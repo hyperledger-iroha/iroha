@@ -18145,6 +18145,166 @@
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.current_policy_proof.response"
       },
+      "ValidationFeePlainBallotDraftRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              "AYE",
+              "NAY",
+              "ABSTAIN"
+            ],
+            "type": "string"
+          },
+          "owner": {
+            "description": "Canonical account that must authenticate the signed ballot transaction.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "owner",
+          "direction"
+        ],
+        "type": "object"
+      },
+      "ValidationFeePlainBallotDraftResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "AYE",
+              "NAY",
+              "ABSTAIN"
+            ],
+            "type": "string"
+          },
+          "duration_blocks": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "owner": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "tx_instructions": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationFeeProposalInstructionDraftV1"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "proposal_id",
+          "owner",
+          "amount",
+          "duration_blocks",
+          "direction",
+          "tx_instructions"
+        ],
+        "type": "object"
+      },
+      "ValidationFeePlainElectorateRulesV1": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_threshold_denominator": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "approval_threshold_numerator": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "ballot_amount": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "ballot_duration_blocks": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "citizenship_amount": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "conviction_step_blocks": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "eligibility_rule": {
+            "additionalProperties": false,
+            "properties": {
+              "rule": {
+                "const": "proposal_operator_at_or_before_gate_others_after_gate"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "rule",
+              "value"
+            ],
+            "type": "object"
+          },
+          "max_conviction": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "max_members": {
+            "const": "256",
+            "type": "string"
+          },
+          "min_turnout": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "voting_asset_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "voting_asset_id",
+          "ballot_amount",
+          "ballot_duration_blocks",
+          "citizenship_amount",
+          "max_members",
+          "conviction_step_blocks",
+          "max_conviction",
+          "min_turnout",
+          "approval_threshold_numerator",
+          "approval_threshold_denominator",
+          "eligibility_rule"
+        ],
+        "type": "object"
+      },
       "ValidationFeeProposalDetailV1": {
         "additionalProperties": false,
         "properties": {
@@ -18181,6 +18341,9 @@
               }
             ]
           },
+          "plain_electorate_rules": {
+            "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1"
+          },
           "proposal": {
             "$ref": "#/components/schemas/JsonValue",
             "description": "Closed POLICY or PAYOUT_LIFECYCLE typed payload."
@@ -18205,7 +18368,8 @@
           "version",
           "proposal",
           "referendum_window",
-          "mode"
+          "mode",
+          "plain_electorate_rules"
         ],
         "type": "object"
       },
@@ -36437,11 +36601,12 @@
                 "maxLength": 69632,
                 "minLength": 1,
                 "type": "string",
-                "x-iroha-norito-schema": "BillingAcknowledgementProofBodyV1"
+                "x-iroha-norito-schema": "iroha.torii.v1.sorafs.billing.acknowledgement_proof",
+                "x-iroha-norito-schema-hash": "fe75acabe03d788012f2e7c556319997"
               }
             }
           },
-          "description": "Exact canonical Norito `BillingAcknowledgementProofBodyV1`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
+          "description": "Exact canonical Norito `BillingAcknowledgementProofV1` under schema `iroha.torii.v1.sorafs.billing.acknowledgement_proof`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
           "required": true
         },
         "responses": {
@@ -42697,6 +42862,49 @@
           "Validation fee"
         ],
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft": {
+      "post": {
+        "description": "Validate the authenticated citizen against the retained proposal electorate and return one exact CastPlainBallot instruction. Amount and duration are forced from the immutable proposal rules.",
+        "parameters": [
+          {
+            "description": "Exact lowercase 32-byte native proposal fingerprint.",
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationFeePlainBallotDraftRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationFeePlainBallotDraftResponseV1"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Draft a proposal-bound PLAIN ballot.",
+        "tags": [
+          "Validation fee"
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/vpn/profile": {

@@ -1203,12 +1203,12 @@ impl MockWorldStateView {
     /// Initialize with a list of balances.
     pub fn with_balances(entries: &[((AccountId, AssetDefinitionId), Quantity)]) -> Self {
         let mut wsv = Self::new();
-        for ((account, asset), amount) in entries.iter().cloned() {
+        for ((account, asset), amount) in entries {
             assert!(
-                Self::is_scale0(&amount),
+                Self::is_scale0(amount),
                 "mock WSV balances must have scale=0"
             );
-            let subject = Self::account_subject(&account);
+            let subject = Self::account_subject(account);
             wsv.domains.entry(asset.domain().clone()).or_default();
             wsv.accounts.entry(subject.clone()).or_default();
             wsv.asset_definitions
@@ -1216,10 +1216,10 @@ impl MockWorldStateView {
                 .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely));
             wsv.balances
                 .insert((subject, asset.clone()), amount.clone());
-            if let Some(def) = wsv.asset_definitions.get_mut(&asset) {
+            if let Some(def) = wsv.asset_definitions.get_mut(asset) {
                 def.total_supply = def
                     .total_supply
-                    .checked_add(&amount)
+                    .checked_add(amount)
                     .expect("mock total supply overflow");
             }
         }

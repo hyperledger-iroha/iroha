@@ -6,7 +6,7 @@ direction: ltr
 source: docs/source/sorafs_hedging_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 6e6586d39d0bf8ecb03f9810bb0434457e3ff7d77ac6282b1f1e0b855b99eead
+source_hash: 1c7fef3b95ed3e9d86c06e9ce614903f2db58508b31e6bc8274a05f48ba401b3
 source_last_modified: "2026-07-27T02:39:39.943163+00:00"
 translation_last_reviewed: null
 ---

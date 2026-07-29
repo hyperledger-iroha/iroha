@@ -135,14 +135,19 @@ All consensus-adjacent report metrics use integer units: success rate is
 `0..=10_000` basis points and latency is an unsigned millisecond count. Provider
 lists are sorted canonically, duplicate provider IDs are rejected, and offender
 ties are resolved by provider ID so identical challenge histories produce
-byte-identical Norito reports on every host.
+byte-identical Norito reports on every host. `generated_at` is the exact end
+boundary of the reported ISO week rather than a process-clock sample. Before
+Governance DAG publication, the coordinator durably retains the canonical
+report and an unpublished marker; it records the publication acknowledgement
+after success, retries exact bytes after crashes, refuses to skip a pending
+cycle, and catches up one missing week at a time.
 
 ## Torii API Extensions
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/v1/sorafs/por/status` | Query `PorChallengeStatusV1` records filtered by manifest, provider, epoch, status, limit, and page token. |
 | `GET` | `/v1/sorafs/por/export` | Return a Norito `PorStatusExportV1` for an optional epoch range. |
-| `GET` | `/v1/sorafs/por/report/{iso_week}` | Return a Norito `PorWeeklyReportV1` generated from coordinator history. |
+| `GET` | `/v1/sorafs/por/report/{iso_week}` | Return a deterministic Norito `PorWeeklyReportV1`; when the cycle is currently prepared for governance publication, return those exact retained bytes. |
 | `GET` | `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N` | Return `limit`-bounded provider backlog and last verdict timestamps from `sorafs_node`, with total provider counts retained. |
 | `POST` | `/v1/sorafs/capacity/por-proof` | Record a provider `PorProofV1`; requires a fresh operator request signature whose Ed25519 key matches both the proof signer and the provider's current admitted advert key. |
 | `POST` | `/v1/sorafs/capacity/por-verdict` | Record an auditor `AuditVerdictV1`; every unique signature must belong to the configured operator trust set, the authenticated request signer must be one of them, and `sorafs.por.auditor_signature_threshold` must be met. |

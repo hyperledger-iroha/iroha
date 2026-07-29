@@ -10,6 +10,16 @@ repository = "https://github.com/hyperledger/ivm"
 documentation = "https://docs.rs/ivm"
 build = "build.rs"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("iroha_telemetry"))',
+    'cfg(feature, values("ivm_halo2_real"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+    'cfg(feature, values("zk-halo2-ipa-poseidon"))',
+] }
+
 [dependencies]
 poseidon-primitives = "0.2.0"
 sha2 = { version = "0.10.9" }
@@ -103,10 +113,6 @@ metal = [
 halo2-params = []
 ## Feature gate for the register-file incremental Merkle update path.
 merkle_incremental = []
-## Accepts Norito derive internal cfg used to pick schema-hash strategy.
-## This is a noop here; present only to silence unexpected-cfg warnings from
-## proc-macros that reference `feature = "schema-structural"`.
-schema-structural = []
 ## Dev-only test gate used by poseidon_simd.rs; declared to silence unexpected-cfg warnings.
 ivm_zk_tests = []
 ## Dev-only test gate used by vrf_verify_chain.rs; declared to silence unexpected-cfg warnings.

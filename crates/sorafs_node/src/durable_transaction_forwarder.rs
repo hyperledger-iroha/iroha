@@ -330,6 +330,9 @@ pub(crate) struct AtomicCheckpointStore {
     max_bytes: u64,
 }
 
+/// Canonical checkpoint bytes paired with their optimistic fingerprint.
+type LoadedCheckpointBytesV1 = (Option<Vec<u8>>, Option<[u8; 32]>);
+
 impl AtomicCheckpointStore {
     /// Open or create a private state directory.
     pub(crate) fn new(
@@ -359,9 +362,7 @@ impl AtomicCheckpointStore {
     }
 
     /// Read the exact canonical checkpoint bytes and their optimistic fingerprint.
-    pub(crate) fn load_bytes(
-        &self,
-    ) -> Result<(Option<Vec<u8>>, Option<[u8; 32]>), CheckpointStoreError> {
+    pub(crate) fn load_bytes(&self) -> Result<LoadedCheckpointBytesV1, CheckpointStoreError> {
         self.verify_root_identity()?;
         let _writer = CheckpointWriterGuard::acquire(&self.lock_path)?;
         self.verify_root_identity()?;
@@ -955,8 +956,6 @@ fn directory_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     use tempfile::TempDir;
 
     fn private_directory(path: &Path) {

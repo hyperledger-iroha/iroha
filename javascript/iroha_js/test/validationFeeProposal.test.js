@@ -186,6 +186,38 @@ test("validation-fee proposal fingerprints require exact object inputs", () => {
   });
 });
 
+test("validation-fee proposal fingerprints require exact native digest lengths", () => {
+  withNativeBinding(
+    {
+      validationFeePolicyProposalFingerprintV1() {
+        return Buffer.alloc(31);
+      },
+      validationFeePayoutLifecycleProposalFingerprintV1() {
+        return Buffer.alloc(33);
+      },
+    },
+    () => {
+      assert.throws(
+        () =>
+          computeValidationFeePolicyProposalFingerprintV1(
+            { schema_version: 1 },
+            null,
+            plainElectorateRules,
+          ),
+        /policy proposal fingerprint must contain exactly 32 bytes/u,
+      );
+      assert.throws(
+        () =>
+          computeValidationFeePayoutLifecycleProposalFingerprintV1(
+            { entrypoint: "autonomous_validation_fee_tick" },
+            plainElectorateRules,
+          ),
+        /payout lifecycle proposal fingerprint must contain exactly 32 bytes/u,
+      );
+    },
+  );
+});
+
 nativeTest("real native addon fingerprints, decodes, and rebuilds the policy instruction", () => {
   const authority = AccountAddress.fromAccount({
     publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x11))),
@@ -229,6 +261,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
     ProposeValidationFeePolicy: {
       policy,
       payout_lifecycle_proposal_id: null,
+      plain_electorate_rules: plainElectorateRules,
       referendum_window: { lower: "100", upper: "140" },
       mode: "Plain",
     },
@@ -236,6 +269,10 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   const encoded = noritoEncodeInstruction(instruction);
   const decoded = noritoDecodeInstruction(encoded);
   assert.equal(decoded.ProposeValidationFeePolicy.mode, "Plain");
+  assert.deepEqual(
+    decoded.ProposeValidationFeePolicy.plain_electorate_rules,
+    plainElectorateRules,
+  );
   assert.deepEqual(
     noritoEncodeInstruction(decoded),
     encoded,

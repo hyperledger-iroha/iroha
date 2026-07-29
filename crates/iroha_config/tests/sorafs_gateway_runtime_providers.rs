@@ -1,4 +1,4 @@
-//! Validate exact non-secret runtime-provider bindings for SoraFS gateways.
+//! Validate exact non-secret runtime-provider bindings for `SoraFS` gateways.
 
 use std::path::PathBuf;
 
@@ -91,10 +91,10 @@ provider_handle = "hsm://gateway/acme/primary"
         ),
         (
             "missing enabled compliance binding",
-            r#"
+            r"
 [sorafs.gateway.compliance]
 enabled = true
-"#
+"
             .to_owned(),
             "feed_transport_provider_handle is required when enabled",
         ),

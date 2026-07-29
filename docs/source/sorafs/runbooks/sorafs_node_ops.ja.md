@@ -6,8 +6,8 @@ direction: ltr
 source: docs/source/sorafs/runbooks/sorafs_node_ops.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 12712e7ceabd3b1255f71546f9c0739398dbc97726a74b475b2fff5654b7914c
-source_last_modified: "2026-07-27T04:39:34.931949+00:00"
+source_hash: c6b16d2590dafa43e5c209c8ca0145ae6f38761871524984508ac6d0f6dedb11
+source_last_modified: "2026-07-28T08:21:55.416868+00:00"
 translation_last_reviewed: null
 ---
 

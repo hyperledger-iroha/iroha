@@ -1034,10 +1034,6 @@ pub(crate) mod test_fixtures {
     pub(crate) fn valid_unshield_witness_bytes() -> Vec<u8> {
         encode_witness(&valid_unshield_witness())
     }
-
-    pub(crate) fn valid_transfer_witness_v2_bytes() -> Vec<u8> {
-        encode_witness_v2(&valid_transfer_witness_v2())
-    }
 }
 
 #[cfg(test)]

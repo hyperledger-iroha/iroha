@@ -613,17 +613,26 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     #if os(macOS)
-    func testLinkedPrivacyProductionRuntimeIsFailClosedBeforeArtifactInstall() throws {
+    func testLinkedPrivacyRuntimeReportsOneExactFailClosedProductionGate() throws {
         let capabilities = try KagemushaRecursiveSpend.nativeCapabilitiesV4()
 
         XCTAssertEqual(capabilities.bridgeABIVersion, 21)
         XCTAssertEqual(capabilities.proofEnvelopeVersion, 5)
         XCTAssertFalse(capabilities.proofBackendAvailable)
-        XCTAssertEqual(
+        switch (
             capabilities.missingGates,
-            ["authenticated-v4-artifact-installation"]
-        )
-        XCTAssertTrue(KagemushaRecursiveSpend.isProductionCompiledAndLinked)
+            KagemushaRecursiveSpend.isProductionCompiledAndLinked
+        ) {
+        case (["authenticated-v4-artifact-installation"], true),
+             (["authenticated-production-promotion"], false):
+            break
+        default:
+            XCTFail(
+                "unexpected ABI-21 production gate state: "
+                    + "\(capabilities.missingGates), "
+                    + "compiled=\(KagemushaRecursiveSpend.isProductionCompiledAndLinked)"
+            )
+        }
         XCTAssertFalse(KagemushaRecursiveSpend.isProductionAvailable)
     }
     #endif
@@ -653,9 +662,10 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
 
         #if canImport(Darwin)
-        guard KagemushaRecursiveSpend.hasRequiredNativeSymbols else {
-            throw XCTSkip("ABI-21 bridge is not linked in this source-only test host")
-        }
+        try requireNativeTestCapability(
+            KagemushaRecursiveSpend.hasRequiredNativeSymbols,
+            "ABI-21 bridge is not linked in this test host"
+        )
         // Portable offer projection is protocol parsing, not proof-backend
         // readiness. It must remain callable while the production gate is
         // deliberately closed before artifact promotion.
@@ -711,7 +721,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "physical-device-benchmark",
             "production-recursive-prover-linkage",
         ]
-        let maximumProofBytes: UInt32 = 4 * 1_024 * 1_024
+        let maximumProofBytes = KagemushaRecursiveSpend.absoluteMaximumProofPairBytesV4
         let archive = KagemushaRecursiveSpend.frameArchive(
             schema: KagemushaRecursiveSpend.nativeCapabilitiesWireNameV4,
             payload: fields([

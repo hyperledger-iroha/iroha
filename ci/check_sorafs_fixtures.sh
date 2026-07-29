@@ -14,8 +14,9 @@ usage() {
 Usage: ci/check_sorafs_fixtures.sh
 
 Verify the complete checked-in SoraFS fixture set. The command is read-only
-when the fixtures are current; generators run in place and any byte drift,
-missing input, or second-run difference fails the command.
+when the fixtures are current. Reference-SDK generators run in two isolated
+temporary copies; any byte drift, missing or extra path, or second-run
+difference fails.
 
 Environment:
   CARGO_NET_OFFLINE                    Cargo offline mode (default: true).
@@ -68,8 +69,9 @@ fixture_tool_available() {
 }
 
 snapshot_manifest_tree() {
-  local output_path="$1"
-  python3 - "fixtures/sorafs_manifest" "${output_path}" <<'PY'
+  local fixture_root="$1"
+  local output_path="$2"
+  python3 - "${fixture_root}" "${output_path}" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -90,7 +92,16 @@ except FileNotFoundError as exc:
 if not stat.S_ISDIR(root_stat.st_mode):
     raise SystemExit(f"{root} must be a directory")
 
+max_snapshot_file_bytes = 64 << 20
+read_flags = (
+    os.O_RDONLY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
 snapshot: dict[str, dict[str, object]] = {}
+directory_identities: dict[Path, tuple[int, int]] = {
+    root: (root_stat.st_dev, root_stat.st_ino)
+}
 for current_root, directory_names, file_names in os.walk(root, followlinks=False):
     directory_names.sort()
     file_names.sort()
@@ -102,22 +113,83 @@ for current_root, directory_names, file_names in os.walk(root, followlinks=False
             raise SystemExit(f"{directory} must not be a symlink")
         if not stat.S_ISDIR(directory_stat.st_mode):
             raise SystemExit(f"{directory} must be a directory")
+        directory_identities[directory] = (
+            directory_stat.st_dev,
+            directory_stat.st_ino,
+        )
     for file_name in file_names:
         path = current / file_name
         relative = path.relative_to(root).as_posix()
-        path_stat = path.lstat()
-        if stat.S_ISLNK(path_stat.st_mode):
-            raise SystemExit(f"{path} must not be a symlink")
-        if not stat.S_ISREG(path_stat.st_mode):
-            raise SystemExit(f"{path} must be a regular file")
-        digest = hashlib.sha256()
-        with path.open("rb") as fixture:
-            while chunk := fixture.read(1024 * 1024):
+        before = path.lstat()
+        if (
+            stat.S_ISLNK(before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+        ):
+            raise SystemExit(f"{path} must be a single-link regular file")
+        if before.st_size > max_snapshot_file_bytes:
+            raise SystemExit(
+                f"{path} exceeds the {max_snapshot_file_bytes}-byte snapshot bound"
+            )
+        descriptor = os.open(path, read_flags)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+                or before.st_size != opened.st_size
+                or before.st_mtime_ns != opened.st_mtime_ns
+            ):
+                raise SystemExit(f"{path} changed while it was opened")
+            digest = hashlib.sha256()
+            byte_length = 0
+            while True:
+                chunk = os.read(
+                    descriptor,
+                    min(1024 * 1024, max_snapshot_file_bytes - byte_length + 1),
+                )
+                if not chunk:
+                    break
+                byte_length += len(chunk)
+                if byte_length > max_snapshot_file_bytes:
+                    raise SystemExit(
+                        f"{path} exceeds the {max_snapshot_file_bytes}-byte snapshot bound"
+                    )
                 digest.update(chunk)
+            after = os.fstat(descriptor)
+            path_after = path.lstat()
+            if (
+                not stat.S_ISREG(after.st_mode)
+                or after.st_nlink != 1
+                or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or opened.st_size != after.st_size
+                or opened.st_mtime_ns != after.st_mtime_ns
+                or byte_length != after.st_size
+                or stat.S_ISLNK(path_after.st_mode)
+                or not stat.S_ISREG(path_after.st_mode)
+                or path_after.st_nlink != 1
+                or (before.st_dev, before.st_ino)
+                != (path_after.st_dev, path_after.st_ino)
+                or path_after.st_size != after.st_size
+                or path_after.st_mtime_ns != after.st_mtime_ns
+            ):
+                raise SystemExit(f"{path} changed while it was hashed")
+        finally:
+            os.close(descriptor)
         snapshot[relative] = {
-            "byte_length": path_stat.st_size,
+            "byte_length": byte_length,
             "sha256": digest.hexdigest(),
         }
+
+for directory, expected_identity in directory_identities.items():
+    after = directory.lstat()
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISDIR(after.st_mode)
+        or (after.st_dev, after.st_ino) != expected_identity
+    ):
+        raise SystemExit(f"{directory} changed during fixture snapshot")
 
 flags = (
     os.O_WRONLY
@@ -138,6 +210,196 @@ try:
     os.fsync(fd)
 finally:
     os.close(fd)
+PY
+}
+
+copy_manifest_tree() {
+  local output_root="$1"
+  python3 - "fixtures/sorafs_manifest" "${output_root}" <<'PY'
+from __future__ import annotations
+
+import os
+import stat
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+if source.is_symlink():
+    raise SystemExit(f"{source} must not be a symlink")
+try:
+    source_stat = source.lstat()
+except FileNotFoundError as exc:
+    raise SystemExit(f"{source} is missing") from exc
+if not stat.S_ISDIR(source_stat.st_mode):
+    raise SystemExit(f"{source} must be a directory")
+if os.path.lexists(target):
+    raise SystemExit(f"{target} already exists")
+
+target_parent = target.parent
+if os.path.lexists(target_parent):
+    raise SystemExit(f"{target_parent} already exists")
+os.mkdir(target_parent, 0o700)
+os.mkdir(target, 0o700)
+
+max_copy_file_bytes = 64 << 20
+read_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+write_flags = (
+    os.O_WRONLY
+    | os.O_CREAT
+    | os.O_EXCL
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+directory_identities: dict[Path, tuple[int, int]] = {
+    source: (source_stat.st_dev, source_stat.st_ino)
+}
+for current_root, directory_names, file_names in os.walk(source, followlinks=False):
+    directory_names.sort()
+    file_names.sort()
+    current = Path(current_root)
+    relative_root = current.relative_to(source)
+    destination_root = target / relative_root
+    for directory_name in directory_names:
+        source_directory = current / directory_name
+        metadata = source_directory.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise SystemExit(f"{source_directory} must be a real directory")
+        directory_identities[source_directory] = (
+            metadata.st_dev,
+            metadata.st_ino,
+        )
+        os.mkdir(destination_root / directory_name, 0o700)
+    for file_name in file_names:
+        source_path = current / file_name
+        destination_path = destination_root / file_name
+        before = source_path.lstat()
+        if (
+            stat.S_ISLNK(before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+        ):
+            raise SystemExit(f"{source_path} must be a single-link regular file")
+        if before.st_size > max_copy_file_bytes:
+            raise SystemExit(
+                f"{source_path} exceeds the {max_copy_file_bytes}-byte copy bound"
+            )
+        source_fd = os.open(source_path, read_flags)
+        try:
+            opened = os.fstat(source_fd)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+                or before.st_size != opened.st_size
+                or before.st_mtime_ns != opened.st_mtime_ns
+            ):
+                raise SystemExit(f"{source_path} changed while it was opened")
+            destination_fd = os.open(destination_path, write_flags, 0o600)
+            try:
+                byte_length = 0
+                while chunk := os.read(
+                    source_fd,
+                    min(1024 * 1024, max_copy_file_bytes - byte_length + 1),
+                ):
+                    byte_length += len(chunk)
+                    if byte_length > max_copy_file_bytes:
+                        raise SystemExit(
+                            f"{source_path} exceeds the "
+                            f"{max_copy_file_bytes}-byte copy bound"
+                        )
+                    view = memoryview(chunk)
+                    while view:
+                        written = os.write(destination_fd, view)
+                        if written <= 0:
+                            raise OSError(f"failed to copy bytes into {destination_path}")
+                        view = view[written:]
+                os.fsync(destination_fd)
+            finally:
+                os.close(destination_fd)
+            after = os.fstat(source_fd)
+            path_after = source_path.lstat()
+            if (
+                not stat.S_ISREG(after.st_mode)
+                or after.st_nlink != 1
+                or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or opened.st_size != after.st_size
+                or opened.st_mtime_ns != after.st_mtime_ns
+                or byte_length != after.st_size
+                or stat.S_ISLNK(path_after.st_mode)
+                or not stat.S_ISREG(path_after.st_mode)
+                or path_after.st_nlink != 1
+                or (before.st_dev, before.st_ino)
+                != (path_after.st_dev, path_after.st_ino)
+                or path_after.st_size != after.st_size
+                or path_after.st_mtime_ns != after.st_mtime_ns
+            ):
+                raise SystemExit(f"{source_path} changed while it was copied")
+        finally:
+            os.close(source_fd)
+
+for directory, expected_identity in directory_identities.items():
+    after = directory.lstat()
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISDIR(after.st_mode)
+        or (after.st_dev, after.st_ino) != expected_identity
+    ):
+        raise SystemExit(f"{directory} changed during fixture copy")
+PY
+}
+
+verify_manifest_tree_paths() {
+  local fixture_root="$1"
+  python3 - "${fixture_root}" <<'PY'
+from __future__ import annotations
+
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+source_root = Path("fixtures/sorafs_manifest")
+fixture_root = Path(sys.argv[1])
+tracked_output = subprocess.check_output(
+    ["git", "ls-files", "-z", "--", str(source_root)]
+)
+tracked_paths = {
+    Path(raw.decode("utf-8")).relative_to(source_root).as_posix()
+    for raw in tracked_output.split(b"\0")
+    if raw
+}
+if not tracked_paths:
+    raise SystemExit("fixtures/sorafs_manifest has no tracked fixture files")
+
+actual_paths: set[str] = set()
+for current_root, directory_names, file_names in os.walk(
+    fixture_root,
+    followlinks=False,
+):
+    directory_names.sort()
+    file_names.sort()
+    current = Path(current_root)
+    for directory_name in directory_names:
+        directory = current / directory_name
+        metadata = directory.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise SystemExit(f"{directory} must be a real directory")
+    for file_name in file_names:
+        path = current / file_name
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit(f"{path} must be a regular non-symlink file")
+        actual_paths.add(path.relative_to(fixture_root).as_posix())
+
+if actual_paths != tracked_paths:
+    missing = sorted(tracked_paths - actual_paths)
+    extra = sorted(actual_paths - tracked_paths)
+    raise SystemExit(
+        "SoraFS manifest fixture path set differs from git "
+        f"(missing={missing}, extra={extra})"
+    )
 PY
 }
 
@@ -177,25 +439,47 @@ python3 scripts/check_sorafs_reference_sdk_fixtures.py
 
 fixture_snapshot_root="$(mktemp -d "${TMPDIR:-/tmp}/sorafs-fixture-snapshots.XXXXXX")"
 trap cleanup_fixture_snapshots EXIT
+# macOS exposes both /tmp and /var as symlinks. Resolve the private directory
+# once so the strict fixture generators can reject symlinked ancestry without
+# making the platform's standard temporary directory unusable.
+fixture_snapshot_root="$(
+  cd -- "${fixture_snapshot_root}"
+  pwd -P
+)"
+verify_manifest_tree_paths "fixtures/sorafs_manifest"
+snapshot_manifest_tree \
+  "fixtures/sorafs_manifest" \
+  "${fixture_snapshot_root}/manifest-checked-in.json"
 for fixture_regeneration_pass in 1 2; do
   echo "[sorafs-fixtures] reference-SDK regeneration pass ${fixture_regeneration_pass}/2"
+  pass_root="${fixture_snapshot_root}/pass-${fixture_regeneration_pass}/sorafs_manifest"
+  copy_manifest_tree "${pass_root}"
   NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
     -p iroha_data_model \
     --features test-fixtures \
-    --bin cancel_asset_lock_fixtures
+    --bin cancel_asset_lock_fixtures \
+    -- \
+    --output-dir "${pass_root}/appeal_finance"
   NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
     -p sorafs_manifest \
-    --bin generate_por_fixtures
-  python3 scripts/check_sorafs_reference_sdk_fixtures.py
+    --bin generate_por_fixtures \
+    -- \
+    --output-dir "${pass_root}"
+  python3 scripts/check_sorafs_reference_sdk_fixtures.py \
+    --inventory "${pass_root}/reference_sdk_validation_inventory_v1.json"
+  verify_manifest_tree_paths "${pass_root}"
   snapshot_manifest_tree \
+    "${pass_root}" \
     "${fixture_snapshot_root}/manifest-pass-${fixture_regeneration_pass}.json"
 
   if [[ "${fixture_regeneration_pass}" == "1" ]]; then
-    fixture_changes="$(git status --short --untracked-files=all -- fixtures/sorafs_manifest)"
-    if [[ -n "${fixture_changes}" ]]; then
+    if ! cmp -s \
+      "${fixture_snapshot_root}/manifest-checked-in.json" \
+      "${fixture_snapshot_root}/manifest-pass-1.json"; then
       echo "[sorafs-fixtures] error: reference-SDK fixtures or signed inventory changed" >&2
-      printf '%s\n' "${fixture_changes}" >&2
-      git diff -- fixtures/sorafs_manifest >&2 || true
+      diff -u \
+        "${fixture_snapshot_root}/manifest-checked-in.json" \
+        "${fixture_snapshot_root}/manifest-pass-1.json" >&2 || true
       exit 1
     fi
   fi

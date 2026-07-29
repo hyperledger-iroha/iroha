@@ -1265,6 +1265,30 @@ pub mod sorafs {
                 PathBuf::from("./storage/sorafs/moderation/orchestrator.norito")
             }
         }
+        /// Authenticated finalized-PoR replay archive defaults.
+        pub mod por_replay_archive {
+            /// Compaction is opt-in until a deployment-owned immutable archive
+            /// and external Ed25519 signer are injected.
+            pub const ENABLED: bool = false;
+            /// Supervised reconciliation and bounded compaction cadence.
+            pub const POLL_INTERVAL_MS: u64 = 1_000;
+            /// Maximum acknowledged records reconciled and compacted per tick.
+            pub const MAX_RECORDS_PER_TICK: u32 = 64;
+            /// Maximum signed successor receipts accepted in one inclusion proof.
+            pub const MAX_SUCCESSOR_RECEIPTS: u32 = 1_024;
+            /// Maximum canonical bytes accepted for one successor-receipt proof.
+            pub const MAX_SUCCESSOR_PROOF_BYTES: u64 = 1_048_576;
+            /// Minimum supported supervised cadence.
+            pub const POLL_INTERVAL_MIN_MS: u64 = 100;
+            /// Maximum supported supervised cadence.
+            pub const POLL_INTERVAL_MAX_MS: u64 = 60_000;
+            /// Hard per-tick work ceiling.
+            pub const MAX_RECORDS_PER_TICK_LIMIT: u32 = 1_024;
+            /// Hard ceiling for a configured successor-receipt count bound.
+            pub const MAX_SUCCESSOR_RECEIPTS_LIMIT: u32 = 65_536;
+            /// Hard ceiling for a configured canonical successor-proof byte bound.
+            pub const MAX_SUCCESSOR_PROOF_BYTES_LIMIT: u64 = 16_777_216;
+        }
         /// Finalized-ledger reputation projector and external publication defaults.
         pub mod reputation_runtime {
             use std::path::PathBuf;
@@ -1293,6 +1317,20 @@ pub mod sorafs {
             pub const INGEST_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
             /// Maximum canonical publication checkpoint size.
             pub const PUBLICATION_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
+            /// Maximum bytes accepted for one canonical finalized archive record.
+            pub const FINALIZED_ARCHIVE_MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
+            /// Maximum immutable records admitted in each finalized archive namespace.
+            pub const FINALIZED_ARCHIVE_MAX_ENTRIES: usize = 1_000_000;
+            /// Maximum aggregate canonical anchor and policy bytes admitted.
+            pub const FINALIZED_ARCHIVE_MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+            /// Maximum admitted lag between the Kura tip and the archive head.
+            pub const FINALIZED_ARCHIVE_MAX_KURA_TIP_LAG_BLOCKS: u64 = 2;
+            /// Hard ceiling for admitted archive lag behind the Kura tip.
+            pub const FINALIZED_ARCHIVE_MAX_KURA_TIP_LAG_BLOCKS_LIMIT: u64 = 10_000;
+            /// Sealed monotonic finalized-archive retention is opt-in.
+            pub const FINALIZED_ARCHIVE_RETENTION_ENABLED: bool = false;
+            /// Deterministic private finalized archive directory below `state_dir`.
+            pub const FINALIZED_ARCHIVE_DIRECTORY_NAME: &str = "finalized-reputation-archive-v1";
             /// Governed default PoR-success weight.
             pub const POR_SUCCESS_BPS: u16 = 2_200;
             /// Governed default PDP-success weight.
@@ -1339,8 +1377,6 @@ pub mod sorafs {
         }
         /// Supervised finalized-ledger provider-ingest defaults.
         pub mod provider_ingest_runtime {
-            use iroha_config_base::util::Bytes;
-
             /// Provider ingest is opt-in until its source, signer, and sealed
             /// checkpoint providers are registered by the daemon.
             pub const ENABLED: bool = false;
@@ -1364,12 +1400,33 @@ pub mod sorafs {
             pub const INGRESS_TIMEOUT_MS: u64 = 30_000;
             /// Time-to-live assigned to one completion transaction.
             pub const COMPLETION_TRANSACTION_TTL_MS: u64 = 5 * 60_000;
-            /// Maximum rows retained by one immutable finalized snapshot.
-            pub const MAX_SNAPSHOT_ROWS: usize = 256;
-            /// Maximum canonical bytes retained by one immutable finalized snapshot.
-            pub const MAX_SNAPSHOT_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024);
-            /// Maximum authenticated finalized-head lag admitted by readiness.
-            pub const MAX_FINALIZED_LAG_BLOCKS: u64 = 2;
+
+            /// Daemon-owned immutable finalized-assignment archive defaults.
+            pub mod finalized_archive {
+                use iroha_config_base::util::Bytes;
+
+                /// Relative archive namespace below the resolved Kura root.
+                pub const RELATIVE_ROOT: &str = "provider-ingest-finalized-archive-v1";
+                /// Maximum canonical bytes admitted for one immutable anchor record.
+                pub const MAX_RECORD_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024);
+                /// Maximum immutable anchor records admitted by one namespace.
+                pub const MAX_ARCHIVE_ENTRIES: usize = 1_000_000;
+                /// Maximum aggregate canonical bytes admitted by one namespace.
+                pub const MAX_TOTAL_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024 * 1024);
+                /// Maximum provider projections admitted at one anchor.
+                pub const MAX_PROVIDERS_PER_ANCHOR: usize = 1_024;
+                /// Maximum assigned orders admitted for one provider at one anchor.
+                pub const MAX_ORDERS_PER_PROVIDER: usize = 256;
+                /// Maximum aggregate provider/order rows admitted at one anchor.
+                pub const MAX_TOTAL_ORDERS_PER_ANCHOR: usize = 256;
+                /// Maximum rows returned by one provider-indexed archive page.
+                pub const MAX_PAGE_ROWS: usize = 64;
+                /// Maximum authenticated lag between the Kura and archive tips.
+                pub const MAX_KURA_TIP_LAG_BLOCKS: u64 = 2;
+                /// Keep archive retention manual unless an external sealed
+                /// monotonic authority is explicitly configured.
+                pub const RETENTION_ENABLED: bool = false;
+            }
 
             /// Durable provider-ingest completion-outbox defaults.
             pub mod outbox {
@@ -1381,8 +1438,12 @@ pub mod sorafs {
                 pub const MAX_TERMINAL_ENTRIES: usize = 4_096;
                 /// Maximum retry attempts under one semantic job identity.
                 pub const MAX_ATTEMPTS: u32 = 8;
+                /// Hard production ceiling for one canonical outbox checkpoint.
+                pub const CHECKPOINT_MAX_BYTES_LIMIT: u64 = 192 * 1024 * 1024;
                 /// Maximum canonical outbox checkpoint size.
                 pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+                /// Deadline for one external sealed-checkpoint operation.
+                pub const CHECKPOINT_OPERATION_TIMEOUT_MS: u64 = 30_000;
                 /// Source-claim lease duration.
                 pub const SOURCE_LEASE_TTL_MS: u64 = 60_000;
                 /// Initial retry delay.
@@ -1391,6 +1452,8 @@ pub mod sorafs {
                 pub const RETRY_MAX_DELAY_MS: u64 = 5 * 60_000;
                 /// Maximum finalized-block age of a terminal tombstone.
                 pub const TERMINAL_RETENTION_BLOCKS: u64 = 100_000;
+                /// Hard production ceiling for one canonical signed completion transaction.
+                pub const MAX_SIGNED_TRANSACTION_BYTES_LIMIT: u64 = 128 * 1024 * 1024;
                 /// Maximum canonical signed completion transaction size.
                 pub const MAX_SIGNED_TRANSACTION_BYTES: Bytes<u64> = Bytes(256 * 1024);
                 /// Maximum payload-free rows returned by one status page.
@@ -1475,7 +1538,12 @@ pub mod sorafs {
             /// Maximum accepted remote response body.
             pub const MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
             /// Maximum local block, head, or CAR payload sent in one request.
-            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+            ///
+            /// Keep this synchronized with
+            /// `sorafs_manifest::GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1`:
+            /// 128 MiB of canonical signing payload plus a checked 64 KiB
+            /// block-signature/envelope allowance.
+            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((128 * 1024 * 1024) + (64 * 1024));
             /// Maximum entries retained in the deterministic local IPLD mirror.
             pub const MIRROR_MAX_ENTRIES: usize = 65_536;
             /// Maximum canonical block bytes retained by the mirror.
@@ -1484,6 +1552,14 @@ pub mod sorafs {
             pub const MAX_HEAD_AGE_SECS: u64 = 15 * 60;
             /// Maximum future clock skew accepted for blocks and heads.
             pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
+            /// Maximum lifetime accepted for one signed outbound request envelope.
+            pub const REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS: u64 = 30;
+            /// Maximum future clock skew accepted for an outbound request envelope.
+            pub const REQUEST_AUTH_MAX_FUTURE_SKEW_SECS: u64 = 5;
+            /// Hard upper bound for a configured outbound request-envelope lifetime.
+            pub const REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_LIMIT_SECS: u64 = 300;
+            /// Hard upper bound for configured outbound request future clock skew.
+            pub const REQUEST_AUTH_MAX_FUTURE_SKEW_LIMIT_SECS: u64 = 60;
             /// HTTPS is required by default.
             pub const ALLOW_INSECURE_HTTP: bool = false;
             /// Publicly routable IPFS API addresses are required by default.
@@ -1630,6 +1706,24 @@ pub mod sorafs {
             pub fn policy_digest_hex() -> Option<String> {
                 None
             }
+
+            /// Deployment-owned fused privacy publisher handle.
+            ///
+            /// Production must set this together with the exact provider
+            /// revision and public-policy digest before enabling the scheduler.
+            pub fn fenced_privacy_publisher_handle() -> Option<String> {
+                None
+            }
+
+            /// Deployment-owned fused privacy publisher revision.
+            pub const fn fenced_privacy_publisher_revision() -> Option<u64> {
+                None
+            }
+
+            /// Deployment-owned fused privacy publisher public-policy digest.
+            pub fn fenced_privacy_publisher_policy_digest_hex() -> Option<String> {
+                None
+            }
         }
 
         /// Production SFM-4b3 evidence-viewer defaults.
@@ -1661,8 +1755,12 @@ pub mod sorafs {
             pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
             /// Retention interval after the last session expires.
             pub const RETENTION_AFTER_EXPIRY_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+            /// Cadence for the supervised immutable-archive compaction worker.
+            pub const COMPACTION_INTERVAL_MS: u64 = 60 * 1_000;
+            /// Maximum expired records archived by one compaction tick.
+            pub const COMPACTION_MAX_RECORDS: u32 = 256;
 
-            /// Default checkpoint used only while the service is disabled.
+            /// Default local checkpoint cache used only while the service is disabled.
             pub fn checkpoint_path() -> PathBuf {
                 PathBuf::from("./storage/sorafs/moderation/evidence-viewer.norito")
             }

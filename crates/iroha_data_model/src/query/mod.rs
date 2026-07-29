@@ -5708,6 +5708,10 @@ pub mod sorafs {
         }
 
         /// Fetch an exclusive-cursor page of committed repair-ledger events.
+        ///
+        /// A clean namespace with no repair status or events returns an empty
+        /// page bound to the selected finalized cursor. Statusless orphaned
+        /// repair state remains an error and fails closed.
         #[derive(Copy)]
         pub struct FindSorafsRepairEvents {
             /// Optional finalized anchor; absent selects the latest committed view.

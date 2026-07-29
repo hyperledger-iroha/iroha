@@ -203,7 +203,7 @@ async function verifyManifest(entry, manifestPath, outputDir, specContext) {
     manifest.generator_commit !== specContext.expectedGeneratorCommit
   ) {
     throw new Error(
-      `manifest ${manifestPath} generator_commit (${String(manifest.generator_commit)}) does not match checked-out commit ${specContext.expectedGeneratorCommit}. ${staleHint}`,
+      `manifest ${manifestPath} generator_commit (${String(manifest.generator_commit)}) does not match expected source commit ${specContext.expectedGeneratorCommit}. ${staleHint}`,
     );
   }
   const artifact = manifest?.artifact;

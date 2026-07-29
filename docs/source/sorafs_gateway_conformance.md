@@ -17,7 +17,11 @@ for gateway self-certification.
 2. **Negative coverage:** Ensure gateways correctly refuse unsupported chunker
    handles, malformed proofs, admission mismatches, and downgrade attempts.
 3. **Load testing:** Sustain ≥1,000 concurrent range streams against a seeded
-   payload set and verify deterministic latency, throughput, and refusal behaviour.
+   payload set and verify deterministic latency, throughput, and refusal
+   behaviour. L1 production qualification additionally requires one
+   86,400-second-or-longer, multi-provider run covering cold, warm, and mixed
+   caches, exact 1% corruption, revocation, malformed-flood,
+   denylist/rate-limit pressure, and failover.
 4. **Attestation:** Produce structured run reports that operators can sign when
    self-certifying gateways.
 
@@ -178,8 +182,9 @@ path or hardware-backed signer implementation via the same trait.
 | B4 | Corrupted CAR payload (digest mismatch) | 422 refusal (payload digest mismatch) |
 | B5 | Provider not admitted | 412 precondition failure with `provider_not_admitted` |
 | B6 | Client exceeds rate limit window | 429 `rate_limited` with `Retry-After` header |
-| C1 | 1k concurrent range streaming (warm cache) | P95 latency < target, no proof failures |
+| C1 | 1k concurrent range streaming across cold, warm, and mixed caches | P95 latency < target, no proof failures |
 | C2 | 1k concurrent streaming with injected 1% corruption | All corrupted responses rejected, gateway returns 422 |
+| C3 | 24-hour multi-provider stream run with revocation, malformed flood, denylist/rate-limit pressure, and failover | Every pressure path exercised; service recovers without state divergence |
 | D1 | Load with governed compliance-catalog trigger | 451 Unavailable For Legal Reasons |
 
 The Rust harness already exercises scenarios A1, A2, A3, A4, B1, B2, B3, B4, B5, and B6 against deterministic fixtures, asserting canonical digests, byte-range alignment, refusal semantics, and policy enforcement.
@@ -266,14 +271,16 @@ The resulting report mirrors the conformance output (including `provider_reports
 
 - Archive signed local conformance reports from
   `ci/check_sorafs_gateway_conformance.sh` for each release candidate.
-- Run the same fixture bundle against live staging hardware and record gateway
-  version, cache state, duration, and hardware profile alongside the signed
-  report.
+- Run the same fixture bundle against live staging hardware for at least 86,400
+  seconds and record gateway version, hardware profile, exact cold/warm/mixed
+  coverage, peak concurrent range streams, at least two distinct providers,
+  exact 1% corruption, revocation, malformed-flood, denylist/rate-limit
+  pressure, and failover alongside the signed report.
 - Add a live-target adapter only if operators need the integration test to
   exercise deployed gateways directly instead of the deterministic fixture
   adapter.
-- Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed
-  HTTP/3 endpoint and configuration surface.
+- Keep HTTP/3 outside the V1 qualification contract; a later committed endpoint
+  and configuration surface require a separately scoped transport plan.
 
 Downgrade/missing-header refusal and HEAD probe coverage now live in the
 integration harness (`integration_tests/tests/sorafs_gateway_conformance.rs:295`

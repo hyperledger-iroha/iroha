@@ -4,11 +4,14 @@ use std::collections::BTreeSet;
 
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+use norito::core::NoritoSerialize as _;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
 use crate::{
-    CapacityMetadataEntry, XorQuantity, chunker_registry,
+    CapacityMetadataEntry, XorQuantity,
+    capacity::{MAX_REPLICATION_ORDER_METADATA_BYTES, MAX_REPLICATION_ORDER_METADATA_ENTRIES},
+    chunker_registry,
     provider_advert::{AdvertSignature, SignatureAlgorithm},
 };
 
@@ -39,6 +42,52 @@ pub const POR_WEEKLY_REPORT_VERSION_V1: u8 = 1;
 pub const POR_SUCCESS_RATE_BPS_MAX: u16 = 10_000;
 /// Current provider VRF submission schema version.
 pub const POR_VRF_SUBMISSION_VERSION_V1: u8 = 1;
+/// Maximum exact canonical size of one provider VRF submission.
+pub const PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1: usize = 4 * 1024;
+/// Maximum exact canonical size of one V1 PoR challenge.
+pub const POR_CHALLENGE_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
+/// Maximum canonical chunker-profile handle bytes in one V1 PoR challenge.
+pub const POR_CHALLENGE_PROFILE_MAX_BYTES_V1: usize = 128;
+/// Maximum sample rows admitted in one V1 PoR challenge.
+pub const POR_CHALLENGE_MAX_SAMPLES_V1: usize = 500;
+/// Maximum exact canonical size of one V1 PoR challenge publication.
+pub const POR_CHALLENGE_PUBLICATION_MAX_CANONICAL_BYTES_V1: usize = 128 * 1024;
+/// Maximum exact canonical size of one V1 PoR proof.
+pub const POR_PROOF_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Maximum sample rows accepted in one V1 PoR proof.
+pub const POR_PROOF_MAX_SAMPLES_V1: usize = 500;
+/// Maximum Merkle authentication-path depth accepted in one V1 PoR proof.
+pub const POR_PROOF_MAX_AUTH_PATH_NODES_V1: usize = 64;
+/// Maximum exact canonical size of one V1 audit verdict.
+pub const AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
+/// Maximum UTF-8 byte length of one audit failure reason.
+pub const AUDIT_VERDICT_FAILURE_REASON_MAX_BYTES_V1: usize = 2 * 1024;
+/// Maximum distinct Ed25519 auditor signatures in one verdict.
+pub const AUDIT_VERDICT_MAX_SIGNATURES_V1: usize = 64;
+/// Maximum metadata rows in one audit verdict.
+pub const AUDIT_VERDICT_MAX_METADATA_ENTRIES_V1: usize = MAX_REPLICATION_ORDER_METADATA_ENTRIES;
+/// Maximum aggregate metadata key/value bytes in one audit verdict.
+pub const AUDIT_VERDICT_MAX_METADATA_BYTES_V1: usize = MAX_REPLICATION_ORDER_METADATA_BYTES;
+/// Maximum exact canonical size of one V1 PoR challenge status.
+pub const POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024;
+/// Maximum canonical UTF-8 bytes in one V1 status failure reason.
+pub const POR_CHALLENGE_STATUS_FAILURE_REASON_MAX_BYTES_V1: usize = 2 * 1024;
+/// Maximum status records returned in one canonical V1 status page.
+pub const POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1: usize = 1_000;
+/// Maximum exact canonical size of one V1 status page.
+pub const POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1: usize =
+    POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1 * POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1
+        + 64 * 1024;
+/// Maximum exact canonical size of one V1 weekly PoR report.
+pub const POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1: usize = 32 * 1024 * 1024;
+/// Maximum slashing-event rows in one V1 weekly PoR report.
+pub const POR_WEEKLY_REPORT_MAX_SLASHING_EVENTS_V1: usize = 65_536;
+/// Maximum missing-VRF provider rows in one V1 weekly PoR report.
+pub const POR_WEEKLY_REPORT_MAX_MISSING_VRF_PROVIDERS_V1: usize = 65_536;
+/// Maximum UTF-8 byte length of ticket and verdict-CID identifiers.
+pub const POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1: usize = 256;
+/// Maximum UTF-8 byte length of weekly governance notes.
+pub const POR_WEEKLY_REPORT_NOTES_MAX_BYTES_V1: usize = 4 * 1024;
 
 /// Build the canonical provider VRF input for one manifest and drand round.
 #[must_use]
@@ -116,6 +165,10 @@ impl From<&ProviderVrfSubmissionV1> for ProviderVrfSubmissionSigningPayloadV1 {
 impl ProviderVrfSubmissionV1 {
     /// Validate bounded structural fields before admission and proof checks.
     pub fn validate(&self) -> Result<(), ProviderVrfSubmissionValidationError> {
+        preflight_provider_vrf_submission_len(
+            self,
+            PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
+        )?;
         if self.version != POR_VRF_SUBMISSION_VERSION_V1 {
             return Err(ProviderVrfSubmissionValidationError::UnsupportedVersion {
                 found: self.version,
@@ -149,9 +202,27 @@ impl ProviderVrfSubmissionV1 {
         if self.issued_at == 0 {
             return Err(ProviderVrfSubmissionValidationError::InvalidIssuedAt);
         }
-        if self.signature.algorithm != SignatureAlgorithm::Ed25519
-            || self.signature.public_key.is_empty()
-            || self.signature.signature.is_empty()
+        if self.signature.algorithm != SignatureAlgorithm::Ed25519 {
+            return Err(ProviderVrfSubmissionValidationError::UnsupportedSignatureAlgorithm);
+        }
+        if self.signature.public_key.len() != PUBLIC_KEY_LENGTH {
+            return Err(
+                ProviderVrfSubmissionValidationError::InvalidSignaturePublicKeyLength {
+                    found: self.signature.public_key.len(),
+                    expected: PUBLIC_KEY_LENGTH,
+                },
+            );
+        }
+        if self.signature.signature.len() != SIGNATURE_LENGTH {
+            return Err(
+                ProviderVrfSubmissionValidationError::InvalidSignatureLength {
+                    found: self.signature.signature.len(),
+                    expected: SIGNATURE_LENGTH,
+                },
+            );
+        }
+        if crate::inert_bytes(&self.signature.public_key)
+            || crate::inert_bytes(&self.signature.signature)
         {
             return Err(ProviderVrfSubmissionValidationError::InvalidSignature);
         }
@@ -194,6 +265,12 @@ impl ProviderVrfSubmissionV1 {
 /// Structural validation failures for provider VRF submissions.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderVrfSubmissionValidationError {
+    /// Exact canonical encoded length could not be computed.
+    #[error("provider VRF submission exact canonical encoded length is unavailable")]
+    CanonicalLengthUnavailable,
+    /// Canonical payload exceeds the V1 byte ceiling.
+    #[error("provider VRF submission has {found} canonical bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
     /// The submission version is unsupported.
     #[error("unsupported provider VRF submission version {found}")]
     UnsupportedVersion { found: u8 },
@@ -222,8 +299,57 @@ pub enum ProviderVrfSubmissionValidationError {
     #[error("provider VRF submission issued_at must be non-zero")]
     InvalidIssuedAt,
     /// Signature fields are missing or unsupported.
-    #[error("provider VRF submission signature must be Ed25519 and non-empty")]
+    #[error("provider VRF submission signature material must not be inert")]
     InvalidSignature,
+    /// The reserved signature algorithm is not admitted in V1.
+    #[error("provider VRF submission signature must use Ed25519")]
+    UnsupportedSignatureAlgorithm,
+    /// Ed25519 public key length is not exact.
+    #[error("provider VRF submission public key has {found} bytes; expected {expected}")]
+    InvalidSignaturePublicKeyLength { found: usize, expected: usize },
+    /// Ed25519 signature length is not exact.
+    #[error("provider VRF submission signature has {found} bytes; expected {expected}")]
+    InvalidSignatureLength { found: usize, expected: usize },
+}
+
+fn preflight_provider_vrf_submission_len(
+    submission: &ProviderVrfSubmissionV1,
+    maximum: usize,
+) -> Result<usize, ProviderVrfSubmissionValidationError> {
+    let found = submission
+        .encoded_len_exact()
+        .ok_or(ProviderVrfSubmissionValidationError::CanonicalLengthUnavailable)?;
+    if found > maximum {
+        return Err(ProviderVrfSubmissionValidationError::PayloadTooLarge { found, maximum });
+    }
+    Ok(found)
+}
+
+/// Decode and validate one bounded canonical provider VRF submission.
+///
+/// # Errors
+///
+/// Returns a Norito error for oversized, noncanonical, malformed, or
+/// structurally invalid submission bytes.
+pub fn decode_provider_vrf_submission_v1(
+    bytes: &[u8],
+) -> Result<ProviderVrfSubmissionV1, norito::core::Error> {
+    let submission: ProviderVrfSubmissionV1 = decode_bounded_canonical_por_payload(
+        "provider VRF submission",
+        bytes,
+        PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
+        norito::DecodeLimits::new(
+            SIGNATURE_LENGTH,
+            256,
+            512,
+            PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1 * 4,
+            32,
+        ),
+    )?;
+    submission
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(submission)
 }
 
 /// Derives the PoR challenge seed by mixing drand randomness, provider VRF output,
@@ -320,6 +446,7 @@ pub struct PorChallengeV1 {
 impl PorChallengeV1 {
     /// Validates the challenge payload.
     pub fn validate(&self) -> Result<(), PorChallengeValidationError> {
+        preflight_por_challenge_len(self, POR_CHALLENGE_MAX_CANONICAL_BYTES_V1)?;
         if self.version != POR_CHALLENGE_VERSION_V1 {
             return Err(PorChallengeValidationError::UnsupportedVersion {
                 found: self.version,
@@ -334,6 +461,7 @@ impl PorChallengeV1 {
         if self.challenge_id.iter().all(|&byte| byte == 0) {
             return Err(PorChallengeValidationError::InvalidChallengeId);
         }
+        validate_por_challenge_profile(&self.chunking_profile)?;
         chunker_registry::lookup_by_handle(&self.chunking_profile).ok_or_else(|| {
             PorChallengeValidationError::UnknownChunkerHandle {
                 handle: self.chunking_profile.clone(),
@@ -407,10 +535,23 @@ impl PorChallengeV1 {
         if self.sample_count == 0 {
             return Err(PorChallengeValidationError::ZeroSampleCount);
         }
+        if usize::from(self.sample_count) > POR_CHALLENGE_MAX_SAMPLES_V1 {
+            return Err(PorChallengeValidationError::TooManyDeclaredSamples {
+                found: self.sample_count,
+                maximum: POR_CHALLENGE_MAX_SAMPLES_V1,
+            });
+        }
+        if self.sample_indices.len() > POR_CHALLENGE_MAX_SAMPLES_V1 {
+            return Err(PorChallengeValidationError::TooManySampleIndices {
+                found: self.sample_indices.len(),
+                maximum: POR_CHALLENGE_MAX_SAMPLES_V1,
+            });
+        }
         if self.sample_indices.len() != usize::from(self.sample_count) {
             return Err(PorChallengeValidationError::SampleCountMismatch {
                 expected: self.sample_count,
-                actual: self.sample_indices.len() as u16,
+                actual: u16::try_from(self.sample_indices.len())
+                    .expect("bounded challenge sample inventory fits u16"),
             });
         }
         if self.issued_at >= self.deadline_at {
@@ -426,6 +567,10 @@ impl PorChallengeV1 {
 /// Validation errors for [`PorChallengeV1`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PorChallengeValidationError {
+    #[error("PoR challenge does not expose an exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    #[error("PoR challenge has {found} canonical bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
     #[error("unsupported challenge version {found}")]
     UnsupportedVersion { found: u8 },
     #[error("challenge id must be non-zero")]
@@ -458,16 +603,49 @@ pub enum PorChallengeValidationError {
     SeedMismatch,
     #[error("challenge id does not match deterministic derivation")]
     ChallengeIdMismatch,
+    #[error("chunker profile is noncanonical or has {found} bytes; maximum is {maximum}")]
+    InvalidChunkerProfile { found: usize, maximum: usize },
     #[error("unknown chunker profile handle: {handle}")]
     UnknownChunkerHandle { handle: String },
     #[error("sample tier must be non-zero")]
     InvalidSampleTier,
     #[error("challenge must contain at least one sample")]
     ZeroSampleCount,
+    #[error("challenge declares {found} samples; maximum is {maximum}")]
+    TooManyDeclaredSamples { found: u16, maximum: usize },
+    #[error("challenge carries {found} sample indices; maximum is {maximum}")]
+    TooManySampleIndices { found: usize, maximum: usize },
     #[error("sample count mismatch (expected {expected}, actual {actual})")]
     SampleCountMismatch { expected: u16, actual: u16 },
     #[error("deadline {deadline_at} must be greater than issued_at {issued_at}")]
     InvalidDeadline { issued_at: u64, deadline_at: u64 },
+}
+
+fn validate_por_challenge_profile(profile: &str) -> Result<(), PorChallengeValidationError> {
+    if profile.is_empty()
+        || profile.len() > POR_CHALLENGE_PROFILE_MAX_BYTES_V1
+        || profile.trim() != profile
+        || profile.chars().any(char::is_control)
+    {
+        return Err(PorChallengeValidationError::InvalidChunkerProfile {
+            found: profile.len(),
+            maximum: POR_CHALLENGE_PROFILE_MAX_BYTES_V1,
+        });
+    }
+    Ok(())
+}
+
+fn preflight_por_challenge_len(
+    challenge: &PorChallengeV1,
+    maximum: usize,
+) -> Result<usize, PorChallengeValidationError> {
+    let found = challenge
+        .encoded_len_exact()
+        .ok_or(PorChallengeValidationError::CanonicalLengthUnavailable)?;
+    if found > maximum {
+        return Err(PorChallengeValidationError::PayloadTooLarge { found, maximum });
+    }
+    Ok(found)
 }
 
 /// Canonical Governance DAG publication envelope for one PoR challenge.
@@ -506,6 +684,10 @@ impl PorChallengePublicationV1 {
 
     /// Validate the envelope and its exact duplicate-sample binding.
     pub fn validate(&self) -> Result<(), PorChallengePublicationValidationError> {
+        preflight_por_challenge_publication_len(
+            self,
+            POR_CHALLENGE_PUBLICATION_MAX_CANONICAL_BYTES_V1,
+        )?;
         if self.version != POR_CHALLENGE_PUBLICATION_VERSION_V1 {
             return Err(PorChallengePublicationValidationError::UnsupportedVersion {
                 found: self.version,
@@ -552,6 +734,12 @@ impl PorChallengePublicationV1 {
 /// Validation failures for [`PorChallengePublicationV1`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PorChallengePublicationValidationError {
+    /// Canonical encoder cannot provide an allocation-free exact length.
+    #[error("PoR challenge publication has no exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    /// Canonical publication bytes exceed the V1 ceiling.
+    #[error("PoR challenge publication has {found} canonical bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
     /// The publication version is unsupported.
     #[error("unsupported PoR challenge publication version {found}")]
     UnsupportedVersion { found: u8 },
@@ -572,6 +760,106 @@ pub enum PorChallengePublicationValidationError {
     /// The declared duplicate count does not match the sample inventory.
     #[error("PoR duplicate sample count mismatch (declared {declared}, actual {actual})")]
     DuplicateSampleCountMismatch { declared: u16, actual: u16 },
+}
+
+fn preflight_por_challenge_publication_len(
+    publication: &PorChallengePublicationV1,
+    maximum: usize,
+) -> Result<usize, PorChallengePublicationValidationError> {
+    let found = publication
+        .encoded_len_exact()
+        .ok_or(PorChallengePublicationValidationError::CanonicalLengthUnavailable)?;
+    if found > maximum {
+        return Err(PorChallengePublicationValidationError::PayloadTooLarge { found, maximum });
+    }
+    Ok(found)
+}
+
+/// Decode and validate one bounded canonical V1 PoR challenge.
+///
+/// # Errors
+///
+/// Returns a Norito error for oversized, noncanonical, malformed, or
+/// structurally invalid challenge bytes.
+pub fn decode_por_challenge_v1(bytes: &[u8]) -> Result<PorChallengeV1, norito::core::Error> {
+    let challenge: PorChallengeV1 = decode_bounded_canonical_por_payload(
+        "PoR challenge",
+        bytes,
+        POR_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+        norito::DecodeLimits::new(
+            POR_CHALLENGE_MAX_SAMPLES_V1,
+            POR_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+            2_048,
+            POR_CHALLENGE_MAX_CANONICAL_BYTES_V1 * 4,
+            32,
+        ),
+    )?;
+    challenge
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(challenge)
+}
+
+/// Decode and validate one bounded canonical V1 PoR challenge publication.
+///
+/// # Errors
+///
+/// Returns a Norito error for oversized, noncanonical, malformed, or
+/// structurally invalid publication bytes.
+pub fn decode_por_challenge_publication_v1(
+    bytes: &[u8],
+) -> Result<PorChallengePublicationV1, norito::core::Error> {
+    let publication: PorChallengePublicationV1 = decode_bounded_canonical_por_payload(
+        "PoR challenge publication",
+        bytes,
+        POR_CHALLENGE_PUBLICATION_MAX_CANONICAL_BYTES_V1,
+        norito::DecodeLimits::new(
+            POR_CHALLENGE_MAX_SAMPLES_V1,
+            POR_CHALLENGE_PUBLICATION_MAX_CANONICAL_BYTES_V1,
+            2_048,
+            POR_CHALLENGE_PUBLICATION_MAX_CANONICAL_BYTES_V1 * 4,
+            32,
+        ),
+    )?;
+    publication
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(publication)
+}
+
+fn decode_bounded_canonical_por_payload<T>(
+    payload: &'static str,
+    bytes: &[u8],
+    maximum: usize,
+    limits: norito::DecodeLimits,
+) -> Result<T, norito::core::Error>
+where
+    T: for<'decode> norito::NoritoDeserialize<'decode> + norito::NoritoSerialize,
+{
+    if bytes.len() > maximum {
+        return Err(norito::core::Error::Message(format!(
+            "{payload} has {} canonical bytes; maximum is {maximum}",
+            bytes.len()
+        )));
+    }
+    let value: T = norito::decode_from_bytes_with_limits(bytes, limits)?;
+    let exact = value.encoded_len_exact().ok_or_else(|| {
+        norito::core::Error::Message(format!(
+            "{payload} does not expose an exact canonical encoded length"
+        ))
+    })?;
+    if exact > maximum {
+        return Err(norito::core::Error::Message(format!(
+            "{payload} has {exact} canonical bytes; maximum is {maximum}"
+        )));
+    }
+    let canonical = norito::to_bytes(&value)?;
+    if canonical != bytes {
+        return Err(norito::core::Error::Message(format!(
+            "{payload} is not canonically encoded"
+        )));
+    }
+    Ok(value)
 }
 
 /// Sample proof attached to a PoR response.
@@ -643,6 +931,121 @@ struct PorProofSigningPayloadV1 {
     submitted_at: u64,
 }
 
+mod borrowed_norito {
+    use norito::core::NoritoSerialize;
+
+    /// Borrowed string that preserves the owned `String` wire representation.
+    pub(super) struct String<'a>(pub(super) &'a str);
+
+    impl NoritoSerialize for String<'_> {
+        fn schema_hash() -> [u8; 16] {
+            <std::string::String>::schema_hash()
+        }
+
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> std::option::Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> std::option::Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+
+    /// Borrowed vector that preserves the owned `Vec<T>` wire representation.
+    pub(super) struct Vec<'a, T>(pub(super) &'a std::vec::Vec<T>);
+
+    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            <std::vec::Vec<T>>::schema_hash()
+        }
+
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> std::option::Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> std::option::Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+
+    /// Borrowed option that preserves the owned `Option<T>` wire representation.
+    pub(super) struct Option<'a, T>(pub(super) &'a std::option::Option<T>);
+
+    impl<T: NoritoSerialize> NoritoSerialize for Option<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            <std::option::Option<T>>::schema_hash()
+        }
+
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> std::option::Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> std::option::Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct PorProofSigningPayloadViewWireV1<'a> {
+    domain: borrowed_norito::String<'a>,
+    version: u8,
+    challenge_id: [u8; 32],
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    samples: borrowed_norito::Vec<'a, PorProofSampleV1>,
+    auth_path: borrowed_norito::Vec<'a, [u8; 32]>,
+    submitted_at: u64,
+}
+
+struct PorProofSigningPayloadViewV1<'a>(PorProofSigningPayloadViewWireV1<'a>);
+
+impl<'a> From<&'a PorProofV1> for PorProofSigningPayloadViewV1<'a> {
+    fn from(proof: &'a PorProofV1) -> Self {
+        Self(PorProofSigningPayloadViewWireV1 {
+            domain: borrowed_norito::String(POR_PROOF_SIGNATURE_DOMAIN_V1),
+            version: proof.version,
+            challenge_id: proof.challenge_id,
+            manifest_digest: proof.manifest_digest,
+            provider_id: proof.provider_id,
+            samples: borrowed_norito::Vec(&proof.samples),
+            auth_path: borrowed_norito::Vec(&proof.auth_path),
+            submitted_at: proof.submitted_at,
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for PorProofSigningPayloadViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        PorProofSigningPayloadV1::schema_hash()
+    }
+
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
+#[cfg(test)]
 impl From<&PorProofV1> for PorProofSigningPayloadV1 {
     fn from(proof: &PorProofV1) -> Self {
         Self {
@@ -661,6 +1064,7 @@ impl From<&PorProofV1> for PorProofSigningPayloadV1 {
 impl PorProofV1 {
     /// Validates the proof payload.
     pub fn validate(&self) -> Result<(), PorProofValidationError> {
+        preflight_por_proof_len(self, POR_PROOF_MAX_CANONICAL_BYTES_V1)?;
         if self.version != POR_PROOF_VERSION_V1 {
             return Err(PorProofValidationError::UnsupportedVersion {
                 found: self.version,
@@ -678,20 +1082,44 @@ impl PorProofV1 {
         if self.samples.is_empty() {
             return Err(PorProofValidationError::MissingSamples);
         }
+        if self.samples.len() > POR_PROOF_MAX_SAMPLES_V1 {
+            return Err(PorProofValidationError::TooManySamples {
+                found: self.samples.len(),
+                maximum: POR_PROOF_MAX_SAMPLES_V1,
+            });
+        }
         for sample in &self.samples {
             sample.validate()?;
         }
         if self.auth_path.is_empty() {
             return Err(PorProofValidationError::MissingAuthPath);
         }
+        if self.auth_path.len() > POR_PROOF_MAX_AUTH_PATH_NODES_V1 {
+            return Err(PorProofValidationError::AuthPathTooDeep {
+                found: self.auth_path.len(),
+                maximum: POR_PROOF_MAX_AUTH_PATH_NODES_V1,
+            });
+        }
         if self.submitted_at == 0 {
             return Err(PorProofValidationError::InvalidSubmittedAt);
         }
-        if self.signature.algorithm != SignatureAlgorithm::Ed25519
-            || self.signature.public_key.is_empty()
-            || self.signature.public_key.iter().all(|byte| *byte == 0)
-            || self.signature.signature.is_empty()
-            || self.signature.signature.iter().all(|byte| *byte == 0)
+        if self.signature.algorithm != SignatureAlgorithm::Ed25519 {
+            return Err(PorProofValidationError::InvalidSignature);
+        }
+        if self.signature.public_key.len() != PUBLIC_KEY_LENGTH {
+            return Err(PorProofValidationError::InvalidPublicKeyLength {
+                found: self.signature.public_key.len(),
+                expected: PUBLIC_KEY_LENGTH,
+            });
+        }
+        if self.signature.signature.len() != SIGNATURE_LENGTH {
+            return Err(PorProofValidationError::InvalidSignatureLength {
+                found: self.signature.signature.len(),
+                expected: SIGNATURE_LENGTH,
+            });
+        }
+        if crate::inert_bytes(&self.signature.public_key)
+            || crate::inert_bytes(&self.signature.signature)
         {
             return Err(PorProofValidationError::InvalidSignature);
         }
@@ -705,7 +1133,20 @@ impl PorProofV1 {
     /// Returns a Norito encoding error if the canonical payload cannot be
     /// serialized.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
-        norito::to_bytes(&PorProofSigningPayloadV1::from(self))
+        preflight_por_proof_len(self, POR_PROOF_MAX_CANONICAL_BYTES_V1)
+            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+        let payload = PorProofSigningPayloadViewV1::from(self);
+        let exact = payload.encoded_len_exact().ok_or_else(|| {
+            norito::core::Error::Message(
+                "PoR proof signing payload has no exact canonical length".to_owned(),
+            )
+        })?;
+        if exact > POR_PROOF_MAX_CANONICAL_BYTES_V1 {
+            return Err(norito::core::Error::Message(format!(
+                "PoR proof signing payload has {exact} bytes; maximum is {POR_PROOF_MAX_CANONICAL_BYTES_V1}"
+            )));
+        }
+        norito::to_bytes(&payload)
     }
 
     /// Cryptographically verifies the provider signature.
@@ -776,6 +1217,10 @@ impl PorProofV1 {
 /// Validation errors for [`PorProofV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PorProofValidationError {
+    #[error("PoR proof does not expose an exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    #[error("PoR proof has {found} canonical bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
     #[error("unsupported proof version {found}")]
     UnsupportedVersion { found: u8 },
     #[error("challenge id must be non-zero")]
@@ -786,8 +1231,12 @@ pub enum PorProofValidationError {
     InvalidProviderId,
     #[error("proof must contain at least one sample")]
     MissingSamples,
+    #[error("proof has {found} samples; maximum is {maximum}")]
+    TooManySamples { found: usize, maximum: usize },
     #[error("authentication path must not be empty")]
     MissingAuthPath,
+    #[error("authentication path has {found} nodes; maximum is {maximum}")]
+    AuthPathTooDeep { found: usize, maximum: usize },
     #[error("sample {sample_index} has invalid chunk size")]
     InvalidChunkSize { sample_index: u64 },
     #[error("sample {sample_index} has invalid chunk digest")]
@@ -796,8 +1245,50 @@ pub enum PorProofValidationError {
     InvalidLeafDigest { sample_index: u64 },
     #[error("signature must include algorithm-specific public key and signature bytes")]
     InvalidSignature,
+    #[error("Ed25519 public key has {found} bytes; expected {expected}")]
+    InvalidPublicKeyLength { found: usize, expected: usize },
+    #[error("Ed25519 signature has {found} bytes; expected {expected}")]
+    InvalidSignatureLength { found: usize, expected: usize },
     #[error("proof submitted_at must be non-zero")]
     InvalidSubmittedAt,
+}
+
+fn preflight_por_proof_len(
+    proof: &PorProofV1,
+    maximum: usize,
+) -> Result<usize, PorProofValidationError> {
+    let found = proof
+        .encoded_len_exact()
+        .ok_or(PorProofValidationError::CanonicalLengthUnavailable)?;
+    if found > maximum {
+        return Err(PorProofValidationError::PayloadTooLarge { found, maximum });
+    }
+    Ok(found)
+}
+
+/// Decode and validate one bounded canonical V1 PoR proof.
+///
+/// # Errors
+///
+/// Returns a Norito error for oversized, noncanonical, malformed, or
+/// structurally invalid proof bytes.
+pub fn decode_por_proof_v1(bytes: &[u8]) -> Result<PorProofV1, norito::core::Error> {
+    let proof: PorProofV1 = decode_bounded_canonical_por_payload(
+        "PoR proof",
+        bytes,
+        POR_PROOF_MAX_CANONICAL_BYTES_V1,
+        norito::DecodeLimits::new(
+            POR_PROOF_MAX_SAMPLES_V1,
+            POR_PROOF_MAX_CANONICAL_BYTES_V1,
+            16_384,
+            POR_PROOF_MAX_CANONICAL_BYTES_V1 * 4,
+            64,
+        ),
+    )?;
+    proof
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(proof)
 }
 
 /// Outcome recorded after challenge verification.
@@ -854,6 +1345,58 @@ struct AuditVerdictSigningPayloadV1 {
     metadata: Vec<CapacityMetadataEntry>,
 }
 
+#[derive(NoritoSerialize)]
+struct AuditVerdictSigningPayloadViewWireV1<'a> {
+    domain: borrowed_norito::String<'a>,
+    version: u8,
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    challenge_id: [u8; 32],
+    proof_digest: Option<[u8; 32]>,
+    outcome: AuditOutcomeV1,
+    failure_reason: borrowed_norito::Option<'a, String>,
+    decided_at: u64,
+    metadata: borrowed_norito::Vec<'a, CapacityMetadataEntry>,
+}
+
+struct AuditVerdictSigningPayloadViewV1<'a>(AuditVerdictSigningPayloadViewWireV1<'a>);
+
+impl<'a> From<&'a AuditVerdictV1> for AuditVerdictSigningPayloadViewV1<'a> {
+    fn from(verdict: &'a AuditVerdictV1) -> Self {
+        Self(AuditVerdictSigningPayloadViewWireV1 {
+            domain: borrowed_norito::String(POR_VERDICT_SIGNATURE_DOMAIN_V1),
+            version: verdict.version,
+            manifest_digest: verdict.manifest_digest,
+            provider_id: verdict.provider_id,
+            challenge_id: verdict.challenge_id,
+            proof_digest: verdict.proof_digest,
+            outcome: verdict.outcome,
+            failure_reason: borrowed_norito::Option(&verdict.failure_reason),
+            decided_at: verdict.decided_at,
+            metadata: borrowed_norito::Vec(&verdict.metadata),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for AuditVerdictSigningPayloadViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        AuditVerdictSigningPayloadV1::schema_hash()
+    }
+
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
+#[cfg(test)]
 impl From<&AuditVerdictV1> for AuditVerdictSigningPayloadV1 {
     fn from(verdict: &AuditVerdictV1) -> Self {
         Self {
@@ -874,6 +1417,7 @@ impl From<&AuditVerdictV1> for AuditVerdictSigningPayloadV1 {
 impl AuditVerdictV1 {
     /// Validates the verdict payload.
     pub fn validate(&self) -> Result<(), AuditVerdictValidationError> {
+        preflight_audit_verdict_len(self, AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1)?;
         if self.version != AUDIT_VERDICT_VERSION_V1 {
             return Err(AuditVerdictValidationError::UnsupportedVersion {
                 found: self.version,
@@ -890,6 +1434,20 @@ impl AuditVerdictV1 {
         }
         if self.decided_at == 0 {
             return Err(AuditVerdictValidationError::InvalidDecidedAt);
+        }
+        if let Some(reason) = self.failure_reason.as_ref() {
+            if reason.len() > AUDIT_VERDICT_FAILURE_REASON_MAX_BYTES_V1 {
+                return Err(AuditVerdictValidationError::FailureReasonTooLong {
+                    found: reason.len(),
+                    maximum: AUDIT_VERDICT_FAILURE_REASON_MAX_BYTES_V1,
+                });
+            }
+            if reason.trim().is_empty()
+                || reason.trim() != reason
+                || reason.chars().any(char::is_control)
+            {
+                return Err(AuditVerdictValidationError::InvalidFailureReason);
+            }
         }
         match self.outcome {
             AuditOutcomeV1::Success => {
@@ -910,55 +1468,68 @@ impl AuditVerdictV1 {
         if self.auditor_signatures.is_empty() {
             return Err(AuditVerdictValidationError::MissingSignatures);
         }
-        for signature in &self.auditor_signatures {
-            if signature.algorithm != SignatureAlgorithm::Ed25519
-                || signature.public_key.is_empty()
-                || signature.public_key.iter().all(|byte| *byte == 0)
-                || signature.signature.is_empty()
-                || signature.signature.iter().all(|byte| *byte == 0)
+        if self.auditor_signatures.len() > AUDIT_VERDICT_MAX_SIGNATURES_V1 {
+            return Err(AuditVerdictValidationError::TooManySignatures {
+                found: self.auditor_signatures.len(),
+                maximum: AUDIT_VERDICT_MAX_SIGNATURES_V1,
+            });
+        }
+        let mut signer_keys = BTreeSet::new();
+        for (index, signature) in self.auditor_signatures.iter().enumerate() {
+            if signature.algorithm != SignatureAlgorithm::Ed25519 {
+                return Err(AuditVerdictValidationError::InvalidSignature);
+            }
+            if signature.public_key.len() != PUBLIC_KEY_LENGTH {
+                return Err(AuditVerdictValidationError::InvalidPublicKeyLength {
+                    index,
+                    found: signature.public_key.len(),
+                    expected: PUBLIC_KEY_LENGTH,
+                });
+            }
+            if signature.signature.len() != SIGNATURE_LENGTH {
+                return Err(AuditVerdictValidationError::InvalidSignatureLength {
+                    index,
+                    found: signature.signature.len(),
+                    expected: SIGNATURE_LENGTH,
+                });
+            }
+            if crate::inert_bytes(&signature.public_key) || crate::inert_bytes(&signature.signature)
             {
                 return Err(AuditVerdictValidationError::InvalidSignature);
             }
+            if !signer_keys.insert(signature.public_key.as_slice()) {
+                return Err(AuditVerdictValidationError::DuplicateAuditorSigner { index });
+            }
+        }
+        if self.metadata.len() > AUDIT_VERDICT_MAX_METADATA_ENTRIES_V1 {
+            return Err(AuditVerdictValidationError::TooManyMetadataEntries {
+                found: self.metadata.len(),
+                maximum: AUDIT_VERDICT_MAX_METADATA_ENTRIES_V1,
+            });
         }
         let mut metadata_keys = BTreeSet::new();
+        let mut metadata_bytes = 0_usize;
         for (index, entry) in self.metadata.iter().enumerate() {
-            let key_trimmed = entry.key.trim();
-            if key_trimmed.is_empty() {
-                return Err(AuditVerdictValidationError::InvalidMetadata {
+            entry
+                .validate()
+                .map_err(|_| AuditVerdictValidationError::InvalidMetadata {
                     index,
-                    reason: "metadata key must not be empty",
-                });
-            }
-            if key_trimmed != entry.key {
-                return Err(AuditVerdictValidationError::InvalidMetadata {
-                    index,
-                    reason: "metadata key must not contain surrounding whitespace",
-                });
-            }
-            if !key_trimmed.chars().all(|c| {
-                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')
-            }) {
-                return Err(AuditVerdictValidationError::InvalidMetadata {
-                    index,
-                    reason: "metadata key must use [a-z0-9_.-]",
-                });
-            }
-            if entry.value.trim().is_empty() {
-                return Err(AuditVerdictValidationError::InvalidMetadata {
-                    index,
-                    reason: "metadata value must not be empty",
-                });
-            }
-            if entry.value.trim() != entry.value {
-                return Err(AuditVerdictValidationError::InvalidMetadata {
-                    index,
-                    reason: "metadata value must not contain surrounding whitespace",
-                });
-            }
+                    reason: "capacity metadata validation failed",
+                })?;
             if !metadata_keys.insert(entry.key.as_str()) {
                 return Err(AuditVerdictValidationError::InvalidMetadata {
                     index,
                     reason: "metadata keys must be unique",
+                });
+            }
+            metadata_bytes = metadata_bytes
+                .checked_add(entry.key.len())
+                .and_then(|bytes| bytes.checked_add(entry.value.len()))
+                .ok_or(AuditVerdictValidationError::MetadataBytesOverflow)?;
+            if metadata_bytes > AUDIT_VERDICT_MAX_METADATA_BYTES_V1 {
+                return Err(AuditVerdictValidationError::MetadataTooLarge {
+                    found: metadata_bytes,
+                    maximum: AUDIT_VERDICT_MAX_METADATA_BYTES_V1,
                 });
             }
         }
@@ -972,7 +1543,20 @@ impl AuditVerdictV1 {
     /// Returns a Norito encoding error if the canonical payload cannot be
     /// serialized.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
-        norito::to_bytes(&AuditVerdictSigningPayloadV1::from(self))
+        preflight_audit_verdict_len(self, AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1)
+            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+        let payload = AuditVerdictSigningPayloadViewV1::from(self);
+        let exact = payload.encoded_len_exact().ok_or_else(|| {
+            norito::core::Error::Message(
+                "audit verdict signing payload has no exact canonical length".to_owned(),
+            )
+        })?;
+        if exact > AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1 {
+            return Err(norito::core::Error::Message(format!(
+                "audit verdict signing payload has {exact} bytes; maximum is {AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1}"
+            )));
+        }
+        norito::to_bytes(&payload)
     }
 
     /// Cryptographically verifies every unique auditor signature.
@@ -992,7 +1576,7 @@ impl AuditVerdictV1 {
         })?;
         let mut signers = BTreeSet::new();
         for signature in &self.auditor_signatures {
-            if !signers.insert(signature.public_key.clone()) {
+            if !signers.insert(signature.public_key.as_slice()) {
                 return Err(PorSignatureVerificationError::DuplicateSigner);
             }
             verify_ed25519_signature(signature, &payload)?;
@@ -1057,6 +1641,10 @@ impl AuditVerdictV1 {
 /// Validation errors for [`AuditVerdictV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum AuditVerdictValidationError {
+    #[error("audit verdict does not expose an exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    #[error("audit verdict has {found} canonical bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
     #[error("unsupported verdict version {found}")]
     UnsupportedVersion { found: u8 },
     #[error("manifest digest must be non-zero")]
@@ -1069,14 +1657,78 @@ pub enum AuditVerdictValidationError {
     InvalidDecidedAt,
     #[error("failure reason required for non-success outcomes")]
     MissingFailureReason,
+    #[error("failure reason must be canonical non-empty UTF-8 without control characters")]
+    InvalidFailureReason,
     #[error("failure reason must be absent for success outcomes")]
     UnexpectedFailureReason,
+    #[error("failure reason has {found} bytes; maximum is {maximum}")]
+    FailureReasonTooLong { found: usize, maximum: usize },
     #[error("at least one auditor signature is required")]
     MissingSignatures,
+    #[error("verdict has {found} auditor signatures; maximum is {maximum}")]
+    TooManySignatures { found: usize, maximum: usize },
     #[error("auditor signature is missing key or signature bytes")]
     InvalidSignature,
+    #[error("auditor signature #{index} public key has {found} bytes; expected {expected}")]
+    InvalidPublicKeyLength {
+        index: usize,
+        found: usize,
+        expected: usize,
+    },
+    #[error("auditor signature #{index} has {found} bytes; expected {expected}")]
+    InvalidSignatureLength {
+        index: usize,
+        found: usize,
+        expected: usize,
+    },
+    #[error("auditor signature #{index} repeats an earlier signer")]
+    DuplicateAuditorSigner { index: usize },
+    #[error("verdict has {found} metadata rows; maximum is {maximum}")]
+    TooManyMetadataEntries { found: usize, maximum: usize },
     #[error("metadata entry {index} invalid: {reason}")]
     InvalidMetadata { index: usize, reason: &'static str },
+    #[error("audit verdict metadata byte count overflow")]
+    MetadataBytesOverflow,
+    #[error("audit verdict metadata has {found} bytes; maximum is {maximum}")]
+    MetadataTooLarge { found: usize, maximum: usize },
+}
+
+fn preflight_audit_verdict_len(
+    verdict: &AuditVerdictV1,
+    maximum: usize,
+) -> Result<usize, AuditVerdictValidationError> {
+    let found = verdict
+        .encoded_len_exact()
+        .ok_or(AuditVerdictValidationError::CanonicalLengthUnavailable)?;
+    if found > maximum {
+        return Err(AuditVerdictValidationError::PayloadTooLarge { found, maximum });
+    }
+    Ok(found)
+}
+
+/// Decode and validate one bounded canonical V1 PoR audit verdict.
+///
+/// # Errors
+///
+/// Returns a Norito error for oversized, noncanonical, malformed, or
+/// structurally invalid verdict bytes.
+pub fn decode_audit_verdict_v1(bytes: &[u8]) -> Result<AuditVerdictV1, norito::core::Error> {
+    let verdict: AuditVerdictV1 = decode_bounded_canonical_por_payload(
+        "PoR audit verdict",
+        bytes,
+        AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1,
+        norito::DecodeLimits::new(
+            crate::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+            crate::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+            16_384,
+            AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1 * 4,
+            64,
+        ),
+    )?;
+    verdict
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(verdict)
 }
 
 /// Errors raised while verifying PoR provider or auditor signatures.
@@ -1205,7 +1857,11 @@ pub enum PorChallengeOutcome {
     /// Proof recovered after repair.
     #[norito(rename = "repaired")]
     Repaired = 4,
-    /// Challenge was forced due to missing VRF.
+    /// Challenge was forced due to missing VRF and has not reached a verdict.
+    ///
+    /// A forced challenge may carry proof response material after provider
+    /// submission; `forced` records scheduling provenance rather than proof
+    /// absence.
     #[norito(rename = "forced")]
     Forced = 5,
 }
@@ -1321,6 +1977,7 @@ pub struct PorChallengeStatusV1 {
 impl PorChallengeStatusV1 {
     /// Validates the status snapshot.
     pub fn validate(&self) -> Result<(), PorChallengeStatusValidationError> {
+        preflight_por_challenge_status_len(self, POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1)?;
         if self.version != POR_CHALLENGE_STATUS_VERSION_V1 {
             return Err(PorChallengeStatusValidationError::UnsupportedVersion {
                 found: self.version,
@@ -1335,40 +1992,109 @@ impl PorChallengeStatusV1 {
         if self.provider_id.iter().all(|&byte| byte == 0) {
             return Err(PorChallengeStatusValidationError::InvalidProviderId);
         }
+        if self.epoch_id == 0 {
+            return Err(PorChallengeStatusValidationError::InvalidEpoch);
+        }
+        if self.drand_round == 0 {
+            return Err(PorChallengeStatusValidationError::InvalidDrandRound);
+        }
         if self.sample_count == 0 {
             return Err(PorChallengeStatusValidationError::InvalidSampleCount);
+        }
+        if usize::from(self.sample_count) > POR_CHALLENGE_MAX_SAMPLES_V1 {
+            return Err(PorChallengeStatusValidationError::TooManySamples {
+                found: self.sample_count,
+                maximum: POR_CHALLENGE_MAX_SAMPLES_V1,
+            });
+        }
+        if self.issued_at == 0 {
+            return Err(PorChallengeStatusValidationError::InvalidIssuedAt);
         }
         if let Some(responded_at) = self.responded_at
             && responded_at < self.issued_at
         {
             return Err(PorChallengeStatusValidationError::InvalidResponseTimestamp);
         }
-        if self
-            .failure_reason
-            .as_ref()
-            .is_some_and(|reason| reason.trim().is_empty())
-        {
+        match (self.responded_at, self.proof_digest) {
+            (Some(_), Some(digest)) => {
+                if digest == [0; 32] {
+                    return Err(PorChallengeStatusValidationError::InvalidProofDigest);
+                }
+            }
+            (None, None) => {}
+            _ => return Err(PorChallengeStatusValidationError::InconsistentProofMaterial),
+        }
+        if self.verifier_latency_ms.is_some() && self.proof_digest.is_none() {
+            return Err(PorChallengeStatusValidationError::UnexpectedVerifierLatency);
+        }
+        if self.failure_reason.as_ref().is_some_and(|reason| {
+            reason.trim().is_empty()
+                || reason.trim() != reason
+                || reason.len() > POR_CHALLENGE_STATUS_FAILURE_REASON_MAX_BYTES_V1
+                || reason.chars().any(char::is_control)
+        }) {
             return Err(PorChallengeStatusValidationError::InvalidFailureReason);
         }
-        if matches!(
-            self.status,
-            PorChallengeOutcome::Failed | PorChallengeOutcome::Repaired
-        ) && self.failure_reason.is_none()
-        {
-            return Err(PorChallengeStatusValidationError::MissingFailureReason);
-        }
-        match (self.status, self.repair_task_id) {
-            (PorChallengeOutcome::Failed, None) => {
-                return Err(PorChallengeStatusValidationError::MissingRepairTaskId);
+        match self.status {
+            PorChallengeOutcome::Pending => {
+                if self.forced {
+                    return Err(PorChallengeStatusValidationError::InvalidForcedState);
+                }
+                if self.responded_at.is_some() {
+                    return Err(PorChallengeStatusValidationError::UnexpectedProofMaterial);
+                }
+                if self.failure_reason.is_some()
+                    || self.repair_task_id.is_some()
+                    || self.verifier_latency_ms.is_some()
+                {
+                    return Err(PorChallengeStatusValidationError::UnexpectedOutcomeMaterial);
+                }
             }
-            (PorChallengeOutcome::Failed, Some(task_id)) if task_id == [0; 32] => {
-                return Err(PorChallengeStatusValidationError::InvalidRepairTaskId);
+            PorChallengeOutcome::Forced => {
+                if !self.forced {
+                    return Err(PorChallengeStatusValidationError::InvalidForcedState);
+                }
+                if self.failure_reason.is_some()
+                    || self.repair_task_id.is_some()
+                    || self.verifier_latency_ms.is_some()
+                {
+                    return Err(PorChallengeStatusValidationError::UnexpectedOutcomeMaterial);
+                }
             }
-            (PorChallengeOutcome::Failed, Some(_)) => {}
-            (_, Some(_)) => {
-                return Err(PorChallengeStatusValidationError::UnexpectedRepairTaskId);
+            PorChallengeOutcome::Verified => {
+                if self.proof_digest.is_none() {
+                    return Err(PorChallengeStatusValidationError::MissingProofMaterial);
+                }
+                if self.failure_reason.is_some() {
+                    return Err(PorChallengeStatusValidationError::UnexpectedFailureReason);
+                }
+                if self.repair_task_id.is_some() {
+                    return Err(PorChallengeStatusValidationError::UnexpectedRepairTaskId);
+                }
             }
-            (_, None) => {}
+            PorChallengeOutcome::Failed => {
+                if self.failure_reason.is_none() {
+                    return Err(PorChallengeStatusValidationError::MissingFailureReason);
+                }
+                match self.repair_task_id {
+                    None => return Err(PorChallengeStatusValidationError::MissingRepairTaskId),
+                    Some(task_id) if task_id == [0; 32] => {
+                        return Err(PorChallengeStatusValidationError::InvalidRepairTaskId);
+                    }
+                    Some(_) => {}
+                }
+            }
+            PorChallengeOutcome::Repaired => {
+                if self.proof_digest.is_none() {
+                    return Err(PorChallengeStatusValidationError::MissingProofMaterial);
+                }
+                if self.failure_reason.is_none() {
+                    return Err(PorChallengeStatusValidationError::MissingFailureReason);
+                }
+                if self.repair_task_id.is_some() {
+                    return Err(PorChallengeStatusValidationError::UnexpectedRepairTaskId);
+                }
+            }
         }
         Ok(())
     }
@@ -1377,6 +2103,10 @@ impl PorChallengeStatusV1 {
 /// Validation errors for [`PorChallengeStatusV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PorChallengeStatusValidationError {
+    #[error("PoR challenge status does not expose an exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    #[error("PoR challenge status has {found} canonical bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
     #[error("unsupported status version {found}")]
     UnsupportedVersion { found: u8 },
     #[error("challenge id must be non-zero")]
@@ -1385,10 +2115,34 @@ pub enum PorChallengeStatusValidationError {
     InvalidManifestDigest,
     #[error("provider id must be non-zero")]
     InvalidProviderId,
+    #[error("epoch id must be non-zero")]
+    InvalidEpoch,
+    #[error("drand round must be non-zero")]
+    InvalidDrandRound,
     #[error("sample count must be greater than zero")]
     InvalidSampleCount,
+    #[error("status declares {found} samples; maximum is {maximum}")]
+    TooManySamples { found: u16, maximum: usize },
+    #[error("issued_at must be non-zero")]
+    InvalidIssuedAt,
+    #[error("responded_at and proof_digest must be present or absent together")]
+    InconsistentProofMaterial,
+    #[error("terminal success/recovery status requires proof response material")]
+    MissingProofMaterial,
+    #[error("proof digest must be non-zero")]
+    InvalidProofDigest,
+    #[error("pending status must not claim proof response material")]
+    UnexpectedProofMaterial,
+    #[error("verifier latency requires proof response material")]
+    UnexpectedVerifierLatency,
+    #[error("status contains material not admitted for its outcome")]
+    UnexpectedOutcomeMaterial,
+    #[error("forced status and forced scheduling flag are inconsistent")]
+    InvalidForcedState,
     #[error("failure reason must be provided for failed/repaired outcomes")]
     MissingFailureReason,
+    #[error("failure reason must be absent for pending/forced/verified outcomes")]
+    UnexpectedFailureReason,
     #[error("failure reason must not be empty")]
     InvalidFailureReason,
     #[error("failed challenge must reference a chain-authoritative repair task")]
@@ -1399,6 +2153,92 @@ pub enum PorChallengeStatusValidationError {
     UnexpectedRepairTaskId,
     #[error("responded_at must not precede issued_at")]
     InvalidResponseTimestamp,
+}
+
+fn preflight_por_challenge_status_len(
+    status: &PorChallengeStatusV1,
+    maximum: usize,
+) -> Result<usize, PorChallengeStatusValidationError> {
+    let found = status
+        .encoded_len_exact()
+        .ok_or(PorChallengeStatusValidationError::CanonicalLengthUnavailable)?;
+    if found > maximum {
+        return Err(PorChallengeStatusValidationError::PayloadTooLarge { found, maximum });
+    }
+    Ok(found)
+}
+
+/// Decode and validate one bounded canonical V1 PoR challenge status.
+///
+/// # Errors
+///
+/// Returns a Norito error for oversized, noncanonical, malformed, or
+/// structurally invalid status bytes.
+pub fn decode_por_challenge_status_v1(
+    bytes: &[u8],
+) -> Result<PorChallengeStatusV1, norito::core::Error> {
+    let status: PorChallengeStatusV1 = decode_bounded_canonical_por_payload(
+        "PoR challenge status",
+        bytes,
+        POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1,
+        norito::DecodeLimits::new(
+            8,
+            POR_CHALLENGE_STATUS_FAILURE_REASON_MAX_BYTES_V1,
+            256,
+            POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1 * 4,
+            16,
+        ),
+    )?;
+    status
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(status)
+}
+
+/// Decode and validate one bounded canonical page of V1 PoR challenge statuses.
+///
+/// `maximum_records` may further restrict, but never raise, the protocol page
+/// ceiling.
+///
+/// # Errors
+///
+/// Returns a Norito error for an invalid requested bound or for oversized,
+/// noncanonical, malformed, or structurally invalid status bytes.
+pub fn decode_por_challenge_status_page_v1(
+    bytes: &[u8],
+    maximum_records: usize,
+) -> Result<Vec<PorChallengeStatusV1>, norito::core::Error> {
+    if maximum_records > POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 {
+        return Err(norito::core::Error::Message(format!(
+            "PoR challenge status page requested {maximum_records} records; protocol maximum is {POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1}"
+        )));
+    }
+    let statuses: Vec<PorChallengeStatusV1> = decode_bounded_canonical_por_payload(
+        "PoR challenge status page",
+        bytes,
+        POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
+        norito::DecodeLimits::new(
+            POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+            POR_CHALLENGE_STATUS_FAILURE_REASON_MAX_BYTES_V1,
+            POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 * 64,
+            POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 * 4,
+            32,
+        ),
+    )?;
+    if statuses.len() > maximum_records {
+        return Err(norito::core::Error::Message(format!(
+            "PoR challenge status page has {} records; requested maximum is {maximum_records}",
+            statuses.len()
+        )));
+    }
+    for (index, status) in statuses.iter().enumerate() {
+        status.validate().map_err(|error| {
+            norito::core::Error::Message(format!(
+                "PoR challenge status page record #{index} is invalid: {error}"
+            ))
+        })?;
+    }
+    Ok(statuses)
 }
 
 /// ISO-8601 week identifier used by PoR reports.
@@ -1528,11 +2368,12 @@ impl PorProviderSummaryV1 {
                 },
             );
         }
-        if self
-            .ticket_id
-            .as_ref()
-            .is_some_and(|ticket| ticket.trim().is_empty())
-        {
+        if self.ticket_id.as_ref().is_some_and(|ticket| {
+            ticket.trim().is_empty()
+                || ticket.trim() != ticket
+                || ticket.len() > POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1
+                || ticket.chars().any(char::is_control)
+        }) {
             return Err(PorProviderSummaryValidationError::InvalidTicketId);
         }
         Ok(())
@@ -1556,7 +2397,9 @@ pub enum PorProviderSummaryValidationError {
     InconsistentSuccessRateBps { expected: u16, actual: u16 },
     #[error("challenge counts are inconsistent")]
     InconsistentCounts,
-    #[error("ticket identifier must not be empty")]
+    #[error(
+        "ticket identifier must be canonical non-empty UTF-8 of at most {POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1} bytes"
+    )]
     InvalidTicketId,
 }
 
@@ -1584,7 +2427,11 @@ impl PorSlashingEventV1 {
         if self.manifest_digest.iter().all(|&byte| byte == 0) {
             return Err(PorSlashingEventValidationError::InvalidManifestDigest);
         }
-        if self.verdict_cid.trim().is_empty() {
+        if self.verdict_cid.trim().is_empty()
+            || self.verdict_cid.trim() != self.verdict_cid
+            || self.verdict_cid.len() > POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1
+            || self.verdict_cid.chars().any(char::is_control)
+        {
             return Err(PorSlashingEventValidationError::InvalidVerdictCid);
         }
         if self.decided_at == 0 {
@@ -1602,7 +2449,9 @@ pub enum PorSlashingEventValidationError {
     InvalidProviderId,
     #[error("manifest digest must be non-zero")]
     InvalidManifestDigest,
-    #[error("verdict CID must not be empty")]
+    #[error(
+        "verdict CID must be canonical non-empty UTF-8 of at most {POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1} bytes"
+    )]
     InvalidVerdictCid,
     #[error("decision timestamp must be non-zero")]
     InvalidDecisionTimestamp,
@@ -1639,7 +2488,8 @@ pub struct PorWeeklyReportV1 {
     /// Optional P95 latency (milliseconds) across verified challenges.
     #[norito(default)]
     pub p95_latency_ms: Option<u64>,
-    /// Slashing events recorded in the cycle.
+    /// Slashing events recorded in the cycle, ordered strictly by
+    /// `(decided_at, provider_id, manifest_digest, verdict_cid)`.
     #[norito(default)]
     pub slashing_events: Vec<PorSlashingEventV1>,
     /// Providers missing VRF submissions.
@@ -1656,6 +2506,7 @@ pub struct PorWeeklyReportV1 {
 impl PorWeeklyReportV1 {
     /// Validates the weekly report payload.
     pub fn validate(&self) -> Result<(), PorWeeklyReportValidationError> {
+        preflight_por_weekly_report_len(self, POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1)?;
         if self.version != POR_WEEKLY_REPORT_VERSION_V1 {
             return Err(PorWeeklyReportValidationError::UnsupportedVersion {
                 found: self.version,
@@ -1691,6 +2542,38 @@ impl PorWeeklyReportV1 {
                 count: self.top_offenders.len(),
             });
         }
+        if self.slashing_events.len() > POR_WEEKLY_REPORT_MAX_SLASHING_EVENTS_V1 {
+            return Err(PorWeeklyReportValidationError::TooManySlashingEvents {
+                found: self.slashing_events.len(),
+                maximum: POR_WEEKLY_REPORT_MAX_SLASHING_EVENTS_V1,
+            });
+        }
+        if self.slashing_events.len()
+            > usize::try_from(self.challenges_failed).unwrap_or(usize::MAX)
+        {
+            return Err(
+                PorWeeklyReportValidationError::SlashingEventsExceedFailures {
+                    slashing_events: self.slashing_events.len(),
+                    failed_challenges: self.challenges_failed,
+                },
+            );
+        }
+        if self.providers_missing_vrf.len() > POR_WEEKLY_REPORT_MAX_MISSING_VRF_PROVIDERS_V1 {
+            return Err(PorWeeklyReportValidationError::TooManyMissingVrfProviders {
+                found: self.providers_missing_vrf.len(),
+                maximum: POR_WEEKLY_REPORT_MAX_MISSING_VRF_PROVIDERS_V1,
+            });
+        }
+        if self.providers_missing_vrf.len()
+            > usize::try_from(self.forced_challenges).unwrap_or(usize::MAX)
+        {
+            return Err(
+                PorWeeklyReportValidationError::MissingVrfProvidersExceedForcedChallenges {
+                    providers: self.providers_missing_vrf.len(),
+                    forced_challenges: self.forced_challenges,
+                },
+            );
+        }
         for (index, provider) in self.top_offenders.iter().enumerate() {
             provider.validate().map_err(|err| {
                 PorWeeklyReportValidationError::InvalidProviderSummary { index, source: err }
@@ -1717,6 +2600,26 @@ impl PorWeeklyReportV1 {
             event.validate().map_err(|err| {
                 PorWeeklyReportValidationError::InvalidSlashingEvent { index, source: err }
             })?;
+            if index > 0 {
+                let prior = &self.slashing_events[index - 1];
+                let prior_key = (
+                    prior.decided_at,
+                    prior.provider_id,
+                    prior.manifest_digest,
+                    prior.verdict_cid.as_str(),
+                );
+                let current_key = (
+                    event.decided_at,
+                    event.provider_id,
+                    event.manifest_digest,
+                    event.verdict_cid.as_str(),
+                );
+                if prior_key >= current_key {
+                    return Err(
+                        PorWeeklyReportValidationError::UnsortedOrDuplicateSlashingEvent { index },
+                    );
+                }
+            }
         }
         for (index, provider) in self.providers_missing_vrf.iter().enumerate() {
             if provider.iter().all(|&byte| byte == 0) {
@@ -1726,11 +2629,12 @@ impl PorWeeklyReportV1 {
                 return Err(PorWeeklyReportValidationError::UnsortedMissingVrfProviders { index });
             }
         }
-        if self
-            .notes
-            .as_ref()
-            .is_some_and(|notes| notes.trim().is_empty())
-        {
+        if self.notes.as_ref().is_some_and(|notes| {
+            notes.trim().is_empty()
+                || notes.trim() != notes
+                || notes.len() > POR_WEEKLY_REPORT_NOTES_MAX_BYTES_V1
+                || notes.chars().any(char::is_control)
+        }) {
             return Err(PorWeeklyReportValidationError::InvalidNotes);
         }
         Ok(())
@@ -1740,6 +2644,10 @@ impl PorWeeklyReportV1 {
 /// Validation errors for [`PorWeeklyReportV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PorWeeklyReportValidationError {
+    #[error("weekly PoR report does not expose an exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    #[error("weekly PoR report has {found} canonical bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
     #[error("unsupported weekly report version {found}")]
     UnsupportedVersion { found: u8 },
     #[error("invalid ISO week specified")]
@@ -1756,6 +2664,24 @@ pub enum PorWeeklyReportValidationError {
     InvalidLatencyOrder,
     #[error("weekly report contains {count} top offenders; at most 10 are allowed")]
     TooManyTopOffenders { count: usize },
+    #[error("weekly report contains {found} slashing events; maximum is {maximum}")]
+    TooManySlashingEvents { found: usize, maximum: usize },
+    #[error(
+        "weekly report contains {slashing_events} slashing events but only {failed_challenges} failed challenges"
+    )]
+    SlashingEventsExceedFailures {
+        slashing_events: usize,
+        failed_challenges: u32,
+    },
+    #[error("weekly report contains {found} missing-VRF providers; maximum is {maximum}")]
+    TooManyMissingVrfProviders { found: usize, maximum: usize },
+    #[error(
+        "weekly report contains {providers} missing-VRF providers but only {forced_challenges} forced challenges"
+    )]
+    MissingVrfProvidersExceedForcedChallenges {
+        providers: usize,
+        forced_challenges: u32,
+    },
     #[error("provider summary #{index} invalid: {source}")]
     InvalidProviderSummary {
         index: usize,
@@ -1770,12 +2696,57 @@ pub enum PorWeeklyReportValidationError {
         index: usize,
         source: PorSlashingEventValidationError,
     },
+    #[error(
+        "slashing event #{index} is duplicate or not ordered by decided_at/provider/manifest/verdict CID"
+    )]
+    UnsortedOrDuplicateSlashingEvent { index: usize },
     #[error("providers_missing_vrf entry #{index} must be non-zero")]
     InvalidMissingVrfProvider { index: usize },
     #[error("providers_missing_vrf entry #{index} is duplicate or not in canonical order")]
     UnsortedMissingVrfProviders { index: usize },
-    #[error("notes field must not be empty when present")]
+    #[error(
+        "notes must be canonical non-empty UTF-8 of at most {POR_WEEKLY_REPORT_NOTES_MAX_BYTES_V1} bytes"
+    )]
     InvalidNotes,
+}
+
+fn preflight_por_weekly_report_len(
+    report: &PorWeeklyReportV1,
+    maximum: usize,
+) -> Result<usize, PorWeeklyReportValidationError> {
+    let found = report
+        .encoded_len_exact()
+        .ok_or(PorWeeklyReportValidationError::CanonicalLengthUnavailable)?;
+    if found > maximum {
+        return Err(PorWeeklyReportValidationError::PayloadTooLarge { found, maximum });
+    }
+    Ok(found)
+}
+
+/// Decode and validate one bounded canonical V1 weekly PoR report.
+///
+/// # Errors
+///
+/// Returns a Norito error for oversized, noncanonical, malformed, or
+/// structurally invalid report bytes.
+pub fn decode_por_weekly_report_v1(bytes: &[u8]) -> Result<PorWeeklyReportV1, norito::core::Error> {
+    let report: PorWeeklyReportV1 = decode_bounded_canonical_por_payload(
+        "weekly PoR report",
+        bytes,
+        POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1,
+        norito::DecodeLimits::new(
+            POR_WEEKLY_REPORT_MAX_SLASHING_EVENTS_V1
+                .max(POR_WEEKLY_REPORT_MAX_MISSING_VRF_PROVIDERS_V1),
+            POR_WEEKLY_REPORT_NOTES_MAX_BYTES_V1,
+            300_000,
+            POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1 * 4,
+            64,
+        ),
+    )?;
+    report
+        .validate()
+        .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -1783,6 +2754,35 @@ mod tests {
     use ed25519_dalek::{Signer as _, SigningKey};
 
     use super::*;
+
+    fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let mut bytes = Vec::new();
+        value
+            .serialize(&mut bytes)
+            .expect("serialize explicit layout");
+        bytes
+    }
+
+    fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        norito::to_bytes(value).expect("serialize explicit canonical frame")
+    }
+
+    fn supported_layouts() -> [u8; 8] {
+        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+
+        [
+            0,
+            COMPACT_LEN,
+            PACKED_SEQ,
+            PACKED_SEQ | COMPACT_LEN,
+            PACKED_STRUCT,
+            PACKED_STRUCT | COMPACT_LEN,
+            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+        ]
+    }
 
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyPorChallengeStatusV1 {
@@ -1855,6 +2855,25 @@ mod tests {
             sample_indices,
             issued_at: 1_700_000_000,
             deadline_at: 1_700_000_900,
+        }
+    }
+
+    fn provider_vrf_submission_fixture() -> ProviderVrfSubmissionV1 {
+        ProviderVrfSubmissionV1 {
+            version: POR_VRF_SUBMISSION_VERSION_V1,
+            provider_id: [1; 32],
+            manifest_digest: [2; 32],
+            epoch_id: 3,
+            drand_round: 4,
+            output: [5; 32],
+            proof: iroha_crypto::vrf::VrfProof::SigInG1([6; 48]),
+            sequence: 7,
+            issued_at: 8,
+            signature: AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![9; PUBLIC_KEY_LENGTH],
+                signature: vec![10; SIGNATURE_LENGTH],
+            },
         }
     }
 
@@ -1934,6 +2953,77 @@ mod tests {
     }
 
     #[test]
+    fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
+        let submission = provider_vrf_submission_fixture();
+        assert!(submission.validate().is_ok());
+        let exact = submission
+            .encoded_len_exact()
+            .expect("VRF submission exposes exact canonical length");
+        assert_eq!(
+            preflight_provider_vrf_submission_len(&submission, exact),
+            Ok(exact)
+        );
+        assert_eq!(
+            preflight_provider_vrf_submission_len(&submission, exact - 1),
+            Err(ProviderVrfSubmissionValidationError::PayloadTooLarge {
+                found: exact,
+                maximum: exact - 1,
+            })
+        );
+        let encoded = norito::to_bytes(&submission).expect("encode VRF submission");
+        assert_eq!(
+            decode_provider_vrf_submission_v1(&encoded).expect("bounded VRF decoder"),
+            submission
+        );
+        assert!(
+            decode_provider_vrf_submission_v1(&vec![
+                0;
+                PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1
+                    + 1
+            ])
+            .is_err()
+        );
+
+        let mut short_key = submission.clone();
+        short_key.signature.public_key.pop();
+        assert_eq!(
+            short_key.validate(),
+            Err(
+                ProviderVrfSubmissionValidationError::InvalidSignaturePublicKeyLength {
+                    found: PUBLIC_KEY_LENGTH - 1,
+                    expected: PUBLIC_KEY_LENGTH,
+                }
+            )
+        );
+
+        let mut overlong_signature = submission.clone();
+        overlong_signature.signature.signature.push(10);
+        assert_eq!(
+            overlong_signature.validate(),
+            Err(
+                ProviderVrfSubmissionValidationError::InvalidSignatureLength {
+                    found: SIGNATURE_LENGTH + 1,
+                    expected: SIGNATURE_LENGTH,
+                }
+            )
+        );
+
+        let mut inert = submission.clone();
+        inert.signature.public_key.fill(0);
+        assert_eq!(
+            inert.validate(),
+            Err(ProviderVrfSubmissionValidationError::InvalidSignature)
+        );
+
+        let mut reserved = submission;
+        reserved.signature.algorithm = SignatureAlgorithm::MultiSig;
+        assert_eq!(
+            reserved.validate(),
+            Err(ProviderVrfSubmissionValidationError::UnsupportedSignatureAlgorithm)
+        );
+    }
+
+    #[test]
     fn challenge_id_reflects_epoch_and_round() {
         let seed = [0x11; 32];
         let manifest = [0x22; 32];
@@ -2006,6 +3096,102 @@ mod tests {
         assert_eq!(
             norito::to_bytes(&decoded).expect("re-encode challenge publication"),
             encoded
+        );
+    }
+
+    #[test]
+    fn challenge_and_publication_bounds_preflight_before_nested_work() {
+        let mut challenge = challenge_fixture(
+            (0..u64::try_from(POR_CHALLENGE_MAX_SAMPLES_V1)
+                .expect("challenge sample ceiling fits u64"))
+                .collect(),
+        );
+        challenge
+            .validate()
+            .expect("exact challenge sample boundary validates");
+
+        let challenge_exact = challenge
+            .encoded_len_exact()
+            .expect("challenge exposes exact canonical length");
+        assert_eq!(
+            preflight_por_challenge_len(&challenge, challenge_exact),
+            Ok(challenge_exact)
+        );
+        assert_eq!(
+            preflight_por_challenge_len(&challenge, challenge_exact - 1),
+            Err(PorChallengeValidationError::PayloadTooLarge {
+                found: challenge_exact,
+                maximum: challenge_exact - 1,
+            })
+        );
+        validate_por_challenge_profile(&"p".repeat(POR_CHALLENGE_PROFILE_MAX_BYTES_V1))
+            .expect("exact profile boundary");
+        assert_eq!(
+            validate_por_challenge_profile(&"p".repeat(POR_CHALLENGE_PROFILE_MAX_BYTES_V1 + 1)),
+            Err(PorChallengeValidationError::InvalidChunkerProfile {
+                found: POR_CHALLENGE_PROFILE_MAX_BYTES_V1 + 1,
+                maximum: POR_CHALLENGE_PROFILE_MAX_BYTES_V1,
+            })
+        );
+
+        let encoded = norito::to_bytes(&challenge).expect("encode bounded challenge");
+        assert_eq!(
+            decode_por_challenge_v1(&encoded).expect("bounded challenge decoder"),
+            challenge
+        );
+        assert!(
+            decode_por_challenge_v1(&vec![0; POR_CHALLENGE_MAX_CANONICAL_BYTES_V1 + 1]).is_err()
+        );
+
+        challenge.sample_count += 1;
+        assert_eq!(
+            challenge.validate(),
+            Err(PorChallengeValidationError::TooManyDeclaredSamples {
+                found: u16::try_from(POR_CHALLENGE_MAX_SAMPLES_V1 + 1)
+                    .expect("sample ceiling plus one fits u16"),
+                maximum: POR_CHALLENGE_MAX_SAMPLES_V1,
+            })
+        );
+
+        challenge.sample_count -= 1;
+        challenge.sample_indices.push(999);
+        assert_eq!(
+            challenge.validate(),
+            Err(PorChallengeValidationError::TooManySampleIndices {
+                found: POR_CHALLENGE_MAX_SAMPLES_V1 + 1,
+                maximum: POR_CHALLENGE_MAX_SAMPLES_V1,
+            })
+        );
+
+        let publication = PorChallengePublicationV1::try_new(challenge_fixture(vec![10, 42]), 0)
+            .expect("bounded challenge publication");
+        let publication_exact = publication
+            .encoded_len_exact()
+            .expect("publication exposes exact canonical length");
+        assert_eq!(
+            preflight_por_challenge_publication_len(&publication, publication_exact),
+            Ok(publication_exact)
+        );
+        assert_eq!(
+            preflight_por_challenge_publication_len(&publication, publication_exact - 1),
+            Err(PorChallengePublicationValidationError::PayloadTooLarge {
+                found: publication_exact,
+                maximum: publication_exact - 1,
+            })
+        );
+        let encoded = norito::to_bytes(&publication).expect("encode challenge publication");
+        assert_eq!(
+            decode_por_challenge_publication_v1(&encoded)
+                .expect("bounded challenge-publication decoder"),
+            publication
+        );
+        assert!(
+            decode_por_challenge_publication_v1(&vec![
+                0;
+                POR_CHALLENGE_PUBLICATION_MAX_CANONICAL_BYTES_V1
+                    + 1
+            ])
+            .is_err()
         );
     }
 
@@ -2160,6 +3346,137 @@ mod tests {
     }
 
     #[test]
+    fn proof_bounds_accept_boundaries_and_reject_one_over() {
+        let mut proof = proof_fixture();
+        let sample = proof.samples[0].clone();
+        proof.samples = vec![sample; POR_PROOF_MAX_SAMPLES_V1];
+        proof.auth_path = vec![[6; 32]; POR_PROOF_MAX_AUTH_PATH_NODES_V1];
+        assert!(proof.validate().is_ok());
+
+        proof.samples.push(proof.samples[0].clone());
+        assert_eq!(
+            proof.validate(),
+            Err(PorProofValidationError::TooManySamples {
+                found: POR_PROOF_MAX_SAMPLES_V1 + 1,
+                maximum: POR_PROOF_MAX_SAMPLES_V1,
+            })
+        );
+
+        proof.samples.truncate(POR_PROOF_MAX_SAMPLES_V1);
+        proof.auth_path.push([7; 32]);
+        assert_eq!(
+            proof.validate(),
+            Err(PorProofValidationError::AuthPathTooDeep {
+                found: POR_PROOF_MAX_AUTH_PATH_NODES_V1 + 1,
+                maximum: POR_PROOF_MAX_AUTH_PATH_NODES_V1,
+            })
+        );
+
+        let proof = proof_fixture();
+        let exact = proof
+            .encoded_len_exact()
+            .expect("PoR proof exposes an exact canonical length");
+        assert_eq!(preflight_por_proof_len(&proof, exact), Ok(exact));
+        assert_eq!(
+            preflight_por_proof_len(&proof, exact.saturating_sub(1)),
+            Err(PorProofValidationError::PayloadTooLarge {
+                found: exact,
+                maximum: exact.saturating_sub(1),
+            })
+        );
+        let encoded = norito::to_bytes(&proof).expect("encode bounded proof");
+        assert_eq!(
+            decode_por_proof_v1(&encoded).expect("decode bounded canonical proof"),
+            proof
+        );
+
+        let mut allocation_bomb = proof_fixture();
+        allocation_bomb.signature.signature = vec![9; POR_PROOF_MAX_CANONICAL_BYTES_V1];
+        let error = allocation_bomb
+            .signature_payload_bytes()
+            .expect_err("oversized proof must fail before constructing a signing payload");
+        assert!(error.to_string().contains("maximum"));
+    }
+
+    #[test]
+    fn borrowed_por_proof_signing_view_is_byte_exact_for_every_layout() {
+        let proof = proof_fixture();
+        let owned = PorProofSigningPayloadV1::from(&proof);
+        let borrowed = PorProofSigningPayloadViewV1::from(&proof);
+
+        assert_eq!(
+            <PorProofSigningPayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
+            PorProofSigningPayloadV1::schema_hash()
+        );
+        assert_eq!(
+            norito::to_bytes(&borrowed).expect("encode borrowed proof signing payload"),
+            norito::to_bytes(&owned).expect("encode historical owned proof signing payload")
+        );
+        assert_eq!(
+            proof
+                .signature_payload_bytes()
+                .expect("encode proof signing payload"),
+            norito::to_bytes(&owned).expect("encode historical proof signing payload")
+        );
+
+        for flags in supported_layouts() {
+            let owned_bytes = encode_bare_with_flags(&owned, flags);
+            let borrowed_bytes = encode_bare_with_flags(&borrowed, flags);
+            assert_eq!(
+                borrowed_bytes, owned_bytes,
+                "borrowed PoR proof signing bytes changed for flags 0x{flags:02x}"
+            );
+            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            assert_eq!(
+                borrowed.encoded_len_exact(),
+                owned.encoded_len_exact(),
+                "borrowed PoR proof signing size changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                norito::core::encoded_payload_len(&borrowed)
+                    .expect("borrowed proof length must be countable"),
+                borrowed_bytes.len()
+            );
+            let owned_frame = encode_frame_with_flags(&owned, flags);
+            assert_eq!(
+                encode_frame_with_flags(&borrowed, flags),
+                owned_frame,
+                "borrowed PoR proof canonical frame or layout flags changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                proof
+                    .signature_payload_bytes()
+                    .expect("encode borrowed proof signing payload"),
+                owned_frame,
+                "PoR proof signature frame changed for flags 0x{flags:02x}"
+            );
+        }
+    }
+
+    #[test]
+    fn proof_validation_requires_exact_ed25519_lengths() {
+        let mut proof = proof_fixture();
+        proof.signature.public_key.pop();
+        assert_eq!(
+            proof.validate(),
+            Err(PorProofValidationError::InvalidPublicKeyLength {
+                found: PUBLIC_KEY_LENGTH - 1,
+                expected: PUBLIC_KEY_LENGTH,
+            })
+        );
+
+        let mut proof = proof_fixture();
+        proof.signature.signature.push(9);
+        assert_eq!(
+            proof.validate(),
+            Err(PorProofValidationError::InvalidSignatureLength {
+                found: SIGNATURE_LENGTH + 1,
+                expected: SIGNATURE_LENGTH,
+            })
+        );
+    }
+
+    #[test]
     fn proof_signature_covers_provider_timestamp_and_payload() {
         let signing_key = SigningKey::from_bytes(&[0x41; 32]);
         let mut proof = proof_fixture();
@@ -2289,6 +3606,237 @@ mod tests {
             metadata: Vec::new(),
         };
         assert!(verdict.validate().is_ok());
+    }
+
+    #[test]
+    fn verdict_bounds_accept_boundaries_and_reject_one_over() {
+        let mut verdict = verdict_fixture();
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.failure_reason = Some("x".repeat(AUDIT_VERDICT_FAILURE_REASON_MAX_BYTES_V1));
+        verdict.auditor_signatures = (1..=AUDIT_VERDICT_MAX_SIGNATURES_V1)
+            .map(|index| AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![u8::try_from(index).expect("signature index fits u8"); 32],
+                signature: vec![u8::try_from(index).expect("signature index fits u8"); 64],
+            })
+            .collect();
+        verdict.metadata = (0..AUDIT_VERDICT_MAX_METADATA_ENTRIES_V1)
+            .map(|index| CapacityMetadataEntry {
+                key: format!("row.{index:02}"),
+                value: "v".to_owned(),
+            })
+            .collect();
+        assert!(verdict.validate().is_ok());
+
+        let mut too_many_signatures = verdict.clone();
+        too_many_signatures
+            .auditor_signatures
+            .push(AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![0xA5; 32],
+                signature: vec![0xA5; 64],
+            });
+        assert_eq!(
+            too_many_signatures.validate(),
+            Err(AuditVerdictValidationError::TooManySignatures {
+                found: AUDIT_VERDICT_MAX_SIGNATURES_V1 + 1,
+                maximum: AUDIT_VERDICT_MAX_SIGNATURES_V1,
+            })
+        );
+
+        let mut reason_too_long = verdict.clone();
+        reason_too_long.auditor_signatures.truncate(1);
+        reason_too_long.failure_reason =
+            Some("x".repeat(AUDIT_VERDICT_FAILURE_REASON_MAX_BYTES_V1 + 1));
+        assert_eq!(
+            reason_too_long.validate(),
+            Err(AuditVerdictValidationError::FailureReasonTooLong {
+                found: AUDIT_VERDICT_FAILURE_REASON_MAX_BYTES_V1 + 1,
+                maximum: AUDIT_VERDICT_FAILURE_REASON_MAX_BYTES_V1,
+            })
+        );
+
+        for invalid_reason in [" padded", "padded ", "line\nbreak", "\u{7f}"] {
+            let mut invalid = verdict.clone();
+            invalid.auditor_signatures.truncate(1);
+            invalid.failure_reason = Some(invalid_reason.to_owned());
+            assert_eq!(
+                invalid.validate(),
+                Err(AuditVerdictValidationError::InvalidFailureReason)
+            );
+        }
+
+        let mut too_many_metadata = verdict;
+        too_many_metadata.auditor_signatures.truncate(1);
+        too_many_metadata.metadata.push(CapacityMetadataEntry {
+            key: "overflow".to_owned(),
+            value: "v".to_owned(),
+        });
+        assert_eq!(
+            too_many_metadata.validate(),
+            Err(AuditVerdictValidationError::TooManyMetadataEntries {
+                found: AUDIT_VERDICT_MAX_METADATA_ENTRIES_V1 + 1,
+                maximum: AUDIT_VERDICT_MAX_METADATA_ENTRIES_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn verdict_reuses_capacity_metadata_bounds_and_rejects_duplicate_signers() {
+        let mut verdict = verdict_fixture();
+        verdict.auditor_signatures = vec![
+            AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![5; 32],
+                signature: vec![6; 64],
+            },
+            AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![5; 32],
+                signature: vec![7; 64],
+            },
+        ];
+        assert_eq!(
+            verdict.validate(),
+            Err(AuditVerdictValidationError::DuplicateAuditorSigner { index: 1 })
+        );
+
+        verdict.auditor_signatures.truncate(1);
+        verdict.metadata = vec![CapacityMetadataEntry {
+            key: "audit.note".to_owned(),
+            value: "x".repeat(crate::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES + 1),
+        }];
+        assert!(matches!(
+            verdict.validate(),
+            Err(AuditVerdictValidationError::InvalidMetadata { index: 0, .. })
+        ));
+
+        verdict.metadata = (0..16)
+            .map(|index| CapacityMetadataEntry {
+                key: format!("row.{index:02}"),
+                value: "x".repeat(crate::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES - 6),
+            })
+            .collect();
+        assert_eq!(
+            verdict
+                .metadata
+                .iter()
+                .map(|entry| entry.key.len() + entry.value.len())
+                .sum::<usize>(),
+            AUDIT_VERDICT_MAX_METADATA_BYTES_V1
+        );
+        verdict
+            .validate()
+            .expect("exact audit metadata aggregate boundary validates");
+
+        verdict.metadata[0].value.push('x');
+        assert_eq!(
+            verdict.validate(),
+            Err(AuditVerdictValidationError::MetadataTooLarge {
+                found: AUDIT_VERDICT_MAX_METADATA_BYTES_V1 + 1,
+                maximum: AUDIT_VERDICT_MAX_METADATA_BYTES_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn verdict_size_preflight_accepts_boundary_and_rejects_one_over() {
+        let mut verdict = verdict_fixture();
+        verdict.auditor_signatures.push(AdvertSignature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: vec![5; 32],
+            signature: vec![6; 64],
+        });
+        let exact = verdict
+            .encoded_len_exact()
+            .expect("audit verdict exposes an exact canonical length");
+        assert_eq!(preflight_audit_verdict_len(&verdict, exact), Ok(exact));
+        assert_eq!(
+            preflight_audit_verdict_len(&verdict, exact.saturating_sub(1)),
+            Err(AuditVerdictValidationError::PayloadTooLarge {
+                found: exact,
+                maximum: exact.saturating_sub(1),
+            })
+        );
+        let encoded = norito::to_bytes(&verdict).expect("encode bounded verdict");
+        assert_eq!(
+            decode_audit_verdict_v1(&encoded).expect("decode bounded canonical verdict"),
+            verdict
+        );
+
+        let mut allocation_bomb = verdict_fixture();
+        allocation_bomb.auditor_signatures.push(AdvertSignature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: vec![5; 32],
+            signature: vec![6; 64],
+        });
+        allocation_bomb.auditor_signatures[0].signature =
+            vec![9; AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1];
+        let error = allocation_bomb
+            .signature_payload_bytes()
+            .expect_err("oversized verdict must fail before constructing a signing payload");
+        assert!(error.to_string().contains("maximum"));
+    }
+
+    #[test]
+    fn borrowed_audit_verdict_signing_view_is_byte_exact_for_every_layout() {
+        let mut verdict = verdict_fixture();
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.failure_reason = Some("provider missed the challenge deadline".to_owned());
+        verdict.metadata.push(CapacityMetadataEntry {
+            key: "repair.ticket".to_owned(),
+            value: "ticket-7".to_owned(),
+        });
+        let owned = AuditVerdictSigningPayloadV1::from(&verdict);
+        let borrowed = AuditVerdictSigningPayloadViewV1::from(&verdict);
+
+        assert_eq!(
+            <AuditVerdictSigningPayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
+            AuditVerdictSigningPayloadV1::schema_hash()
+        );
+        assert_eq!(
+            norito::to_bytes(&borrowed).expect("encode borrowed verdict signing payload"),
+            norito::to_bytes(&owned).expect("encode historical owned verdict signing payload")
+        );
+        assert_eq!(
+            verdict
+                .signature_payload_bytes()
+                .expect("encode verdict signing payload"),
+            norito::to_bytes(&owned).expect("encode historical verdict signing payload")
+        );
+
+        for flags in supported_layouts() {
+            let owned_bytes = encode_bare_with_flags(&owned, flags);
+            let borrowed_bytes = encode_bare_with_flags(&borrowed, flags);
+            assert_eq!(
+                borrowed_bytes, owned_bytes,
+                "borrowed audit-verdict signing bytes changed for flags 0x{flags:02x}"
+            );
+            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            assert_eq!(
+                borrowed.encoded_len_exact(),
+                owned.encoded_len_exact(),
+                "borrowed audit-verdict signing size changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                norito::core::encoded_payload_len(&borrowed)
+                    .expect("borrowed audit verdict length must be countable"),
+                borrowed_bytes.len()
+            );
+            let owned_frame = encode_frame_with_flags(&owned, flags);
+            assert_eq!(
+                encode_frame_with_flags(&borrowed, flags),
+                owned_frame,
+                "borrowed audit-verdict canonical frame or layout flags changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                verdict
+                    .signature_payload_bytes()
+                    .expect("encode borrowed verdict signing payload"),
+                owned_frame,
+                "audit-verdict signature frame changed for flags 0x{flags:02x}"
+            );
+        }
     }
 
     #[test]
@@ -2462,11 +4010,11 @@ mod tests {
             sample_count: 64,
             forced: false,
             issued_at: 1_700_000_000,
-            responded_at: Some(1_700_000_100),
+            responded_at: None,
             proof_digest: None,
             repair_task_id: Some([4; 32]),
             failure_reason: None,
-            verifier_latency_ms: Some(1_500),
+            verifier_latency_ms: None,
         };
         let err = status
             .validate()
@@ -2487,11 +4035,11 @@ mod tests {
             sample_count: 64,
             forced: false,
             issued_at: 1_700_000_000,
-            responded_at: Some(1_700_000_100),
+            responded_at: None,
             proof_digest: None,
             repair_task_id: None,
             failure_reason: Some("provider missed deadline".to_owned()),
-            verifier_latency_ms: Some(1_500),
+            verifier_latency_ms: None,
         };
         assert_eq!(
             status.validate(),
@@ -2501,10 +4049,74 @@ mod tests {
         status.repair_task_id = Some([4; 32]);
         status.validate().expect("canonical failed status");
         status.status = PorChallengeOutcome::Repaired;
+        status.responded_at = Some(1_700_000_100);
+        status.proof_digest = Some([5; 32]);
         assert_eq!(
             status.validate(),
             Err(PorChallengeStatusValidationError::UnexpectedRepairTaskId)
         );
+    }
+
+    #[test]
+    fn challenge_status_outcome_material_matrix_is_strict() {
+        let mut status = PorChallengeStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            epoch_id: 10,
+            drand_round: 99,
+            status: PorChallengeOutcome::Pending,
+            sample_count: 64,
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: None,
+            proof_digest: None,
+            repair_task_id: None,
+            failure_reason: None,
+            verifier_latency_ms: None,
+        };
+        status.validate().expect("material-free pending status");
+
+        status.responded_at = Some(1_700_000_100);
+        status.proof_digest = Some([4; 32]);
+        assert_eq!(
+            status.validate(),
+            Err(PorChallengeStatusValidationError::UnexpectedProofMaterial)
+        );
+
+        status.status = PorChallengeOutcome::Forced;
+        status.forced = true;
+        status
+            .validate()
+            .expect("forced-with-proof is an established pre-verdict state");
+
+        status.status = PorChallengeOutcome::Verified;
+        status.forced = false;
+        status
+            .validate()
+            .expect("verified status carries proof response material");
+        status.proof_digest = None;
+        assert_eq!(
+            status.validate(),
+            Err(PorChallengeStatusValidationError::InconsistentProofMaterial)
+        );
+
+        status.proof_digest = Some([4; 32]);
+        status.status = PorChallengeOutcome::Repaired;
+        status.failure_reason = Some("recovered after failed audit".to_owned());
+        status
+            .validate()
+            .expect("repaired status retains failure and proof material");
+
+        status.status = PorChallengeOutcome::Failed;
+        status.responded_at = None;
+        status.proof_digest = None;
+        status.verifier_latency_ms = None;
+        status.repair_task_id = Some([5; 32]);
+        status
+            .validate()
+            .expect("proofless failure keeps response material absent");
     }
 
     #[test]
@@ -2575,6 +4187,126 @@ mod tests {
             verifier_latency_ms: Some(950),
         };
         assert!(status.validate().is_ok());
+    }
+
+    #[test]
+    fn challenge_status_bounds_and_decoder_fail_closed() {
+        let mut status = PorChallengeStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            epoch_id: 10,
+            drand_round: 42,
+            status: PorChallengeOutcome::Failed,
+            sample_count: u16::try_from(POR_CHALLENGE_MAX_SAMPLES_V1)
+                .expect("challenge sample ceiling fits u16"),
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: Some(1_700_000_050),
+            proof_digest: Some([4; 32]),
+            repair_task_id: Some([5; 32]),
+            failure_reason: Some("x".repeat(POR_CHALLENGE_STATUS_FAILURE_REASON_MAX_BYTES_V1)),
+            verifier_latency_ms: Some(950),
+        };
+        status
+            .validate()
+            .expect("exact status field boundaries validate");
+
+        let exact = status
+            .encoded_len_exact()
+            .expect("status exposes exact canonical length");
+        assert_eq!(
+            preflight_por_challenge_status_len(&status, exact),
+            Ok(exact)
+        );
+        assert_eq!(
+            preflight_por_challenge_status_len(&status, exact - 1),
+            Err(PorChallengeStatusValidationError::PayloadTooLarge {
+                found: exact,
+                maximum: exact - 1,
+            })
+        );
+        let encoded = norito::to_bytes(&status).expect("encode bounded status");
+        assert_eq!(
+            decode_por_challenge_status_v1(&encoded).expect("bounded status decoder"),
+            status
+        );
+        assert!(
+            decode_por_challenge_status_v1(&vec![
+                0;
+                POR_CHALLENGE_STATUS_MAX_CANONICAL_BYTES_V1 + 1
+            ])
+            .is_err()
+        );
+
+        status
+            .failure_reason
+            .as_mut()
+            .expect("failure reason")
+            .push('x');
+        assert_eq!(
+            status.validate(),
+            Err(PorChallengeStatusValidationError::InvalidFailureReason)
+        );
+
+        status.failure_reason = Some("failure".to_owned());
+        status.sample_count += 1;
+        assert_eq!(
+            status.validate(),
+            Err(PorChallengeStatusValidationError::TooManySamples {
+                found: u16::try_from(POR_CHALLENGE_MAX_SAMPLES_V1 + 1)
+                    .expect("sample ceiling plus one fits u16"),
+                maximum: POR_CHALLENGE_MAX_SAMPLES_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn challenge_status_page_record_bound_is_exact() {
+        let status = PorChallengeStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            epoch_id: 10,
+            drand_round: 42,
+            status: PorChallengeOutcome::Verified,
+            sample_count: 32,
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: Some(1_700_000_050),
+            proof_digest: Some([4; 32]),
+            repair_task_id: None,
+            failure_reason: None,
+            verifier_latency_ms: Some(950),
+        };
+        let exact_page = vec![status.clone(); POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1];
+        let exact_bytes = norito::to_bytes(&exact_page).expect("encode exact status page");
+        assert_eq!(
+            decode_por_challenge_status_page_v1(
+                &exact_bytes,
+                POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+            )
+            .expect("protocol-maximum status page"),
+            exact_page
+        );
+
+        let oversized_page =
+            vec![status; POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1.saturating_add(1)];
+        let oversized_bytes =
+            norito::to_bytes(&oversized_page).expect("encode oversized status page");
+        assert!(
+            decode_por_challenge_status_page_v1(
+                &oversized_bytes,
+                POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+            )
+            .is_err()
+        );
+        assert!(
+            decode_por_challenge_status_page_v1(&[], POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 + 1,)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2731,6 +4463,27 @@ mod tests {
             Err(PorWeeklyReportValidationError::DuplicateTopOffender { .. })
         ));
 
+        let slashing_event = |decided_at| PorSlashingEventV1 {
+            provider_id: [1; 32],
+            manifest_digest: [2; 32],
+            penalty_xor: XorQuantity::try_from_micro(1).expect("positive penalty"),
+            verdict_cid: format!("verdict-{decided_at}"),
+            decided_at,
+        };
+        let mut invalid = report.clone();
+        invalid.slashing_events = vec![slashing_event(2), slashing_event(1)];
+        assert_eq!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::UnsortedOrDuplicateSlashingEvent { index: 1 })
+        );
+
+        let mut invalid = report.clone();
+        invalid.slashing_events = vec![slashing_event(1), slashing_event(1)];
+        assert_eq!(
+            invalid.validate(),
+            Err(PorWeeklyReportValidationError::UnsortedOrDuplicateSlashingEvent { index: 1 })
+        );
+
         let mut invalid = report.clone();
         invalid.p95_latency_ms = Some(799);
         assert_eq!(
@@ -2766,6 +4519,131 @@ mod tests {
             invalid.validate(),
             Err(PorWeeklyReportValidationError::TooManyTopOffenders { count: 11 })
         ));
+    }
+
+    #[test]
+    fn weekly_report_bounds_accept_boundaries_and_reject_one_over() {
+        let mut report = canonical_weekly_report();
+        report.challenges_total = u32::try_from(POR_WEEKLY_REPORT_MAX_MISSING_VRF_PROVIDERS_V1)
+            .expect("missing-VRF bound fits u32");
+        report.forced_challenges = report.challenges_total;
+        report.providers_missing_vrf = (1_u32..=report.challenges_total)
+            .map(|index| {
+                let mut provider = [0_u8; 32];
+                provider[..4].copy_from_slice(&index.to_be_bytes());
+                provider
+            })
+            .collect();
+        report.notes = Some("x".repeat(POR_WEEKLY_REPORT_NOTES_MAX_BYTES_V1));
+        assert!(report.validate().is_ok());
+
+        report.providers_missing_vrf.push([0xFF; 32]);
+        assert_eq!(
+            report.validate(),
+            Err(PorWeeklyReportValidationError::TooManyMissingVrfProviders {
+                found: POR_WEEKLY_REPORT_MAX_MISSING_VRF_PROVIDERS_V1 + 1,
+                maximum: POR_WEEKLY_REPORT_MAX_MISSING_VRF_PROVIDERS_V1,
+            })
+        );
+
+        let mut notes_too_long = canonical_weekly_report();
+        notes_too_long.notes = Some("x".repeat(POR_WEEKLY_REPORT_NOTES_MAX_BYTES_V1 + 1));
+        assert_eq!(
+            notes_too_long.validate(),
+            Err(PorWeeklyReportValidationError::InvalidNotes)
+        );
+    }
+
+    #[test]
+    fn weekly_slashing_inventory_accepts_boundary_and_rejects_one_over() {
+        let mut report = canonical_weekly_report();
+        report.challenges_total = u32::try_from(POR_WEEKLY_REPORT_MAX_SLASHING_EVENTS_V1)
+            .expect("slashing-event bound fits u32");
+        report.challenges_verified = 0;
+        report.challenges_failed = report.challenges_total;
+        report.forced_challenges = 0;
+        report.providers_missing_vrf.clear();
+        report.slashing_events = (1..=POR_WEEKLY_REPORT_MAX_SLASHING_EVENTS_V1)
+            .map(|index| PorSlashingEventV1 {
+                provider_id: [1; 32],
+                manifest_digest: [2; 32],
+                penalty_xor: XorQuantity::try_from_micro(1).expect("positive penalty"),
+                verdict_cid: "v".to_owned(),
+                decided_at: u64::try_from(index).expect("slashing index fits u64"),
+            })
+            .collect();
+        report
+            .validate()
+            .expect("exact slashing-event boundary validates");
+
+        report
+            .slashing_events
+            .push(report.slashing_events[0].clone());
+        assert_eq!(
+            report.validate(),
+            Err(PorWeeklyReportValidationError::TooManySlashingEvents {
+                found: POR_WEEKLY_REPORT_MAX_SLASHING_EVENTS_V1 + 1,
+                maximum: POR_WEEKLY_REPORT_MAX_SLASHING_EVENTS_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn weekly_nested_identifiers_enforce_exact_boundaries() {
+        let mut summary = canonical_weekly_report().top_offenders.remove(0);
+        summary.ticket_id = Some("t".repeat(POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1));
+        assert!(summary.validate().is_ok());
+        summary.ticket_id = Some("t".repeat(POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1 + 1));
+        assert_eq!(
+            summary.validate(),
+            Err(PorProviderSummaryValidationError::InvalidTicketId)
+        );
+
+        let mut event = PorSlashingEventV1 {
+            provider_id: [1; 32],
+            manifest_digest: [2; 32],
+            penalty_xor: XorQuantity::try_from_micro(1).expect("positive penalty"),
+            verdict_cid: "v".repeat(POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1),
+            decided_at: 1,
+        };
+        assert!(event.validate().is_ok());
+        event.verdict_cid = "v".repeat(POR_WEEKLY_REPORT_IDENTIFIER_MAX_BYTES_V1 + 1);
+        assert_eq!(
+            event.validate(),
+            Err(PorSlashingEventValidationError::InvalidVerdictCid)
+        );
+
+        summary.ticket_id = Some("ticket\nid".to_owned());
+        assert_eq!(
+            summary.validate(),
+            Err(PorProviderSummaryValidationError::InvalidTicketId)
+        );
+        event.verdict_cid = "verdict\ncid".to_owned();
+        assert_eq!(
+            event.validate(),
+            Err(PorSlashingEventValidationError::InvalidVerdictCid)
+        );
+    }
+
+    #[test]
+    fn weekly_report_size_preflight_accepts_boundary_and_rejects_one_over() {
+        let report = canonical_weekly_report();
+        let exact = report
+            .encoded_len_exact()
+            .expect("weekly report exposes an exact canonical length");
+        assert_eq!(preflight_por_weekly_report_len(&report, exact), Ok(exact));
+        assert_eq!(
+            preflight_por_weekly_report_len(&report, exact.saturating_sub(1)),
+            Err(PorWeeklyReportValidationError::PayloadTooLarge {
+                found: exact,
+                maximum: exact.saturating_sub(1),
+            })
+        );
+        let encoded = norito::to_bytes(&report).expect("encode bounded weekly report");
+        assert_eq!(
+            decode_por_weekly_report_v1(&encoded).expect("decode bounded canonical weekly report"),
+            report
+        );
     }
 
     #[test]

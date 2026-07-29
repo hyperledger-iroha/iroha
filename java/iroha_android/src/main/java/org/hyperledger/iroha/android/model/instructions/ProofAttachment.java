@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.model.instructions;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Objects;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 
 /** JSON-serializable proof attachment accepted by native zk transaction encoders. */
 public final class ProofAttachment {
@@ -44,6 +45,10 @@ public final class ProofAttachment {
         envelopeHash == null
             ? null
             : ZkInstructionUtils.fixedBytes(envelopeHash, 32, "envelopeHash");
+    if (this.envelopeHash != null
+        && !Arrays.equals(this.envelopeHash, IrohaHash.prehash(this.proofBytes))) {
+      throw new IllegalArgumentException("envelopeHash must match proofBytes");
+    }
   }
 
   public String backend() {
@@ -86,10 +91,11 @@ public final class ProofAttachment {
       ZkInstructionUtils.appendJsonString(
           builder, ZkInstructionUtils.hexLower(verifyingKeyCommitment));
     }
-    if (envelopeHash != null) {
-      builder.append(",\"envelope_hash_hex\":");
-      ZkInstructionUtils.appendJsonString(builder, ZkInstructionUtils.hexLower(envelopeHash));
-    }
+    builder.append(",\"envelope_hash_hex\":");
+    ZkInstructionUtils.appendJsonString(
+        builder,
+        ZkInstructionUtils.hexLower(
+            envelopeHash == null ? IrohaHash.prehash(proofBytes) : envelopeHash));
     builder.append('}');
     return builder.toString();
   }

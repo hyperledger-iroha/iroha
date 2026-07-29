@@ -1857,6 +1857,52 @@ await torii.submitSumeragiEvidence({
 
 ## SoraFS Storage Helpers
 
+The hedging and billing helpers use a per-request canonical account signature,
+disable transparent retries and redirects, require exact non-zero lowercase
+32-byte checkpoint/cursor identifiers, and stream responses under the Torii
+caps (1 MiB for JSON and 22 MiB for a published statement). The acknowledgement
+proof is encoded with the shared
+`iroha.torii.v1.sorafs.billing.acknowledgement_proof` Norito schema; no nonce,
+proof, or field aliases are accepted.
+
+```js
+const canonicalAuth = {
+  accountId: process.env.IROHA_ACCOUNT_ID,
+  privateKey: Buffer.from(process.env.IROHA_PRIVATE_KEY_HEX, "hex"),
+};
+const checkpoint = process.env.SORAFS_BILLING_CHECKPOINT_HEX;
+
+const status = await torii.getSorafsBillingStatus({ canonicalAuth });
+const statements = await torii.listSorafsBillingStatements({
+  expectedCheckpointFingerprintHex: checkpoint,
+  limit: 25,
+  canonicalAuth,
+});
+const statement = await torii.getSorafsBillingStatement(
+  statements.items[0].statement_id_hex,
+  checkpoint,
+  { canonicalAuth },
+);
+await torii.acknowledgeSorafsBillingStatement(
+  statements.items[0].statement_id_hex,
+  checkpoint,
+  {
+    requestNonceHex: crypto.randomBytes(32).toString("hex"),
+    authenticationProof: externalOwnerProof,
+  },
+  { canonicalAuth },
+);
+const exposure = await torii.getSorafsHedgingExposure({
+  expectedCheckpointFingerprintHex: checkpoint,
+  limit: 100,
+  canonicalAuth,
+});
+```
+
+`getSorafsBillingReconciliation` requires the governed billing-manager role.
+The exposure and intent reads require a treasury- or hedging-observer role.
+These APIs expose projections only; automatic hedge execution remains absent.
+
 Pin registration accepts only a caller-signed, versioned transaction containing
 exactly one native `RegisterPinManifest` instruction. Build and fee-quote that
 transaction locally; neither the raw private key nor any secret-bearing JSON

@@ -35,14 +35,24 @@ Their `cargo_command` evidence must be one of the reviewed gateway conformance
 commands, so substring-only or shell-expanded command strings cannot stand in
 for the actual replay harness.
 Staging-load artifacts must also keep `stream_count` and `provider_count` equal
-to the unique canonical `streams[].name` and `providers[].name` inventories, and
-duplicate stream or provider entries fail the artifact before promotion can
-report ready. Stream labels must use generated `gateway-load-stream-0000`-style
-names, provider names must use reviewed `gateway-load-provider-*` slugs without
-placeholder or test markers, `hardware_profile.name` must use a reviewed
-`gateway-load-hardware-*` label, and `cache_state.mode` is closed to
-`cold-cache`, `warm-cache`, or `mixed-cache`. Their `gateway_version` evidence
-must use a concrete
+to the unique canonical `streams[].name` and `providers[].name` inventories,
+must contain at least two distinct providers, and reject duplicate stream or
+provider entries before promotion can report ready. Stream labels must use
+generated `gateway-load-stream-0000`-style names, provider names must use
+reviewed `gateway-load-provider-*` slugs without placeholder or test markers,
+and `hardware_profile.name` must use a reviewed
+`gateway-load-hardware-*` label. One staging artifact, under one reviewed
+deployment context, must record at least 86,400 seconds, a peak of at least
+1,000 concurrent range streams, and an exact schema-closed `cache_coverage`
+object whose `cold_cache_exercised`, `warm_cache_exercised`, and
+`mixed_cache_exercised` fields are all `true`. A single cache-state label,
+including the retired `cache_state` field, cannot satisfy the V1 contract.
+The same artifact must carry a schema-closed `load_conditions` object with
+`corruption_injection_bps` exactly `100` (1%) and
+`revocation_exercised`, `malformed_flood_exercised`,
+`denylist_pressure_exercised`, `rate_limit_pressure_exercised`, and
+`failover_exercised` all exactly `true`. Their
+`gateway_version` evidence must use a concrete
 `iroha-gateway X.Y.Z` release label or `iroha-gateway X.Y.Z-rc.N` release
 candidate label, so placeholder or unscoped version strings cannot enter
 promotion packets. Telemetry/SLO artifacts also bind `metric_count` to the unique
@@ -73,7 +83,7 @@ capped at `10000` so impossible basis-point rates cannot satisfy promotion.
 | Metrics report | Implemented | `LoadTestReport` records total requests, elapsed time, per-scenario success/refusal/error counts, and P50/P95/P99 latency. |
 | Signed evidence | Implemented | `generate_attestation`, `verify_attestation_envelope`, and `cargo xtask sorafs-gateway-attest --verify` cover signed report validation. |
 | Payload-free rollout canary builder | Implemented | `scripts/build_sorafs_gateway_load_canary.py` builds checked-in local conformance, staging load, telemetry/SLO, transport-scope, and governance approval evidence artifacts from reviewed rollout facts. |
-| Live staging load evidence | Rollout evidence | Capture against deployed gateways once the operator selects hardware, cache state, and duration. |
+| Live staging load evidence | Rollout evidence | Capture one 24-hour-or-longer run against deployed gateways with exact cold/warm/mixed coverage, at least 1,000 peak concurrent range streams, 1% corruption, revocation, malformed-flood, denylist/rate-limit pressure, failover, and at least two providers. |
 | HTTP/3 gateway load coverage | Not applicable to V1 | V1 has no committed SoraFS HTTP/3 endpoint or release requirement. Any later transport work is separately scoped and cannot block or satisfy V1 readiness. |
 
 ## Scenario Matrix
@@ -140,21 +150,25 @@ evidence-contract, and command-step shapes before any live gateway-load contact.
 Gateway-load payload-safety artifacts must explicitly set
 `raw_report_included`, `private_keys_included`, `response_bodies_included`,
 `raw_payloads_included`, and `critical_alerts_firing` to `false`; transport-scope
-artifacts must also explicitly set the non-applicable HTTP/3 booleans to
-`false` before promotion can report ready.
+artifacts must also explicitly bind the V1 HTTP/3 non-applicability state:
+`http3_endpoint_committed`, `http3_config_surface_documented`, and
+`http3_scenarios_passed` are `false`, while `http3_scenarios_deferred` is
+`true`. HTTP/3 execution is not a V1 readiness requirement.
 `scripts/build_sorafs_gateway_load_canary.py` builds individual payload-free
 evidence artifacts for local conformance, staging load, telemetry/SLO,
 transport-scope, and governance approval runs. The builder requires reviewed
 deployment context, complete deterministic scenario and metric coverage where
 applicable, reviewed staging provider names using
 `gateway-load-provider-*` labels whose unique inventory matches
-`--provider-count`, reviewed `gateway-load-hardware-*` hardware-profile labels,
-reviewed cache-state modes,
-rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1 contract,
-generated `gateway-load-stream-*` per-stream inventory labels matching
-`--stream-count`, suite/staging
-digest bindings, SLO threshold facts, and
-validates every generated artifact through
+`--provider-count` and contains at least two providers, reviewed
+`gateway-load-hardware-*` hardware-profile labels, an explicit 86,400-second
+minimum, explicit cold/warm/mixed cache-coverage flags, at least 1,000 peak
+concurrent range streams, exact 100-bps corruption, and explicit
+revocation/malformed-flood/denylist-pressure/rate-limit-pressure/failover flags.
+It also requires generated `gateway-load-stream-*` per-stream inventory labels
+matching `--stream-count`, suite/staging digest bindings, and SLO threshold
+facts; rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1
+contract; and validates every generated artifact through
 `scripts/check_sorafs_gateway_load_rollout_evidence.py` before writing. Checked
 in response-file examples cover the local conformance and staging-load roots.
 Local-conformance artifacts also bind `scenario_count` to the unique canonical
@@ -163,15 +177,24 @@ duplicate or unknown scenario labels before promotion can report ready.
 They also reject unreviewed `cargo_command` values before promotion can report
 ready.
 Staging-load artifacts reject placeholder or malformed `gateway_version` labels
-before promotion can report ready, reject unknown cache-state modes, require
+before promotion can report ready, reject the retired `cache_state` field and
+every unknown or extra top-level/nested field, require
 `providers[].name` entries to use reviewed `gateway-load-provider-*` labels,
 require `hardware_profile.name` to use reviewed `gateway-load-hardware-*`
 labels, and reject placeholder or test markers in provider and hardware-profile
 labels before promotion can report ready. The staging-load checker also rejects
+durations below 86,400 seconds, peak concurrency below 1,000 range streams,
+fewer than two distinct providers, corruption values other than exactly 100
+basis points, and any missing or false cache/pressure/failover exercise flag.
+It also rejects
 fractional or out-of-range `success_rate_bps` values plus fractional or
 out-of-range `error_rate_bps` values plus fractional or negative
 `p95_latency_ms` and `p99_latency_ms` values before those integer-unit SLO fields
 can satisfy promotion thresholds.
+The payload-free staging artifact fingerprint binds the deployment context,
+gateway/hardware identity, exact cache coverage, duration, stream inventory,
+peak concurrency, provider inventory, load conditions, and integer SLO values;
+changing any required qualification fact changes the summarized fingerprint.
 Telemetry/SLO artifacts also bind `metric_count` to the unique canonical
 `metrics` inventory, require the reviewed gateway-load metrics, and reject
 duplicate or unknown metric labels before promotion can report ready. The
@@ -202,8 +225,11 @@ before final promotion can report ready.
 
 1. Archive signed local conformance reports from `ci/check_sorafs_gateway_conformance.sh`
    for release candidates.
-2. Run a live staging load rig with the same fixture bundle and record hardware,
-   cache state, duration, and gateway version alongside the signed report.
+2. Run a live staging load rig with the same fixture bundle for at least 24
+   hours and record hardware, exact cold/warm/mixed coverage, peak concurrent
+   range streams, two-or-more-provider inventory, exact 1% corruption, every
+   required pressure/failover flag, duration, and gateway version alongside the
+   signed report.
 3. Add a live-target adapter if operators need the integration test to exercise a
    deployed gateway instead of the fixture-backed adapter.
 4. Record cold-cache SLO baselines after the staging hardware profile is chosen.

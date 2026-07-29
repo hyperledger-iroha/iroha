@@ -14,8 +14,6 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         let inputs: [FixtureBundleInputSpec]
     }
 
-    private static let nativeValidationRequiredEnvironment =
-        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"
     private static let nativeValidationRequiredMessage =
         "ABI-21 connect_norito_bridge with Governance DAG symbols is required."
     private static let referenceFixtureGeneratedAtUnix: UInt64 = 1_700_001_234
@@ -1190,13 +1188,8 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         _ unavailableMessage: String
     ) throws -> Bool {
         guard !available else { return true }
-        if ProcessInfo.processInfo.environment[
-            Self.nativeValidationRequiredEnvironment
-        ] == "1" {
-            XCTFail("\(Self.nativeValidationRequiredMessage) \(unavailableMessage)")
-            return false
-        }
-        throw XCTSkip(unavailableMessage)
+        XCTFail("\(Self.nativeValidationRequiredMessage) \(unavailableMessage)")
+        return false
     }
 
     func testSignsOrderbookFixtureWhenNativeBridgeIsAvailable() throws {
@@ -1210,10 +1203,22 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         let signed = try SorafsReferenceValidators.signOrderbookPayload(
             kind: .orderRequest,
             payload: payload,
-            privateKey: Data(repeating: 0xB7, count: 32)
+            privateKey: Data(repeating: 0xB8, count: 32)
         )
         XCTAssertFalse(signed.isEmpty)
         XCTAssertNotEqual(signed, payload)
+        let json = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
+            kind: .orderRequest,
+            payload: signed,
+            label: "order_request_resigned_v1.to",
+            generatedAtUnix: 123
+        )
+        let jsonData = try XCTUnwrap(json.data(using: .utf8))
+        let outcome = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+        )
+        XCTAssertEqual(outcome["status"] as? String, "Ok")
+        XCTAssertEqual(outcome["code"] as? String, "SFS-OK-000")
     }
 
     func testDerivesCanonicalOrderIdAndRejectsExplicitMismatchWhenNativeBridgeIsAvailable() throws {

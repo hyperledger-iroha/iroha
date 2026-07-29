@@ -915,6 +915,7 @@ fn minimal_config_snapshot() {
                     moderation_orchestrator: None,
                     evidence_viewer: None,
                     reputation_runtime: None,
+                    por_replay_archive: None,
                     hedging_billing_runtime: None,
                     provider_ingest_runtime: None,
                     pdp_provider: SorafsPdpProviderPolicy {
@@ -966,6 +967,12 @@ fn minimal_config_snapshot() {
                         default_rate_limit_bytes: 8388608,
                         default_requests_per_minute: 120,
                     },
+                    native_transaction_signers: SorafsNativeTransactionSignerBindings {
+                        proof_outcome: None,
+                        repair: None,
+                        reserve: None,
+                        orderbook: None,
+                    },
                     orderbook_worker: SorafsOrderbookWorker {
                         enabled: false,
                         scan_interval: 1s,
@@ -1010,6 +1017,8 @@ fn minimal_config_snapshot() {
                         policy_digest: None,
                         cycle_prf_provider: None,
                         release_anchor_provider: None,
+                        leader_lease_provider: None,
+                        fenced_privacy_publisher: None,
                         composition_budget_epsilon_numerator: 12,
                         composition_budget_epsilon_denominator: 1,
                         composition_budget_max_publications: 52,
@@ -1022,6 +1031,8 @@ fn minimal_config_snapshot() {
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,
                     governance_dag_signer_handle: None,
+                    governance_dag_signer_revision: None,
+                    governance_dag_signer_policy_digest: None,
                     governance_dag_publisher_public_key_hex: None,
                     governance_dag_service: SorafsGovernanceDagService {
                         enabled: false,
@@ -1034,9 +1045,13 @@ fn minimal_config_snapshot() {
                         ipfs_authenticator_handle: None,
                         ipfs_authenticator_revision: None,
                         ipfs_authenticator_policy_digest: None,
+                        ipfs_request_auth_public_key: None,
                         head_authenticator_handle: None,
                         head_authenticator_revision: None,
                         head_authenticator_policy_digest: None,
+                        head_request_auth_public_key: None,
+                        request_auth_max_envelope_lifetime_secs: 30,
+                        request_auth_max_future_skew_secs: 5,
                         checkpoint_store_handle: None,
                         checkpoint_store_revision: None,
                         checkpoint_store_policy_digest: None,
@@ -1049,7 +1064,7 @@ fn minimal_config_snapshot() {
                             4194304,
                         ),
                         max_request_bytes: Bytes(
-                            67108864,
+                            134283264,
                         ),
                         mirror_max_entries: 65536,
                         mirror_max_bytes: Bytes(
@@ -4582,6 +4597,17 @@ fn taira_config_enables_untrusted_cid_hosting() {
 
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
+
+    assert_eq!(
+        doc.get("settlement")
+            .and_then(TomlValue::as_table)
+            .and_then(|settlement| settlement.get("offline"))
+            .and_then(TomlValue::as_table)
+            .and_then(|offline| offline.get("enabled"))
+            .and_then(TomlValue::as_bool),
+        Some(true),
+        "Taira must explicitly enable mandatory offline cash"
+    );
 
     let dataspaces = doc
         .get("nexus")

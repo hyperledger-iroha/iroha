@@ -44,13 +44,14 @@ def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
         "authorization remain"
     ) not in normalized
     assert "release-wide signed fixture inventory" not in normalized
+    assert "The published and sealed cross-domain fixture inventory" not in normalized
     for marker in (
         "authoritative native ledger and supervised worker now own bounded "
         "price-time matching",
         "atomic custody mutation",
         "authority/signature enforcement",
-        "The published and sealed cross-domain fixture inventory binds 82 payload "
-        "artifacts",
+        "The checked-in, test-only signed and sealed cross-domain fixture "
+        "inventory binds 82 payload artifacts",
         "82 payload artifacts",
         "32 `ValidationOutcomeV1` outcomes",
         "38 negative payload vectors",

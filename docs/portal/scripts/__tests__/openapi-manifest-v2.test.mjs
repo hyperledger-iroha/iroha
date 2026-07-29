@@ -18,6 +18,7 @@ test('V2 signing payload has a fixed cross-language digest', () => {
     artifactBytes: ARTIFACT,
     generatedUnixMs: 1_700_000_000_000,
     generatorCommit: '11'.repeat(20),
+    generatorSourceSha256Hex: '22'.repeat(32),
     blake3Hex: 'd39d778cc128eafcfb89fbc286690120032a99eff18ffdec08c2a373e8618d41',
     signed: false,
   });
@@ -27,7 +28,7 @@ test('V2 signing payload has a fixed cross-language digest', () => {
   });
   assert.equal(
     createHash('sha256').update(payload).digest('hex'),
-    '83148de11a5187d7f000770c29f4f18419163d654ed6aa5ffade0558ce47b5e5',
+    '775b7af4c2c8a98dc49cf117745f0032f5064485b82a807f946a71b27539b9cd',
   );
 });
 
@@ -48,7 +49,7 @@ test('V2 signature binds every manifest field and the artifact bytes', () => {
       value.generator_source_sha256_hex = 'cd'.repeat(32);
     }],
     ['generator_source_sha256_hex', (value) => {
-      value.generator_source_sha256_hex = 'cd'.repeat(32);
+      value.generator_source_sha256_hex = 'ef'.repeat(32);
     }],
     ['artifact.path', (value) => {
       value.artifact.path = 'other.json';

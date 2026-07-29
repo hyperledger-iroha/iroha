@@ -1,14 +1,21 @@
 //! PoR challenge/proof tracking for the embedded storage node.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{
         Arc, RwLock,
         atomic::{AtomicU64, Ordering},
     },
 };
 
-use iroha_data_model::{metadata::Metadata, sorafs::moderation_ledger::sorafs_repair_task_id_v1};
+use ed25519_dalek::{Signature, VerifyingKey};
+use iroha_data_model::{
+    metadata::Metadata,
+    sorafs::{
+        moderation_ledger::sorafs_repair_task_id_v1,
+        reputation::{PorTerminalFailureKindV1, PorTerminalOutcomeV1, PorTerminalStatusV1},
+    },
+};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
 use rand::{RngCore, SeedableRng};
@@ -42,6 +49,18 @@ const DEFAULT_TRACKER_ENTRY_LIMIT: usize = 65_536;
 
 /// Domain separator for a failed PoR challenge's exactly-once repair source.
 pub const POR_REPAIR_SOURCE_ID_DOMAIN_V1: &[u8] = b"sorafs.por.repair-source.v1";
+/// Domain separator for one retained PoR-to-reputation delivery binding.
+pub const POR_REPUTATION_TERMINAL_WORK_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.por.reputation-terminal-work.v1";
+/// Domain separator for canonical finalized-PoR archive records.
+pub const POR_FINALIZED_REPLAY_ARCHIVE_RECORD_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.por.finalized-replay-archive.record.v1";
+/// Domain separator for signed finalized-PoR archive heads.
+pub const POR_FINALIZED_REPLAY_ARCHIVE_HEAD_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.por.finalized-replay-archive.head.v1";
+/// Domain separator for a signed absence result at one exact archive head.
+pub const POR_FINALIZED_REPLAY_ARCHIVE_ABSENCE_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.por.finalized-replay-archive.absence.v1";
 
 /// Derive the cross-peer repair source identity for one PoR challenge.
 #[must_use]
@@ -689,25 +708,669 @@ impl PorProtocolMetrics {
     }
 }
 
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeState {
     challenge: PorChallengeV1,
     proof_digest: Option<[u8; 32]>,
     proof_submitted_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct FinalizedChallengeStateV1 {
     state: ChallengeState,
     verdict: AuditVerdictV1,
     stats: PorVerdictStats,
     repair_task_id: Option<[u8; 32]>,
+    reputation_sequence: u64,
+    reputation_terminal: PorTerminalOutcomeV1,
+}
+
+/// Pinned identity and verification policy for a finalized-PoR replay archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PorFinalizedReplayArchiveBindingV1 {
+    /// Stable deployment-owned archive identity.
+    pub archive_id: [u8; 32],
+    /// Non-zero adapter/policy revision.
+    pub revision: u64,
+    /// Exact public archive policy digest.
+    pub policy_digest: [u8; 32],
+    /// Ed25519 public key authenticating append receipts and readbacks.
+    pub signing_public_key: [u8; 32],
+}
+
+impl PorFinalizedReplayArchiveBindingV1 {
+    /// Construct and validate an exact deployment-owned archive binding.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identity, revision, or policy material and non-canonical
+    /// or weak Ed25519 verification keys.
+    pub fn try_new(
+        archive_id: [u8; 32],
+        revision: u64,
+        policy_digest: [u8; 32],
+        signing_public_key: [u8; 32],
+    ) -> Result<Self, PorTrackerError> {
+        let binding = Self {
+            archive_id,
+            revision,
+            policy_digest,
+            signing_public_key,
+        };
+        binding.verifying_key()?;
+        Ok(binding)
+    }
+
+    fn verifying_key(self) -> Result<VerifyingKey, PorTrackerError> {
+        if self.archive_id == [0; 32] || self.revision == 0 || self.policy_digest == [0; 32] {
+            return Err(PorTrackerError::InvalidReplayArchiveBinding);
+        }
+        let key = VerifyingKey::from_bytes(&self.signing_public_key)
+            .map_err(|_| PorTrackerError::InvalidReplayArchiveBinding)?;
+        if key.to_bytes() != self.signing_public_key || key.is_weak() {
+            return Err(PorTrackerError::InvalidReplayArchiveBinding);
+        }
+        Ok(key)
+    }
+}
+
+/// Canonical source record persisted by the authenticated replay archive.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PorFinalizedReplayArchiveRecordV1 {
+    finalized: FinalizedChallengeStateV1,
+}
+
+impl PorFinalizedReplayArchiveRecordV1 {
+    fn from_finalized(finalized: FinalizedChallengeStateV1) -> Self {
+        Self { finalized }
+    }
+
+    /// Finalization-order sequence bound by this record.
+    #[must_use]
+    pub const fn reputation_sequence(&self) -> u64 {
+        self.finalized.reputation_sequence
+    }
+
+    /// Challenge identity bound by this record.
+    #[must_use]
+    pub const fn challenge_id(&self) -> [u8; 32] {
+        self.finalized.state.challenge.challenge_id
+    }
+
+    /// Return the exact retained PoR-to-reputation work.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when canonical terminal encoding fails.
+    pub fn reputation_work(&self) -> Result<PorReputationTerminalWorkV1, PorTrackerError> {
+        retained_reputation_work(&self.finalized)
+    }
+
+    /// Verify all retained challenge, verdict, repair, terminal, and digest invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any retained source field is malformed,
+    /// unauthenticated, or inconsistent with its canonical projection.
+    pub fn validate(&self) -> Result<(), PorTrackerError> {
+        validate_replay_archive_record(self)
+    }
+
+    /// Canonical domain-separated record digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when canonical Norito encoding cannot be produced.
+    pub fn record_digest(&self) -> Result<[u8; 32], PorTrackerError> {
+        let bytes =
+            norito::to_bytes(self).map_err(|_| PorTrackerError::ReplayArchiveCanonicalEncoding)?;
+        let len = u64::try_from(bytes.len())
+            .map_err(|_| PorTrackerError::ReplayArchiveCanonicalEncoding)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(POR_FINALIZED_REPLAY_ARCHIVE_RECORD_DIGEST_DOMAIN_V1);
+        hasher.update(&len.to_le_bytes());
+        hasher.update(&bytes);
+        Ok(*hasher.finalize().as_bytes())
+    }
+}
+
+/// HSM-authenticated receipt for one replay-archive append.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PorFinalizedReplayArchiveReceiptV1 {
+    binding: PorFinalizedReplayArchiveBindingV1,
+    reputation_sequence: u64,
+    challenge_id: [u8; 32],
+    record_digest: [u8; 32],
+    reputation_work_digest: [u8; 32],
+    previous_head_digest: Option<[u8; 32]>,
+    head_digest: [u8; 32],
+    signature: [u8; 64],
+}
+
+impl PorFinalizedReplayArchiveReceiptV1 {
+    /// Derive the exact digest an external archive signer must authenticate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid binding or canonical record.
+    pub fn signing_digest(
+        binding: PorFinalizedReplayArchiveBindingV1,
+        record: &PorFinalizedReplayArchiveRecordV1,
+        previous_head_digest: Option<[u8; 32]>,
+    ) -> Result<[u8; 32], PorTrackerError> {
+        binding.verifying_key()?;
+        record.validate()?;
+        if previous_head_digest == Some([0; 32]) {
+            return Err(PorTrackerError::InvalidReplayArchiveReceipt);
+        }
+        let record_digest = record.record_digest()?;
+        let reputation_work_digest = record.reputation_work()?.work_digest;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(POR_FINALIZED_REPLAY_ARCHIVE_HEAD_DIGEST_DOMAIN_V1);
+        hasher.update(&binding.archive_id);
+        hasher.update(&binding.revision.to_le_bytes());
+        hasher.update(&binding.policy_digest);
+        hasher.update(&binding.signing_public_key);
+        hasher.update(&record.reputation_sequence().to_le_bytes());
+        hasher.update(&record.challenge_id());
+        hasher.update(&record_digest);
+        hasher.update(&reputation_work_digest);
+        match previous_head_digest {
+            Some(previous) => {
+                hasher.update(&[1]);
+                hasher.update(&previous);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+        Ok(*hasher.finalize().as_bytes())
+    }
+
+    /// Construct and verify an archive receipt from an external signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid binding, record, chain link, or signature.
+    pub fn try_new(
+        binding: PorFinalizedReplayArchiveBindingV1,
+        record: &PorFinalizedReplayArchiveRecordV1,
+        previous_head_digest: Option<[u8; 32]>,
+        signature: [u8; 64],
+    ) -> Result<Self, PorTrackerError> {
+        let head_digest = Self::signing_digest(binding, record, previous_head_digest)?;
+        binding
+            .verifying_key()?
+            .verify_strict(&head_digest, &Signature::from_bytes(&signature))
+            .map_err(|_| PorTrackerError::InvalidReplayArchiveReceipt)?;
+        Ok(Self {
+            binding,
+            reputation_sequence: record.reputation_sequence(),
+            challenge_id: record.challenge_id(),
+            record_digest: record.record_digest()?,
+            reputation_work_digest: record.reputation_work()?.work_digest,
+            previous_head_digest,
+            head_digest,
+            signature,
+        })
+    }
+
+    /// Verify the canonical fields and HSM signature carried by this receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the binding, chain fields, digest, or signature is
+    /// malformed or unauthenticated.
+    pub fn validate(self) -> Result<(), PorTrackerError> {
+        let key = self.binding.verifying_key()?;
+        if self.reputation_sequence == 0
+            || self.challenge_id == [0; 32]
+            || self.record_digest == [0; 32]
+            || self.reputation_work_digest == [0; 32]
+            || self.previous_head_digest == Some([0; 32])
+            || self.head_digest == [0; 32]
+        {
+            return Err(PorTrackerError::InvalidReplayArchiveReceipt);
+        }
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(POR_FINALIZED_REPLAY_ARCHIVE_HEAD_DIGEST_DOMAIN_V1);
+        hasher.update(&self.binding.archive_id);
+        hasher.update(&self.binding.revision.to_le_bytes());
+        hasher.update(&self.binding.policy_digest);
+        hasher.update(&self.binding.signing_public_key);
+        hasher.update(&self.reputation_sequence.to_le_bytes());
+        hasher.update(&self.challenge_id);
+        hasher.update(&self.record_digest);
+        hasher.update(&self.reputation_work_digest);
+        match self.previous_head_digest {
+            Some(previous) => {
+                hasher.update(&[1]);
+                hasher.update(&previous);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+        if self.head_digest != *hasher.finalize().as_bytes() {
+            return Err(PorTrackerError::InvalidReplayArchiveReceipt);
+        }
+        key.verify_strict(&self.head_digest, &Signature::from_bytes(&self.signature))
+            .map_err(|_| PorTrackerError::InvalidReplayArchiveReceipt)
+    }
+
+    /// Verify that this receipt authenticates one exact canonical record.
+    ///
+    /// `expected_previous_head` is an outer option so callers can either enforce
+    /// an exact predecessor (`Some`) or validate the receipt without constraining
+    /// its predecessor (`None`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a substituted binding, record, predecessor, digest,
+    /// or signature.
+    pub fn validate_record(
+        self,
+        expected_binding: PorFinalizedReplayArchiveBindingV1,
+        record: &PorFinalizedReplayArchiveRecordV1,
+        expected_previous_head: Option<Option<[u8; 32]>>,
+    ) -> Result<(), PorTrackerError> {
+        if self.binding != expected_binding
+            || self.reputation_sequence != record.reputation_sequence()
+            || self.challenge_id != record.challenge_id()
+            || self.record_digest != record.record_digest()?
+            || self.reputation_work_digest != record.reputation_work()?.work_digest
+            || expected_previous_head.is_some_and(|expected| expected != self.previous_head_digest)
+            || self.head_digest
+                != Self::signing_digest(self.binding, record, self.previous_head_digest)?
+        {
+            return Err(PorTrackerError::InvalidReplayArchiveReceipt);
+        }
+        self.validate()
+    }
+
+    /// Exact archive binding authenticated by this receipt.
+    #[must_use]
+    pub const fn binding(self) -> PorFinalizedReplayArchiveBindingV1 {
+        self.binding
+    }
+
+    /// Finalization-order sequence authenticated by this receipt.
+    #[must_use]
+    pub const fn reputation_sequence(self) -> u64 {
+        self.reputation_sequence
+    }
+
+    /// Challenge identity authenticated by this receipt.
+    #[must_use]
+    pub const fn challenge_id(self) -> [u8; 32] {
+        self.challenge_id
+    }
+
+    /// Canonical record digest authenticated by this receipt.
+    #[must_use]
+    pub const fn record_digest(self) -> [u8; 32] {
+        self.record_digest
+    }
+
+    /// Canonical retained-work digest authenticated by this receipt.
+    #[must_use]
+    pub const fn reputation_work_digest(self) -> [u8; 32] {
+        self.reputation_work_digest
+    }
+
+    /// Exact predecessor head authenticated by this receipt.
+    #[must_use]
+    pub const fn previous_head_digest(self) -> Option<[u8; 32]> {
+        self.previous_head_digest
+    }
+
+    /// Signed archive head digest.
+    #[must_use]
+    pub const fn head_digest(self) -> [u8; 32] {
+        self.head_digest
+    }
+
+    /// Ed25519 signature authenticating the receipt head digest.
+    #[must_use]
+    pub const fn signature(self) -> [u8; 64] {
+        self.signature
+    }
+}
+
+/// Exact resource bounds for one authenticated replay-archive lookup proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PorFinalizedReplayArchiveProofBoundsV1 {
+    max_successor_receipts: usize,
+    max_successor_proof_bytes: u64,
+}
+
+impl PorFinalizedReplayArchiveProofBoundsV1 {
+    /// Construct non-zero count and canonical-byte bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either bound is zero or the count cannot be
+    /// represented on this platform.
+    pub fn try_new(
+        max_successor_receipts: u32,
+        max_successor_proof_bytes: u64,
+    ) -> Result<Self, PorTrackerError> {
+        if max_successor_receipts == 0 || max_successor_proof_bytes == 0 {
+            return Err(PorTrackerError::ReplayArchiveProofLimitExceeded);
+        }
+        Ok(Self {
+            max_successor_receipts: usize::try_from(max_successor_receipts)
+                .map_err(|_| PorTrackerError::ReplayArchiveProofLimitExceeded)?,
+            max_successor_proof_bytes,
+        })
+    }
+
+    /// Maximum signed successor receipts accepted in one proof.
+    #[must_use]
+    pub const fn max_successor_receipts(self) -> usize {
+        self.max_successor_receipts
+    }
+
+    /// Maximum canonical successor-proof bytes accepted in one proof.
+    #[must_use]
+    pub const fn max_successor_proof_bytes(self) -> u64 {
+        self.max_successor_proof_bytes
+    }
+
+    /// Qualify an outer transport frame before decoding its successor receipts.
+    ///
+    /// Production adapters should call this with the authenticated or
+    /// length-prefixed receipt count and frame length before reserving or
+    /// decoding the successor collection. The typed lookup boundary still
+    /// revalidates the canonical decoded representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the declared count is not representable, a
+    /// non-empty collection declares an empty frame, or either configured
+    /// resource ceiling is exceeded.
+    pub fn validate_framed_successor_shape(
+        self,
+        declared_successor_receipts: u64,
+        framed_successor_bytes: u64,
+    ) -> Result<(), PorTrackerError> {
+        let declared_successor_receipts = usize::try_from(declared_successor_receipts)
+            .map_err(|_| PorTrackerError::ReplayArchiveProofLimitExceeded)?;
+        if declared_successor_receipts > self.max_successor_receipts
+            || framed_successor_bytes > self.max_successor_proof_bytes
+            || (declared_successor_receipts != 0 && framed_successor_bytes == 0)
+        {
+            return Err(PorTrackerError::ReplayArchiveProofLimitExceeded);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn production_default() -> Self {
+        Self::try_new(
+            iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::MAX_SUCCESSOR_RECEIPTS,
+            iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::MAX_SUCCESSOR_PROOF_BYTES,
+        )
+        .expect("non-zero finalized PoR replay-archive proof defaults")
+    }
+}
+
+/// Authenticated archive lookup result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PorFinalizedReplayArchiveReadbackV1 {
+    /// Exact canonical finalized record.
+    pub record: PorFinalizedReplayArchiveRecordV1,
+    /// HSM-authenticated receipt binding that record.
+    pub receipt: PorFinalizedReplayArchiveReceiptV1,
+    /// Signed contiguous successors proving inclusion at the pinned head.
+    pub successor_receipts: Vec<PorFinalizedReplayArchiveReceiptV1>,
+}
+
+impl PorFinalizedReplayArchiveReadbackV1 {
+    /// Verify this record and its bounded contiguous inclusion path at one exact head.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when canonical proof bounds are exceeded or any record,
+    /// receipt, chain link, binding, or final head is invalid.
+    pub fn validate_at_checkpoint(
+        &self,
+        binding: PorFinalizedReplayArchiveBindingV1,
+        checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+        proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+    ) -> Result<(), PorTrackerError> {
+        if self.successor_receipts.len() > proof_bounds.max_successor_receipts {
+            return Err(PorTrackerError::ReplayArchiveProofLimitExceeded);
+        }
+        let canonical_successors = norito::to_bytes(&self.successor_receipts)
+            .map_err(|_| PorTrackerError::ReplayArchiveCanonicalEncoding)?;
+        if u64::try_from(canonical_successors.len()).unwrap_or(u64::MAX)
+            > proof_bounds.max_successor_proof_bytes
+        {
+            return Err(PorTrackerError::ReplayArchiveProofLimitExceeded);
+        }
+        checkpoint_head.validate()?;
+        if checkpoint_head.binding != binding {
+            return Err(PorTrackerError::InvalidReplayArchiveReceipt);
+        }
+        self.receipt.validate_record(binding, &self.record, None)?;
+        let mut previous = self.receipt;
+        for successor in &self.successor_receipts {
+            successor.validate()?;
+            if successor.binding != binding
+                || successor.previous_head_digest != Some(previous.head_digest)
+                || successor.reputation_sequence
+                    != previous
+                        .reputation_sequence
+                        .checked_add(1)
+                        .ok_or(PorTrackerError::ReputationSequenceOverflow)?
+            {
+                return Err(PorTrackerError::InvalidReplayArchiveReceipt);
+            }
+            previous = *successor;
+        }
+        if previous != checkpoint_head {
+            return Err(PorTrackerError::InvalidReplayArchiveReceipt);
+        }
+        Ok(())
+    }
+}
+
+/// HSM-authenticated proof that one challenge is absent at an exact signed head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PorFinalizedReplayArchiveAbsenceProofV1 {
+    binding: PorFinalizedReplayArchiveBindingV1,
+    challenge_id: [u8; 32],
+    checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+    signature: [u8; 64],
+}
+
+impl PorFinalizedReplayArchiveAbsenceProofV1 {
+    /// Derive the exact digest an external archive signer must authenticate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid identity, binding, or checkpoint head.
+    pub fn signing_digest(
+        binding: PorFinalizedReplayArchiveBindingV1,
+        challenge_id: [u8; 32],
+        checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+    ) -> Result<[u8; 32], PorTrackerError> {
+        if challenge_id == [0; 32] || checkpoint_head.binding != binding {
+            return Err(PorTrackerError::InvalidReplayArchiveAbsenceProof);
+        }
+        binding.verifying_key()?;
+        checkpoint_head.validate()?;
+        let head_bytes = norito::to_bytes(&checkpoint_head)
+            .map_err(|_| PorTrackerError::ReplayArchiveCanonicalEncoding)?;
+        let head_len = u64::try_from(head_bytes.len())
+            .map_err(|_| PorTrackerError::ReplayArchiveCanonicalEncoding)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(POR_FINALIZED_REPLAY_ARCHIVE_ABSENCE_DIGEST_DOMAIN_V1);
+        hasher.update(&binding.archive_id);
+        hasher.update(&binding.revision.to_le_bytes());
+        hasher.update(&binding.policy_digest);
+        hasher.update(&binding.signing_public_key);
+        hasher.update(&challenge_id);
+        hasher.update(&head_len.to_le_bytes());
+        hasher.update(&head_bytes);
+        Ok(*hasher.finalize().as_bytes())
+    }
+
+    /// Construct and verify a head-bound absence proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed or unauthenticated proof.
+    pub fn try_new(
+        binding: PorFinalizedReplayArchiveBindingV1,
+        challenge_id: [u8; 32],
+        checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+        signature: [u8; 64],
+    ) -> Result<Self, PorTrackerError> {
+        let digest = Self::signing_digest(binding, challenge_id, checkpoint_head)?;
+        binding
+            .verifying_key()?
+            .verify_strict(&digest, &Signature::from_bytes(&signature))
+            .map_err(|_| PorTrackerError::InvalidReplayArchiveAbsenceProof)?;
+        Ok(Self {
+            binding,
+            challenge_id,
+            checkpoint_head,
+            signature,
+        })
+    }
+
+    /// Exact archive binding authenticated by this proof.
+    #[must_use]
+    pub const fn binding(self) -> PorFinalizedReplayArchiveBindingV1 {
+        self.binding
+    }
+
+    /// Challenge identity whose absence is authenticated.
+    #[must_use]
+    pub const fn challenge_id(self) -> [u8; 32] {
+        self.challenge_id
+    }
+
+    /// Exact signed checkpoint head against which absence was proven.
+    #[must_use]
+    pub const fn checkpoint_head(self) -> PorFinalizedReplayArchiveReceiptV1 {
+        self.checkpoint_head
+    }
+
+    /// Ed25519 signature authenticating this exact absence statement.
+    #[must_use]
+    pub const fn signature(self) -> [u8; 64] {
+        self.signature
+    }
+
+    /// Verify this signed absence proof against one exact challenge and head.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the proof is substituted, stale, malformed, or
+    /// unauthenticated.
+    pub fn validate_at_checkpoint(
+        self,
+        binding: PorFinalizedReplayArchiveBindingV1,
+        challenge_id: [u8; 32],
+        checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+    ) -> Result<(), PorTrackerError> {
+        if self.binding != binding
+            || self.challenge_id != challenge_id
+            || self.checkpoint_head != checkpoint_head
+        {
+            return Err(PorTrackerError::InvalidReplayArchiveAbsenceProof);
+        }
+        let digest = Self::signing_digest(binding, challenge_id, checkpoint_head)?;
+        binding
+            .verifying_key()?
+            .verify_strict(&digest, &Signature::from_bytes(&self.signature))
+            .map_err(|_| PorTrackerError::InvalidReplayArchiveAbsenceProof)
+    }
+}
+
+/// Authenticated result of an exact checkpoint-bound archive lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PorFinalizedReplayArchiveLookupV1 {
+    /// The exact record and contiguous inclusion path were returned.
+    Found(PorFinalizedReplayArchiveReadbackV1),
+    /// Absence was signed against the exact requested checkpoint head.
+    Absent(PorFinalizedReplayArchiveAbsenceProofV1),
+}
+
+/// Payload-free external replay-archive failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PorFinalizedReplayArchiveExternalErrorV1 {
+    /// The archive could not provide authenticated service.
+    #[error("finalized PoR replay archive is unavailable")]
+    Unavailable,
+    /// The archive rejected the exact request.
+    #[error("finalized PoR replay archive rejected the request")]
+    Rejected,
+}
+
+/// Deployment-injected authenticated finalized-PoR replay archive.
+///
+/// Append must be durable before success. Repeating the same record and
+/// expected predecessor must return the exact same signed receipt even after
+/// later successors exist; it must never move the current head backwards.
+/// Substituted material must fail. Lookups must authenticate the returned record
+/// before it crosses this boundary.
+pub trait PorFinalizedReplayArchiveV1: Send + Sync + std::fmt::Debug {
+    /// Return the stable credential-free production adapter handle.
+    fn runtime_handle(&self) -> &str;
+
+    /// Return the exact live adapter identity and verification binding.
+    fn binding(
+        &self,
+    ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>;
+
+    /// Prove the archive can authenticate its current monotonic head.
+    ///
+    /// This call must not mutate archive state. Adapters that cannot establish
+    /// fresh authenticated read/write readiness must fail closed.
+    fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1>;
+
+    /// Return the current HSM-authenticated monotonic head.
+    fn current_head(
+        &self,
+    ) -> Result<Option<PorFinalizedReplayArchiveReceiptV1>, PorFinalizedReplayArchiveExternalErrorV1>;
+
+    /// Durably append one exact record after the supplied signed head.
+    fn append(
+        &self,
+        record: &PorFinalizedReplayArchiveRecordV1,
+        expected_previous_head: Option<[u8; 32]>,
+    ) -> Result<PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveExternalErrorV1>;
+
+    /// Return authenticated presence or absence for `challenge_id` at the
+    /// caller's exact checkpoint head.
+    ///
+    /// A found record must include a signed contiguous successor chain ending
+    /// at `expected_checkpoint_head`. Absence must carry an independent
+    /// signature over that exact head. A transport-backed adapter must apply
+    /// [`PorFinalizedReplayArchiveProofBoundsV1::validate_framed_successor_shape`]
+    /// to its outer length/count envelope before allocating or decoding an
+    /// untrusted successor collection. The typed result is validated again by
+    /// the caller. An adapter unable to prove either property must return an
+    /// external error.
+    fn lookup(
+        &self,
+        challenge_id: [u8; 32],
+        expected_checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+        proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+    ) -> Result<PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveExternalErrorV1>;
 }
 
 #[derive(Debug)]
 struct PorTrackerState {
     pending: HashMap<[u8; 32], ChallengeState>,
     finalized: HashMap<[u8; 32], FinalizedChallengeStateV1>,
+    last_reputation_sequence: u64,
+    acknowledged_reputation_terminal: Option<PorReputationTerminalAckV1>,
+    replay_archive_receipt: Option<PorFinalizedReplayArchiveReceiptV1>,
     entry_limit: usize,
 }
 
@@ -716,22 +1379,85 @@ impl Default for PorTrackerState {
         Self {
             pending: HashMap::new(),
             finalized: HashMap::new(),
+            last_reputation_sequence: 0,
+            acknowledged_reputation_terminal: None,
+            replay_archive_receipt: None,
             entry_limit: DEFAULT_TRACKER_ENTRY_LIMIT,
         }
     }
 }
 
 /// Canonical durable snapshot of PoR challenge replay-protection state.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PorTrackerCheckpointV1 {
     pending: Vec<ChallengeState>,
     finalized: Vec<FinalizedChallengeStateV1>,
+    last_reputation_sequence: u64,
+    acknowledged_reputation_terminal: Option<PorReputationTerminalAckV1>,
+    replay_archive_receipt: Option<PorFinalizedReplayArchiveReceiptV1>,
+}
+
+/// One canonical, replay-stable PoR terminal awaiting reputation admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PorReputationTerminalWorkV1 {
+    /// Strictly monotonic node-local delivery sequence.
+    pub sequence: u64,
+    /// Provider attributed by the retained authenticated challenge.
+    pub provider_id: [u8; 32],
+    /// Canonical terminal projection retained with finalized PoR state.
+    pub terminal: PorTerminalOutcomeV1,
+    /// Domain-separated digest binding the sequence, provider, and terminal.
+    pub work_digest: [u8; 32],
+}
+
+impl PorReputationTerminalWorkV1 {
+    fn try_new(
+        sequence: u64,
+        provider_id: [u8; 32],
+        terminal: PorTerminalOutcomeV1,
+    ) -> Result<Self, PorTrackerError> {
+        if sequence == 0 || provider_id == [0; 32] {
+            return Err(PorTrackerError::InvalidReputationTerminalWork);
+        }
+        let terminal_bytes = norito::to_bytes(&terminal)
+            .map_err(|_| PorTrackerError::ReputationTerminalCanonicalEncoding)?;
+        let terminal_len = u64::try_from(terminal_bytes.len())
+            .map_err(|_| PorTrackerError::ReputationTerminalCanonicalEncoding)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(POR_REPUTATION_TERMINAL_WORK_DIGEST_DOMAIN_V1);
+        hasher.update(&sequence.to_le_bytes());
+        hasher.update(&provider_id);
+        hasher.update(&terminal_len.to_le_bytes());
+        hasher.update(&terminal_bytes);
+        Ok(Self {
+            sequence,
+            provider_id,
+            terminal,
+            work_digest: *hasher.finalize().as_bytes(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct PorReputationTerminalAckV1 {
+    sequence: u64,
+    work_digest: [u8; 32],
+}
+
+/// Outcome of advancing the durable PoR-to-reputation delivery cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PorReputationTerminalAckOutcomeV1 {
+    /// The exact next terminal advanced the tracker acknowledgement cursor.
+    Advanced,
+    /// The exact terminal acknowledgement was already retained.
+    ExactReplay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PorVerdictTransitionV1 {
     pub(crate) stats: PorVerdictStats,
     pub(crate) repair_task_id: Option<[u8; 32]>,
+    pub(crate) reputation_work: PorReputationTerminalWorkV1,
     pub(crate) newly_finalized: bool,
 }
 
@@ -769,6 +1495,29 @@ impl PorTracker {
         &self,
         challenge: &PorChallengeV1,
     ) -> Result<(), PorTrackerError> {
+        self.record_challenge_with_archive_option(challenge, None, None)
+    }
+
+    /// Register or replay a challenge with exact configured proof bounds.
+    pub(crate) fn record_challenge_with_archive_and_bounds(
+        &self,
+        challenge: &PorChallengeV1,
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+        proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+    ) -> Result<(), PorTrackerError> {
+        self.record_challenge_with_archive_option(
+            challenge,
+            Some(replay_archive),
+            Some(proof_bounds),
+        )
+    }
+
+    fn record_challenge_with_archive_option(
+        &self,
+        challenge: &PorChallengeV1,
+        replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
+        proof_bounds: Option<PorFinalizedReplayArchiveProofBoundsV1>,
+    ) -> Result<(), PorTrackerError> {
         if let Err(error) = challenge.validate() {
             if matches!(
                 error,
@@ -788,6 +1537,57 @@ impl PorTracker {
             } else {
                 Err(PorTrackerError::ChallengeConflict)
             };
+        }
+        if !state.pending.contains_key(&challenge.challenge_id)
+            && let Some(latest_archive_receipt) = state.replay_archive_receipt
+        {
+            let replay_archive = replay_archive.ok_or(PorTrackerError::ReplayArchiveRequired)?;
+            replay_archive
+                .check_readiness()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            let binding = replay_archive
+                .binding()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            if binding != latest_archive_receipt.binding {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+            let proof_bounds =
+                proof_bounds.ok_or(PorTrackerError::ReplayArchiveProofLimitExceeded)?;
+            let lookup = replay_archive
+                .lookup(challenge.challenge_id, latest_archive_receipt, proof_bounds)
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            replay_archive
+                .check_readiness()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            if replay_archive
+                .binding()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?
+                != binding
+            {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+            match lookup {
+                PorFinalizedReplayArchiveLookupV1::Found(readback) => {
+                    readback.validate_at_checkpoint(
+                        binding,
+                        latest_archive_receipt,
+                        proof_bounds,
+                    )?;
+                    validate_replay_archive_record(&readback.record)?;
+                    return if readback.record.finalized.state.challenge == *challenge {
+                        Ok(())
+                    } else {
+                        Err(PorTrackerError::ChallengeConflict)
+                    };
+                }
+                PorFinalizedReplayArchiveLookupV1::Absent(absence) => {
+                    absence.validate_at_checkpoint(
+                        binding,
+                        challenge.challenge_id,
+                        latest_archive_receipt,
+                    )?;
+                }
+            }
         }
         if !state.pending.contains_key(&challenge.challenge_id)
             && state.pending.len() >= state.entry_limit
@@ -940,6 +1740,54 @@ impl PorTracker {
             &PorFailedRepairIntentV1,
         ) -> Result<[u8; 32], PorRepairHandoffError>,
     ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
+        self.record_verdict_with_archive_option(
+            verdict,
+            trusted_auditor_keys,
+            auditor_threshold,
+            None,
+            None,
+            enqueue_failed_repair,
+        )
+    }
+
+    /// Finalise or replay a verdict against an authenticated compacted archive
+    /// with exact configured proof bounds.
+    ///
+    /// The archive is consulted only when the challenge no longer exists in
+    /// local pending/finalized state. Its live binding and signed readback must
+    /// match the checkpoint-pinned archive before an exact replay is returned.
+    pub(crate) fn record_verdict_with_archive_and_bounds(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+        proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+        enqueue_failed_repair: impl FnOnce(
+            &PorFailedRepairIntentV1,
+        ) -> Result<[u8; 32], PorRepairHandoffError>,
+    ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
+        self.record_verdict_with_archive_option(
+            verdict,
+            trusted_auditor_keys,
+            auditor_threshold,
+            Some(replay_archive),
+            Some(proof_bounds),
+            enqueue_failed_repair,
+        )
+    }
+
+    fn record_verdict_with_archive_option(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+        replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
+        proof_bounds: Option<PorFinalizedReplayArchiveProofBoundsV1>,
+        enqueue_failed_repair: impl FnOnce(
+            &PorFailedRepairIntentV1,
+        ) -> Result<[u8; 32], PorRepairHandoffError>,
+    ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
         verdict
             .validate()
             .map_err(PorTrackerError::VerdictInvalid)?;
@@ -954,20 +1802,73 @@ impl PorTracker {
             return Ok(PorVerdictTransitionV1 {
                 stats: finalized.stats,
                 repair_task_id: finalized.repair_task_id,
+                reputation_work: retained_reputation_work(finalized)?,
                 newly_finalized: false,
             });
         }
-        let state = tracker
-            .pending
-            .get(&verdict.challenge_id)
-            .ok_or(PorTrackerError::UnknownChallenge)?;
+        let Some(state) = tracker.pending.get(&verdict.challenge_id) else {
+            let Some(latest_archive_receipt) = tracker.replay_archive_receipt else {
+                return Err(PorTrackerError::UnknownChallenge);
+            };
+            let replay_archive = replay_archive.ok_or(PorTrackerError::ReplayArchiveRequired)?;
+            replay_archive
+                .check_readiness()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            let binding = replay_archive
+                .binding()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            if binding != latest_archive_receipt.binding {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+            let proof_bounds =
+                proof_bounds.ok_or(PorTrackerError::ReplayArchiveProofLimitExceeded)?;
+            let lookup = replay_archive
+                .lookup(verdict.challenge_id, latest_archive_receipt, proof_bounds)
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            replay_archive
+                .check_readiness()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            if replay_archive
+                .binding()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?
+                != binding
+            {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+            let readback = match lookup {
+                PorFinalizedReplayArchiveLookupV1::Found(readback) => readback,
+                PorFinalizedReplayArchiveLookupV1::Absent(absence) => {
+                    absence.validate_at_checkpoint(
+                        binding,
+                        verdict.challenge_id,
+                        latest_archive_receipt,
+                    )?;
+                    return Err(PorTrackerError::UnknownChallenge);
+                }
+            };
+            readback.validate_at_checkpoint(binding, latest_archive_receipt, proof_bounds)?;
+            validate_replay_archive_record(&readback.record)?;
+            if readback.record.finalized.verdict != *verdict {
+                return Err(PorTrackerError::VerdictConflict);
+            }
+            return Ok(PorVerdictTransitionV1 {
+                stats: readback.record.finalized.stats,
+                repair_task_id: readback.record.finalized.repair_task_id,
+                reputation_work: readback.record.reputation_work()?,
+                newly_finalized: false,
+            });
+        };
         let stats = validate_verdict_transition(state, verdict)?;
         if tracker.finalized.len() >= tracker.entry_limit {
             return Err(PorTrackerError::FinalizedRetentionExhausted {
                 limit: tracker.entry_limit,
             });
         }
-        let repair_task_id = if verdict.outcome == AuditOutcomeV1::Failed {
+        let reputation_sequence = tracker
+            .last_reputation_sequence
+            .checked_add(1)
+            .ok_or(PorTrackerError::ReputationSequenceOverflow)?;
+        let failed_repair_intent = if verdict.outcome == AuditOutcomeV1::Failed {
             let failed_samples = u16::try_from(stats.failed_samples)
                 .map_err(|_| PorTrackerError::InvalidFailedSampleCount)?;
             let intent = PorFailedRepairIntentV1 {
@@ -979,8 +1880,29 @@ impl PorTracker {
                 decided_at_unix: verdict.decided_at,
             };
             intent.validate().map_err(PorTrackerError::RepairHandoff)?;
+            Some(intent)
+        } else {
+            None
+        };
+        let expected_repair_task_id =
+            failed_repair_intent.map(PorFailedRepairIntentV1::repair_task_id);
+        // Projection is validated before any external repair handoff. An
+        // unrepresentable terminal therefore cannot consume a challenge or
+        // create an orphaned repair side effect.
+        let reputation_terminal = por_reputation_terminal_from_retained_v1(
+            state,
+            verdict,
+            stats,
+            expected_repair_task_id,
+        )?;
+        let reputation_work = PorReputationTerminalWorkV1::try_new(
+            reputation_sequence,
+            state.challenge.provider_id,
+            reputation_terminal,
+        )?;
+        let repair_task_id = if let Some(intent) = failed_repair_intent {
             let task_id = enqueue_failed_repair(&intent).map_err(PorTrackerError::RepairHandoff)?;
-            if task_id != intent.repair_task_id() {
+            if Some(task_id) != expected_repair_task_id {
                 return Err(PorTrackerError::RepairTaskIdMismatch);
             }
             Some(task_id)
@@ -998,11 +1920,15 @@ impl PorTracker {
                 verdict: verdict.clone(),
                 stats,
                 repair_task_id,
+                reputation_sequence,
+                reputation_terminal,
             },
         );
+        tracker.last_reputation_sequence = reputation_sequence;
         Ok(PorVerdictTransitionV1 {
             stats,
             repair_task_id,
+            reputation_work,
             newly_finalized: true,
         })
     }
@@ -1014,7 +1940,441 @@ impl PorTracker {
         pending.sort_by_key(|state| state.challenge.challenge_id);
         let mut finalized = tracker.finalized.values().cloned().collect::<Vec<_>>();
         finalized.sort_by_key(|state| state.state.challenge.challenge_id);
-        PorTrackerCheckpointV1 { pending, finalized }
+        PorTrackerCheckpointV1 {
+            pending,
+            finalized,
+            last_reputation_sequence: tracker.last_reputation_sequence,
+            acknowledged_reputation_terminal: tracker.acknowledged_reputation_terminal,
+            replay_archive_receipt: tracker.replay_archive_receipt,
+        }
+    }
+
+    /// Return the exact next retained PoR terminal awaiting reputation admission.
+    ///
+    /// Work is exposed strictly in finalization order. The same item is
+    /// returned until its sequence and binding digest are acknowledged.
+    pub fn next_reputation_terminal_work(
+        &self,
+    ) -> Result<Option<PorReputationTerminalWorkV1>, PorTrackerError> {
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        let next_sequence = match tracker.acknowledged_reputation_terminal {
+            Some(acknowledged) if acknowledged.sequence == tracker.last_reputation_sequence => {
+                return Ok(None);
+            }
+            Some(acknowledged) => acknowledged
+                .sequence
+                .checked_add(1)
+                .ok_or(PorTrackerError::ReputationSequenceOverflow)?,
+            None => 1,
+        };
+        let Some(finalized) = tracker
+            .finalized
+            .values()
+            .find(|finalized| finalized.reputation_sequence == next_sequence)
+        else {
+            return Ok(None);
+        };
+        retained_reputation_work(finalized).map(Some)
+    }
+
+    /// Return the number of retained terminals not yet acknowledged.
+    #[must_use]
+    pub fn pending_reputation_terminal_count(&self) -> u64 {
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        let acknowledged = tracker
+            .acknowledged_reputation_terminal
+            .map_or(0, |ack| ack.sequence);
+        tracker
+            .last_reputation_sequence
+            .saturating_sub(acknowledged)
+    }
+
+    /// Advance the delivery cursor for the exact next retained terminal.
+    ///
+    /// Skipped, foreign, stale, or digest-substituted acknowledgements fail
+    /// closed. An exact replay of the latest acknowledgement is idempotent.
+    pub(crate) fn acknowledge_reputation_terminal(
+        &self,
+        sequence: u64,
+        work_digest: [u8; 32],
+    ) -> Result<PorReputationTerminalAckOutcomeV1, PorTrackerError> {
+        if sequence == 0 || work_digest == [0; 32] {
+            return Err(PorTrackerError::InvalidReputationTerminalAcknowledgement);
+        }
+        let mut tracker = self.inner.write().expect("por tracker poisoned");
+        if let Some(acknowledged) = tracker.acknowledged_reputation_terminal {
+            if sequence == acknowledged.sequence {
+                return if work_digest == acknowledged.work_digest {
+                    Ok(PorReputationTerminalAckOutcomeV1::ExactReplay)
+                } else {
+                    Err(PorTrackerError::ReputationAcknowledgementDigestMismatch)
+                };
+            }
+            if sequence < acknowledged.sequence {
+                return Err(PorTrackerError::StaleReputationAcknowledgement {
+                    acknowledged: acknowledged.sequence,
+                    received: sequence,
+                });
+            }
+        }
+        let expected = tracker
+            .acknowledged_reputation_terminal
+            .map_or(Some(1), |ack| ack.sequence.checked_add(1))
+            .ok_or(PorTrackerError::ReputationSequenceOverflow)?;
+        if sequence != expected {
+            return Err(PorTrackerError::SkippedReputationAcknowledgement {
+                expected,
+                received: sequence,
+            });
+        }
+        let finalized = tracker
+            .finalized
+            .values()
+            .find(|finalized| finalized.reputation_sequence == expected)
+            .ok_or(PorTrackerError::UnknownReputationTerminalWork { sequence })?;
+        let retained = retained_reputation_work(finalized)?;
+        if retained.work_digest != work_digest {
+            return Err(PorTrackerError::ReputationAcknowledgementDigestMismatch);
+        }
+        tracker.acknowledged_reputation_terminal = Some(PorReputationTerminalAckV1 {
+            sequence,
+            work_digest,
+        });
+        Ok(PorReputationTerminalAckOutcomeV1::Advanced)
+    }
+
+    /// Reconcile a restored local archive head with an authenticated live prefix.
+    ///
+    /// A live-ahead head is accepted only when every newly archived record is
+    /// the exact acknowledged prefix still retained by the local checkpoint.
+    /// This closes the crash window where durable external appends precede the
+    /// local checkpoint without adding an intent field to the V1 format.
+    pub(crate) fn reconcile_restored_replay_archive_head(
+        &self,
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+        expected_binding: PorFinalizedReplayArchiveBindingV1,
+        proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+    ) -> Result<bool, PorTrackerError> {
+        replay_archive
+            .check_readiness()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?;
+        if replay_archive
+            .binding()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?
+            != expected_binding
+        {
+            return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+        }
+        let restored_head = self
+            .inner
+            .read()
+            .expect("por tracker poisoned")
+            .replay_archive_receipt;
+        if let Some(restored) = restored_head {
+            restored.validate()?;
+            if restored.binding() != expected_binding {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+        }
+        let current_head = replay_archive
+            .current_head()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?;
+        if let Some(current) = current_head {
+            current.validate()?;
+            if current.binding() != expected_binding {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+        }
+
+        let reconciliation = match (restored_head, current_head) {
+            (Some(_), None) => return Err(PorTrackerError::ReplayArchiveHeadRollback),
+            (None, None) => None,
+            (Some(restored), Some(current))
+                if current.reputation_sequence() < restored.reputation_sequence()
+                    || (current.reputation_sequence() == restored.reputation_sequence()
+                        && current != restored) =>
+            {
+                return Err(PorTrackerError::ReplayArchiveHeadRollback);
+            }
+            (Some(restored), Some(current)) if current == restored => None,
+            (restored, Some(current)) => {
+                let restored_sequence =
+                    restored.map_or(0, PorFinalizedReplayArchiveReceiptV1::reputation_sequence);
+                let advance_count = current
+                    .reputation_sequence()
+                    .checked_sub(restored_sequence)
+                    .filter(|count| *count != 0)
+                    .ok_or(PorTrackerError::ReplayArchiveHeadRollback)?;
+                let successor_count = advance_count
+                    .checked_sub(1)
+                    .ok_or(PorTrackerError::ReplayArchiveHeadRollback)?;
+                if successor_count
+                    > u64::try_from(proof_bounds.max_successor_receipts())
+                        .map_err(|_| PorTrackerError::ReplayArchiveProofLimitExceeded)?
+                {
+                    return Err(PorTrackerError::ReplayArchiveProofLimitExceeded);
+                }
+                let advance_count = usize::try_from(advance_count)
+                    .map_err(|_| PorTrackerError::ReplayArchiveProofLimitExceeded)?;
+
+                let tracker = self.inner.read().expect("por tracker poisoned");
+                let acknowledged = tracker
+                    .acknowledged_reputation_terminal
+                    .ok_or(PorTrackerError::ReplayArchiveHeadRollback)?;
+                let last_reputation_sequence = tracker.last_reputation_sequence;
+                if current.reputation_sequence() > acknowledged.sequence
+                    || acknowledged.sequence > last_reputation_sequence
+                    || current.reputation_sequence() > last_reputation_sequence
+                    || advance_count > tracker.finalized.len()
+                {
+                    return Err(PorTrackerError::ReplayArchiveHeadRollback);
+                }
+
+                let mut by_sequence = BTreeMap::new();
+                for (challenge_id, finalized) in &tracker.finalized {
+                    if finalized.reputation_sequence > restored_sequence
+                        && finalized.reputation_sequence <= current.reputation_sequence()
+                        && by_sequence
+                            .insert(
+                                finalized.reputation_sequence,
+                                (
+                                    *challenge_id,
+                                    PorFinalizedReplayArchiveRecordV1::from_finalized(
+                                        finalized.clone(),
+                                    ),
+                                ),
+                            )
+                            .is_some()
+                    {
+                        return Err(PorTrackerError::ReplayArchiveHeadRollback);
+                    }
+                }
+                if by_sequence.len() != advance_count {
+                    return Err(PorTrackerError::ReplayArchiveHeadRollback);
+                }
+                let mut local_prefix = Vec::with_capacity(advance_count);
+                for sequence in restored_sequence
+                    .checked_add(1)
+                    .ok_or(PorTrackerError::ReputationSequenceOverflow)?
+                    ..=current.reputation_sequence()
+                {
+                    let local = by_sequence
+                        .remove(&sequence)
+                        .ok_or(PorTrackerError::ReplayArchiveHeadRollback)?;
+                    validate_replay_archive_record(&local.1)?;
+                    local_prefix.push(local);
+                }
+                drop(tracker);
+
+                let first = local_prefix
+                    .first()
+                    .ok_or(PorTrackerError::ReplayArchiveHeadRollback)?;
+                let lookup = replay_archive
+                    .lookup(first.0, current, proof_bounds)
+                    .map_err(PorTrackerError::ReplayArchiveExternal)?;
+                let PorFinalizedReplayArchiveLookupV1::Found(readback) = lookup else {
+                    return Err(PorTrackerError::ReplayArchiveHeadRollback);
+                };
+                readback.validate_at_checkpoint(expected_binding, current, proof_bounds)?;
+                if readback.record != first.1
+                    || readback.successor_receipts.len() != local_prefix.len().saturating_sub(1)
+                {
+                    return Err(PorTrackerError::ReplayArchiveHeadRollback);
+                }
+                let first_previous = restored.map(PorFinalizedReplayArchiveReceiptV1::head_digest);
+                readback.receipt.validate_record(
+                    expected_binding,
+                    &first.1,
+                    Some(first_previous),
+                )?;
+                let mut previous = readback.receipt;
+                for (receipt, (_, record)) in readback
+                    .successor_receipts
+                    .iter()
+                    .copied()
+                    .zip(local_prefix.iter().skip(1))
+                {
+                    receipt.validate_record(
+                        expected_binding,
+                        record,
+                        Some(Some(previous.head_digest())),
+                    )?;
+                    previous = receipt;
+                }
+                if previous != current {
+                    return Err(PorTrackerError::ReplayArchiveHeadRollback);
+                }
+                Some((
+                    current,
+                    local_prefix,
+                    acknowledged,
+                    last_reputation_sequence,
+                ))
+            }
+        };
+
+        replay_archive
+            .check_readiness()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?;
+        if replay_archive
+            .binding()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?
+            != expected_binding
+        {
+            return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+        }
+        let confirmed_head = replay_archive
+            .current_head()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?;
+        if confirmed_head != current_head {
+            return Err(PorTrackerError::ReplayArchiveHeadRollback);
+        }
+        if replay_archive
+            .binding()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?
+            != expected_binding
+        {
+            return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+        }
+
+        let Some((current, local_prefix, acknowledged, last_reputation_sequence)) = reconciliation
+        else {
+            return Ok(false);
+        };
+        let mut tracker = self.inner.write().expect("por tracker poisoned");
+        if tracker.replay_archive_receipt != restored_head
+            || tracker.acknowledged_reputation_terminal != Some(acknowledged)
+            || tracker.last_reputation_sequence != last_reputation_sequence
+            || local_prefix.iter().any(|(challenge_id, record)| {
+                tracker.finalized.get(challenge_id) != Some(&record.finalized)
+            })
+        {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR replay state changed during startup archive reconciliation".to_owned(),
+            ));
+        }
+        for (challenge_id, _) in local_prefix {
+            if tracker.finalized.remove(&challenge_id).is_none() {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "PoR replay prefix disappeared during startup archive reconciliation"
+                        .to_owned(),
+                ));
+            }
+        }
+        tracker.replay_archive_receipt = Some(current);
+        Ok(true)
+    }
+
+    /// Archive and compact a bounded acknowledged finalized prefix.
+    ///
+    /// Every record is durably appended and its HSM-authenticated receipt is
+    /// verified before local replay state is removed. If any append fails,
+    /// in-memory state rolls back to its exact pre-call snapshot; an archive
+    /// that committed before the failure must return the same receipt on retry.
+    pub(crate) fn compact_acknowledged_with_replay_archive(
+        &self,
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+        expected_binding: PorFinalizedReplayArchiveBindingV1,
+        maximum_records: u32,
+    ) -> Result<u32, PorTrackerError> {
+        if maximum_records == 0 {
+            return Err(PorTrackerError::InvalidReplayArchiveCompactionLimit);
+        }
+        replay_archive
+            .check_readiness()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?;
+        let binding = replay_archive
+            .binding()
+            .map_err(PorTrackerError::ReplayArchiveExternal)?;
+        binding.verifying_key()?;
+        if binding != expected_binding {
+            return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+        }
+        let mut tracker = self.inner.write().expect("por tracker poisoned");
+        if tracker
+            .replay_archive_receipt
+            .is_some_and(|receipt| receipt.binding != binding)
+        {
+            return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+        }
+        let original_finalized = tracker.finalized.clone();
+        let original_receipt = tracker.replay_archive_receipt;
+        let result = (|| {
+            let acknowledged = tracker
+                .acknowledged_reputation_terminal
+                .map_or(0, |acknowledged| acknowledged.sequence);
+            let mut compacted = 0_u32;
+            while compacted < maximum_records {
+                let archived_through = tracker
+                    .replay_archive_receipt
+                    .map_or(0, |receipt| receipt.reputation_sequence);
+                let next_sequence = archived_through
+                    .checked_add(1)
+                    .ok_or(PorTrackerError::ReputationSequenceOverflow)?;
+                if next_sequence > acknowledged {
+                    break;
+                }
+                let (challenge_id, finalized) = tracker
+                    .finalized
+                    .iter()
+                    .find(|(_, finalized)| finalized.reputation_sequence == next_sequence)
+                    .map(|(challenge_id, finalized)| (*challenge_id, finalized.clone()))
+                    .ok_or_else(|| {
+                        PorTrackerError::InvalidCheckpoint(
+                            "acknowledged PoR archive prefix is not locally contiguous".to_owned(),
+                        )
+                    })?;
+                let record = PorFinalizedReplayArchiveRecordV1::from_finalized(finalized);
+                validate_replay_archive_record(&record)?;
+                let previous_head = tracker
+                    .replay_archive_receipt
+                    .map(|receipt| receipt.head_digest);
+                let receipt = replay_archive
+                    .append(&record, previous_head)
+                    .map_err(PorTrackerError::ReplayArchiveExternal)?;
+                receipt.validate_record(binding, &record, Some(previous_head))?;
+                tracker.finalized.remove(&challenge_id);
+                tracker.replay_archive_receipt = Some(receipt);
+                compacted = compacted
+                    .checked_add(1)
+                    .ok_or(PorTrackerError::ReputationSequenceOverflow)?;
+            }
+            replay_archive
+                .check_readiness()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            if replay_archive
+                .binding()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?
+                != binding
+            {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+            let confirmed_head = replay_archive
+                .current_head()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            if let Some(confirmed) = confirmed_head {
+                confirmed.validate()?;
+                if confirmed.binding() != binding {
+                    return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+                }
+            }
+            if confirmed_head != tracker.replay_archive_receipt {
+                return Err(PorTrackerError::ReplayArchiveHeadRollback);
+            }
+            if replay_archive
+                .binding()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?
+                != binding
+            {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+            Ok(compacted)
+        })();
+        if result.is_err() {
+            tracker.finalized = original_finalized;
+            tracker.replay_archive_receipt = original_receipt;
+        }
+        result
     }
 
     /// Restore a validated deterministic tracker checkpoint.
@@ -1033,6 +2393,14 @@ impl PorTracker {
                 limit: tracker.entry_limit,
             });
         }
+        let last_reputation_sequence = checkpoint.last_reputation_sequence;
+        let acknowledged_reputation_terminal = checkpoint.acknowledged_reputation_terminal;
+        let replay_archive_receipt = checkpoint.replay_archive_receipt;
+        if let Some(receipt) = replay_archive_receipt {
+            receipt.validate()?;
+        }
+        let archived_through =
+            replay_archive_receipt.map_or(0, |receipt| receipt.reputation_sequence);
         let mut pending = HashMap::with_capacity(checkpoint.pending.len());
         let mut previous_pending_id = None;
         for state in checkpoint.pending {
@@ -1068,6 +2436,7 @@ impl PorTracker {
             }
         }
         let mut finalized = HashMap::with_capacity(checkpoint.finalized.len());
+        let mut reputation_sequences = Vec::with_capacity(checkpoint.finalized.len());
         let mut previous_finalized_id = None;
         for finalized_state in checkpoint.finalized {
             finalized_state
@@ -1117,6 +2486,20 @@ impl PorTracker {
                     "finalized verdict repair task identity is inconsistent".to_owned(),
                 ));
             }
+            let expected_terminal = por_reputation_terminal_from_retained_v1(
+                &finalized_state.state,
+                &finalized_state.verdict,
+                expected_stats,
+                expected_task_id,
+            )?;
+            if finalized_state.reputation_terminal != expected_terminal {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "finalized PoR reputation terminal differs from retained source state"
+                        .to_owned(),
+                ));
+            }
+            retained_reputation_work(&finalized_state)?;
+            reputation_sequences.push(finalized_state.reputation_sequence);
             let challenge_id = finalized_state.state.challenge.challenge_id;
             if previous_finalized_id.is_some_and(|previous| previous >= challenge_id) {
                 return Err(PorTrackerError::InvalidCheckpoint(
@@ -1135,8 +2518,78 @@ impl PorTracker {
                 "challenge id appears in both pending and finalized state".to_owned(),
             ));
         }
+        reputation_sequences.sort_unstable();
+        let finalized_count = u64::try_from(reputation_sequences.len()).map_err(|_| {
+            PorTrackerError::InvalidCheckpoint(
+                "finalized PoR reputation sequence count is not representable".to_owned(),
+            )
+        })?;
+        let expected_retained_count = last_reputation_sequence
+            .checked_sub(archived_through)
+            .ok_or_else(|| {
+                PorTrackerError::InvalidCheckpoint(
+                    "PoR replay archive extends beyond finalized sequence state".to_owned(),
+                )
+            })?;
+        if expected_retained_count != finalized_count
+            || reputation_sequences
+                .iter()
+                .copied()
+                .zip(
+                    archived_through
+                        .checked_add(1)
+                        .ok_or(PorTrackerError::ReputationSequenceOverflow)?
+                        ..=last_reputation_sequence,
+                )
+                .any(|(actual, expected)| actual != expected)
+        {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "retained PoR reputation sequences must be unique and contiguous after the authenticated archive prefix".to_owned(),
+            ));
+        }
+        if let Some(acknowledged) = acknowledged_reputation_terminal {
+            if acknowledged.sequence == 0
+                || acknowledged.sequence > last_reputation_sequence
+                || archived_through > acknowledged.sequence
+            {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "PoR reputation acknowledgement sequence is outside retained work".to_owned(),
+                ));
+            }
+            if acknowledged.sequence > archived_through {
+                let retained = finalized
+                    .values()
+                    .find(|state| state.reputation_sequence == acknowledged.sequence)
+                    .ok_or_else(|| {
+                        PorTrackerError::InvalidCheckpoint(
+                            "PoR reputation acknowledgement names missing retained work".to_owned(),
+                        )
+                    })
+                    .and_then(retained_reputation_work)?;
+                if retained.work_digest != acknowledged.work_digest {
+                    return Err(PorTrackerError::InvalidCheckpoint(
+                        "PoR reputation acknowledgement digest differs from retained work"
+                            .to_owned(),
+                    ));
+                }
+            } else if replay_archive_receipt
+                .is_none_or(|receipt| receipt.reputation_work_digest != acknowledged.work_digest)
+            {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "PoR reputation acknowledgement digest differs from authenticated archive work"
+                        .to_owned(),
+                ));
+            }
+        } else if archived_through != 0 {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR replay archive exists without an acknowledged delivery prefix".to_owned(),
+            ));
+        }
         tracker.pending = pending;
         tracker.finalized = finalized;
+        tracker.last_reputation_sequence = last_reputation_sequence;
+        tracker.acknowledged_reputation_terminal = acknowledged_reputation_terminal;
+        tracker.replay_archive_receipt = replay_archive_receipt;
         Ok(())
     }
 
@@ -1213,6 +2666,156 @@ impl PorTracker {
         }
         grouped.into_values().collect()
     }
+}
+
+fn validate_replay_archive_record(
+    record: &PorFinalizedReplayArchiveRecordV1,
+) -> Result<(), PorTrackerError> {
+    let finalized = &record.finalized;
+    finalized
+        .state
+        .challenge
+        .validate()
+        .map_err(PorTrackerError::ChallengeInvalid)?;
+    if finalized.state.proof_digest.is_some() != finalized.state.proof_submitted_at.is_some() {
+        return Err(PorTrackerError::InvalidReplayArchiveRecord);
+    }
+    if let Some(submitted_at) = finalized.state.proof_submitted_at
+        && (submitted_at < finalized.state.challenge.issued_at
+            || submitted_at > finalized.state.challenge.deadline_at)
+    {
+        return Err(PorTrackerError::InvalidReplayArchiveRecord);
+    }
+    finalized
+        .verdict
+        .validate()
+        .map_err(PorTrackerError::VerdictInvalid)?;
+    finalized
+        .verdict
+        .verify_signatures()
+        .map_err(PorTrackerError::VerdictSignatureInvalid)?;
+    let expected_stats = validate_verdict_transition(&finalized.state, &finalized.verdict)?;
+    let expected_task_id = (finalized.verdict.outcome == AuditOutcomeV1::Failed).then(|| {
+        sorafs_repair_task_id_v1(por_repair_source_identity_v1(
+            finalized.verdict.challenge_id,
+        ))
+    });
+    let expected_terminal = por_reputation_terminal_from_retained_v1(
+        &finalized.state,
+        &finalized.verdict,
+        expected_stats,
+        expected_task_id,
+    )?;
+    if finalized.reputation_sequence == 0
+        || finalized.stats != expected_stats
+        || finalized.repair_task_id != expected_task_id
+        || finalized.reputation_terminal != expected_terminal
+    {
+        return Err(PorTrackerError::InvalidReplayArchiveRecord);
+    }
+    retained_reputation_work(finalized)?;
+    record.record_digest()?;
+    Ok(())
+}
+
+fn retained_reputation_work(
+    finalized: &FinalizedChallengeStateV1,
+) -> Result<PorReputationTerminalWorkV1, PorTrackerError> {
+    PorReputationTerminalWorkV1::try_new(
+        finalized.reputation_sequence,
+        finalized.state.challenge.provider_id,
+        finalized.reputation_terminal,
+    )
+}
+
+fn checked_seconds_to_millis(value: u64, field: &'static str) -> Result<u64, PorTrackerError> {
+    value
+        .checked_mul(1_000)
+        .ok_or(PorTrackerError::ReputationTimestampOverflow { field })
+}
+
+fn por_reputation_terminal_from_retained_v1(
+    state: &ChallengeState,
+    verdict: &AuditVerdictV1,
+    stats: PorVerdictStats,
+    repair_task_id: Option<[u8; 32]>,
+) -> Result<PorTerminalOutcomeV1, PorTrackerError> {
+    let failed_samples = u16::try_from(stats.failed_samples)
+        .map_err(|_| PorTrackerError::InvalidFailedSampleCount)?;
+    let status = match verdict.outcome {
+        AuditOutcomeV1::Success => {
+            if repair_task_id.is_some() {
+                return Err(PorTrackerError::InvalidReputationTerminalWork);
+            }
+            PorTerminalStatusV1::Verified
+        }
+        AuditOutcomeV1::Repaired => {
+            if repair_task_id.is_some() {
+                return Err(PorTrackerError::InvalidReputationTerminalWork);
+            }
+            PorTerminalStatusV1::Repaired
+        }
+        AuditOutcomeV1::Failed if state.proof_digest.is_some() => {
+            if repair_task_id.is_none() {
+                return Err(PorTrackerError::InvalidReputationTerminalWork);
+            }
+            // The tracker rejects proofs submitted after the challenge
+            // deadline, so `SubmissionLate` cannot be selected here.
+            PorTerminalStatusV1::Failed(PorTerminalFailureKindV1::InvalidProof)
+        }
+        AuditOutcomeV1::Failed if verdict.decided_at >= state.challenge.deadline_at => {
+            if repair_task_id.is_none() {
+                return Err(PorTrackerError::InvalidReputationTerminalWork);
+            }
+            PorTerminalStatusV1::Failed(PorTerminalFailureKindV1::DeadlineExpired)
+        }
+        AuditOutcomeV1::Failed => {
+            // No retained typed fact states that storage was unavailable.
+            // Free-text `failure_reason` is deliberately non-authoritative,
+            // so it cannot select `StorageUnavailable`.
+            return Err(PorTrackerError::UnprojectablePreDeadlineFailure);
+        }
+    };
+    let responded_at_unix_ms = state
+        .proof_submitted_at
+        .map(|timestamp| checked_seconds_to_millis(timestamp, "responded_at_unix_ms"))
+        .transpose()?;
+    let verifier_latency_ms = state
+        .proof_submitted_at
+        .map(|submitted_at| {
+            let latency_seconds = verdict.decided_at.checked_sub(submitted_at).ok_or(
+                PorTrackerError::VerdictBeforeProof {
+                    decided_at: verdict.decided_at,
+                    submitted_at,
+                },
+            )?;
+            let latency_ms = checked_seconds_to_millis(latency_seconds, "verifier_latency_ms")?;
+            u32::try_from(latency_ms).map_err(|_| PorTrackerError::ReputationLatencyOverflow)
+        })
+        .transpose()?;
+    Ok(PorTerminalOutcomeV1 {
+        challenge_id: state.challenge.challenge_id,
+        manifest_digest: state.challenge.manifest_digest,
+        epoch_id: state.challenge.epoch_id,
+        drand_round: state.challenge.drand_round,
+        forced: state.challenge.forced,
+        sample_count: state.challenge.sample_count,
+        failed_samples,
+        issued_at_unix_ms: checked_seconds_to_millis(
+            state.challenge.issued_at,
+            "issued_at_unix_ms",
+        )?,
+        deadline_at_unix_ms: checked_seconds_to_millis(
+            state.challenge.deadline_at,
+            "deadline_at_unix_ms",
+        )?,
+        responded_at_unix_ms,
+        decided_at_unix_ms: checked_seconds_to_millis(verdict.decided_at, "decided_at_unix_ms")?,
+        proof_digest: state.proof_digest,
+        repair_task_id,
+        verifier_latency_ms,
+        status,
+    })
 }
 
 fn validate_verdict_transition(
@@ -1310,6 +2913,10 @@ pub enum PorTrackerError {
         limit: usize,
     },
     /// Finalized challenge replay retention reached its configured hard ceiling.
+    ///
+    /// Acknowledged records can be compacted only through the authenticated
+    /// replay-archive seam. Nodes without that deployment adapter fail closed
+    /// at this ceiling.
     #[error("finalized PoR challenge retention exhausted (limit {limit})")]
     FinalizedRetentionExhausted {
         /// Configured entry ceiling.
@@ -1402,11 +3009,97 @@ pub enum PorTrackerError {
     /// The handoff returned an identifier other than the deterministic native task id.
     #[error("PoR repair handoff returned a mismatched native task id")]
     RepairTaskIdMismatch,
+    /// Whole-second source time cannot be represented canonically in milliseconds.
+    #[error("PoR reputation timestamp `{field}` overflows milliseconds")]
+    ReputationTimestampOverflow {
+        /// Canonical projection field whose conversion overflowed.
+        field: &'static str,
+    },
+    /// Proof-to-decision latency cannot be represented by the V1 `u32` field.
+    #[error("PoR reputation verifier latency exceeds the V1 millisecond range")]
+    ReputationLatencyOverflow,
+    /// Monotonic PoR-to-reputation work sequence cannot advance.
+    #[error("PoR reputation terminal sequence overflow")]
+    ReputationSequenceOverflow,
+    /// Canonical terminal bytes could not be encoded for their delivery binding.
+    #[error("failed to canonically encode PoR reputation terminal work")]
+    ReputationTerminalCanonicalEncoding,
+    /// Retained source material cannot form a canonical reputation terminal.
+    #[error("retained PoR state cannot form a canonical reputation terminal")]
+    InvalidReputationTerminalWork,
+    /// A failed verdict arrived before its deadline without proof or a typed
+    /// storage-unavailability fact.
+    #[error(
+        "failed PoR verdict before deadline has no typed fact selecting a reputation failure kind"
+    )]
+    UnprojectablePreDeadlineFailure,
+    /// Acknowledgement contains a zero sequence or inert digest.
+    #[error("invalid PoR reputation terminal acknowledgement")]
+    InvalidReputationTerminalAcknowledgement,
+    /// Acknowledgement digest differs from the exact retained work.
+    #[error("PoR reputation terminal acknowledgement digest mismatch")]
+    ReputationAcknowledgementDigestMismatch,
+    /// Acknowledgement attempts to skip the exact next retained work.
+    #[error("PoR reputation terminal acknowledgement skipped sequence {expected} with {received}")]
+    SkippedReputationAcknowledgement {
+        /// Exact next sequence.
+        expected: u64,
+        /// Sequence supplied by the caller.
+        received: u64,
+    },
+    /// Acknowledgement predates the latest retained acknowledgement.
+    #[error("stale PoR reputation terminal acknowledgement {received}; latest is {acknowledged}")]
+    StaleReputationAcknowledgement {
+        /// Latest acknowledged sequence.
+        acknowledged: u64,
+        /// Older sequence supplied by the caller.
+        received: u64,
+    },
+    /// Acknowledgement names no retained terminal work.
+    #[error("unknown PoR reputation terminal work sequence {sequence}")]
+    UnknownReputationTerminalWork {
+        /// Unrecognized sequence.
+        sequence: u64,
+    },
+    /// Replay-archive identity, revision, policy, or public key is invalid.
+    #[error("invalid finalized PoR replay-archive binding")]
+    InvalidReplayArchiveBinding,
+    /// Signed replay-archive receipt is malformed, substituted, or unauthenticated.
+    #[error("invalid finalized PoR replay-archive receipt")]
+    InvalidReplayArchiveReceipt,
+    /// Signed replay-archive absence result is malformed, stale, or unauthenticated.
+    #[error("invalid finalized PoR replay-archive absence proof")]
+    InvalidReplayArchiveAbsenceProof,
+    /// Canonical replay-archive record is internally inconsistent.
+    #[error("invalid finalized PoR replay-archive record")]
+    InvalidReplayArchiveRecord,
+    /// Canonical replay-archive bytes could not be encoded.
+    #[error("failed to canonically encode finalized PoR replay-archive material")]
+    ReplayArchiveCanonicalEncoding,
+    /// A compacted replay requires the deployment-owned archive adapter.
+    #[error("finalized PoR replay requires the checkpoint-pinned archive adapter")]
+    ReplayArchiveRequired,
+    /// Live archive identity differs from the checkpoint-pinned binding.
+    #[error("finalized PoR replay-archive binding changed")]
+    ReplayArchiveBindingMismatch,
+    /// Live archive head is missing, stale, forked, or cannot prove ancestry.
+    #[error("finalized PoR replay-archive head rolled back or forked")]
+    ReplayArchiveHeadRollback,
+    /// An archive inclusion proof exceeds the exact configured resource bounds.
+    #[error("finalized PoR replay-archive proof exceeds configured bounds")]
+    ReplayArchiveProofLimitExceeded,
+    /// External archive append/readback failed.
+    #[error(transparent)]
+    ReplayArchiveExternal(#[from] PorFinalizedReplayArchiveExternalErrorV1),
+    /// Archive compaction requested a zero work bound.
+    #[error("finalized PoR replay-archive compaction limit must be non-zero")]
+    InvalidReplayArchiveCompactionLimit,
 }
 
 #[cfg(test)]
 /// Utilities used only in tests to build attested POR inputs.
 pub mod test_support {
+    use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use sorafs_manifest::{
         por::{AUDIT_VERDICT_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1},
@@ -1552,19 +3245,394 @@ pub mod test_support {
     pub fn sample_auditor_keys() -> Vec<Vec<u8>> {
         vec![signing_key(0x13).public_key().to_bytes().1.to_vec()]
     }
+
+    /// Build one canonical record and authenticated non-empty head for startup tests.
+    pub fn sample_replay_archive_record_and_head(
+        seed: u8,
+    ) -> (
+        PorFinalizedReplayArchiveBindingV1,
+        PorFinalizedReplayArchiveRecordV1,
+        PorFinalizedReplayArchiveReceiptV1,
+    ) {
+        let archive_signing_key = SigningKey::from_bytes(&[seed; 32]);
+        let binding = PorFinalizedReplayArchiveBindingV1::try_new(
+            [seed.wrapping_add(1); 32],
+            7,
+            [seed.wrapping_add(2); 32],
+            archive_signing_key.verifying_key().to_bytes(),
+        )
+        .expect("valid replay-archive test binding");
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        let tracker = PorTracker::default();
+        tracker
+            .record_challenge(&challenge)
+            .expect("record replay-archive test challenge");
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .expect("record replay-archive test proof");
+        tracker
+            .record_verdict(
+                &sample_verdict(&challenge, proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            )
+            .expect("record replay-archive test verdict");
+        let finalized = tracker
+            .checkpoint()
+            .finalized
+            .into_iter()
+            .next()
+            .expect("one finalized replay-archive test record");
+        let record = PorFinalizedReplayArchiveRecordV1::from_finalized(finalized);
+        let digest = PorFinalizedReplayArchiveReceiptV1::signing_digest(binding, &record, None)
+            .expect("derive replay-archive test head digest");
+        let receipt = PorFinalizedReplayArchiveReceiptV1::try_new(
+            binding,
+            &record,
+            None,
+            archive_signing_key.sign(&digest).to_bytes(),
+        )
+        .expect("authenticate replay-archive test head");
+        (binding, record, receipt)
+    }
+
+    /// Build one authenticated non-empty replay-archive head for startup tests.
+    pub fn sample_replay_archive_head(
+        seed: u8,
+    ) -> (
+        PorFinalizedReplayArchiveBindingV1,
+        PorFinalizedReplayArchiveReceiptV1,
+    ) {
+        let (binding, _, receipt) = sample_replay_archive_record_and_head(seed);
+        (binding, receipt)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{convert::TryFrom, str::FromStr};
+    use std::{
+        collections::BTreeMap,
+        convert::TryFrom,
+        str::FromStr,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use super::*;
     use crate::por::test_support::{
         resign_sample_proof, resign_sample_verdict, sample_auditor_keys, sample_challenge,
         sample_proof, sample_provider_key, sample_verdict,
     };
+    use ed25519_dalek::{Signer, SigningKey};
     use iroha_data_model::{metadata::Metadata, name::Name};
     use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
+
+    #[derive(Debug)]
+    struct MemoryReplayArchive {
+        runtime_handle: String,
+        binding: PorFinalizedReplayArchiveBindingV1,
+        signing_key: SigningKey,
+        state: Mutex<MemoryReplayArchiveState>,
+    }
+
+    #[derive(Debug, Default)]
+    struct MemoryReplayArchiveState {
+        records: BTreeMap<[u8; 32], PorFinalizedReplayArchiveReadbackV1>,
+        latest_head: Option<[u8; 32]>,
+        append_calls: u32,
+    }
+
+    impl MemoryReplayArchive {
+        fn new(seed: u8) -> Self {
+            let signing_key = SigningKey::from_bytes(&[seed; 32]);
+            let binding = PorFinalizedReplayArchiveBindingV1::try_new(
+                [seed.wrapping_add(1); 32],
+                1,
+                [seed.wrapping_add(2); 32],
+                signing_key.verifying_key().to_bytes(),
+            )
+            .expect("valid archive binding");
+            Self {
+                runtime_handle: format!("hsm://sorafs/por-replay-archive/{seed:02x}"),
+                binding,
+                signing_key,
+                state: Mutex::new(MemoryReplayArchiveState::default()),
+            }
+        }
+
+        fn append_calls(&self) -> u32 {
+            self.state.lock().expect("archive state").append_calls
+        }
+
+        fn retained_records(&self) -> usize {
+            self.state.lock().expect("archive state").records.len()
+        }
+    }
+
+    impl PorFinalizedReplayArchiveV1 for MemoryReplayArchive {
+        fn runtime_handle(&self) -> &str {
+            &self.runtime_handle
+        }
+
+        fn binding(
+            &self,
+        ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            Ok(self.binding)
+        }
+
+        fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
+            self.binding
+                .verifying_key()
+                .map(|_| ())
+                .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected)
+        }
+
+        fn current_head(
+            &self,
+        ) -> Result<
+            Option<PorFinalizedReplayArchiveReceiptV1>,
+            PorFinalizedReplayArchiveExternalErrorV1,
+        > {
+            let state = self.state.lock().expect("archive state");
+            let Some(latest_head) = state.latest_head else {
+                return Ok(None);
+            };
+            state
+                .records
+                .values()
+                .find(|readback| readback.receipt.head_digest() == latest_head)
+                .map(|readback| Some(readback.receipt))
+                .ok_or(PorFinalizedReplayArchiveExternalErrorV1::Rejected)
+        }
+
+        fn append(
+            &self,
+            record: &PorFinalizedReplayArchiveRecordV1,
+            expected_previous_head: Option<[u8; 32]>,
+        ) -> Result<PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            let mut state = self.state.lock().expect("archive state");
+            state.append_calls = state.append_calls.saturating_add(1);
+            if let Some(existing) = state.records.get(&record.challenge_id()) {
+                return if &existing.record == record
+                    && existing.receipt.previous_head_digest == expected_previous_head
+                {
+                    Ok(existing.receipt)
+                } else {
+                    Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected)
+                };
+            }
+            if state.latest_head != expected_previous_head {
+                return Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected);
+            }
+            let digest = PorFinalizedReplayArchiveReceiptV1::signing_digest(
+                self.binding,
+                record,
+                expected_previous_head,
+            )
+            .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected)?;
+            let receipt = PorFinalizedReplayArchiveReceiptV1::try_new(
+                self.binding,
+                record,
+                expected_previous_head,
+                self.signing_key.sign(&digest).to_bytes(),
+            )
+            .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected)?;
+            state.latest_head = Some(receipt.head_digest());
+            state.records.insert(
+                record.challenge_id(),
+                PorFinalizedReplayArchiveReadbackV1 {
+                    record: record.clone(),
+                    receipt,
+                    successor_receipts: Vec::new(),
+                },
+            );
+            Ok(receipt)
+        }
+
+        fn lookup(
+            &self,
+            challenge_id: [u8; 32],
+            expected_checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+            proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+        ) -> Result<PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            let state = self.state.lock().expect("archive state");
+            let current_head = state
+                .records
+                .values()
+                .find(|readback| Some(readback.receipt.head_digest()) == state.latest_head)
+                .map(|readback| readback.receipt)
+                .ok_or(PorFinalizedReplayArchiveExternalErrorV1::Rejected)?;
+            if current_head != expected_checkpoint_head {
+                return Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected);
+            }
+            let Some(mut readback) = state.records.get(&challenge_id).cloned() else {
+                let digest = PorFinalizedReplayArchiveAbsenceProofV1::signing_digest(
+                    self.binding,
+                    challenge_id,
+                    expected_checkpoint_head,
+                )
+                .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected)?;
+                return PorFinalizedReplayArchiveAbsenceProofV1::try_new(
+                    self.binding,
+                    challenge_id,
+                    expected_checkpoint_head,
+                    self.signing_key.sign(&digest).to_bytes(),
+                )
+                .map(PorFinalizedReplayArchiveLookupV1::Absent)
+                .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected);
+            };
+            let successor_count = current_head
+                .reputation_sequence
+                .checked_sub(readback.receipt.reputation_sequence)
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or(PorFinalizedReplayArchiveExternalErrorV1::Rejected)?;
+            if successor_count > proof_bounds.max_successor_receipts() {
+                return Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected);
+            }
+            let mut successors = state
+                .records
+                .values()
+                .map(|candidate| candidate.receipt)
+                .filter(|receipt| {
+                    receipt.reputation_sequence > readback.receipt.reputation_sequence
+                })
+                .collect::<Vec<_>>();
+            successors.sort_by_key(|receipt| receipt.reputation_sequence);
+            readback.successor_receipts = successors;
+            readback
+                .validate_at_checkpoint(self.binding, expected_checkpoint_head, proof_bounds)
+                .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected)?;
+            Ok(PorFinalizedReplayArchiveLookupV1::Found(readback))
+        }
+    }
+
+    #[derive(Debug)]
+    struct BindingDriftReplayArchive<'a> {
+        inner: &'a MemoryReplayArchive,
+        binding_calls: AtomicUsize,
+    }
+
+    impl<'a> BindingDriftReplayArchive<'a> {
+        fn new(inner: &'a MemoryReplayArchive) -> Self {
+            Self {
+                inner,
+                binding_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn substituted_binding(&self) -> PorFinalizedReplayArchiveBindingV1 {
+            let mut binding = self.inner.binding;
+            binding.policy_digest[0] ^= 1;
+            binding
+        }
+    }
+
+    impl PorFinalizedReplayArchiveV1 for BindingDriftReplayArchive<'_> {
+        fn runtime_handle(&self) -> &str {
+            self.inner.runtime_handle()
+        }
+
+        fn binding(
+            &self,
+        ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            if self.binding_calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                Ok(self.inner.binding)
+            } else {
+                Ok(self.substituted_binding())
+            }
+        }
+
+        fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
+            self.inner.check_readiness()
+        }
+
+        fn current_head(
+            &self,
+        ) -> Result<
+            Option<PorFinalizedReplayArchiveReceiptV1>,
+            PorFinalizedReplayArchiveExternalErrorV1,
+        > {
+            self.inner.current_head()
+        }
+
+        fn append(
+            &self,
+            record: &PorFinalizedReplayArchiveRecordV1,
+            expected_previous_head: Option<[u8; 32]>,
+        ) -> Result<PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.inner.append(record, expected_previous_head)
+        }
+
+        fn lookup(
+            &self,
+            challenge_id: [u8; 32],
+            expected_checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+            proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+        ) -> Result<PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.inner
+                .lookup(challenge_id, expected_checkpoint_head, proof_bounds)
+        }
+    }
+
+    #[derive(Debug)]
+    struct StaleHeadReplayArchive<'a> {
+        inner: &'a MemoryReplayArchive,
+    }
+
+    impl PorFinalizedReplayArchiveV1 for StaleHeadReplayArchive<'_> {
+        fn runtime_handle(&self) -> &str {
+            self.inner.runtime_handle()
+        }
+
+        fn binding(
+            &self,
+        ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.inner.binding()
+        }
+
+        fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
+            self.inner.check_readiness()
+        }
+
+        fn current_head(
+            &self,
+        ) -> Result<
+            Option<PorFinalizedReplayArchiveReceiptV1>,
+            PorFinalizedReplayArchiveExternalErrorV1,
+        > {
+            Ok(None)
+        }
+
+        fn append(
+            &self,
+            record: &PorFinalizedReplayArchiveRecordV1,
+            expected_previous_head: Option<[u8; 32]>,
+        ) -> Result<PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.inner.append(record, expected_previous_head)
+        }
+
+        fn lookup(
+            &self,
+            challenge_id: [u8; 32],
+            expected_checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+            proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+        ) -> Result<PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.inner
+                .lookup(challenge_id, expected_checkpoint_head, proof_bounds)
+        }
+    }
 
     fn next_challenge(base: &PorChallengeV1, delta: u64) -> PorChallengeV1 {
         let mut challenge = base.clone();
@@ -1731,6 +3799,216 @@ mod tests {
     }
 
     #[test]
+    fn reputation_projection_preserves_success_repair_and_zero_latency() {
+        for (index, expected_status) in
+            [PorTerminalStatusV1::Verified, PorTerminalStatusV1::Repaired]
+                .into_iter()
+                .enumerate()
+        {
+            let tracker = PorTracker::default();
+            let challenge = next_challenge(&sample_challenge(), index as u64);
+            tracker.record_challenge(&challenge).unwrap();
+            let mut proof = sample_proof(&challenge);
+            proof.submitted_at = 1_700_000_300;
+            resign_sample_proof(&mut proof);
+            tracker
+                .record_proof(&proof, &sample_provider_key())
+                .unwrap();
+            let mut verdict = sample_verdict(&challenge, proof.proof_digest());
+            verdict.outcome = if index == 0 {
+                AuditOutcomeV1::Success
+            } else {
+                AuditOutcomeV1::Repaired
+            };
+            verdict.failure_reason = (index == 1).then(|| "repair recovered service".to_owned());
+            resign_sample_verdict(&mut verdict);
+
+            let transition = tracker
+                .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
+                    panic!("successful terminal must not invoke repair handoff")
+                })
+                .expect("project proof-bearing success");
+            assert_eq!(transition.reputation_work.sequence, 1);
+            assert_eq!(
+                transition.reputation_work.provider_id,
+                challenge.provider_id
+            );
+            assert_eq!(transition.reputation_work.terminal.status, expected_status);
+            assert_eq!(
+                transition.reputation_work.terminal.verifier_latency_ms,
+                Some(0)
+            );
+            assert_eq!(
+                tracker.next_reputation_terminal_work().unwrap(),
+                Some(transition.reputation_work)
+            );
+        }
+    }
+
+    #[test]
+    fn reputation_projection_maps_only_retained_typed_failure_facts() {
+        let proof_tracker = PorTracker::default();
+        let proof_challenge = sample_challenge();
+        proof_tracker.record_challenge(&proof_challenge).unwrap();
+        let proof = sample_proof(&proof_challenge);
+        proof_tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        let mut invalid = sample_verdict(&proof_challenge, proof.proof_digest());
+        invalid.outcome = AuditOutcomeV1::Failed;
+        invalid.failure_reason = Some("Merkle verification failed".to_owned());
+        resign_sample_verdict(&mut invalid);
+        let invalid_transition = proof_tracker
+            .record_verdict_with(&invalid, &sample_auditor_keys(), 1, |intent| {
+                Ok(intent.repair_task_id())
+            })
+            .expect("proof-bearing failure");
+        assert_eq!(
+            invalid_transition.reputation_work.terminal.status,
+            PorTerminalStatusV1::Failed(PorTerminalFailureKindV1::InvalidProof)
+        );
+        assert_eq!(
+            invalid_transition
+                .reputation_work
+                .terminal
+                .verifier_latency_ms,
+            Some(200_000)
+        );
+
+        let deadline_tracker = PorTracker::default();
+        let deadline_challenge = next_challenge(&proof_challenge, 1);
+        deadline_tracker
+            .record_challenge(&deadline_challenge)
+            .unwrap();
+        let mut expired = sample_verdict(&deadline_challenge, [0xA5; 32]);
+        expired.outcome = AuditOutcomeV1::Failed;
+        expired.proof_digest = None;
+        expired.decided_at = deadline_challenge.deadline_at;
+        expired.failure_reason = Some("deadline elapsed".to_owned());
+        resign_sample_verdict(&mut expired);
+        let expired_transition = deadline_tracker
+            .record_verdict_with(&expired, &sample_auditor_keys(), 1, |intent| {
+                Ok(intent.repair_task_id())
+            })
+            .expect("no-proof failure at deadline");
+        assert_eq!(
+            expired_transition.reputation_work.terminal.status,
+            PorTerminalStatusV1::Failed(PorTerminalFailureKindV1::DeadlineExpired)
+        );
+        assert_eq!(
+            expired_transition
+                .reputation_work
+                .terminal
+                .verifier_latency_ms,
+            None
+        );
+    }
+
+    #[test]
+    fn pre_deadline_failure_text_cannot_fabricate_storage_unavailability() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        tracker.record_challenge(&challenge).unwrap();
+        let mut verdict = sample_verdict(&challenge, [0xA5; 32]);
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.proof_digest = None;
+        verdict.decided_at = challenge.deadline_at - 1;
+        verdict.failure_reason =
+            Some("storage unavailable; please classify StorageUnavailable".to_owned());
+        resign_sample_verdict(&mut verdict);
+        let repair_calls = AtomicUsize::new(0);
+
+        assert!(matches!(
+            tracker.record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
+                repair_calls.fetch_add(1, Ordering::Relaxed);
+                Ok([0xFF; 32])
+            }),
+            Err(PorTrackerError::UnprojectablePreDeadlineFailure)
+        ));
+        assert_eq!(repair_calls.load(Ordering::Relaxed), 0);
+        assert!(tracker.contains_challenge(&challenge.challenge_id));
+        assert_eq!(tracker.pending_reputation_terminal_count(), 0);
+        assert_eq!(tracker.next_reputation_terminal_work().unwrap(), None);
+    }
+
+    #[test]
+    fn reputation_projection_rejects_timestamp_and_latency_overflow_atomically() {
+        let timestamp_tracker = PorTracker::default();
+        let mut timestamp_challenge = sample_challenge();
+        timestamp_challenge.issued_at = u64::MAX / 1_000 + 1;
+        timestamp_challenge.deadline_at = timestamp_challenge.issued_at + 1;
+        timestamp_tracker
+            .record_challenge(&timestamp_challenge)
+            .unwrap();
+        let mut timestamp_verdict = sample_verdict(&timestamp_challenge, [0xA5; 32]);
+        timestamp_verdict.outcome = AuditOutcomeV1::Failed;
+        timestamp_verdict.proof_digest = None;
+        timestamp_verdict.decided_at = timestamp_challenge.deadline_at;
+        timestamp_verdict.failure_reason = Some("deadline elapsed".to_owned());
+        resign_sample_verdict(&mut timestamp_verdict);
+        assert!(matches!(
+            timestamp_tracker.record_verdict_with(
+                &timestamp_verdict,
+                &sample_auditor_keys(),
+                1,
+                |intent| Ok(intent.repair_task_id()),
+            ),
+            Err(PorTrackerError::ReputationTimestampOverflow { .. })
+        ));
+        assert!(timestamp_tracker.contains_challenge(&timestamp_challenge.challenge_id));
+
+        let latency_tracker = PorTracker::default();
+        let latency_challenge = sample_challenge();
+        latency_tracker
+            .record_challenge(&latency_challenge)
+            .unwrap();
+        let proof = sample_proof(&latency_challenge);
+        latency_tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        let mut latency_verdict = sample_verdict(&latency_challenge, proof.proof_digest());
+        latency_verdict.decided_at = proof.submitted_at + u64::from(u32::MAX) / 1_000 + 1;
+        resign_sample_verdict(&mut latency_verdict);
+        assert!(matches!(
+            latency_tracker.record_verdict_with(
+                &latency_verdict,
+                &sample_auditor_keys(),
+                1,
+                |_| panic!("success must not invoke repair handoff"),
+            ),
+            Err(PorTrackerError::ReputationLatencyOverflow)
+        ));
+        assert!(latency_tracker.contains_challenge(&latency_challenge.challenge_id));
+
+        let sequence_tracker = PorTracker::default();
+        let sequence_challenge = sample_challenge();
+        let sequence_proof = sample_proof(&sequence_challenge);
+        sequence_tracker
+            .record_challenge(&sequence_challenge)
+            .unwrap();
+        sequence_tracker
+            .record_proof(&sequence_proof, &sample_provider_key())
+            .unwrap();
+        sequence_tracker
+            .inner
+            .write()
+            .expect("tracker lock")
+            .last_reputation_sequence = u64::MAX;
+        assert!(matches!(
+            sequence_tracker.record_verdict_with(
+                &sample_verdict(&sequence_challenge, sequence_proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+                |_| panic!("sequence overflow precedes repair handoff"),
+            ),
+            Err(PorTrackerError::ReputationSequenceOverflow)
+        ));
+        assert!(sequence_tracker.contains_challenge(&sequence_challenge.challenge_id));
+    }
+
+    #[test]
     fn tracker_reports_vrf_seed_and_proof_latency_metrics_without_replay_inflation() {
         let tracker = PorTracker::default();
         let challenge = sample_challenge();
@@ -1820,6 +4098,163 @@ mod tests {
     }
 
     #[test]
+    fn reputation_work_is_ordered_deduplicated_and_strictly_acknowledged() {
+        let tracker = PorTracker::default();
+        let first_challenge = sample_challenge();
+        let first_proof = sample_proof(&first_challenge);
+        let first_verdict = sample_verdict(&first_challenge, first_proof.proof_digest());
+        tracker.record_challenge(&first_challenge).unwrap();
+        tracker
+            .record_proof(&first_proof, &sample_provider_key())
+            .unwrap();
+        let first = tracker
+            .record_verdict_with(&first_verdict, &sample_auditor_keys(), 1, |_| {
+                panic!("success must not invoke repair handoff")
+            })
+            .unwrap()
+            .reputation_work;
+
+        let replay = tracker
+            .record_verdict_with(&first_verdict, &sample_auditor_keys(), 1, |_| {
+                panic!("exact replay must not invoke repair handoff")
+            })
+            .expect("exact verdict replay");
+        assert!(!replay.newly_finalized);
+        assert_eq!(replay.reputation_work, first);
+        assert_eq!(tracker.pending_reputation_terminal_count(), 1);
+
+        let second_challenge = next_challenge(&first_challenge, 1);
+        let second_proof = sample_proof(&second_challenge);
+        let second_verdict = sample_verdict(&second_challenge, second_proof.proof_digest());
+        tracker.record_challenge(&second_challenge).unwrap();
+        tracker
+            .record_proof(&second_proof, &sample_provider_key())
+            .unwrap();
+        let second = tracker
+            .record_verdict_with(&second_verdict, &sample_auditor_keys(), 1, |_| {
+                panic!("success must not invoke repair handoff")
+            })
+            .unwrap()
+            .reputation_work;
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 2);
+        assert_eq!(
+            tracker.next_reputation_terminal_work().unwrap(),
+            Some(first)
+        );
+
+        assert!(matches!(
+            tracker.acknowledge_reputation_terminal(second.sequence, second.work_digest),
+            Err(PorTrackerError::SkippedReputationAcknowledgement {
+                expected: 1,
+                received: 2
+            })
+        ));
+        let mut substituted = first.work_digest;
+        substituted[0] ^= 0x80;
+        assert!(matches!(
+            tracker.acknowledge_reputation_terminal(first.sequence, substituted),
+            Err(PorTrackerError::ReputationAcknowledgementDigestMismatch)
+        ));
+        assert_eq!(
+            tracker
+                .acknowledge_reputation_terminal(first.sequence, first.work_digest)
+                .unwrap(),
+            PorReputationTerminalAckOutcomeV1::Advanced
+        );
+        assert_eq!(
+            tracker
+                .acknowledge_reputation_terminal(first.sequence, first.work_digest)
+                .unwrap(),
+            PorReputationTerminalAckOutcomeV1::ExactReplay
+        );
+        assert_eq!(
+            tracker.next_reputation_terminal_work().unwrap(),
+            Some(second)
+        );
+        assert_eq!(
+            tracker
+                .acknowledge_reputation_terminal(second.sequence, second.work_digest)
+                .unwrap(),
+            PorReputationTerminalAckOutcomeV1::Advanced
+        );
+        assert!(matches!(
+            tracker.acknowledge_reputation_terminal(3, [0xA3; 32]),
+            Err(PorTrackerError::UnknownReputationTerminalWork { sequence: 3 })
+        ));
+        assert!(matches!(
+            tracker.acknowledge_reputation_terminal(first.sequence, first.work_digest),
+            Err(PorTrackerError::StaleReputationAcknowledgement {
+                acknowledged: 2,
+                received: 1
+            })
+        ));
+        assert_eq!(tracker.pending_reputation_terminal_count(), 0);
+        assert_eq!(tracker.next_reputation_terminal_work().unwrap(), None);
+    }
+
+    #[test]
+    fn reputation_work_and_ack_checkpoint_roundtrip_byte_identically() {
+        let source = PorTracker::default();
+        let first_challenge = sample_challenge();
+        let first_proof = sample_proof(&first_challenge);
+        source.record_challenge(&first_challenge).unwrap();
+        source
+            .record_proof(&first_proof, &sample_provider_key())
+            .unwrap();
+        let first = source
+            .record_verdict_with(
+                &sample_verdict(&first_challenge, first_proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+                |_| panic!("success must not invoke repair handoff"),
+            )
+            .unwrap()
+            .reputation_work;
+        source
+            .acknowledge_reputation_terminal(first.sequence, first.work_digest)
+            .unwrap();
+
+        let second_challenge = next_challenge(&first_challenge, 1);
+        let second_proof = sample_proof(&second_challenge);
+        source.record_challenge(&second_challenge).unwrap();
+        source
+            .record_proof(&second_proof, &sample_provider_key())
+            .unwrap();
+        let second = source
+            .record_verdict_with(
+                &sample_verdict(&second_challenge, second_proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+                |_| panic!("success must not invoke repair handoff"),
+            )
+            .unwrap()
+            .reputation_work;
+        let checkpoint = source.checkpoint();
+        let canonical = norito::to_bytes(&checkpoint).expect("encode source checkpoint");
+
+        let restored = PorTracker::default();
+        restored
+            .restore_checkpoint(checkpoint)
+            .expect("restore canonical checkpoint");
+        assert_eq!(
+            norito::to_bytes(&restored.checkpoint()).expect("encode restored checkpoint"),
+            canonical
+        );
+        assert_eq!(
+            restored
+                .acknowledge_reputation_terminal(first.sequence, first.work_digest)
+                .expect("latest acknowledgement remains exactly replayable"),
+            PorReputationTerminalAckOutcomeV1::ExactReplay
+        );
+        assert_eq!(
+            restored.next_reputation_terminal_work().unwrap(),
+            Some(second)
+        );
+        assert_eq!(restored.pending_reputation_terminal_count(), 1);
+    }
+
+    #[test]
     fn tracker_refuses_pending_and_finalized_retention_exhaustion() {
         let tracker = PorTracker::with_entry_limit(1);
         let first = sample_challenge();
@@ -1855,6 +4290,25 @@ mod tests {
             Err(PorTrackerError::FinalizedRetentionExhausted { limit: 1 })
         ));
         assert!(tracker.contains_challenge(&second.challenge_id));
+        let retained = tracker
+            .next_reputation_terminal_work()
+            .unwrap()
+            .expect("first finalized terminal remains retained");
+        tracker
+            .acknowledge_reputation_terminal(retained.sequence, retained.work_digest)
+            .expect("acknowledge retained terminal");
+        assert!(matches!(
+            tracker.record_verdict(
+                &sample_verdict(&second, proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            ),
+            Err(PorTrackerError::FinalizedRetentionExhausted { limit: 1 })
+        ));
+        assert!(
+            tracker.contains_challenge(&second.challenge_id),
+            "V1 never prunes finalized replay protection, even after acknowledgement"
+        );
     }
 
     #[test]
@@ -1928,6 +4382,660 @@ mod tests {
     }
 
     #[test]
+    fn tracker_checkpoint_rejects_reputation_sequence_terminal_and_ack_tampering() {
+        let source = PorTracker::default();
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        source.record_challenge(&challenge).unwrap();
+        source.record_proof(&proof, &sample_provider_key()).unwrap();
+        source
+            .record_verdict(
+                &sample_verdict(&challenge, proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            )
+            .unwrap();
+        let work = source
+            .next_reputation_terminal_work()
+            .unwrap()
+            .expect("retained terminal");
+        source
+            .acknowledge_reputation_terminal(work.sequence, work.work_digest)
+            .unwrap();
+        let checkpoint = source.checkpoint();
+
+        for mutation in 0..3 {
+            let mut tampered = checkpoint.clone();
+            match mutation {
+                0 => tampered.finalized[0].reputation_sequence = 2,
+                1 => {
+                    tampered.finalized[0].reputation_terminal.status =
+                        PorTerminalStatusV1::Repaired;
+                }
+                2 => {
+                    tampered
+                        .acknowledged_reputation_terminal
+                        .as_mut()
+                        .expect("retained acknowledgement")
+                        .work_digest[0] ^= 0x80;
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    PorTracker::default().restore_checkpoint(tampered),
+                    Err(PorTrackerError::InvalidCheckpoint(_))
+                ),
+                "tamper case {mutation} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts() {
+        let tracker = PorTracker::with_entry_limit(1);
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        let verdict = sample_verdict(&challenge, proof.proof_digest());
+        tracker.record_challenge(&challenge).unwrap();
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        tracker
+            .record_verdict(&verdict, &sample_auditor_keys(), 1)
+            .unwrap();
+        let work = tracker
+            .next_reputation_terminal_work()
+            .unwrap()
+            .expect("retained terminal");
+        let archive = MemoryReplayArchive::new(0x91);
+        let mut substituted_binding = archive.binding;
+        substituted_binding.policy_digest[0] ^= 1;
+        assert!(matches!(
+            tracker.compact_acknowledged_with_replay_archive(&archive, substituted_binding, 1),
+            Err(PorTrackerError::ReplayArchiveBindingMismatch)
+        ));
+        assert_eq!(
+            tracker
+                .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+                .expect("unacknowledged records are never archived"),
+            0
+        );
+        assert_eq!(archive.append_calls(), 0);
+        tracker
+            .acknowledge_reputation_terminal(work.sequence, work.work_digest)
+            .unwrap();
+        let before_compaction = tracker.checkpoint();
+
+        assert_eq!(
+            tracker
+                .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+                .expect("first authenticated compaction"),
+            1
+        );
+        let after_compaction = tracker.checkpoint();
+        assert!(after_compaction.finalized.is_empty());
+        assert!(after_compaction.replay_archive_receipt.is_some());
+
+        // Simulate a crash after the external append but before the node
+        // checkpoint. Restoring the old checkpoint must drive an exact append
+        // replay, not create a second archive record.
+        tracker
+            .restore_checkpoint(before_compaction)
+            .expect("restore pre-commit node checkpoint");
+        assert_eq!(
+            tracker
+                .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+                .expect("retry exact authenticated compaction"),
+            1
+        );
+        assert_eq!(archive.append_calls(), 2);
+        assert_eq!(archive.retained_records(), 1);
+        assert_eq!(
+            norito::to_bytes(&tracker.checkpoint()).unwrap(),
+            norito::to_bytes(&after_compaction).unwrap()
+        );
+
+        let restored = PorTracker::with_entry_limit(1);
+        restored
+            .restore_checkpoint(after_compaction.clone())
+            .expect("restore compacted checkpoint");
+        assert!(matches!(
+            restored.record_challenge(&challenge),
+            Err(PorTrackerError::ReplayArchiveRequired)
+        ));
+        restored
+            .record_challenge_with_archive_and_bounds(
+                &challenge,
+                &archive,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            )
+            .expect("archived challenge exact replay");
+        let mut conflicting_challenge = challenge.clone();
+        conflicting_challenge.deadline_at = conflicting_challenge.deadline_at.saturating_add(1);
+        assert!(matches!(
+            restored.record_challenge_with_archive_and_bounds(
+                &conflicting_challenge,
+                &archive,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorTrackerError::ChallengeConflict)
+        ));
+
+        let replay = restored
+            .record_verdict_with_archive_and_bounds(
+                &verdict,
+                &sample_auditor_keys(),
+                1,
+                &archive,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+                |_| panic!("archived exact replay must not enqueue repair"),
+            )
+            .expect("archived verdict exact replay");
+        assert!(!replay.newly_finalized);
+        assert_eq!(replay.reputation_work, work);
+        let mut conflicting_verdict = verdict.clone();
+        conflicting_verdict.decided_at = conflicting_verdict.decided_at.saturating_add(1);
+        resign_sample_verdict(&mut conflicting_verdict);
+        assert!(matches!(
+            restored.record_verdict_with_archive_and_bounds(
+                &conflicting_verdict,
+                &sample_auditor_keys(),
+                1,
+                &archive,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+                |_| panic!("conflicting archived replay must not enqueue repair"),
+            ),
+            Err(PorTrackerError::VerdictConflict)
+        ));
+
+        let fresh = next_challenge(&challenge, 1);
+        restored
+            .record_challenge_with_archive_and_bounds(
+                &fresh,
+                &archive,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            )
+            .expect("authenticated absence permits a fresh challenge after compaction");
+
+        let mut tampered_acknowledgement = after_compaction.clone();
+        tampered_acknowledgement
+            .acknowledged_reputation_terminal
+            .as_mut()
+            .expect("archived acknowledgement")
+            .work_digest[0] ^= 1;
+        assert!(matches!(
+            PorTracker::with_entry_limit(1).restore_checkpoint(tampered_acknowledgement),
+            Err(PorTrackerError::InvalidCheckpoint(_))
+        ));
+
+        let mut tampered = after_compaction;
+        tampered
+            .replay_archive_receipt
+            .as_mut()
+            .expect("archive receipt")
+            .signature[0] ^= 1;
+        assert!(matches!(
+            PorTracker::with_entry_limit(1).restore_checkpoint(tampered),
+            Err(PorTrackerError::InvalidReplayArchiveReceipt)
+        ));
+    }
+
+    #[test]
+    fn archive_call_paths_reject_post_call_binding_drift() {
+        let tracker = PorTracker::with_entry_limit(2);
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        let verdict = sample_verdict(&challenge, proof.proof_digest());
+        tracker.record_challenge(&challenge).unwrap();
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        tracker
+            .record_verdict(&verdict, &sample_auditor_keys(), 1)
+            .unwrap();
+        let work = tracker
+            .next_reputation_terminal_work()
+            .unwrap()
+            .expect("retained terminal");
+        tracker
+            .acknowledge_reputation_terminal(work.sequence, work.work_digest)
+            .unwrap();
+
+        let archive = MemoryReplayArchive::new(0x95);
+        let before_compaction = tracker.checkpoint();
+        let compaction_drift = BindingDriftReplayArchive::new(&archive);
+        assert!(matches!(
+            tracker
+                .compact_acknowledged_with_replay_archive(&compaction_drift, archive.binding, 1,),
+            Err(PorTrackerError::ReplayArchiveBindingMismatch)
+        ));
+        assert_eq!(
+            tracker.checkpoint(),
+            before_compaction,
+            "post-append binding drift must roll local compaction state back"
+        );
+        assert_eq!(
+            archive.retained_records(),
+            1,
+            "the exact external append remains retryable after local rollback"
+        );
+
+        tracker
+            .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+            .expect("exact append replay commits local compaction");
+        let compacted = tracker.checkpoint();
+
+        let fresh = next_challenge(&challenge, 1);
+        let challenge_drift = BindingDriftReplayArchive::new(&archive);
+        assert!(matches!(
+            tracker.record_challenge_with_archive_and_bounds(
+                &fresh,
+                &challenge_drift,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorTrackerError::ReplayArchiveBindingMismatch)
+        ));
+        assert_eq!(
+            tracker.checkpoint(),
+            compacted,
+            "post-lookup binding drift must not admit an absent challenge"
+        );
+
+        let verdict_drift = BindingDriftReplayArchive::new(&archive);
+        assert!(matches!(
+            tracker.record_verdict_with_archive_and_bounds(
+                &verdict,
+                &sample_auditor_keys(),
+                1,
+                &verdict_drift,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+                |_| panic!("archived exact replay must not enqueue repair"),
+            ),
+            Err(PorTrackerError::ReplayArchiveBindingMismatch)
+        ));
+        assert_eq!(
+            tracker.checkpoint(),
+            compacted,
+            "post-lookup binding drift must not return an archived verdict"
+        );
+    }
+
+    #[test]
+    fn archive_compaction_requires_authoritative_head_installation() {
+        let tracker = PorTracker::with_entry_limit(1);
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        tracker.record_challenge(&challenge).unwrap();
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        let work = tracker
+            .record_verdict_with(
+                &sample_verdict(&challenge, proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+                |_| panic!("success must not invoke repair handoff"),
+            )
+            .unwrap()
+            .reputation_work;
+        tracker
+            .acknowledge_reputation_terminal(work.sequence, work.work_digest)
+            .unwrap();
+
+        let archive = MemoryReplayArchive::new(0x96);
+        let stale_head_archive = StaleHeadReplayArchive { inner: &archive };
+        let before_compaction = tracker.checkpoint();
+        assert!(matches!(
+            tracker.compact_acknowledged_with_replay_archive(
+                &stale_head_archive,
+                archive.binding,
+                1,
+            ),
+            Err(PorTrackerError::ReplayArchiveHeadRollback)
+        ));
+        assert_eq!(
+            tracker.checkpoint(),
+            before_compaction,
+            "a signed append without authoritative head readback must preserve local replay state"
+        );
+        assert_eq!(
+            archive.retained_records(),
+            1,
+            "the externally committed record remains available for exact retry"
+        );
+
+        assert_eq!(
+            tracker
+                .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+                .expect("authoritative exact-append retry"),
+            1
+        );
+        assert!(tracker.checkpoint().finalized.is_empty());
+        assert_eq!(
+            tracker.checkpoint().replay_archive_receipt,
+            archive.current_head().expect("authoritative archive head")
+        );
+    }
+
+    #[test]
+    fn archive_readback_requires_successor_chain_to_checkpoint_head() {
+        let tracker = PorTracker::with_entry_limit(2);
+        let first_challenge = sample_challenge();
+        let first_proof = sample_proof(&first_challenge);
+        tracker.record_challenge(&first_challenge).unwrap();
+        tracker
+            .record_proof(&first_proof, &sample_provider_key())
+            .unwrap();
+        let first_work = tracker
+            .record_verdict_with(
+                &sample_verdict(&first_challenge, first_proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+                |_| panic!("success must not invoke repair handoff"),
+            )
+            .unwrap()
+            .reputation_work;
+
+        let second_challenge = next_challenge(&first_challenge, 1);
+        let second_proof = sample_proof(&second_challenge);
+        tracker.record_challenge(&second_challenge).unwrap();
+        tracker
+            .record_proof(&second_proof, &sample_provider_key())
+            .unwrap();
+        let second_work = tracker
+            .record_verdict_with(
+                &sample_verdict(&second_challenge, second_proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+                |_| panic!("success must not invoke repair handoff"),
+            )
+            .unwrap()
+            .reputation_work;
+        tracker
+            .acknowledge_reputation_terminal(first_work.sequence, first_work.work_digest)
+            .unwrap();
+        tracker
+            .acknowledge_reputation_terminal(second_work.sequence, second_work.work_digest)
+            .unwrap();
+
+        let archive = MemoryReplayArchive::new(0x92);
+        let pre_archive_checkpoint = tracker.checkpoint();
+        assert_eq!(
+            tracker
+                .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+                .expect("archive first acknowledged record"),
+            1
+        );
+        let first_archive_checkpoint = tracker.checkpoint();
+        assert_eq!(
+            tracker
+                .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+                .expect("archive second acknowledged record"),
+            1
+        );
+        let fully_archived_checkpoint = tracker.checkpoint();
+        let checkpoint_head = fully_archived_checkpoint
+            .replay_archive_receipt
+            .expect("checkpoint-pinned archive head");
+        let PorFinalizedReplayArchiveLookupV1::Found(readback) = archive
+            .lookup(
+                first_challenge.challenge_id,
+                checkpoint_head,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            )
+            .expect("authenticated archive lookup")
+        else {
+            panic!("first archived record must be present");
+        };
+        assert_eq!(readback.successor_receipts.len(), 1);
+        readback
+            .record
+            .validate()
+            .expect("canonical archived record");
+        readback
+            .receipt
+            .validate()
+            .expect("canonical signed receipt");
+        assert_eq!(readback.receipt.binding(), archive.binding);
+        assert_eq!(readback.receipt.reputation_sequence(), first_work.sequence);
+        assert_eq!(
+            readback.receipt.challenge_id(),
+            first_challenge.challenge_id
+        );
+        assert_eq!(
+            readback.receipt.record_digest(),
+            readback.record.record_digest().expect("record digest")
+        );
+        assert_eq!(
+            readback.receipt.reputation_work_digest(),
+            first_work.work_digest
+        );
+        assert_eq!(readback.receipt.previous_head_digest(), None);
+        assert_ne!(readback.receipt.signature(), [0; 64]);
+        readback
+            .validate_at_checkpoint(
+                archive.binding,
+                checkpoint_head,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            )
+            .expect("contiguous signed successor chain reaches pinned head");
+
+        let mut truncated = readback.clone();
+        truncated.successor_receipts.clear();
+        assert!(matches!(
+            truncated.validate_at_checkpoint(
+                archive.binding,
+                checkpoint_head,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorTrackerError::InvalidReplayArchiveReceipt)
+        ));
+
+        let mut count_flood = readback.clone();
+        count_flood
+            .successor_receipts
+            .push(*count_flood.successor_receipts.last().expect("successor"));
+        assert!(matches!(
+            count_flood.validate_at_checkpoint(
+                archive.binding,
+                checkpoint_head,
+                PorFinalizedReplayArchiveProofBoundsV1::try_new(1, u64::MAX).expect("count bound"),
+            ),
+            Err(PorTrackerError::ReplayArchiveProofLimitExceeded)
+        ));
+        assert!(matches!(
+            readback.validate_at_checkpoint(
+                archive.binding,
+                checkpoint_head,
+                PorFinalizedReplayArchiveProofBoundsV1::try_new(2, 1).expect("byte bound"),
+            ),
+            Err(PorTrackerError::ReplayArchiveProofLimitExceeded)
+        ));
+        let framed_bounds =
+            PorFinalizedReplayArchiveProofBoundsV1::try_new(1, 1).expect("framed bounds");
+        framed_bounds
+            .validate_framed_successor_shape(1, 1)
+            .expect("declared transport frame is within both bounds");
+        assert!(matches!(
+            framed_bounds.validate_framed_successor_shape(2, 1),
+            Err(PorTrackerError::ReplayArchiveProofLimitExceeded)
+        ));
+        assert!(matches!(
+            framed_bounds.validate_framed_successor_shape(1, 2),
+            Err(PorTrackerError::ReplayArchiveProofLimitExceeded)
+        ));
+        assert!(matches!(
+            framed_bounds.validate_framed_successor_shape(1, 0),
+            Err(PorTrackerError::ReplayArchiveProofLimitExceeded)
+        ));
+        assert_eq!(
+            archive.lookup(
+                first_challenge.challenge_id,
+                checkpoint_head,
+                PorFinalizedReplayArchiveProofBoundsV1::try_new(1, 1).expect("adapter byte bound"),
+            ),
+            Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected),
+            "the typed in-memory adapter must reject an oversized canonical proof before return"
+        );
+
+        let first_record = pre_archive_checkpoint
+            .finalized
+            .iter()
+            .find(|finalized| finalized.reputation_sequence == first_work.sequence)
+            .cloned()
+            .map(PorFinalizedReplayArchiveRecordV1::from_finalized)
+            .expect("first retained archive record");
+        assert_eq!(
+            archive
+                .append(&first_record, None)
+                .expect("historical exact append retry remains idempotent"),
+            readback.receipt,
+            "an exact retry must return its original receipt after successors exist"
+        );
+        assert_eq!(
+            archive.current_head().expect("current archive head"),
+            Some(checkpoint_head),
+            "a historical exact retry must not roll the monotonic head back"
+        );
+
+        let absent_challenge_id = [0xFA; 32];
+        let PorFinalizedReplayArchiveLookupV1::Absent(absence) = archive
+            .lookup(
+                absent_challenge_id,
+                checkpoint_head,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            )
+            .expect("signed absence at current head")
+        else {
+            panic!("unknown challenge must return signed absence");
+        };
+        absence
+            .validate_at_checkpoint(archive.binding, absent_challenge_id, checkpoint_head)
+            .expect("absence binds the exact checkpoint head");
+        assert_eq!(absence.binding(), archive.binding);
+        assert_eq!(absence.challenge_id(), absent_challenge_id);
+        assert_eq!(absence.checkpoint_head(), checkpoint_head);
+        assert_ne!(absence.signature(), [0; 64]);
+        assert!(matches!(
+            absence.validate_at_checkpoint(archive.binding, absent_challenge_id, readback.receipt,),
+            Err(PorTrackerError::InvalidReplayArchiveAbsenceProof)
+        ));
+        assert_eq!(
+            archive.lookup(
+                absent_challenge_id,
+                readback.receipt,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected),
+            "the adapter must reject a stale expected checkpoint head"
+        );
+
+        let restored_ancestor = PorTracker::with_entry_limit(2);
+        restored_ancestor
+            .restore_checkpoint(first_archive_checkpoint.clone())
+            .expect("restore first archive head");
+        assert!(
+            restored_ancestor
+                .reconcile_restored_replay_archive_head(
+                    &archive,
+                    archive.binding,
+                    PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+                )
+                .expect("current head proves and reconciles the exact retained successor")
+        );
+        assert_eq!(
+            restored_ancestor.checkpoint(),
+            fully_archived_checkpoint,
+            "startup reconciliation must advance the local checkpoint to the proved prefix"
+        );
+
+        let restored_empty_head = PorTracker::with_entry_limit(2);
+        restored_empty_head
+            .restore_checkpoint(pre_archive_checkpoint)
+            .expect("restore acknowledged local prefix before its first archive append");
+        assert!(
+            restored_empty_head
+                .reconcile_restored_replay_archive_head(
+                    &archive,
+                    archive.binding,
+                    PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+                )
+                .expect("live first-append crash window has an exact acknowledged local intent")
+        );
+        assert_eq!(
+            restored_empty_head.checkpoint(),
+            fully_archived_checkpoint,
+            "the exact live prefix must be compacted locally without a format-level intent"
+        );
+
+        let mut insufficient_ack_checkpoint = first_archive_checkpoint;
+        insufficient_ack_checkpoint.acknowledged_reputation_terminal =
+            Some(PorReputationTerminalAckV1 {
+                sequence: first_work.sequence,
+                work_digest: readback.receipt.reputation_work_digest(),
+            });
+        let insufficient_ack = PorTracker::with_entry_limit(2);
+        insufficient_ack
+            .restore_checkpoint(insufficient_ack_checkpoint)
+            .expect("restore a checkpoint acknowledging only its existing archive head");
+        assert!(matches!(
+            insufficient_ack.reconcile_restored_replay_archive_head(
+                &archive,
+                archive.binding,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorTrackerError::ReplayArchiveHeadRollback)
+        ));
+
+        let fresh_tracker = PorTracker::with_entry_limit(2);
+        assert!(matches!(
+            fresh_tracker.reconcile_restored_replay_archive_head(
+                &archive,
+                archive.binding,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorTrackerError::ReplayArchiveHeadRollback)
+        ));
+        assert!(
+            !tracker
+                .reconcile_restored_replay_archive_head(
+                    &archive,
+                    archive.binding,
+                    PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+                )
+                .expect("an exact restored head needs no reconciliation")
+        );
+
+        let latest_head = archive
+            .state
+            .lock()
+            .expect("archive state")
+            .latest_head
+            .expect("latest head");
+        archive.state.lock().expect("archive state").latest_head =
+            Some(readback.receipt.head_digest());
+        assert!(matches!(
+            tracker.reconcile_restored_replay_archive_head(
+                &archive,
+                archive.binding,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorTrackerError::ReplayArchiveHeadRollback)
+        ));
+        archive.state.lock().expect("archive state").latest_head = None;
+        assert!(matches!(
+            tracker.reconcile_restored_replay_archive_head(
+                &archive,
+                archive.binding,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorTrackerError::ReplayArchiveHeadRollback)
+        ));
+        archive.state.lock().expect("archive state").latest_head = Some(latest_head);
+    }
+
+    #[test]
     fn tracker_handles_failure_verdict() {
         let tracker = PorTracker::default();
         let mut challenge = sample_challenge();
@@ -1938,7 +5046,7 @@ mod tests {
         verdict.proof_digest = None;
         verdict.outcome = AuditOutcomeV1::Failed;
         verdict.failure_reason = Some("timeout".to_string());
-        verdict.decided_at = 1_700_000_400;
+        verdict.decided_at = challenge.deadline_at;
         resign_sample_verdict(&mut verdict);
         let stats = tracker
             .record_verdict(&verdict, &sample_auditor_keys(), 1)
@@ -2136,6 +5244,7 @@ mod tests {
 
         let mut failure = success_without_digest;
         failure.outcome = AuditOutcomeV1::Failed;
+        failure.decided_at = challenge.deadline_at;
         failure.failure_reason = Some("provider missed deadline".to_owned());
         resign_sample_verdict(&mut failure);
         tracker
@@ -2186,6 +5295,7 @@ mod tests {
         let mut verdict = sample_verdict(&challenge, [0x11; 32]);
         verdict.outcome = AuditOutcomeV1::Failed;
         verdict.proof_digest = None;
+        verdict.decided_at = challenge.deadline_at;
         verdict.failure_reason = Some("provider missed the challenge".to_owned());
         resign_sample_verdict(&mut verdict);
         let handoff_calls = AtomicUsize::new(0);
@@ -2226,6 +5336,7 @@ mod tests {
         let mut verdict = sample_verdict(&challenge, [0x11; 32]);
         verdict.outcome = AuditOutcomeV1::Failed;
         verdict.proof_digest = None;
+        verdict.decided_at = challenge.deadline_at;
         verdict.failure_reason = Some("provider missed the challenge".to_owned());
         resign_sample_verdict(&mut verdict);
 

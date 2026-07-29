@@ -37,3 +37,4 @@ feed_collector,reference_price,billing_cycle,statement_publication,reconciliatio
 /runtime/sorafs/hedging/native-bridge-release.json
 --governance-approval-evidence
 /runtime/sorafs/hedging/governance-approval.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

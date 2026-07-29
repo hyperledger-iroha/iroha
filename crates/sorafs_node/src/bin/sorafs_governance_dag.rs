@@ -17,7 +17,9 @@ use sorafs_node::run_governance_dag_service_with_runtime_registry;
     about = "Always-on SoraFS Governance DAG publisher and mirror"
 )]
 struct Args {
-    /// Iroha TOML containing `[sorafs.storage]` Governance DAG service fields.
+    /// Self-contained Iroha TOML containing the Governance DAG service fields.
+    ///
+    /// The standalone launcher deliberately rejects unresolved `extends`.
     #[arg(long, value_name = "PATH")]
     config: PathBuf,
     /// Reconcile exactly once without starting the query listener.

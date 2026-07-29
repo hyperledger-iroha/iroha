@@ -53,7 +53,11 @@ Flag scoping rules:
 - `COMPACT_LEN` affects per-value length prefixes only.
 - Reserved layout bits (`VARINT_OFFSETS`, `COMPACT_SEQ_LEN`) are rejected when decoding headers.
 
-These flags are independent; no heuristic cross-effects are permitted.
+Except for the declared `FIELD_BITSET` dependency, flags have no heuristic
+cross-effects. Encoders and decoders reject `FIELD_BITSET` unless both
+`PACKED_STRUCT` and `COMPACT_LEN` are present. When a hybrid packed struct emits
+a field bitset, its final header retains those two required flags even if every
+field is self-delimiting and therefore no explicit compact size prefix appears.
 
 Default v1 payloads use `COMPACT_LEN` (`flags = 0x02`) while keeping the minor
 version byte fixed at `0x00`. The header flag byte is therefore the source of
@@ -178,6 +182,14 @@ batch-item variants. Nodes reject an empty `Batch`; SDKs should reject one
 before signing. Existing instruction-only transactions continue to use
 `Executable` tag `0`, so adding the mixed form does not rewrite their canonical
 bytes. The append-only variant is advertised by `DATA_MODEL_VERSION = 3`.
+
+The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
+Version 4 changes the canonical validation-fee governance layout:
+`ProposeValidationFeePolicy` and `ProposeValidationFeePayoutLifecycle` require
+the exact `plain_electorate_rules` used by their ballot lifecycle, and enacted
+registry entries retain the same rules for historical verification. Version 3
+peers and SDKs must therefore reject the version 4 wire contract instead of
+attempting a compatibility decode.
 
 Admission schedules a mixed batch as one global live-state barrier. Items run
 in canonical input order against the same transaction view, and failure of any

@@ -1,3 +1,5 @@
+//! Deterministic SoraFS PoR and cross-SDK fixture regeneration checks.
+
 #![allow(unexpected_cfgs)]
 
 use std::{fs, path::Path};
@@ -8,7 +10,7 @@ use sorafs_manifest::{
     governance::{
         GovernanceLogNodeV1, GovernanceLogPayloadV1, SoraFsModerationBallotGovernanceEventKindV1,
     },
-    por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
+    por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, decode_por_proof_v1},
 };
 use tempfile::tempdir;
 
@@ -22,6 +24,18 @@ fn read_fixture(path: &str) -> Vec<u8> {
 }
 
 fn regenerate_fixtures(root: &Path) {
+    for directory in [
+        "por",
+        "potr",
+        "repair/negative",
+        "governance",
+        "moderation",
+        "reference_sdk",
+    ] {
+        fs::create_dir_all(root.join("fixtures/sorafs_manifest").join(directory)).unwrap_or_else(
+            |error| panic!("create fixture generator output directory `{directory}`: {error}"),
+        );
+    }
     for directory in [
         "appeal_finance",
         "orderbook",
@@ -94,7 +108,7 @@ fn por_challenge_fixture_decodes_and_validates() {
 #[test]
 fn por_proof_fixture_decodes_and_validates() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/por/proof_v1.to"));
-    let proof: PorProofV1 = norito::decode_from_bytes(&bytes).expect("proof fixture should decode");
+    let proof = decode_por_proof_v1(&bytes).expect("proof fixture should decode within V1 bounds");
     let digest = proof.proof_digest();
     proof.validate().expect("proof must validate");
     proof

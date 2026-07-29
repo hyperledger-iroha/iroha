@@ -11,9 +11,13 @@ from requests.structures import CaseInsensitiveDict
 
 import iroha_python.client as client_module
 from iroha_python import (
+    AggregateFn,
+    AggregateMetric,
+    AggregateSpec,
     MultisigResponse,
     QueryEnvelope,
     ToriiClient,
+    TriggerCompletionList,
     account_query_envelope,
     asset_holders_query_envelope,
 )
@@ -223,6 +227,132 @@ def test_query_envelope_rejects_bad_select_entries() -> None:
         QueryEnvelope(select=[" "]).to_dict()
     with pytest.raises(TypeError, match=r"select\[1].*field-path string or mapping"):
         QueryEnvelope(select=["id", 7]).to_dict()
+
+
+def test_query_envelope_serializes_typed_aggregate_spec() -> None:
+    payload = QueryEnvelope(
+        aggregate=AggregateSpec(
+            group_by=["result_ok"],
+            metrics=[
+                AggregateMetric("transactions", AggregateFn.COUNT),
+                AggregateMetric("distinct_assets", "distinct_count", "asset_id"),
+            ],
+        )
+    ).to_dict()
+
+    assert payload["aggregate"] == {
+        "group_by": ["result_ok"],
+        "metrics": [
+            {"alias": "transactions", "fn": "count"},
+            {
+                "alias": "distinct_assets",
+                "fn": "distinct_count",
+                "field": "asset_id",
+            },
+        ],
+    }
+
+
+def test_query_envelope_rejects_invalid_aggregate_shape() -> None:
+    with pytest.raises(ValueError, match="select and aggregate are mutually exclusive"):
+        QueryEnvelope(
+            select=["authority"],
+            aggregate=AggregateSpec(metrics=[AggregateMetric("count", "count")]),
+        ).to_dict()
+    with pytest.raises(ValueError, match="sum requires a field"):
+        AggregateMetric("total", AggregateFn.SUM).to_dict()
+    with pytest.raises(ValueError, match="must not declare a field"):
+        AggregateMetric("count", AggregateFn.COUNT, "authority").to_dict()
+    with pytest.raises(ValueError, match="at most eight"):
+        AggregateSpec(
+            metrics=[AggregateMetric(f"count_{index}", AggregateFn.COUNT) for index in range(9)]
+        ).to_dict()
+
+
+def test_query_transactions_routes_visible_aggregate_query() -> None:
+    client, session = _client_with_session()
+    aggregate = AggregateSpec(
+        group_by=["result_ok"],
+        metrics=[AggregateMetric("transactions", AggregateFn.COUNT)],
+    )
+
+    client.query_transactions(aggregate=aggregate, visible=True)
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "http://localhost:8080/v1/transactions/visible/query"
+    body = json.loads(call["data"].decode("utf-8"))
+    assert body["aggregate"] == aggregate.to_dict()
+
+
+def test_list_trigger_completions_returns_typed_step_evidence() -> None:
+    client, session = _client_with_session()
+    session._response = StubResponse(
+        payload={
+            "latest_height": 42,
+            "from_height": 40,
+            "to_height": 42,
+            "scanned_blocks": 3,
+            "limit": 10,
+            "completions": [
+                {
+                    "block_height": 41,
+                    "entrypoint_index": 2,
+                    "completion": {
+                        "trigger_id": "minimum-liquidity",
+                        "trigger_execution_hash": "hash:trigger-execution",
+                        "step_index": 1,
+                        "outcome": "Success",
+                        "message": None,
+                    },
+                    "source": "block_result",
+                }
+            ],
+        }
+    )
+
+    result = client.list_trigger_completions(
+        trigger_id="minimum-liquidity",
+        entrypoint_hash="hash:trigger-execution",
+        outcome="success",
+        from_height=40,
+        to_height=42,
+        limit=10,
+        scan_limit_blocks=3,
+        include_reconstructed=False,
+    )
+
+    assert isinstance(result, TriggerCompletionList)
+    assert result.latest_height == 42
+    assert result.completions[0].completion.step_index == 1
+    assert result.completions[0].source == "block_result"
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"] == "http://localhost:8080/v1/triggers/completed"
+    assert session.calls[0]["params"] == {
+        "id": "minimum-liquidity",
+        "entrypoint_hash": "hash:trigger-execution",
+        "outcome": "success",
+        "from_height": 40,
+        "to_height": 42,
+        "limit": 10,
+        "scan_limit_blocks": 3,
+        "include_reconstructed": False,
+    }
+
+
+def test_list_trigger_completions_validates_filters_before_request() -> None:
+    client, session = _client_with_session()
+
+    with pytest.raises(ValueError, match="all, success, or failure"):
+        client.list_trigger_completions(outcome="maybe")
+    with pytest.raises(ValueError, match="limit"):
+        client.list_trigger_completions(limit=0)
+    with pytest.raises(TypeError, match="from_height"):
+        client.list_trigger_completions(from_height=True)
+    with pytest.raises(ValueError, match="u64"):
+        client.list_trigger_completions(to_height=1 << 64)
+
+    assert session.calls == []
 
 
 def test_list_accounts_omits_canonical_i105_param() -> None:

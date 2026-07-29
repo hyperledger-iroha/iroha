@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -85,6 +86,17 @@ def valid_manifest() -> dict:
             "configuration_contains_private_material": False,
             "external_injection_required": True,
         },
+        "signed_model_artifacts": [
+            {
+                "artifact_id": "moderation-prescreen-primary",
+                "revision": 7,
+                "artifact_sha256": "12" * 32,
+                "signature_algorithm": "ed25519",
+                "signature_sha256": "34" * 32,
+                "signer_public_key_fingerprint_sha256": "56" * 32,
+                "signature_verified": True,
+            }
+        ],
         "lane_slots": [
             {
                 "gate": gate,
@@ -124,6 +136,7 @@ def test_complete_topology_is_configuration_qualified_only() -> None:
     assert summary["storage_provider_count"] == 2
     assert summary["gateway_count"] == 2
     assert summary["governance_dag_instance_count"] == 2
+    assert summary["signed_model_artifact_count"] == 1
     assert summary["recognized_lane_slot_count"] == 17
     assert summary["required_lane_slots"] == list(MODULE.DEFAULT_REQUIRED_GATES)
 
@@ -197,6 +210,12 @@ def test_complete_topology_is_configuration_qualified_only() -> None:
         ),
         (
             lambda payload: payload["runtime_handles"].update(
+                hsm="mockhsm-prod-release"
+            ),
+            "runtime_handles.hsm must be a canonical production runtime handle",
+        ),
+        (
+            lambda payload: payload["runtime_handles"].update(
                 webauthn="hsm-prod-release"
             ),
             "runtime handles must be distinct",
@@ -212,6 +231,40 @@ def test_complete_topology_is_configuration_qualified_only() -> None:
                 external_injection_required=False
             ),
             "runtime_material_policy.external_injection_required must be true",
+        ),
+        (
+            lambda payload: payload.update(signed_model_artifacts=[]),
+            "signed_model_artifacts must contain between 1 and 64 entries",
+        ),
+        (
+            lambda payload: payload["signed_model_artifacts"][0].update(
+                signature_verified=False
+            ),
+            "signed_model_artifacts[0].signature_verified must be true",
+        ),
+        (
+            lambda payload: payload["signed_model_artifacts"][0].update(
+                artifact_id="moderation-model-test"
+            ),
+            "signed_model_artifacts[0].artifact_id must identify a production model",
+        ),
+        (
+            lambda payload: payload["signed_model_artifacts"][0].update(
+                artifact_id="testmodel-primary"
+            ),
+            "signed_model_artifacts[0].artifact_id must identify a production model",
+        ),
+        (
+            lambda payload: payload["signed_model_artifacts"][0].update(
+                signature_algorithm="rsa-sha256"
+            ),
+            "signed_model_artifacts[0].signature_algorithm must be one of",
+        ),
+        (
+            lambda payload: payload["signed_model_artifacts"][0].update(
+                artifact_sha256="00" * 32
+            ),
+            "signed_model_artifacts[0].artifact_sha256 must not be zero",
         ),
         (
             lambda payload: payload["lane_slots"].pop(),
@@ -314,6 +367,57 @@ def test_cli_writes_non_promotable_configuration_summary(tmp_path: Path) -> None
     assert summary["status"] == "configuration-qualified"
     assert summary["live_evidence_recognized"] is False
     assert summary["promotion_eligible"] is False
+    assert summary["manifest_sha256"] == hashlib.sha256(
+        manifest.read_bytes()
+    ).hexdigest()
+    assert summary["canonical_manifest_sha256"] == (
+        MODULE.canonical_manifest_sha256(valid_manifest())
+    )
+
+
+def test_exact_and_canonical_manifest_digests_detect_byte_substitution(
+    tmp_path: Path,
+) -> None:
+    """Equivalent JSON binds the same model but never the same reviewed bytes."""
+
+    compact = tmp_path / "compact.json"
+    pretty = tmp_path / "pretty.json"
+    compact_summary = tmp_path / "compact-summary.json"
+    pretty_summary = tmp_path / "pretty-summary.json"
+    payload = valid_manifest()
+    compact.write_text(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    write_json(pretty, payload)
+
+    for manifest, summary in (
+        (compact, compact_summary),
+        (pretty, pretty_summary),
+    ):
+        assert (
+            MODULE.main(
+                [
+                    "--manifest",
+                    str(manifest),
+                    "--deployment-id",
+                    DEPLOYMENT_ID,
+                    "--environment",
+                    ENVIRONMENT,
+                    "--summary-out",
+                    str(summary),
+                ]
+            )
+            == 0
+        )
+
+    compact_payload = json.loads(compact_summary.read_text(encoding="utf-8"))
+    pretty_payload = json.loads(pretty_summary.read_text(encoding="utf-8"))
+    assert compact_payload["manifest_sha256"] != pretty_payload["manifest_sha256"]
+    assert (
+        compact_payload["canonical_manifest_sha256"]
+        == pretty_payload["canonical_manifest_sha256"]
+    )
 
 
 def test_cli_rejects_duplicate_json_keys(tmp_path: Path) -> None:
@@ -342,6 +446,7 @@ def test_cli_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["status"] == "blocked"
     assert summary["manifest_sha256"] is None
+    assert summary["canonical_manifest_sha256"] is None
     assert summary["promotion_eligible"] is False
 
 

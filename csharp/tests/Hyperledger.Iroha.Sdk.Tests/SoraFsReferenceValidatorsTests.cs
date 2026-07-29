@@ -716,17 +716,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void LinkedFixtureBundleMatchesNativeReferenceWhenAvailable()
     {
-        if (!SoraFsReferenceValidators.IsFixtureBundleAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with fixture-bundle symbol is required.");
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsFixtureBundleAvailable(),
+            "ABI-21 connect_norito_bridge with fixture-bundle symbol is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -769,17 +761,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void OrderbookAndPdpFixturesMatchExactNativeReferenceOutcomesWhenAvailable()
     {
-        if (!SoraFsReferenceValidators.IsOrderbookPdpAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
+            "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
 
         var orderbookRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -1004,10 +988,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void OrderbookBuildersProduceAcceptedPayloadsWhenNativeAvailable()
     {
-        if (!SoraFsReferenceValidators.IsOrderbookPdpAvailable())
-        {
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
+            "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
         var privateKey = Enumerable.Repeat((byte)0xb7, 32).ToArray();
         var owner = Encoding.UTF8.GetBytes("buyer@sora");
         var orderId = SoraFsReferenceValidators.DeriveOrderbookOrderId(owner, 7);
@@ -1085,17 +1068,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void GovernanceLogNodeMatchesModerationGoldenByteForByteWhenAvailable()
     {
-        if (!SoraFsReferenceValidators.IsAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with governance reference symbols is required.");
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsAvailable(),
+            "ABI-21 connect_norito_bridge with governance reference symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -1128,17 +1103,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void GovernanceFixturesAndNegativeVectorsMatchNativeReferenceWhenAvailable()
     {
-        if (!SoraFsReferenceValidators.IsAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsAvailable(),
+            "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,

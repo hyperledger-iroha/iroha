@@ -179,8 +179,14 @@ fn complete_order_instruction(
             "--provider-id-hex" => set_once(&mut provider_id_hex, value.to_owned(), key)?,
             "--completion-epoch" => set_once(&mut completion_epoch, parse_u64(value, key)?, key)?,
             "--expected-owner" => {
-                let owner = AccountId::from_str(value)
+                let parsed = AccountId::parse_encoded(value)
                     .map_err(|error| format!("invalid `--expected-owner` account ID: {error}"))?;
+                if parsed.canonical() != value {
+                    return Err(
+                        "`--expected-owner` must be an exact canonical I105 account ID".to_owned(),
+                    );
+                }
+                let owner = parsed.into_account_id();
                 set_once(&mut expected_owner, owner, key)?;
             }
             "--assignment-revision" => {
@@ -445,6 +451,8 @@ fn print_instruction_json(instruction: InstructionBox) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const OWNER_I105: &str = "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T";
+
     #[test]
     fn parse_u64_rejects_noncanonical_epoch_tokens() {
         assert_eq!(parse_u64("0", "--issued-epoch").expect("zero"), 0);
@@ -544,13 +552,11 @@ mod tests {
 
     #[test]
     fn complete_order_requires_and_encodes_exact_commit_context() {
-        let owner_literal =
-            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C";
         let args = [
             format!("--order-id-hex={}", "11".repeat(32)),
             format!("--provider-id-hex={}", "22".repeat(32)),
             "--completion-epoch=25".to_owned(),
-            format!("--expected-owner={owner_literal}"),
+            format!("--expected-owner={OWNER_I105}"),
             "--assignment-revision=3".to_owned(),
             format!("--signer-policy-id-hex={}", "33".repeat(32)),
             "--signer-policy-revision=2".to_owned(),
@@ -559,8 +565,11 @@ mod tests {
             "--finalized-height=19".to_owned(),
             format!("--finalized-block-hash-hex={}", "66".repeat(32)),
         ];
-        let actual = complete_order_instruction(args.into_iter()).expect("build exact completion");
-        let owner = AccountId::from_str(owner_literal).expect("fixture owner");
+        let actual =
+            complete_order_instruction(args.clone().into_iter()).expect("build exact completion");
+        let owner = AccountId::parse_encoded(OWNER_I105)
+            .expect("fixture owner")
+            .into_account_id();
         let expected = InstructionBox::from(CompleteReplicationOrder::new(
             ReplicationOrderId::new([0x11; 32]),
             ProviderId::new([0x22; 32]),
@@ -584,6 +593,19 @@ mod tests {
             to_bytes(&actual).expect("encode actual"),
             to_bytes(&expected).expect("encode expected")
         );
+
+        for noncanonical_owner in [
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C".to_owned(),
+            format!(" {OWNER_I105}"),
+            format!("{OWNER_I105} "),
+        ] {
+            let mut invalid = args.clone();
+            invalid[3] = format!("--expected-owner={noncanonical_owner}");
+            assert!(
+                complete_order_instruction(invalid.into_iter()).is_err(),
+                "noncanonical expected owner must fail"
+            );
+        }
     }
 
     #[test]
@@ -592,8 +614,7 @@ mod tests {
             format!("--order-id-hex={}", "11".repeat(32)),
             format!("--provider-id-hex={}", "22".repeat(32)),
             "--completion-epoch=25".to_owned(),
-            "--expected-owner=ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
-                .to_owned(),
+            format!("--expected-owner={OWNER_I105}"),
             "--assignment-revision=3".to_owned(),
             format!("--signer-policy-id-hex={}", "33".repeat(32)),
             format!("--signer-policy-digest-hex={}", "55".repeat(32)),

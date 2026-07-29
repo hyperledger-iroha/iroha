@@ -299,8 +299,11 @@ book.
 
 Implemented authoritative Torii routes:
 
-- `POST /v1/sorafs/orderbook/orders`, `/cancel`, and `/receipts` accept exact
-  canonical Norito `SignedTransaction` bytes. Each route requires exactly one
+- `POST /v1/sorafs/orderbook/orders`, `/cancel`, and `/receipts` accept a
+  header-bearing Norito or JSON `SignedTransaction`. Each decoded transaction
+  is canonically re-encoded and must fit the 2 MiB native transaction ceiling;
+  the embedded order, cancellation, or receipt retains its independent 64 KiB
+  canonical ceiling. Each route requires exactly one
   native orderbook instruction of the route-specific kind, verifies the
   transaction signature and active finalized policy digest, validates the
   canonical embedded payload and Ed25519 signature, binds order/cancel owner to

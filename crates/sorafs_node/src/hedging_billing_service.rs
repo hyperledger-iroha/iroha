@@ -22,6 +22,7 @@ use std::{
 };
 
 use ed25519_dalek::{Signature, VerifyingKey};
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_data_model::{ChainId, account::AccountId};
 use norito::{
     DecodeLimits, NoritoSerialize, decode_from_bytes_with_limits,
@@ -137,8 +138,6 @@ pub const HEDGING_BILLING_RUNTIME_API_MAX_PAGE_ITEMS_V1: u16 = 100;
 pub const HEDGING_BILLING_MAX_DELIVERY_WORK_ITEMS_V1: u32 = 4_096;
 /// Maximum runtime epoch-witness store handle length.
 pub const HEDGING_BILLING_WITNESS_HANDLE_MAX_BYTES_V1: usize = 256;
-/// Maximum opaque production-provider handle length.
-pub const HEDGING_BILLING_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 /// Maximum canonical bytes accepted for one governed service-policy artifact.
 pub const HEDGING_BILLING_SERVICE_POLICY_MAX_BYTES_V1: usize = 64 * 1024;
 /// Fixed canonical wrapper allowance around one embedded checkpoint witness.
@@ -643,36 +642,20 @@ fn validate_hedging_billing_runtime_provider_handle(
     handle: &str,
     configured: bool,
 ) -> Result<(), HedgingBillingRuntimeProviderQualificationErrorV1> {
-    if handle.is_empty()
-        || handle.len() > HEDGING_BILLING_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(if configured {
+    validate_production_runtime_handle(handle).map_err(|error| match (configured, error) {
+        (true, ProductionRuntimeHandleError::InvalidSyntax) => {
             HedgingBillingRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle
-        } else {
+        }
+        (false, ProductionRuntimeHandleError::InvalidSyntax) => {
             HedgingBillingRuntimeProviderQualificationErrorV1::InvalidProviderHandle
-        });
-    }
-    let lowercase = handle.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
-        return Err(if configured {
+        }
+        (true, ProductionRuntimeHandleError::TestMarked) => {
             HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle
-        } else {
+        }
+        (false, ProductionRuntimeHandleError::TestMarked) => {
             HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
-        });
-    }
-    Ok(())
+        }
+    })
 }
 
 /// Public runtime identity of one non-secret production adapter.
@@ -1238,10 +1221,9 @@ impl HedgingBillingEpochTransitionV1 {
                 != self.next_source_sequence
             || self.compacted_through_period_end_unix
                 <= self.previous_service_policy.billing_epoch_unix
-            || (self.compacted_through_period_end_unix
+            || !(self.compacted_through_period_end_unix
                 - self.previous_service_policy.billing_epoch_unix)
-                % self.previous_service_policy.billing_period_secs
-                != 0
+                .is_multiple_of(self.previous_service_policy.billing_period_secs)
             || self.compacted_counts.source_pages == 0
             || self.compacted_counts.period_closes == 0
             || self.compacted_counts.statements != self.compacted_counts.acknowledgements
@@ -1468,7 +1450,8 @@ impl HedgingBillingFinalizedPeriodCloseV1 {
         if self.version != HEDGING_BILLING_PERIOD_CLOSE_VERSION_V1
             || self.chain_id != policy.chain_id
             || self.period_end_unix <= policy.billing_epoch_unix
-            || (self.period_end_unix - policy.billing_epoch_unix) % policy.billing_period_secs != 0
+            || !(self.period_end_unix - policy.billing_epoch_unix)
+                .is_multiple_of(policy.billing_period_secs)
             || self.journal_commitment.finalized_cursor.finalized_at_unix < self.period_end_unix
             || self.billing_policy_digest != policy.billing_policy_digest
             || self.service_policy_digest != policy.digest()?
@@ -2787,12 +2770,11 @@ impl HedgingBillingCheckpointV1 {
                 > usize::try_from(policy.max_accounts).unwrap_or(usize::MAX)
             || self.compacted_through_period_end_unix < policy.billing_epoch_unix
             || self.compacted_through_period_end_unix > self.last_period_end_unix
-            || (self.compacted_through_period_end_unix - policy.billing_epoch_unix)
-                % policy.billing_period_secs
-                != 0
+            || !(self.compacted_through_period_end_unix - policy.billing_epoch_unix)
+                .is_multiple_of(policy.billing_period_secs)
             || self.last_period_end_unix < policy.billing_epoch_unix
-            || (self.last_period_end_unix - policy.billing_epoch_unix) % policy.billing_period_secs
-                != 0
+            || !(self.last_period_end_unix - policy.billing_epoch_unix)
+                .is_multiple_of(policy.billing_period_secs)
             || self.open_accruals.len()
                 > usize::try_from(policy.max_open_accruals).unwrap_or(usize::MAX)
             || self.replay_receipts.len()
@@ -8835,6 +8817,43 @@ mod tests {
             .sign_next_statement(&TestSigner::valid())
             .expect("sign statement")
             .expect("signed statement")
+    }
+
+    #[test]
+    fn runtime_provider_handles_use_canonical_production_grammar() {
+        for handle in [
+            "hsm://sorafs/billing/statement-primary",
+            "sealed://sorafs/billing/epoch-primary",
+        ] {
+            assert_eq!(
+                validate_hedging_billing_runtime_provider_handle(handle, true),
+                Ok(())
+            );
+        }
+        for handle in [
+            "hsm://sorafs/billing/operator@statement",
+            "hsm://sorafs/billing/statement?token",
+            "hsm://sorafs/billing/statement#fragment",
+            "hsm://sorafs/billing/%73tatement",
+            "hsm://sorafs/billing/statement\\primary",
+        ] {
+            assert_eq!(
+                validate_hedging_billing_runtime_provider_handle(handle, true),
+                Err(HedgingBillingRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle)
+            );
+            assert_eq!(
+                validate_hedging_billing_runtime_provider_handle(handle, false),
+                Err(HedgingBillingRuntimeProviderQualificationErrorV1::InvalidProviderHandle)
+            );
+        }
+        assert_eq!(
+            validate_hedging_billing_runtime_provider_handle("hsm://sorafs/billing/dummy", true,),
+            Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle)
+        );
+        assert_eq!(
+            validate_hedging_billing_runtime_provider_handle("hsm://sorafs/billing/dummy", false,),
+            Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
+        );
     }
 
     #[test]

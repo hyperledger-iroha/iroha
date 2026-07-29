@@ -156,7 +156,10 @@ advert_args=(
   --max-streams=32
   --capability=torii
   --capability=quic
-  --capability=range:64
+  --range-capability=max_span=1048576,min_granularity=4096,sparse=true,alignment=false,merkle=true
+  --stream-budget=max_in_flight=32,max_bytes_per_sec=5000000,burst=2000000
+  --transport-hint=torii:0
+  --transport-hint=quic:1
   --endpoint=torii:storage.example.com
   --endpoint-meta=region:global
   --topic=sorafs.sf1.primary:global
@@ -179,15 +182,15 @@ cargo run -p sorafs_car --bin sorafs_provider_advert -- \
   --signature-file=provider.sig \
   --advert-out=provider.advert \
   --json-out=provider.report.json
-
-# You can still pass `--profile-id=<alias>`, but prefer the canonical handle
-# (`namespace.name@semver`) so automation stays aligned with the shared registry.
 ```
 
-The `range` capability advertises support for ranged chunk requests. Supplying
-an optional numeric suffix (for example, `--capability=range:64`) encodes the
-provider's preferred concurrent range-fetch budget in little-endian form so
-downstream fetchers can tune multi-source scheduling.
+V1 accepts only the exact canonical chunker handle
+(`--chunker-profile=namespace.name@semver`); numeric IDs, registry aliases,
+slash-form handles, case folding, and whitespace normalization are rejected.
+Ranged fetch support uses the typed `--range-capability` payload shown above.
+`--stream-budget` carries concurrency and rate limits, while repeated
+`--transport-hint` entries declare the ordered transport set. The raw
+`--capability=range[:streams]` form is not part of V1.
 
 The JSON report mirrors the validated fields (stake, capabilities, endpoints,
 rendezvous topics, signature metadata), stores the Norito bytes as hex, and

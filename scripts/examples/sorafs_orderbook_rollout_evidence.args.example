@@ -19,3 +19,4 @@ contract_surface,matcher_service,settlement_service,api_gateway,event_streams,sd
 1000
 --min-reconciliation-peers
 4
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

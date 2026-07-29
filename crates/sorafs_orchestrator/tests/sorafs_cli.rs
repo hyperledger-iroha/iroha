@@ -9,7 +9,7 @@ use std::{
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 #[cfg(feature = "local-quic-proxy")]
@@ -355,7 +355,7 @@ fn por_status_outputs_table() {
         proof_digest: None,
         repair_task_id: None,
         failure_reason: None,
-        verifier_latency_ms: Some(950),
+        verifier_latency_ms: None,
     };
     let body = to_bytes(&vec![status]).expect("encode status list");
     let manifest_hex = hex_encode([0x22; 32]);
@@ -2696,6 +2696,40 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
     );
 }
 
+fn governance_fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("fixtures/sorafs_manifest/governance")
+}
+
+fn parse_cli_json_stdout(output: &[u8]) -> Value {
+    from_slice(output).expect("CLI stdout should be JSON")
+}
+
+fn governance_dag_build_key_hex() -> String {
+    "cd".repeat(32)
+}
+
+fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&Path>) -> Value {
+    let root = governance_fixture_root();
+    let key_hex = governance_dag_build_key_hex();
+    let mut command = sorafs_cli_cmd();
+    command
+        .arg("governance")
+        .arg("dag")
+        .arg("build")
+        .arg(format!("--root={}", root.display()))
+        .arg(format!("--out={}", build_dir.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={key_hex}"))
+        .arg("--generated-at=1700000999");
+    if let Some(path) = summary_path {
+        command.arg(format!("--summary-out={}", path.display()));
+    }
+    let build_assert = command.assert().success();
+    parse_cli_json_stdout(&build_assert.get_output().stdout)
+}
+
 #[test]
 fn governance_dag_list_and_show_validate_fixture() {
     let root = governance_fixture_root();
@@ -4049,15 +4083,6 @@ fn canonical_por_payload() -> Vec<u8> {
     (0..1024)
         .map(|value| (value as u8).wrapping_mul(29))
         .collect()
-}
-
-fn manifest_digest_hex(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let bytes = fs::read(path)?;
-    let manifest: ManifestV1 = decode_from_bytes(&bytes)?;
-    let digest = manifest
-        .digest()
-        .map_err(|err| format!("manifest digest error: {err}"))?;
-    Ok(hex_encode(digest.as_bytes()))
 }
 
 #[test]

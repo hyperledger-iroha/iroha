@@ -4,8 +4,8 @@ Status
 - Metal: SHA‑256 compression and batched leaf hashing/reduction used for Merkle
   roots are accelerated on macOS; bitwise vector kernels (add/and/xor/or) are
   wired through `vector::*` helpers with deterministic fallbacks.
-- CUDA: A `build.rs` script compiles kernels in `cuda/` to PTX at build time
-  and copies bundled `*.ptx` files if `nvcc` is unavailable; vector helpers,
+- CUDA: A `build.rs` script installs checked-in PTX by default and exposes
+  explicit generation and byte-for-byte verification modes; vector helpers,
   SHA‑256, Merkle leaf hashing/reduction, Keccak, Poseidon2/6 permutations,
   AES rounds/batches, BN254 add/sub/mul plus the matching batch helpers,
   Ed25519 verification via the shared batch kernel path, and the scheduler
@@ -18,18 +18,28 @@ Status
 
 ## PTX Build Process
 
-CUDA kernels live under [`cuda/`](../cuda/). During compilation `build.rs` invokes `nvcc` (overridable via the `NVCC` environment variable) to convert any `.cu` sources such as `sha256.cu` into PTX files placed in the crate’s output directory. When the CUDA toolkit is missing or `nvcc` fails, the script falls back to shipping the precompiled `.ptx` artifacts stored alongside the sources. The build prints `cargo:warning` lines when `nvcc` is unavailable or when neither compilation nor bundled PTX is present, in which case it aborts with an error. This keeps builds deterministic and allows the crate to work without a local CUDA installation.
+CUDA kernels live under [`cuda/`](../cuda/). The default
+`IVM_CUDA_PTX_MODE=bundled` path copies the exact checked-in PTX into Cargo's
+output directory and fails if any source lacks a real, structurally valid
+artifact. `IVM_CUDA_PTX_MODE=generate` explicitly invokes `nvcc` and writes only
+to Cargo's output directory. `IVM_CUDA_PTX_MODE=check` regenerates every kernel,
+requires byte identity with its checked-in counterpart, and then installs the
+checked-in bytes. There is no automatic compiler fallback and no placeholder
+PTX. See [`cuda/README.md`](../cuda/README.md) for the open 11-artifact and
+signed-provenance release blocker.
 
-You can explicitly select the target SM/architecture via environment variables (dev/operator convenience; production gating should use config):
+Generation and checking accept these build-time controls:
 
+- `IVM_CUDA_NVCC` (or `NVCC`) — selects the CUDA compiler.
 - `IVM_CUDA_GENCODE` — passes a full `-gencode` tuple to `nvcc`.
-  - Example: `IVM_CUDA_GENCODE="arch=compute_80,code=sm_80"`
-- `IVM_CUDA_SM` — selects a specific SM with `-arch=sm_<NN>`.
-  - Example: `IVM_CUDA_SM=80` → `-arch=sm_80`
-- `IVM_CUDA_ARCH` — passes the raw `-arch=<value>` (e.g., `sm_75`, `compute_80`).
+  - The current default and nightly qualification profile is
+    `arch=compute_86,code=sm_86`.
 - `IVM_CUDA_NVCC_EXTRA` — additional flags appended verbatim to `nvcc` (testing only).
 
-Determinism note: These knobs do not change observable outputs; kernels implement identical integer logic across SMs. They only control the PTX/SASS targeting and may influence performance.
+Determinism note: These knobs may only select how a candidate artifact is
+generated. Release builds consume qualified checked-in bytes, and the
+accelerated results must match scalar golden vectors before the backend is
+enabled.
 
 This document outlines a plan for accelerating selected IVM operations on CUDA GPUs while preserving bit-for-bit determinism across nodes. The VM already provides CPU SIMD paths and Metal compute kernels for some vector helpers. Extending this to CUDA allows heavier workloads to run on up to eight GPUs without altering execution results.
 
@@ -71,7 +81,11 @@ fall back to the scalar backend.
 
 ## Ensuring Determinism
 
-- **Pure Integer Arithmetic** – Kernels avoid floating point math entirely. All operations use 32‑bit or 64‑bit integers and fixed‑width field limbs, matching the CPU code exactly.
+- **Consensus Integer Arithmetic** – Consensus-facing kernels use fixed-width
+  integers and field limbs matching the CPU code. The legacy
+  `vector_add_f32`/`add.cu` diagnostic helper is not a consensus path.
+  TODO: remove it or give it an explicit non-consensus artifact class before
+  signing the PTX release manifest.
 - **Fixed Reduction Order** – Parallel reductions (e.g., in Merkle hashing) accumulate results in a predetermined order per chunk so thread scheduling cannot change the final digest.
 - **Synchronous Commits** – The VM waits for all kernels in a cycle to finish before applying their outputs to the state. Results are committed sequentially in instruction order as done for CPU execution.
 - **Golden Self‑tests and Auto‑Disable** – On startup/first use, GPU backends (Metal, CUDA) execute small golden vectors (vadd32, SHA‑256, Keccak). Any mismatch disables the backend at runtime and the VM falls back to CPU scalar/SIMD paths, preserving correctness.

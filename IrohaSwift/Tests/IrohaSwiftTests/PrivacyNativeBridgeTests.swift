@@ -1061,9 +1061,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     }
 
     func testLiveCapabilitiesArchiveWhenNativeBridgeIsAvailable() throws {
-        guard PrivacyNativeBridge.isNativeAvailable else {
-            throw XCTSkip("Privacy native bridge is unavailable.")
-        }
+        try requireNativeTestCapability(
+            PrivacyNativeBridge.isNativeAvailable,
+            "Privacy native bridge is unavailable."
+        )
 
         let archive = try PrivacyNativeBridge.capabilitiesV1()
         XCTAssertFalse(archive.isEmpty)

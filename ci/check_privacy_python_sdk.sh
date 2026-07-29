@@ -7,14 +7,20 @@ VENV_DIR="${PRIVACY_PYTHON_SDK_VENV:-${TMPDIR:-/tmp}/iroha-privacy-python-sdk-ve
 
 export PYTHONDONTWRITEBYTECODE=1
 
-resolve_python_311_bin() {
+resolve_python_312_bin() {
   if [[ -n "${PYTHON_OVERRIDE}" ]]; then
     printf '%s\n' "${PYTHON_OVERRIDE}"
     return 0
   fi
 
   local candidate
-  for candidate in python3.11 /opt/homebrew/bin/python3.11 /usr/local/bin/python3.11 python3; do
+  for candidate in \
+    python3.12 \
+    /opt/homebrew/bin/python3.12 \
+    /opt/homebrew/opt/python@3.12/bin/python3.12 \
+    /usr/local/bin/python3.12 \
+    /usr/local/opt/python@3.12/bin/python3.12 \
+    python3; do
     if command -v "${candidate}" >/dev/null 2>&1; then
       command -v "${candidate}"
       return 0
@@ -28,7 +34,7 @@ resolve_python_311_bin() {
   printf '%s\n' "python3"
 }
 
-PYTHON_BIN="$(resolve_python_311_bin)"
+PYTHON_BIN="$(resolve_python_312_bin)"
 
 create_venv() {
   "${PYTHON_BIN}" -m venv "${VENV_DIR}"
@@ -49,9 +55,9 @@ recreate_venv() {
 PYTHON_VERSION="$("${PYTHON_BIN}" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
 "${PYTHON_BIN}" --version
 case "${PYTHON_VERSION}" in
-  3.11) ;;
+  3.12) ;;
   *)
-    echo "error: privacy Python SDK tests require Python 3.11; got ${PYTHON_VERSION}" >&2
+    echo "error: privacy Python SDK tests require Python 3.12; got ${PYTHON_VERSION}" >&2
     exit 1
     ;;
 esac
@@ -63,16 +69,16 @@ fi
 VENV_PYTHON_VERSION="$("${VENV_DIR}/bin/python" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
 "${VENV_DIR}/bin/python" --version
 case "${VENV_PYTHON_VERSION}" in
-  3.11) ;;
+  3.12) ;;
   *)
-    echo "recreating privacy Python SDK venv because it uses Python ${VENV_PYTHON_VERSION}, not 3.11" >&2
+    echo "recreating privacy Python SDK venv because it uses Python ${VENV_PYTHON_VERSION}, not 3.12" >&2
     recreate_venv
     VENV_PYTHON_VERSION="$("${VENV_DIR}/bin/python" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
     "${VENV_DIR}/bin/python" --version
     case "${VENV_PYTHON_VERSION}" in
-      3.11) ;;
+      3.12) ;;
       *)
-        echo "error: privacy Python SDK venv must use Python 3.11; got ${VENV_PYTHON_VERSION}" >&2
+        echo "error: privacy Python SDK venv must use Python 3.12; got ${VENV_PYTHON_VERSION}" >&2
         exit 1
         ;;
     esac

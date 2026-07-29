@@ -11,6 +11,11 @@
 //! global event-id index and one exact source-head index. Exact event-id
 //! replays are idempotent; a different event at an occupied source revision is
 //! equivocation.
+//!
+//! The module also defines the explicit finalized-archive retention request.
+//! That request is a caller-signed custom parameter with a strict digest-linked
+//! sequence and exact committed target; it intentionally contains no automatic
+//! age, capacity, or process-local retention policy.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,7 +23,10 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
+#[cfg(feature = "json")]
+use crate::parameter::{CustomParameter, CustomParameterId};
 use crate::{
+    ChainId,
     account::AccountId,
     sorafs::capacity::{CapacityDisputeId, CapacityDisputeOutcome, ProviderId},
 };
@@ -37,6 +45,11 @@ pub const REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1: usize = 16 * 1024;
 pub const REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1: usize = 2_048;
 /// Hard governed ceiling for the age of a submitted source observation.
 pub const REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1: u64 = 30 * 24 * 60 * 60 * 1_000;
+/// First-release finalized-reputation archive retention-request version.
+pub const REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_VERSION_V1: u16 = 1;
+/// Reserved custom-parameter identifier carrying explicit retention work.
+pub const REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_PARAMETER_ID_V1: &str =
+    "sorafs_reputation_finalized_archive_retention_request_v1";
 
 /// Domain separator for governed recorder-policy digests.
 pub const REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1: &[u8] =
@@ -50,8 +63,325 @@ pub const REPUTATION_JOURNAL_DISPUTE_SOURCE_ID_DOMAIN_V1: &[u8] =
 /// Domain separator for globally unique stream-token source identifiers.
 pub const REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.journal.source.stream-token.v1";
+/// Domain separator for canonical stream-token validation identifiers.
+pub const STREAM_TOKEN_VALIDATION_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.reputation.stream-token.validation-id.v1";
 /// Domain separator for content-derived journal event identifiers.
 pub const REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1: &[u8] = b"sorafs.reputation.journal.event-id.v1";
+/// Domain separator for explicit finalized-reputation archive retention requests.
+pub const REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.reputation.finalized-archive.retention-request.v1";
+
+/// Exact finalized ancestor selected by one explicit archive-retention request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReputationFinalizedArchiveRetentionTargetV1 {
+    /// One-based finalized block height.
+    pub height: u64,
+    /// Exact finalized block hash at `height`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+}
+
+impl ReputationFinalizedArchiveRetentionTargetV1 {
+    /// Construct one exact non-zero finalized target.
+    ///
+    /// # Errors
+    ///
+    /// Rejects height zero or the reserved all-zero block hash.
+    pub fn try_new(
+        height: u64,
+        block_hash: [u8; 32],
+    ) -> Result<Self, ReputationFinalizedArchiveRetentionRequestErrorV1> {
+        let target = Self { height, block_hash };
+        target.validate()?;
+        Ok(target)
+    }
+
+    /// Validate the exact target identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects height zero or the reserved all-zero block hash.
+    pub fn validate(&self) -> Result<(), ReputationFinalizedArchiveRetentionRequestErrorV1> {
+        if self.height == 0 {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::ZeroTargetHeight);
+        }
+        if self.block_hash == [0; 32] {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::ZeroTargetBlockHash);
+        }
+        Ok(())
+    }
+}
+
+/// Caller-signed, committed request for one explicit finalized archive compaction.
+///
+/// This value selects no target automatically. A holder of `CanSetParameters`
+/// must submit the exact target as a custom parameter, and consensus validates
+/// that target against an already committed block. Successive requests form a
+/// strict digest-linked sequence so replicas can reconcile them idempotently.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReputationFinalizedArchiveRetentionRequestV1 {
+    /// Schema version.
+    pub version: u16,
+    /// Exact chain whose archive may be compacted.
+    pub chain_id: ChainId,
+    /// Monotonic request sequence beginning at one.
+    pub sequence: u64,
+    /// Digest of the immediately preceding canonical request.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub predecessor_request_digest: Option<[u8; 32]>,
+    /// Exact finalized ancestor selected explicitly by governance.
+    pub compact_through: ReputationFinalizedArchiveRetentionTargetV1,
+    /// Domain-separated digest of every preceding field.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub request_digest: [u8; 32],
+}
+
+impl ReputationFinalizedArchiveRetentionRequestV1 {
+    /// Construct one canonical explicit retention request.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid targets, sequence/predecessor combinations, or a
+    /// canonical encoding failure.
+    pub fn try_new(
+        chain_id: ChainId,
+        sequence: u64,
+        predecessor_request_digest: Option<[u8; 32]>,
+        compact_through: ReputationFinalizedArchiveRetentionTargetV1,
+    ) -> Result<Self, ReputationFinalizedArchiveRetentionRequestErrorV1> {
+        let mut request = Self {
+            version: REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_VERSION_V1,
+            chain_id,
+            sequence,
+            predecessor_request_digest,
+            compact_through,
+            request_digest: [0; 32],
+        };
+        request.validate_without_digest()?;
+        request.request_digest = request.expected_digest()?;
+        request.validate()?;
+        Ok(request)
+    }
+
+    /// Reserved custom-parameter identifier accepted by `SetParameter`.
+    #[cfg(feature = "json")]
+    #[must_use]
+    pub fn parameter_id() -> CustomParameterId {
+        REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_PARAMETER_ID_V1
+            .parse()
+            .expect("valid finalized-reputation retention parameter identifier")
+    }
+
+    /// Convert this request into the caller-signed custom parameter.
+    #[cfg(feature = "json")]
+    #[must_use]
+    pub fn into_custom_parameter(self) -> CustomParameter {
+        CustomParameter::new(
+            Self::parameter_id(),
+            iroha_primitives::json::Json::new(self),
+        )
+    }
+
+    /// Strictly decode a matching custom parameter.
+    ///
+    /// Non-matching identifiers return `Ok(None)`. Matching values reject
+    /// malformed JSON, unsupported versions, non-canonical digests, and every
+    /// invalid sequence/predecessor combination.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JSON error for malformed or semantically invalid matching
+    /// payloads.
+    #[cfg(feature = "json")]
+    pub fn from_custom_parameter(
+        custom: &CustomParameter,
+    ) -> Result<Option<Self>, norito::json::Error> {
+        if custom.id() != &Self::parameter_id() {
+            return Ok(None);
+        }
+        let request = norito::json::from_str::<Self>(custom.payload().get())?;
+        request
+            .validate()
+            .map_err(|error| norito::json::Error::Message(error.to_string()))?;
+        Ok(Some(request))
+    }
+
+    /// Validate the request and its embedded canonical digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed versions, targets, lineage, or digest substitution.
+    pub fn validate(&self) -> Result<(), ReputationFinalizedArchiveRetentionRequestErrorV1> {
+        self.validate_without_digest()?;
+        if self.request_digest == [0; 32] {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::ZeroRequestDigest);
+        }
+        if self.request_digest != self.expected_digest()? {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::RequestDigestMismatch);
+        }
+        Ok(())
+    }
+
+    /// Validate one request as an exact replay or strict successor.
+    ///
+    /// # Errors
+    ///
+    /// Rejects cross-chain changes, skips, rollback, equivocation, or an
+    /// incorrect predecessor digest.
+    pub fn validate_transition(
+        previous: Option<&Self>,
+        next: &Self,
+    ) -> Result<(), ReputationFinalizedArchiveRetentionRequestErrorV1> {
+        next.validate()?;
+        let Some(previous) = previous else {
+            return if next.sequence == 1 && next.predecessor_request_digest.is_none() {
+                Ok(())
+            } else {
+                Err(ReputationFinalizedArchiveRetentionRequestErrorV1::InvalidInitialLineage)
+            };
+        };
+        previous.validate()?;
+        if next == previous {
+            return Ok(());
+        }
+        if next.chain_id != previous.chain_id {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::ChainChanged);
+        }
+        let expected_sequence = previous
+            .sequence
+            .checked_add(1)
+            .ok_or(ReputationFinalizedArchiveRetentionRequestErrorV1::SequenceOverflow)?;
+        if next.sequence != expected_sequence {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::NonContiguousSequence);
+        }
+        if next.predecessor_request_digest != Some(previous.request_digest) {
+            return Err(
+                ReputationFinalizedArchiveRetentionRequestErrorV1::PredecessorDigestMismatch,
+            );
+        }
+        if next.compact_through.height <= previous.compact_through.height {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::TargetDidNotAdvance);
+        }
+        Ok(())
+    }
+
+    fn validate_without_digest(
+        &self,
+    ) -> Result<(), ReputationFinalizedArchiveRetentionRequestErrorV1> {
+        if self.version != REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_VERSION_V1 {
+            return Err(
+                ReputationFinalizedArchiveRetentionRequestErrorV1::UnsupportedVersion {
+                    found: self.version,
+                },
+            );
+        }
+        if self.chain_id.as_str().is_empty() {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::EmptyChainId);
+        }
+        if self.sequence == 0 {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::ZeroSequence);
+        }
+        match (self.sequence, self.predecessor_request_digest) {
+            (1, None) => {}
+            (1, Some(_)) => {
+                return Err(
+                    ReputationFinalizedArchiveRetentionRequestErrorV1::UnexpectedPredecessor,
+                );
+            }
+            (_, Some(digest)) if digest != [0; 32] => {}
+            _ => {
+                return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::MissingPredecessor);
+            }
+        }
+        self.compact_through.validate()
+    }
+
+    fn expected_digest(
+        &self,
+    ) -> Result<[u8; 32], ReputationFinalizedArchiveRetentionRequestErrorV1> {
+        let material = (
+            self.version,
+            self.chain_id.clone(),
+            self.sequence,
+            self.predecessor_request_digest,
+            self.compact_through.clone(),
+        );
+        let bytes = norito::to_bytes(&material)
+            .map_err(|_| ReputationFinalizedArchiveRetentionRequestErrorV1::CanonicalEncoding)?;
+        Ok(domain_digest(
+            REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_DIGEST_DOMAIN_V1,
+            &bytes,
+        ))
+    }
+}
+
+/// Validation failure for an explicit finalized archive retention request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum ReputationFinalizedArchiveRetentionRequestErrorV1 {
+    /// The payload version is unsupported.
+    #[error("unsupported retention-request version {found}")]
+    UnsupportedVersion {
+        /// Observed version.
+        found: u16,
+    },
+    /// The request carries an empty chain id.
+    #[error("retention-request chain id must be non-empty")]
+    EmptyChainId,
+    /// Sequence zero is reserved.
+    #[error("retention-request sequence must begin at one")]
+    ZeroSequence,
+    /// A first request unexpectedly names a predecessor.
+    #[error("first retention request must not name a predecessor")]
+    UnexpectedPredecessor,
+    /// A successor omitted or zeroed its predecessor.
+    #[error("successor retention request requires a non-zero predecessor digest")]
+    MissingPredecessor,
+    /// The exact target height is zero.
+    #[error("retention target height must be non-zero")]
+    ZeroTargetHeight,
+    /// The exact target block hash is zero.
+    #[error("retention target block hash must be non-zero")]
+    ZeroTargetBlockHash,
+    /// The embedded request digest is zero.
+    #[error("retention request digest must be non-zero")]
+    ZeroRequestDigest,
+    /// The embedded request digest does not match the canonical payload.
+    #[error("retention request digest mismatch")]
+    RequestDigestMismatch,
+    /// Canonical Norito encoding failed.
+    #[error("retention request canonical encoding failed")]
+    CanonicalEncoding,
+    /// A non-initial request appeared without a predecessor state.
+    #[error("retention request has invalid initial lineage")]
+    InvalidInitialLineage,
+    /// A successor targets another chain.
+    #[error("retention request chain changed")]
+    ChainChanged,
+    /// The preceding sequence cannot advance.
+    #[error("retention request sequence overflowed")]
+    SequenceOverflow,
+    /// A successor skipped, repeated, or rolled back its sequence.
+    #[error("retention request sequence is not contiguous")]
+    NonContiguousSequence,
+    /// A successor does not bind the exact preceding request.
+    #[error("retention request predecessor digest mismatch")]
+    PredecessorDigestMismatch,
+    /// A successor did not advance the explicit target height.
+    #[error("retention request target did not advance")]
+    TargetDidNotAdvance,
+}
 
 /// Globally namespaced identity of one native reputation source.
 #[derive(
@@ -85,10 +415,19 @@ impl ReputationJournalSourceIdV1 {
         )
     }
 
-    /// Derive the globally namespaced source for a native stream-token validation.
+    /// Derive the globally namespaced source for one gateway validation sequence.
+    ///
+    /// The request-context digest is deliberately excluded from this source
+    /// key. Reusing one gateway sequence with substituted request context must
+    /// therefore collide at the source boundary and fail as equivocation,
+    /// rather than entering the journal as a distinct event.
     #[must_use]
-    pub fn for_stream_token_validation(validation_id: [u8; 32]) -> Self {
-        source_id(REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1, validation_id)
+    pub fn for_stream_token_validation(binding: StreamTokenValidationBindingV1) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1);
+        hasher.update(&binding.gateway_id);
+        hasher.update(&binding.gateway_sequence.to_le_bytes());
+        Self(*hasher.finalize().as_bytes())
     }
 
     /// Access the raw digest.
@@ -340,6 +679,12 @@ pub enum PorTerminalExcludedKindV1 {
 pub enum PorTerminalStatusV1 {
     /// The original provider proof verified before the deadline.
     Verified,
+    /// The original proof failed, but governed repair recovered service.
+    ///
+    /// This remains a successful provider observation, but is intentionally
+    /// distinct from [`Self::Verified`] so consumers never claim that the
+    /// original service attempt completed without recovery.
+    Repaired,
     /// The challenge ended with a provider-attributable failure.
     Failed(PorTerminalFailureKindV1),
     /// The challenge ended without a safely attributable provider observation.
@@ -353,10 +698,10 @@ impl PorTerminalStatusV1 {
         !matches!(self, Self::Excluded(_))
     }
 
-    /// Whether this terminal is a successful original `PoR` observation.
+    /// Whether this terminal records verified or recovered service success.
     #[must_use]
     pub const fn is_success(self) -> bool {
-        matches!(self, Self::Verified)
+        matches!(self, Self::Verified | Self::Repaired)
     }
 
     /// Whether this terminal increments the provider `PoR` failure counter.
@@ -457,12 +802,12 @@ impl PorTerminalOutcomeV1 {
         }
 
         match self.status {
-            PorTerminalStatusV1::Verified => {
+            PorTerminalStatusV1::Verified | PorTerminalStatusV1::Repaired => {
                 if self.failed_samples != 0
                     || self.responded_at_unix_ms.is_none()
                     || self.proof_digest.is_none()
                     || self.repair_task_id.is_some()
-                    || self.verifier_latency_ms.is_none_or(|latency| latency == 0)
+                    || self.verifier_latency_ms.is_none()
                     || self
                         .responded_at_unix_ms
                         .is_some_and(|responded_at| responded_at > self.deadline_at_unix_ms)
@@ -501,7 +846,10 @@ impl PorTerminalOutcomeV1 {
     ) -> Result<(), ReputationJournalValidationError> {
         let proof_present = self.proof_digest.is_some();
         let response_present = self.responded_at_unix_ms.is_some();
-        let latency_present = self.verifier_latency_ms.is_some_and(|latency| latency > 0);
+        // PoR source timestamps have whole-second resolution. A proof and its
+        // terminal decision may therefore have an exact, valid zero-millisecond
+        // delta; presence, rather than positivity, carries the evidence bit.
+        let latency_present = self.verifier_latency_ms.is_some();
         if failure.carries_proof() != proof_present
             || failure.carries_proof() != response_present
             || failure.carries_proof() != latency_present
@@ -730,6 +1078,74 @@ impl StreamTokenValidationStatusV1 {
     }
 }
 
+/// Durable identity and request-context binding for one gateway validation.
+///
+/// A production gateway must allocate `gateway_sequence` from sealed
+/// monotonic state before publishing an outcome. The exact fixed-width
+/// canonical binding is:
+///
+/// `gateway_id[32] || gateway_sequence_le[8] || request_context_digest[32]`.
+///
+/// There is no caller-supplied validation-id compatibility path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct StreamTokenValidationBindingV1 {
+    /// Stable authenticated identity of the regional gateway.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub gateway_id: [u8; 32],
+    /// Non-zero sequence allocated by that gateway's sealed monotonic state.
+    pub gateway_sequence: u64,
+    /// Digest of the exact range request and provider-serving context.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub request_context_digest: [u8; 32],
+}
+
+impl StreamTokenValidationBindingV1 {
+    /// Construct a non-inert canonical gateway binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero gateway identity, zero sequence, or zero
+    /// request-context digest.
+    pub fn try_new(
+        gateway_id: [u8; 32],
+        gateway_sequence: u64,
+        request_context_digest: [u8; 32],
+    ) -> Result<Self, ReputationJournalValidationError> {
+        let binding = Self {
+            gateway_id,
+            gateway_sequence,
+            request_context_digest,
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    /// Derive the globally unique validation identity from exact binding bytes.
+    #[must_use]
+    pub fn validation_id(self) -> [u8; 32] {
+        let mut canonical = [0_u8; 72];
+        canonical[..32].copy_from_slice(&self.gateway_id);
+        canonical[32..40].copy_from_slice(&self.gateway_sequence.to_le_bytes());
+        canonical[40..].copy_from_slice(&self.request_context_digest);
+        domain_digest(STREAM_TOKEN_VALIDATION_ID_DOMAIN_V1, &canonical)
+    }
+
+    fn validate(self) -> Result<(), ReputationJournalValidationError> {
+        ensure_digest(self.gateway_id, "stream_token_gateway_id")?;
+        if self.gateway_sequence == 0 {
+            return Err(ReputationJournalValidationError::ZeroStreamTokenGatewaySequence);
+        }
+        ensure_digest(
+            self.request_context_digest,
+            "stream_token_request_context_digest",
+        )
+    }
+}
+
 /// Payload-free result of one provider-bound stream-token validation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -737,12 +1153,8 @@ impl StreamTokenValidationStatusV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct StreamTokenValidationOutcomeV1 {
-    /// Native request-attempt identity, unique across regional gateways.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub validation_id: [u8; 32],
-    /// Payload-free digest of the exact range request and serving context.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub request_digest: [u8; 32],
+    /// Durable gateway sequence and request-context binding.
+    pub binding: StreamTokenValidationBindingV1,
     /// Canonical signed token-body digest, present exactly after successful decode.
     #[cfg_attr(
         feature = "json",
@@ -759,8 +1171,8 @@ pub struct StreamTokenValidationOutcomeV1 {
 
 impl StreamTokenValidationOutcomeV1 {
     fn validate(&self, source_time_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
-        ensure_digest(self.validation_id, "validation_id")?;
-        ensure_digest(self.request_digest, "request_digest")?;
+        self.binding.validate()?;
+        ensure_digest(self.binding.validation_id(), "stream_token_validation_id")?;
         ensure_timestamp(self.validated_at_unix_ms, "validated_at_unix_ms")?;
         if self.validated_at_unix_ms != source_time_unix_ms {
             return Err(ReputationJournalValidationError::SourceTimestampMismatch);
@@ -820,7 +1232,7 @@ impl ReputationJournalPayloadV1 {
                 ReputationJournalSourceIdV1::for_provider_dispute(event.dispute_id)
             }
             Self::StreamTokenValidation(outcome) => {
-                ReputationJournalSourceIdV1::for_stream_token_validation(outcome.validation_id)
+                ReputationJournalSourceIdV1::for_stream_token_validation(outcome.binding)
             }
         }
     }
@@ -1486,6 +1898,9 @@ pub enum ReputationJournalValidationError {
     /// Stream-token status does not match decoded token material.
     #[error("stream-token validation status is inconsistent with decoded token material")]
     TokenMaterialMismatch,
+    /// Gateway validation sequence zero is reserved.
+    #[error("stream-token gateway validation sequence must be non-zero")]
+    ZeroStreamTokenGatewaySequence,
     /// Governance text is empty, non-canonical, control-bearing, or too large.
     #[error("governance rationale must be trimmed control-free UTF-8 within the V1 bound")]
     InvalidText,
@@ -1747,6 +2162,93 @@ mod tests {
         let mut digest = [0xA5; 32];
         digest[..4].copy_from_slice(&value.to_be_bytes());
         digest
+    }
+
+    fn retention_request(
+        sequence: u64,
+        predecessor_request_digest: Option<[u8; 32]>,
+        height: u64,
+        block_hash: u8,
+    ) -> ReputationFinalizedArchiveRetentionRequestV1 {
+        ReputationFinalizedArchiveRetentionRequestV1::try_new(
+            ChainId::from("reputation-retention-test"),
+            sequence,
+            predecessor_request_digest,
+            ReputationFinalizedArchiveRetentionTargetV1::try_new(height, [block_hash; 32])
+                .expect("valid exact retention target"),
+        )
+        .expect("valid explicit retention request")
+    }
+
+    #[test]
+    fn retention_request_round_trips_canonically_and_as_custom_parameter() {
+        let request = retention_request(1, None, 7, 0x71);
+        let bytes = norito::to_bytes(&request).expect("encode retention request");
+        let decoded: ReputationFinalizedArchiveRetentionRequestV1 =
+            norito::decode_from_bytes(&bytes).expect("decode retention request");
+        assert_eq!(decoded, request);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode retention request"),
+            bytes
+        );
+
+        #[cfg(feature = "json")]
+        {
+            let parameter = request.clone().into_custom_parameter();
+            assert_eq!(
+                ReputationFinalizedArchiveRetentionRequestV1::from_custom_parameter(&parameter)
+                    .expect("decode strict custom parameter"),
+                Some(request.clone())
+            );
+            let json = norito::json::to_string(&request).expect("encode request JSON");
+            let decoded: ReputationFinalizedArchiveRetentionRequestV1 =
+                norito::json::from_slice(json.as_bytes()).expect("decode request JSON");
+            assert_eq!(decoded, request);
+        }
+    }
+
+    #[test]
+    fn retention_request_lineage_rejects_replay_substitution_skips_and_rollback() {
+        let first = retention_request(1, None, 7, 0x71);
+        ReputationFinalizedArchiveRetentionRequestV1::validate_transition(None, &first)
+            .expect("valid initial request");
+        ReputationFinalizedArchiveRetentionRequestV1::validate_transition(Some(&first), &first)
+            .expect("exact replay is idempotent");
+
+        let successor = retention_request(2, Some(first.request_digest), 8, 0x81);
+        ReputationFinalizedArchiveRetentionRequestV1::validate_transition(Some(&first), &successor)
+            .expect("exact successor");
+
+        let skipped = retention_request(3, Some(first.request_digest), 9, 0x91);
+        assert_eq!(
+            ReputationFinalizedArchiveRetentionRequestV1::validate_transition(
+                Some(&first),
+                &skipped,
+            ),
+            Err(ReputationFinalizedArchiveRetentionRequestErrorV1::NonContiguousSequence)
+        );
+        let wrong_predecessor = retention_request(2, Some([0xD1; 32]), 8, 0x81);
+        assert_eq!(
+            ReputationFinalizedArchiveRetentionRequestV1::validate_transition(
+                Some(&first),
+                &wrong_predecessor,
+            ),
+            Err(ReputationFinalizedArchiveRetentionRequestErrorV1::PredecessorDigestMismatch)
+        );
+        let rollback = retention_request(2, Some(first.request_digest), 7, 0x72);
+        assert_eq!(
+            ReputationFinalizedArchiveRetentionRequestV1::validate_transition(
+                Some(&first),
+                &rollback,
+            ),
+            Err(ReputationFinalizedArchiveRetentionRequestErrorV1::TargetDidNotAdvance)
+        );
+        let mut substituted = successor;
+        substituted.compact_through.block_hash[0] ^= 0xFF;
+        assert_eq!(
+            substituted.validate(),
+            Err(ReputationFinalizedArchiveRetentionRequestErrorV1::RequestDigestMismatch)
+        );
     }
 
     fn por_payload(seed: u8) -> ReputationJournalPayloadV1 {
@@ -2063,6 +2565,37 @@ mod tests {
     }
 
     #[test]
+    fn proof_bearing_por_accepts_exact_zero_millisecond_latency() {
+        for status in [PorTerminalStatusV1::Verified, PorTerminalStatusV1::Repaired] {
+            let mut payload = por_payload(0x31);
+            let ReputationJournalPayloadV1::PorTerminal(outcome) = &mut payload else {
+                unreachable!()
+            };
+            outcome.status = status;
+            outcome.deadline_at_unix_ms = SOURCE_TIME + 1_000;
+            outcome.responded_at_unix_ms = Some(SOURCE_TIME);
+            outcome.verifier_latency_ms = Some(0);
+
+            let entry = ReputationJournalEntryV1::try_new(
+                ProviderId::new([0x22; 32]),
+                policy().canonical_digest().expect("policy digest"),
+                policy().por_recorder_authority,
+                SOURCE_TIME,
+                None,
+                payload,
+            )
+            .expect("whole-second source timestamps permit an exact zero-millisecond delta");
+            let ReputationJournalPayloadV1::PorTerminal(outcome) = entry.payload else {
+                unreachable!()
+            };
+            assert_eq!(outcome.status, status);
+            assert!(outcome.status.counts_for_provider());
+            assert!(outcome.status.is_success());
+            assert!(!outcome.status.is_failure());
+        }
+    }
+
+    #[test]
     fn impossible_por_counters_and_statuses_are_rejected() {
         let mut payload = por_payload(1);
         let ReputationJournalPayloadV1::PorTerminal(outcome) = &mut payload else {
@@ -2191,8 +2724,11 @@ mod tests {
     fn token_status_material_is_exact_and_counter_effect_is_typed() {
         let policy = policy();
         let accepted = StreamTokenValidationOutcomeV1 {
-            validation_id: [0x11; 32],
-            request_digest: [0x12; 32],
+            binding: StreamTokenValidationBindingV1 {
+                gateway_id: [0x11; 32],
+                gateway_sequence: 1,
+                request_context_digest: [0x12; 32],
+            },
             token_body_digest: Some([0x13; 32]),
             token_key_version: Some(1),
             validated_at_unix_ms: SOURCE_TIME,
@@ -2222,6 +2758,15 @@ mod tests {
             !StreamTokenValidationStatusV1::Excluded(StreamTokenExcludedKindV1::InvalidSignature)
                 .counts_for_provider()
         );
+        let expected_validation_id = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(STREAM_TOKEN_VALIDATION_ID_DOMAIN_V1);
+            hasher.update(&[0x11; 32]);
+            hasher.update(&1_u64.to_le_bytes());
+            hasher.update(&[0x12; 32]);
+            *hasher.finalize().as_bytes()
+        };
+        assert_eq!(accepted.binding.validation_id(), expected_validation_id);
 
         let mut malformed = accepted;
         malformed.status =
@@ -2237,6 +2782,94 @@ mod tests {
             ),
             Err(ReputationJournalValidationError::TokenMaterialMismatch)
         );
+
+        for mutation in 0..3 {
+            let mut invalid = accepted;
+            let expected = match mutation {
+                0 => {
+                    invalid.binding.gateway_id = [0; 32];
+                    ReputationJournalValidationError::ZeroDigest {
+                        field: "stream_token_gateway_id",
+                    }
+                }
+                1 => {
+                    invalid.binding.gateway_sequence = 0;
+                    ReputationJournalValidationError::ZeroStreamTokenGatewaySequence
+                }
+                2 => {
+                    invalid.binding.request_context_digest = [0; 32];
+                    ReputationJournalValidationError::ZeroDigest {
+                        field: "stream_token_request_context_digest",
+                    }
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                ReputationJournalEntryV1::try_new(
+                    ProviderId::new([0x22; 32]),
+                    policy.canonical_digest().expect("policy digest"),
+                    policy.token_recorder_authority.clone(),
+                    SOURCE_TIME,
+                    None,
+                    ReputationJournalPayloadV1::StreamTokenValidation(invalid),
+                ),
+                Err(expected)
+            );
+        }
+
+        let original_source = entry.source_id;
+        let mut substituted_context = accepted;
+        substituted_context.binding.request_context_digest[0] ^= 1;
+        let substituted = ReputationJournalEntryV1::try_new(
+            ProviderId::new([0x22; 32]),
+            policy.canonical_digest().expect("policy digest"),
+            policy.token_recorder_authority,
+            SOURCE_TIME,
+            None,
+            ReputationJournalPayloadV1::StreamTokenValidation(substituted_context),
+        )
+        .expect("substituted context remains structurally valid");
+        assert_eq!(substituted.source_id, original_source);
+        assert_ne!(substituted.event_id, entry.event_id);
+        assert_ne!(
+            substituted_context.binding.validation_id(),
+            accepted.binding.validation_id()
+        );
+
+        #[cfg(feature = "json")]
+        {
+            let mut aliased =
+                norito::json::to_value(&accepted).expect("serialize token validation outcome");
+            let fields = aliased.as_object_mut().expect("token outcome object");
+            fields.insert(
+                "validation_id".to_owned(),
+                norito::json::Value::String("11".repeat(32)),
+            );
+            fields.insert(
+                "request_digest".to_owned(),
+                norito::json::Value::String("12".repeat(32)),
+            );
+            norito::json::value::from_value::<StreamTokenValidationOutcomeV1>(aliased)
+                .expect_err("legacy token identity aliases must be rejected beside the binding");
+
+            let mut legacy =
+                norito::json::to_value(&accepted).expect("serialize token validation outcome");
+            let fields = legacy.as_object_mut().expect("token outcome object");
+            assert!(fields.contains_key("binding"));
+            assert!(!fields.contains_key("validation_id"));
+            assert!(!fields.contains_key("request_digest"));
+            fields.remove("binding");
+            fields.insert(
+                "validation_id".to_owned(),
+                norito::json::Value::String("11".repeat(32)),
+            );
+            fields.insert(
+                "request_digest".to_owned(),
+                norito::json::Value::String("12".repeat(32)),
+            );
+            norito::json::value::from_value::<StreamTokenValidationOutcomeV1>(legacy)
+                .expect_err("caller-supplied legacy token identities must fail the V1 hard cut");
+        }
     }
 
     #[test]

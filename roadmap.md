@@ -163,7 +163,11 @@ the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
 cancel-asset-lock, reference-validation, and provider-ingest suites, and rejects
 JUnit skips. Its static workflow-file contract is green at 9/9. Clean native
 rebuilds and source-bound provenance across all five release targets remain
-open. The separate SoraFS pin-register SDK workflow, runner, and guard are also
+open. Kotlin/JVM and mirrored Java Android now require both exact bridge ABI 21
+and `NativeSignerBridge` JNI contract revision 1 before making any native signer
+call; the Android artifact gate requires both revision-probe exports, preventing
+a stale same-ABI JNI descriptor from passing package qualification. The
+separate SoraFS pin-register SDK workflow, runner, and guard are also
 exact Python 3.12 and install only the hash-locked, binary-only
 `requirements-ci.lock`; a fresh isolated CPython 3.12.13 venv is green at 3/3,
 including positive static coverage and version/resolver/major/workflow/lock
@@ -175,20 +179,30 @@ outbox, monotonic finalized high-water, bounded claims, retention-only terminal
 pruning, retry/dead-letter path, exact fee-quoted completion transactions,
 committed reconciliation, and payload-free liveness/readiness are wired from
 `iroha_config`. Enabled startup requires separately identified
-authenticated-source and governed completion-signer providers. The worker now
+authenticated-source and governed completion-signer providers. The new
+authenticated source-pool coordinator pins at least two distinct non-local
+provider identities and independently identified child transports, rejects
+noncanonical or incomplete finalized source lists before I/O, rechecks each
+source around fetch, and fails over only in canonical provider order. Standard
+daemon startup freezes the exact bounded provider inventory across readiness
+probing and requires the same slice on every supervised tick. The worker also
 rechecks the current committed provider owner before signer resolution and
 immediately before and after signing; a newer finalized assignment snapshot
-also invalidates retained `Signing`, `Signed`, `Ambiguous`, and `Submitted`
-material when that owner changes or is removed. The exact governed
-signer-policy identity, monotonic revision, and digest are now persisted with
-prepared material; a newer finalized policy rotation or revocation invalidates
-that material before observation or resubmission, including after restart.
-The durable policy floor rejects revision rollback, same-revision digest
-equivocation, identity substitution, and reuse after revocation unless a strict
-canonical successor is observed.
-Remaining gaps are the production authenticated multi-provider transport and
-HSM/KMS signer-resolver adapters plus a provider-indexed committed query or
-governed archive that stays bounded across long-lived history.
+invalidates retained `Signing`, `Signed`, `Ambiguous`, and `Submitted` material
+when that owner changes or is removed. The exact governed signer-policy
+identity, monotonic revision, and digest are persisted with prepared material;
+a newer finalized policy rotation or revocation invalidates it before
+observation or resubmission, including after restart. The durable policy floor
+rejects revision rollback, same-revision digest equivocation, identity
+substitution, and reuse after revocation unless a strict canonical successor is
+observed.
+Remaining gaps are concrete governance-advert/stream-grant/pinned-HTTPS child
+transports, deployment-owned source qualification pins, a concrete
+governance-aware HSM/KMS completion signer that enforces the now-configured
+public handle/revision/policy/algorithm/key binding atomically through
+rotation/revocation, and a sealed-CAS retention coordinator for the implemented
+daemon-owned Kura-authenticated provider-indexed archive and its explicit
+content-addressed compaction fence.
 Focused/workspace validation and reviewed four-peer restart/
 duplicate-submission evidence remain open under
 `V1-BLOCK-PROVIDER-INGEST-RUNTIME-01`.
@@ -220,23 +234,41 @@ payload-free committed events, and a fixed-view finalized query. PoR terminals
 and stream-token outcomes have exact append instructions; canonical capacity
 dispute registration and resolution update the dispute record and journal
 atomically. Typed proof-outcome, repair, orderbook, and reserve finalized feeds
-already exist. The runtime now requires an injected immutable historical
-`ReputationFinalizedQueryV1`; the current-head state adapter was removed because
-it could not provide exact-anchor pages.
-`QueuedReputationJournalTransactionSubmitterV1` signs and enqueues the exact
+already exist. The current-head state adapter was removed because it could not
+provide exact-anchor pages. The standard daemon now owns the configured bounded
+historical archive and constructs `ReputationFinalizedQueryV1` from that
+archive rather than accepting an injected query. Before Sumeragi starts it
+reconciles the committed State tip against Kura's authenticated V2 finality
+receipt with a zero-gap barrier, retains an explicit activation floor when
+first enabled on a nonempty chain, and then applies the configured live-lag
+qualification. The same archive is installed at the V2 apply boundary so a
+fresh projection is durably captured after Kura finality and the WSV checkpoint
+but before live State publication; capture failure is restart-required. Daemon
+bootstrap also validates the immutable response against the complete exact
+request—chain and height, finalized anchor/time, authority activation,
+continuation, row bound, and exact cursor—before opening runtime state.
+An externally authenticated journal-transaction submitter handles the exact
 PoR and counted stream-token append transactions for supervised committed-event
-reconciliation. The exported deterministic `sorafs_node` multi-feed projector
+reconciliation; standard `irohad` no longer constructs a validator-key or
+queue-backed fallback. The exported deterministic `sorafs_node` multi-feed projector
 persists five finalized-feed cursors, provider accumulators, a bounded
 retry/dead-letter signing-material outbox, and acknowledgements that verify the
 full threshold-signed snapshot against the anchored trust policy and
 authoritative finalized time. Strict standard-daemon policy construction,
 trust-policy reuse, supervised fixed-view scheduling, shutdown, status, and
-bounded metrics are now wired through runtime-only finalized-query,
-threshold-signer, and Governance DAG clients. Enabled startup rejects missing,
-null/test-marked, or substituted clients. The queue-backed journal submitter is
-constructed by `irohad`. Governance publication reconciliation now accepts only
-the canonical versioned signed-head receipt with a bounded inclusion suffix
-whose hard limit aliases the manifest checkpoint window. It verifies the pinned
+bounded metrics are wired through the daemon-owned finalized archive plus
+runtime-only threshold-signer and Governance DAG clients. Enabled startup
+rejects an unavailable or inconsistent archive and missing, null/test-marked,
+or substituted external clients. The threshold-signer handle is pinned
+to the full canonical trust policy and revalidated before and after signing;
+the returned envelope is verified against its policy ID/version, quorum,
+ordered Ed25519 key set, and revocations. Governance DAG provider qualification
+now binds both publisher peer identity and Ed25519 key, rejecting same-key
+cross-peer substitution before durable state opens. The authenticated journal
+submitter must be supplied through runtime injection. Governance publication reconciliation
+now accepts only the canonical versioned signed-head receipt with a bounded
+inclusion suffix whose hard limit aliases the manifest checkpoint window. It
+verifies the pinned
 head publisher/key before traversing every block, requires the exact signed
 snapshot once, links each successor suffix to the previously authenticated head
 without rollback or fork, and persists/reverifies the head and path before
@@ -3414,12 +3446,19 @@ excluded from the first release.
   top-provider score gauge, low-score threshold-crossing counters, a Grafana
   dashboard, and Prometheus alerts are defined. Strict standard-daemon
   configuration, dependency injection, supervision, status, and metrics are
-  wired. `QueuedReputationJournalTransactionSubmitterV1` provides the
-  queue-backed journal-delivery boundary; an immutable historical finalized
-  query must be injected because a current-head state view is not exact.
-  External historical-query, threshold-signing, Governance DAG publication/
-  readback/head-inclusion, and producer-owner adapters, integrated Rust
-  validation, and reviewed four-peer live evidence remain open.
+  wired. An authenticated journal-transaction submitter remains injected;
+  standard `irohad` has no validator-key, queue-backed, or current-head
+  fallback. The exact historical query is now daemon-owned: startup opens and
+  zero-gap reconciles the configured Kura-authenticated archive, and the V2
+  apply corridor captures every fresh committed height before State
+  publication. Startup validates the complete immutable bootstrap response
+  against the exact request before opening the checkpoint. External signer qualification is
+  already bound to the full canonical trust policy and fenced before/after
+  every call; Governance DAG qualification binds both the configured publisher
+  peer and Ed25519 public key.
+  External threshold-signing, Governance DAG publication/readback/head-
+  inclusion, and producer-owner adapters, integrated Rust validation, and
+  reviewed four-peer live evidence remain open.
   `scripts/check_sorafs_reputation_rollout_evidence.py` now gates deployed
   SFM-3 rollout evidence: publish/latest/provider/event/proof replay artifacts,
   integer-unit metrics freshness/ingest lag, SSE/WebSocket transport delivery,
@@ -3507,9 +3546,18 @@ excluded from the first release.
   fails closed on invalid recognized artifacts, including stale duplicate
   evidence for an otherwise valid kind and invalid optional artifacts outside a
   narrowed `--require-kind` subset. `scripts/run_sorafs_reputation_rollout_evidence.py`
-  now drives the bounded deployed collection path, including publish/readback,
-  provider fetch, proof replay, event watch, provider-proof coverage checks,
-  shell-style `@ARGFILE` support, and the final gate invocation. Reputation
+  now drives the bounded deployed collection path, including reviewed
+  publication binding, provider fetch, proof replay, one exact event-watch
+  poll, provider-proof coverage checks, shell-style `@ARGFILE` support, and the
+  final gate invocation. Its strict source adapter accepts only schema-closed
+  full CLI profiles, binds them to the reviewed deployment/snapshot/root/time,
+  provider inventory and weights, proof geometry, score, and watch request,
+  then emits payload-free canonical canaries. Raw sources use non-JSON
+  extensions and every final checker input carries an explicit evidence kind,
+  preventing recursive duplicate discovery. The collector also requires the
+  same exact canonical HTTPS-or-loopback origin profile as the Rust CLI and
+  redacts the runtime key-file path from dry-run JSON and `RUN` notices while
+  retaining it only in the in-memory subprocess command. Reputation
   rollout summaries now also publish the common aggregate-readiness contract:
   full `required_kinds`, top-level evidence/artifact counts, required-row
   `present`/`artifact_count` fields, and reviewed deployment-context
@@ -4789,10 +4837,11 @@ excluded from the first release.
   retry/dead-letter/acknowledgement outbox. Acknowledgement performs full
   anchored trust-policy, quorum, revocation, signature, and freshness
   verification using the locked finalized timestamp; callers cannot select
-  that time. Strict `iroha_config`, the immutable historical-query injection
-  boundary, `QueuedReputationJournalTransactionSubmitterV1` PoR/counting
-  submission, and supervised finality reconciliation are wired through
-  `irohad`. Latest/provider/weights/event routes read the fresh committed
+  that time. Strict `iroha_config`, the daemon-owned Kura-authenticated
+  historical archive/query boundary, externally authenticated PoR/counting
+  journal submission, and supervised finality reconciliation are wired through
+  `irohad`.
+  Latest/provider/weights/event routes read the fresh committed
   projection. Focused locked Rust validation, authenticated signed-head
   inclusion, restart revalidation, and exact retained historical snapshot-id
   reads are now complete. Remaining SFM-3 work is full-workspace validation,
@@ -6014,6 +6063,9 @@ excluded from the first release.
   `iroha_config` handle/revision/policy-digest bindings; startup and every
   ACME-order/DNS/HTTPS operation reject unavailable, substituted, stale,
   malformed, or test-marked providers before accepting returned material.
+  Standard `irohad` no longer constructs an in-process compliance-feed fallback;
+  configured compliance and ACME bindings must resolve to the exact
+  deployment-owned injected adapters before Torii startup.
   Remaining SFM-4 production work is independently audited
   standard-daemon feed and ACME adapters, finalized precedence/hold catalog
   producers, external threshold signing, deployed SFM-4c receipt publication,
@@ -7015,10 +7067,17 @@ excluded from the first release.
   viewer-session/access routes are no longer mounted or advertised. The
   crash-safe canonical Ed25519-signed checkpoint envelope retains digests and
   finalized anchors rather than assertions, credentials, bearer grants,
-  signing keys, or evidence payloads. Legal holds take precedence over erasure
-  without a check/commit race. The signed receipt checkpoint and exact
-  predecessor-bound receipt projection are now the sole evidence-access audit
-  authority. The old aggregate-audit POSTs authenticate and authorize before
+  signing keys, or evidence payloads. The checkpoint now lives in a signed
+  predecessor-bound record under an injected qualified external CAS authority;
+  reported-success and ambiguous writes require authoritative readback, stale
+  replicas fail closed, and the hardened local file is only an exact or
+  one-generation-behind verified cache. `iroha_config`, the sanitized daemon
+  registry, standard `irohad`, and Torii carry the store's public
+  handle/revision/policy digest and require the provider whenever the viewer is
+  enabled. Legal holds take precedence over erasure without a check/commit
+  race. The signed receipt checkpoint and exact predecessor-bound receipt
+  projection are now the sole evidence-access audit authority. The old
+  aggregate-audit POSTs authenticate and authorize before
   returning `410 Gone`; their scheduler and all Torii calls into the former
   local viewer registry are removed. Moderation GETs read only the fresh
   worker-owned finalized projection, while reconciliation runs outside request
@@ -7026,12 +7085,15 @@ excluded from the first release.
   cursor/freshness/liveness checks, dead-letter readiness, and typed
   payload-free startup failures.
   SFM-4b3 remains open under `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01`: construct
-  reference runtime HSM/KMS/WebAuthn and authenticated downstream providers;
+  reference runtime HSM/KMS/WebAuthn, linearizable sealed-CAS checkpoint-store,
+  immutable object-lock archive, and authenticated downstream providers;
   add durable notification delivery, real settlement/publication adapters, and
   the signed receipt-to-transparency adapter; fence semantic operation IDs and
-  predecessor-bound monotonic checkpoints across instances; add signed
-  replay-safe terminal/receipt compaction and archive; and complete focused,
-  adversarial, multi-instance, recovery, and four-validator evidence.
+  give the moderation orchestrator equivalent predecessor-bound monotonic
+  checkpoint ownership; deploy the viewer CAS/archive path across replicas and
+  prove the shipped signed replay-safe bounded compaction contract against real
+  providers; and complete focused, adversarial, multi-instance, recovery, and
+  four-validator evidence.
   The commit/reveal canary now covers SFM-4b4-specific controls for
   commit digest recomputation, duplicate-commit rejection, mismatched-reveal
   rejection, late commit/reveal rejection, missed-quorum detection, no-show
@@ -7259,12 +7321,14 @@ excluded from the first release.
   negative fixture byte suite is now checked in and pinned by the rollout
   contract so future deletions or unmanifested fixture drift fail closed. The
   rollout-gate static contract now distinguishes the shipped internal
-  projector/supervisor from the still-external live collector, concrete
-  finalized-query/journal-verifier/HSM/publisher/acknowledgement/witness
-  providers, public REST API, service-management CLI, and governed manual venue
-  adapter. Automated hedge execution remains forbidden. The contract preserves
-  local `sorafs-validate hedging`/`billing`, fixture validation, rollout
-  evidence, runtime metrics, and payload-free canary labels. It also scans
+  projector/supervisor, authenticated Torii API, signed Rust client, and
+  standard `iroha_cli` commands from the still-external live collector,
+  concrete finalized-query/journal-verifier/HSM/publisher/acknowledgement/
+  witness providers, and governed manual venue adapter. There is deliberately
+  no separate service-management daemon API. Automated hedge execution remains
+  forbidden. The contract preserves local `sorafs-validate
+  hedging`/`billing`, fixture validation, rollout evidence, runtime metrics, and
+  payload-free canary labels. It also scans
   CLI sources for nested deployed-only `hedging
   daemon|price-feed-collector|hedge-execute|status` and `billing
   daemon|statement-publish|statement-ack|api` spellings without blocking local
@@ -7278,10 +7342,9 @@ excluded from the first release.
   Rust verification, a live collector, production finalized-query and
   journal-verifier adapters, independently administered HSM/KMS signing,
   immutable publication, acknowledgement-authority and sealed-witness
-  providers, any manually governed venue adapter, signed public APIs, runtime
-  CLI helpers, released native bridge artifacts, deployed scrape/alert-routing
-  validation, governance approval, and staged billing evidence that passes the
-  gate; SFM-6
+  providers, any manually governed venue adapter, released native bridge
+  artifacts, deployed scrape/alert-routing validation, governance approval,
+  and staged billing evidence that passes the gate; SFM-6
   now uses only native reserve policy/provider/movement/rent/lifecycle/credit/
   repayment/appeal state and committed events. Exact caller-signed native
   transactions enter strict durable ingress; the supervised worker derives

@@ -1706,7 +1706,6 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
 
 
 def test_identifier_resolution_receipt_matches_shared_vectors() -> None:
-    pytest.importorskip("iroha_python.crypto")
     fixture = json.loads(
         (PACKAGE_ROOT.parent / "fixtures/soracloud/identifier_receipt_vectors_v1.json").read_text(
             encoding="utf-8"

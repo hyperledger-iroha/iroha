@@ -17,29 +17,13 @@ import org.junit.Test;
 
 public final class IrohaPeerKagemushaAdapterV1Tests {
   @Test
-  public void failsClosedWithoutNativeOrPreservesExactBytesThroughNative() {
+  public void requiresAbi21AndPreservesExactBytesThroughNative() {
     final byte[] archive = portableOfferFixture();
     final boolean nativeAvailable =
         KagemushaRecursiveSpendProver.isArtifactStreamingAvailable();
-    if ("1".equals(System.getenv("IROHA_REQUIRE_KAGEMUSHA_NATIVE"))) {
-      assertTrue(
-          "The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library",
-          nativeAvailable);
-    }
-    if (!nativeAvailable) {
-      final IllegalArgumentException failure =
-          assertThrows(
-              IllegalArgumentException.class,
-              () ->
-                  KagemushaPeerTransport.Payload.decode(
-                      archive, KagemushaPeerTransport.Kind.RECEIVE_REQUEST));
-      assertEquals("Invalid Kagemusha peer archive", failure.getMessage());
-      assertTrue(failure.getCause() instanceof IllegalStateException);
-      assertEquals(
-          "connect_norito_bridge ABI 21 artifact streaming is unavailable",
-          failure.getCause().getMessage());
-      return;
-    }
+    assertTrue(
+        "A freshly built connect_norito_bridge ABI 21 artifact-streaming library is required",
+        nativeAvailable);
 
     final KagemushaPeerTransport.Payload typed =
         KagemushaPeerTransport.Payload.decode(

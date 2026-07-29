@@ -18,9 +18,10 @@ use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
 use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
-use super::zk_ace_stark::{BLOWUP_LOG2, QUERY_COUNT, SECURITY_LANES, TRACE_LOG2};
+use super::zk_ace_stark::proof_test_guard;
 use super::zk_ace_stark::{
-    MAX_PROOF_BYTES, prove_zk_ace_stark_v1_with_rng, verify_zk_ace_stark_v1,
+    COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES, prove_zk_ace_stark_v1_with_rng,
+    verify_zk_ace_stark_v1,
 };
 
 /// Transcript family frozen into the dedicated proof implementation.
@@ -29,7 +30,7 @@ pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:trans
 pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:private-witness:masked-poseidon2-execution-trace:three-lane-fri:v1";
 /// Exact native proof wire description frozen into the compiled profile.
 pub const ZK_ACE_PROOF_WIRE_V1: &[u8] =
-    b"norito:zk-ace-stark-proof-v1:strict-exact:no-generic-envelope";
+    b"ZKA1:fixed-shape-big-endian:922214:strict-exact:no-lengths:no-generic-envelope";
 /// Exact low-level AIR relation schema frozen into the compiled profile.
 pub const ZK_ACE_AIR_RELATION_SCHEMA_V1: &[u8] = b"version:u16|identity_commitment:bytes32|tx_digest:bytes32|authorization_digest:bytes32|chain_id|fixed_domain|fixed_action|replay_nullifier:bytes32|policy_digest:bytes32|source|destination|asset_definition_id|amount:u128|fixed_verifier";
 /// Exact typed authorization projection frozen into the compiled profile.
@@ -40,12 +41,21 @@ pub const ZK_ACE_POSEIDON_MANIFEST_SHA256_V1: &str =
 /// Native and consensus proof byte ceiling.
 pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
 /// Frozen digest of every compiled verifier-profile field below.
-pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [0; 32];
+pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
+    0xb0, 0x7a, 0x87, 0x1c, 0xe7, 0x48, 0xe4, 0xe2, 0x1d, 0x02, 0x5e, 0xe0, 0xe8, 0xd8, 0x6a, 0x69,
+    0x41, 0x32, 0x2d, 0x9e, 0xd9, 0x50, 0x96, 0xf1, 0x32, 0x8a, 0x69, 0xde, 0xdc, 0xc6, 0x47, 0x86,
+];
 
 /// Return the frozen digest of the exact compiled native verifier profile.
 #[must_use]
 pub const fn zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
     ZK_ACE_COMPILED_PROFILE_DIGEST_V1
+}
+
+/// Return the complete human-auditable compiled algebraic profile.
+#[must_use]
+pub const fn zk_ace_stark_profile_descriptor_v1() -> &'static [u8] {
+    COMPILED_STARK_PROFILE_DESCRIPTOR_V1
 }
 
 #[cfg(test)]
@@ -62,19 +72,7 @@ fn recompute_zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
         ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.as_bytes(),
     );
     hash_field(&mut hasher, ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes());
-    hash_field(
-        &mut hasher,
-        &[
-            1,
-            TRACE_LOG2,
-            BLOWUP_LOG2,
-            2,
-            u8::try_from(QUERY_COUNT).expect("query count fits u8"),
-            2,
-            u8::try_from(SECURITY_LANES).expect("lane count fits u8"),
-            1,
-        ],
-    );
+    hash_field(&mut hasher, zk_ace_stark_profile_descriptor_v1());
     hash_field(
         &mut hasher,
         &ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1.to_be_bytes(),
@@ -297,6 +295,7 @@ mod tests {
 
     fn fixture() -> &'static (ZkAcePrivacyPublicInputsV1, Vec<u8>) {
         static FIXTURE: OnceLock<(ZkAcePrivacyPublicInputsV1, Vec<u8>)> = OnceLock::new();
+        let _guard = proof_test_guard();
         FIXTURE.get_or_init(|| {
             let (public_inputs, witness) = public_inputs_and_witness();
             let proof =

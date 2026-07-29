@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import unicodedata
@@ -40,6 +42,10 @@ RUNNER_URL_ARG_ERROR = (
     "SoraFS runner URL arguments must not contain userinfo, query strings, "
     "fragments, control characters, encoded separators, drive prefixes, "
     "URI-scheme-like host/path tokens, or secret-looking host/path components"
+)
+RUNNER_CANONICAL_ORIGIN_ERROR = (
+    "SoraFS runner service origins must be exact canonical bare HTTPS origins; "
+    "HTTP is permitted only for localhost or literal loopback fixtures"
 )
 RUNNER_PASSTHROUGH_ARG_ERROR = (
     "SoraFS runner passthrough arguments must not contain secret-looking "
@@ -354,6 +360,109 @@ def require_runner_url_args(
                 error_list.append(RUNNER_URL_ARG_ERROR)
 
 
+def runner_url_arg_is_canonical_service_origin(
+    value: str,
+    *,
+    allow_loopback_http: bool,
+) -> bool:
+    """Return whether a URL is an exact HTTPS origin or allowed loopback HTTP."""
+
+    if not isinstance(allow_loopback_http, bool):
+        return False
+    if not runner_url_arg_is_plan_safe(value):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if not value.startswith(f"{parsed.scheme}://"):
+        return False
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        return False
+    if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+        return False
+    if port == 0:
+        return False
+    host = parsed.hostname
+    if not host or not host.isascii() or "%" in host:
+        return False
+
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address | None
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is None:
+        final_host_label = host.rsplit(".", 1)[-1]
+        if (
+            host.replace(".", "").isdigit()
+            or final_host_label.isdigit()
+            or (
+                final_host_label.lower().startswith("0x")
+                and len(final_host_label) > 2
+                and all(
+                    character in "0123456789abcdef"
+                    for character in final_host_label[2:].lower()
+                )
+            )
+        ):
+            return False
+        if (
+            host != host.lower()
+            or host.startswith(".")
+            or host.endswith(".")
+            or any(
+                not component
+                or not _url_host_component_is_plan_safe(component)
+                for component in host.split(".")
+            )
+        ):
+            return False
+        canonical_host = host
+        loopback = host == "localhost"
+    else:
+        canonical_address = address.compressed
+        canonical_host = (
+            f"[{canonical_address}]"
+            if isinstance(address, ipaddress.IPv6Address)
+            else canonical_address
+        )
+        loopback = address.is_loopback
+
+    if parsed.scheme == "http" and not (allow_loopback_http and loopback):
+        return False
+    default_port = 443 if parsed.scheme == "https" else 80
+    port_suffix = "" if port is None or port == default_port else f":{port}"
+    canonical_origin = f"{parsed.scheme}://{canonical_host}{port_suffix}"
+    return value in {canonical_origin, f"{canonical_origin}/"}
+
+
+def require_runner_canonical_service_origin_args(
+    args: argparse.Namespace,
+    fields: Sequence[str],
+    errors: list[str],
+    *,
+    allow_loopback_http: bool = False,
+) -> None:
+    """Require exact secure bare origins before a runner mutates output state."""
+
+    error_list = _require_error_list(errors)
+    for field in fields:
+        field_name = _require_runner_arg_field(field)
+        value = getattr(args, field_name, None)
+        if value is None:
+            continue
+        if not runner_url_arg_is_canonical_service_origin(
+            value,
+            allow_loopback_http=allow_loopback_http,
+        ):
+            if RUNNER_CANONICAL_ORIGIN_ERROR not in error_list:
+                error_list.append(RUNNER_CANONICAL_ORIGIN_ERROR)
+
+
 def runner_passthrough_arg_is_plan_safe(value: str) -> bool:
     """Return whether a passthrough CLI argument can be rendered in plans."""
 
@@ -525,7 +634,9 @@ def inspect_runner_path_is_symlink(
         )
         return None
     try:
-        return path.is_symlink()
+        return stat.S_ISLNK(os.lstat(path).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
     except (OSError, RuntimeError) as error:
         _record_path_inspection_failure(
             error_list,
@@ -766,6 +877,12 @@ def validate_runner_preflight(
     verifier = getattr(args, "verifier", None)
     out_dir = getattr(args, "out_dir", None)
     configured_summary_out = getattr(args, "summary_out", None)
+    has_topology_qualification = hasattr(args, "topology_qualification_summary")
+    topology_qualification_summary = getattr(
+        args,
+        "topology_qualification_summary",
+        None,
+    )
     summary_out = (
         configured_summary_out
         if configured_summary_out is not None
@@ -773,9 +890,33 @@ def validate_runner_preflight(
         if isinstance(out_dir, Path)
         else configured_summary_out
     )
-    validate_plan_rendered_paths((verifier, out_dir, summary_out), errors)
+    rendered_paths = [verifier, out_dir, summary_out]
+    if has_topology_qualification:
+        rendered_paths.append(topology_qualification_summary)
+    validate_plan_rendered_paths(rendered_paths, errors)
     if errors:
         return errors
+
+    if has_topology_qualification:
+        topology_file_errors = require_existing_files(
+            [topology_qualification_summary],
+            "--topology-qualification-summary",
+        )
+        errors.extend(topology_file_errors)
+        if not topology_file_errors and isinstance(
+            topology_qualification_summary,
+            Path,
+        ):
+            # Imported lazily because evidence validation also imports this
+            # preflight module for its URL guard.
+            from sorafs_topology_qualification import (
+                load_topology_qualification_binding,
+            )
+
+            _binding, topology_errors = load_topology_qualification_binding(
+                topology_qualification_summary
+            )
+            errors.extend(topology_errors)
 
     if hasattr(args, "now_unix") and getattr(args, "now_unix") is None:
         errors.append("--now-unix is required")
@@ -2343,18 +2484,26 @@ def run_command_plan(
     out_dir: Path,
     *,
     prepare_step: Callable[[Any], Sequence[str]] | None = None,
+    notice_command: Callable[[Any], Sequence[str]] | None = None,
 ) -> int:
     """Run a SoraFS collection command plan with structured launch/output errors.
 
     ``prepare_step`` is an optional runner-owned callback for creating a
     validated step's narrowly scoped runtime prerequisites immediately before
     launch. It must return a sequence of canonical, payload-free diagnostics.
+    ``notice_command`` may return a redacted command vector for human notices;
+    the original in-memory vector is always passed to the subprocess.
     """
 
     errors: list[str] = []
     if prepare_step is not None and not callable(prepare_step):
         emit_runner_error_lines(
             ("command-plan step preparation callback must be callable",)
+        )
+        return 1
+    if notice_command is not None and not callable(notice_command):
+        emit_runner_error_lines(
+            ("command-plan notice renderer must be callable",)
         )
         return 1
     shape_errors = validate_command_plan_step_shapes(plan)
@@ -2408,7 +2557,30 @@ def run_command_plan(
             if preparation_errors:
                 emit_runner_error_lines(preparation_errors)
                 return 1
-        emit_runner_notice(f"RUN {label}: {shlex.join(command)}")
+        displayed_command = command
+        if notice_command is not None:
+            try:
+                rendered_notice_command = notice_command(step)
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                emit_runner_error_lines(
+                    (
+                        f"{label} notice rendering failed: "
+                        f"{error_diagnostic_label(error)}",
+                    )
+                )
+                return 1
+            if isinstance(
+                rendered_notice_command,
+                (str, bytes, bytearray, Mapping),
+            ) or not isinstance(rendered_notice_command, Sequence):
+                displayed_command = rendered_notice_command
+            else:
+                displayed_command = list(rendered_notice_command)
+            display_errors = _command_vector_errors(label, displayed_command)
+            if display_errors:
+                emit_runner_error_lines(display_errors)
+                return 1
+        emit_runner_notice(f"RUN {label}: {shlex.join(displayed_command)}")
         try:
             result = subprocess.run(command, check=False)
         except OSError as error:

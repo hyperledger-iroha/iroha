@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs/sorafs_node_storage.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 16ef60af0518f0925c666b66ce519a818051a7b281fd07727bde9cb4d64d68f9
-source_last_modified: "2026-07-27T04:39:34.931301+00:00"
+source_hash: fcc09a32fc012c3ee0ae817805811c85428448f7a647aa790890de068caa2a7e
+source_last_modified: "2026-07-28T08:48:36.566330+00:00"
 translation_last_reviewed: null
 ---
 

@@ -165,6 +165,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferFreeze>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferBlacklist>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferControl>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetHoldingLimit>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,
@@ -495,6 +496,24 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1>,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RotatePrivacyZkX509TrustAnchorV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RevokePrivacyZkX509TrustAnchorV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1
+    >,
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>,
 }
 

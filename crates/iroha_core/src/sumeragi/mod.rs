@@ -4438,6 +4438,14 @@ pub struct SumeragiStartArgs {
     pub queue: Arc<Queue>,
     /// Persistent block store interface.
     pub kura: Arc<Kura>,
+    /// Optional exact finalized provider-ingest archive captured at every v2
+    /// WSV commit boundary.
+    pub provider_ingest_finalized_archive:
+        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
+    /// Optional exact finalized reputation archive captured at every v2 WSV
+    /// commit boundary.
+    pub reputation_finalized_archive:
+        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     /// Network transport handle for broadcasting consensus messages.
     pub network: IrohaNetwork,
     /// Maximum encrypted P2P frame bytes accepted by the transport.
@@ -4506,6 +4514,8 @@ impl SumeragiStartArgs {
             state,
             queue,
             kura,
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
             network,
             max_frame_bytes,
             max_frame_bytes_consensus,
@@ -4600,6 +4610,8 @@ impl SumeragiStartArgs {
             state,
             queue,
             kura,
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
             network,
             genesis_network,
             lane_relay_rx,
@@ -4666,6 +4678,10 @@ struct SumeragiWorker {
     state: Arc<State>,
     queue: Arc<Queue>,
     kura: Arc<Kura>,
+    provider_ingest_finalized_archive:
+        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
+    reputation_finalized_archive:
+        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     network: IrohaNetwork,
     genesis_network: GenesisWithPubKey,
     lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,

@@ -466,7 +466,9 @@ enum SccpSubmitValidation {
 
     private static func requireCanonicalChargeLimits(_ payload: Data) throws {
         var limits = SccpCompactTransactionCursor(payload)
-        let count = try limits.takeLength("fee_payment.charge_limits.count")
+        // Norito's compact-length flag applies to enclosing fields and
+        // elements, while sequence counts remain fixed-width little-endian.
+        let count = try limits.takeUInt64("fee_payment.charge_limits.count")
         guard count <= UInt64(FeeChargeKind.allCases.count) else {
             throw SccpV1Error.invalid(
                 "fee_payment.charge_limits contains duplicate or unknown charge kinds"

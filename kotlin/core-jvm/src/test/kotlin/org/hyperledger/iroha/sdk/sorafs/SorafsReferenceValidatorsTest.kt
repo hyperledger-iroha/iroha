@@ -3,11 +3,13 @@ package org.hyperledger.iroha.sdk.sorafs
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 
 class SorafsReferenceValidatorsTest {
@@ -678,11 +680,12 @@ class SorafsReferenceValidatorsTest {
                     label = label,
                     generatedAtUnix = 123,
                 )
-            assertTrue(outcome.contains("\"status\": \"${profile[1]}\""), path)
-            assertTrue(outcome.contains("\"code\": \"${profile[2]}\""), path)
-            assertTrue(outcome.contains("\"category\": \"${profile[3]}\""), path)
-            assertTrue(outcome.contains("\"version\": 1"), path)
-            assertTrue(outcome.contains("\"generated_at\": 123"), path)
+            val fields = Json.parseToJsonElement(outcome).jsonObject
+            assertEquals(profile[1], fields.getValue("status").jsonPrimitive.content, path)
+            assertEquals(profile[2], fields.getValue("code").jsonPrimitive.content, path)
+            assertEquals(profile[3], fields.getValue("category").jsonPrimitive.content, path)
+            assertEquals("1", fields.getValue("version").jsonPrimitive.content, path)
+            assertEquals("123", fields.getValue("generated_at").jsonPrimitive.content, path)
             assertTrue(outcome.contains("\"sorafs.reference.appeal_finance\""), path)
         }
 
@@ -799,9 +802,10 @@ class SorafsReferenceValidatorsTest {
                 nowUnix = 1_700_000_001,
                 generatedAtUnix = 1_700_001_238,
             )
-        assertTrue(outcome.contains("\"status\":\"Ok\""))
-        assertTrue(outcome.contains("\"code\":\"SFS-OK-000\""))
-        assertTrue(outcome.contains("\"generated_at\":1700001238"))
+        val fields = Json.parseToJsonElement(outcome).jsonObject
+        assertEquals("Ok", fields.getValue("status").jsonPrimitive.content)
+        assertEquals("SFS-OK-000", fields.getValue("code").jsonPrimitive.content)
+        assertEquals("1700001238", fields.getValue("generated_at").jsonPrimitive.content)
     }
 
     @Test
@@ -1025,10 +1029,7 @@ class SorafsReferenceValidatorsTest {
         if (SorafsReferenceValidators.isNativeAvailable()) {
             return
         }
-        if (System.getenv("IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION") == "1") {
-            throw AssertionError(requiredMessage)
-        }
-        assumeTrue(false, "connect_norito_bridge not available")
+        throw AssertionError(requiredMessage)
     }
 
     @Test
@@ -1038,10 +1039,20 @@ class SorafsReferenceValidatorsTest {
         val signed = SorafsReferenceValidators.signOrderbookPayload(
             SorafsOrderbookPayloadKind.ORDER_REQUEST,
             payload,
-            ByteArray(32) { 0xB7.toByte() },
+            ByteArray(32) { 0xB8.toByte() },
         )
         assertTrue(signed.isNotEmpty())
         assertTrue(!signed.contentEquals(payload))
+        val outcome =
+            SorafsReferenceValidators.validateOrderbookPayloadJson(
+                SorafsOrderbookPayloadKind.ORDER_REQUEST,
+                signed,
+                label = "order_request_resigned_v1.to",
+                generatedAtUnix = 123,
+            )
+        val fields = Json.parseToJsonElement(outcome).jsonObject
+        assertEquals("Ok", fields.getValue("status").jsonPrimitive.content)
+        assertEquals("SFS-OK-000", fields.getValue("code").jsonPrimitive.content)
     }
 
     @Test

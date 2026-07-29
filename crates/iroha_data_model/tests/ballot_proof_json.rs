@@ -1,5 +1,4 @@
-//! JSON base64 helper test for `BallotProof` (feature `zk-ballot`).
-#![cfg(feature = "zk-ballot")]
+//! JSON base64 helper test for the canonical V1 `BallotProof`.
 
 #[test]
 fn ballot_proof_json_base64() {

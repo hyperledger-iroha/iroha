@@ -13,12 +13,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::HybridSecretKey;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use rand::rngs::OsRng;
 use sorafs_manifest::pop_credentials::{
-    POP_MEMBERSHIP_CONTEXT_MAX_BYTES_V1, POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopMembershipProofV1,
-    PopMembershipWitnessV1, PopRevocationListV1,
+    POP_IDENTITY_TEXT_MAX_BYTES_V1, POP_MEMBERSHIP_CONTEXT_MAX_BYTES_V1,
+    POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopMembershipProofV1, PopMembershipWitnessV1,
+    PopRevocationListV1,
 };
 use sorafs_node::pop_credentials::{
     POP_API_AUTHENTICATION_MAX_BYTES_V1, POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
@@ -49,7 +51,6 @@ pub const POP_PROOF_REQUEST_MAX_BYTES_V1: usize =
 pub const POP_WALLET_DELIVERY_RESPONSE_MAX_BYTES_V1: usize =
     canonical_base64_max_len(POP_WALLET_DELIVERY_MAX_BYTES_V1) + 8 * 1024;
 const POP_CANONICAL_DECODE_MAX_DEPTH_V1: usize = 64;
-const POP_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 const POP_ISSUE_TRIGGER_BINDING_DOMAIN_V1: &[u8] = b"sorafs.pop.issue-trigger.v1";
 const POP_WALLET_WITNESS_SYNC_BINDING_DOMAIN_V1: &[u8] = b"sorafs.pop.wallet-witness-sync-api.v1";
 
@@ -197,28 +198,11 @@ fn validate_pop_runtime_provider_handle(
     value: &str,
     field: &'static str,
 ) -> Result<(), PopCredentialServiceError> {
-    if value.is_empty()
-        || value.len() > POP_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !value.is_ascii()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(PopCredentialServiceError::InvalidInput { field });
-    }
-    let lowercase = value.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
-            )
-        })
-    {
-        return Err(PopCredentialServiceError::InvalidInput { field });
-    }
-    Ok(())
+    validate_production_runtime_handle(value).map_err(|error| match error {
+        ProductionRuntimeHandleError::InvalidSyntax | ProductionRuntimeHandleError::TestMarked => {
+            PopCredentialServiceError::InvalidInput { field }
+        }
+    })
 }
 
 /// Exact public bindings supplied to a deployment-owned PoP provider registry.
@@ -237,15 +221,64 @@ pub struct PopCredentialRuntimeProviderBindingsV1 {
 }
 
 impl PopCredentialRuntimeProviderBindingsV1 {
-    fn from_config(config: &PopCredentialRuntimeConfigV1) -> Self {
-        Self {
-            issuer_policy_digest: config.service_policy.issuer_policy_digest,
-            issuer_id: config.service_policy.issuer_id.clone(),
-            issuer_hsm_key_id: config.service_policy.issuer_hsm_key_id.clone(),
-            issuer_public_key: config.service_policy.issuer_public_key,
-            enrollment_recipient_key_id: config.service_policy.enrollment_recipient_key_id.clone(),
-            wallet_wrapping_key_id: config.wallet_wrapping_key_id.clone(),
+    /// Construct exact, validated public bindings for a deployment registry.
+    ///
+    /// Every V1 field is required by this typed constructor. Runtime handles
+    /// must use canonical production syntax and may not be test-marked.
+    pub fn try_new(
+        issuer_policy_digest: [u8; 32],
+        issuer_id: String,
+        issuer_hsm_key_id: String,
+        issuer_public_key: [u8; 32],
+        enrollment_recipient_key_id: String,
+        wallet_wrapping_key_id: String,
+    ) -> Result<Self, PopCredentialServiceError> {
+        if issuer_policy_digest == [0; 32] {
+            return Err(PopCredentialServiceError::InvalidInput {
+                field: "issuer_policy_digest",
+            });
         }
+        if issuer_id.is_empty()
+            || issuer_id != issuer_id.trim()
+            || issuer_id.len() > POP_IDENTITY_TEXT_MAX_BYTES_V1
+            || issuer_id.chars().any(char::is_control)
+        {
+            return Err(PopCredentialServiceError::InvalidInput { field: "issuer_id" });
+        }
+        validate_pop_runtime_provider_handle(&issuer_hsm_key_id, "issuer_hsm_key_id")?;
+        validate_pop_runtime_provider_handle(
+            &enrollment_recipient_key_id,
+            "enrollment_recipient_key_id",
+        )?;
+        validate_pop_runtime_provider_handle(&wallet_wrapping_key_id, "wallet_wrapping_key_id")?;
+        if issuer_public_key == [0; 32]
+            || iroha_crypto::ed25519_parse_public_key(&issuer_public_key).is_err()
+        {
+            return Err(PopCredentialServiceError::InvalidInput {
+                field: "issuer_public_key",
+            });
+        }
+        Ok(Self {
+            issuer_policy_digest,
+            issuer_id,
+            issuer_hsm_key_id,
+            issuer_public_key,
+            enrollment_recipient_key_id,
+            wallet_wrapping_key_id,
+        })
+    }
+
+    fn from_config(
+        config: &PopCredentialRuntimeConfigV1,
+    ) -> Result<Self, PopCredentialServiceError> {
+        Self::try_new(
+            config.service_policy.issuer_policy_digest,
+            config.service_policy.issuer_id.clone(),
+            config.service_policy.issuer_hsm_key_id.clone(),
+            config.service_policy.issuer_public_key,
+            config.service_policy.enrollment_recipient_key_id.clone(),
+            config.wallet_wrapping_key_id.clone(),
+        )
     }
 
     /// Exact active finalized issuer-policy digest.
@@ -843,7 +876,7 @@ impl PopCredentialToriiRuntimeV1 {
         config.validate()?;
         let provider_registry =
             QualifiedPopCredentialRuntimeProviderRegistryV1::try_new(&config, registry)?;
-        let bindings = PopCredentialRuntimeProviderBindingsV1::from_config(&config);
+        let bindings = PopCredentialRuntimeProviderBindingsV1::from_config(&config)?;
         let secrets = provider_registry.resolve(&bindings)?;
         provider_registry.assert_qualification()?;
         validate_pop_runtime_provider_handle(secrets.issuer_hsm.key_id(), "issuer_hsm_key_id")
@@ -2479,6 +2512,122 @@ mod tests {
             .expect("Ed25519 public key width")
     }
 
+    #[test]
+    fn runtime_provider_bindings_constructor_is_exact_and_fail_closed() {
+        let issuer_public_key = public_key_bytes(&ed25519(0x40));
+        let bindings = PopCredentialRuntimeProviderBindingsV1::try_new(
+            [0x41; 32],
+            "pop-issuer-runtime-primary".to_owned(),
+            "pkcs11:pop/issuer:primary".to_owned(),
+            issuer_public_key,
+            "kms:pop/enrollment:primary".to_owned(),
+            "kms:pop/wallet:primary".to_owned(),
+        )
+        .expect("canonical exact bindings");
+        assert_eq!(bindings.issuer_policy_digest(), [0x41; 32]);
+        assert_eq!(bindings.issuer_id(), "pop-issuer-runtime-primary");
+        assert_eq!(bindings.issuer_hsm_key_id(), "pkcs11:pop/issuer:primary");
+        assert_eq!(bindings.issuer_public_key(), issuer_public_key);
+        assert_eq!(
+            bindings.enrollment_recipient_key_id(),
+            "kms:pop/enrollment:primary"
+        );
+        assert_eq!(bindings.wallet_wrapping_key_id(), "kms:pop/wallet:primary");
+
+        let assert_rejected = |issuer_policy_digest,
+                               issuer_id: &str,
+                               issuer_hsm_key_id: &str,
+                               issuer_public_key,
+                               enrollment_recipient_key_id: &str,
+                               wallet_wrapping_key_id: &str,
+                               field| {
+            assert_eq!(
+                PopCredentialRuntimeProviderBindingsV1::try_new(
+                    issuer_policy_digest,
+                    issuer_id.to_owned(),
+                    issuer_hsm_key_id.to_owned(),
+                    issuer_public_key,
+                    enrollment_recipient_key_id.to_owned(),
+                    wallet_wrapping_key_id.to_owned(),
+                ),
+                Err(PopCredentialServiceError::InvalidInput { field })
+            );
+        };
+        assert_rejected(
+            [0; 32],
+            "pop-issuer-runtime-primary",
+            "pkcs11:pop/issuer:primary",
+            issuer_public_key,
+            "kms:pop/enrollment:primary",
+            "kms:pop/wallet:primary",
+            "issuer_policy_digest",
+        );
+        for issuer_id in [
+            "",
+            " pop-issuer-runtime-primary",
+            "pop-issuer-runtime-primary\n",
+        ] {
+            assert_rejected(
+                [0x41; 32],
+                issuer_id,
+                "pkcs11:pop/issuer:primary",
+                issuer_public_key,
+                "kms:pop/enrollment:primary",
+                "kms:pop/wallet:primary",
+                "issuer_id",
+            );
+        }
+        let oversized_issuer = "i".repeat(POP_IDENTITY_TEXT_MAX_BYTES_V1 + 1);
+        assert_rejected(
+            [0x41; 32],
+            &oversized_issuer,
+            "pkcs11:pop/issuer:primary",
+            issuer_public_key,
+            "kms:pop/enrollment:primary",
+            "kms:pop/wallet:primary",
+            "issuer_id",
+        );
+        for (issuer_hsm_key_id, enrollment_key_id, wallet_key_id, field) in [
+            (
+                "pkcs11:pop/test",
+                "kms:pop/enrollment:primary",
+                "kms:pop/wallet:primary",
+                "issuer_hsm_key_id",
+            ),
+            (
+                "pkcs11:pop/issuer:primary",
+                "kms://pop/mock/enrollment",
+                "kms:pop/wallet:primary",
+                "enrollment_recipient_key_id",
+            ),
+            (
+                "pkcs11:pop/issuer:primary",
+                "kms:pop/enrollment:primary",
+                "kms://pop/fake/wallet",
+                "wallet_wrapping_key_id",
+            ),
+        ] {
+            assert_rejected(
+                [0x41; 32],
+                "pop-issuer-runtime-primary",
+                issuer_hsm_key_id,
+                issuer_public_key,
+                enrollment_key_id,
+                wallet_key_id,
+                field,
+            );
+        }
+        assert_rejected(
+            [0x41; 32],
+            "pop-issuer-runtime-primary",
+            "pkcs11:pop/issuer:primary",
+            [0; 32],
+            "kms:pop/enrollment:primary",
+            "kms:pop/wallet:primary",
+            "issuer_public_key",
+        );
+    }
+
     fn runtime_fixture(
         root: &std::path::Path,
         expected_registry_handle: &str,
@@ -2739,6 +2888,30 @@ mod tests {
             wrapper.wrap_dek([0x93; 32], &[0x94; 32]),
             Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
         );
+    }
+
+    #[test]
+    fn runtime_provider_handles_use_central_production_grammar() {
+        const FIELD: &str = "runtime_provider_registry_handle";
+        for handle in [
+            "runtime:pop/providers/primary",
+            "pkcs11:prod/pop.providers-v1_slot-a",
+        ] {
+            validate_pop_runtime_provider_handle(handle, FIELD)
+                .expect("canonical production provider handle");
+        }
+        for handle in [
+            "https://operator:secret@pop-provider",
+            "https://pop-provider/path?credential=secret",
+            "https://pop-provider/path#fragment",
+            "runtime:pop/%70roviders/primary",
+            "runtime:pop\\providers\\primary",
+        ] {
+            assert!(matches!(
+                validate_pop_runtime_provider_handle(handle, FIELD),
+                Err(PopCredentialServiceError::InvalidInput { field: FIELD })
+            ));
+        }
     }
 
     #[test]

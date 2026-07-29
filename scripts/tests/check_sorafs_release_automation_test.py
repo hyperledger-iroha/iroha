@@ -53,12 +53,22 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in workflow
-    assert "LD_LIBRARY_PATH: ${{ github.workspace }}/target/debug" in workflow
-    assert "cargo build --locked -p connect_norito_bridge" in workflow
+    assert (
+        "LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/"
+        "runtimes/linux-x64/native"
+    ) in workflow
+    assert (
+        'cargo build --locked --release -p connect_norito_bridge --target "$target"'
+        in workflow
+    )
+    assert "package_csharp_native_artifacts.py stage" in workflow
+    assert "package_csharp_native_artifacts.py verify-package" in workflow
     assert "dotnet test Hyperledger.Iroha.Sdk.sln" in workflow
-    assert "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION" in validator_tests
-    assert "ABI-21 connect_norito_bridge with Governance DAG symbols is required." in (
-        validator_tests
+    assert "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION" not in validator_tests
+    assert "Assert.True(" in validator_tests
+    assert (
+        "ABI-21 connect_norito_bridge with Governance DAG symbols is required."
+        in validator_tests
     )
 
 
@@ -66,9 +76,6 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     "relative",
     [
         automation.MOBILE_SDK_ARTIFACTS_WORKFLOW,
-        automation.SWIFT_GOVERNANCE_VALIDATOR_TEST,
-        automation.KOTLIN_GOVERNANCE_VALIDATOR_TEST,
-        automation.JAVA_GOVERNANCE_VALIDATOR_TEST,
     ],
 )
 def test_native_governance_sdk_contract_requires_fail_closed_environment(
@@ -146,13 +153,15 @@ def test_java_governance_validator_uses_external_writable_gradle_state(
                 "  private static void "
                 "validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()\n"
                 "      throws IOException {\n"
-                "    if (!requireNativeBridge()) {\n"
+                "    requireNativeBridge();\n"
             ),
             (
                 "  private static void "
                 "validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()\n"
                 "      throws IOException {\n"
                 "    if (!SorafsReferenceValidators.isNativeAvailable()) {\n"
+                "      return;\n"
+                "    }\n"
             ),
         ),
     ],

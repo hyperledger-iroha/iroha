@@ -66,7 +66,10 @@ final class Sm2Tests: XCTestCase {
     }
 
     func testCanonicalFixtureMatchesBridge() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isSm2Available, "SM2 helpers unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isSm2Available,
+            "SM2 helpers unavailable"
+        )
 
         let fixture = try loadFixture()
         guard
@@ -98,7 +101,10 @@ final class Sm2Tests: XCTestCase {
     }
 
     func testRustSdkVectorParity() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isSm2Available, "SM2 helpers unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isSm2Available,
+            "SM2 helpers unavailable"
+        )
 
         let fixture = try loadFixture()
         guard let vector = fixture.vectors.first(where: { $0.caseId == "sm2-rust-sdk-fixture-v1" }) else {

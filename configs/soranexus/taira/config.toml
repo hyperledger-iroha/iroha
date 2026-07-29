@@ -103,6 +103,7 @@ minimum_xor_balance = "1"
 max_tx_value = "1000000000"
 
 [settlement.offline]
+enabled = true
 escrow_required = true
 escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
 kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"

@@ -3777,7 +3777,7 @@ impl PorMerkleTree {
         let mut index = chunk_index;
         let mut width = self.chunks.len();
         for level in 0..depth {
-            let sibling_index = if index % 2 == 0 {
+            let sibling_index = if index.is_multiple_of(2) {
                 index.checked_add(1).filter(|sibling| *sibling < width)
             } else {
                 Some(index - 1)
@@ -4079,7 +4079,7 @@ impl PorProof {
             if is_unpaired_tail && sibling != &chunk_tree_root {
                 return None;
             }
-            let (left, right) = if chunk_tree_index % 2 == 0 {
+            let (left, right) = if chunk_tree_index.is_multiple_of(2) {
                 (&chunk_tree_root, sibling)
             } else {
                 (sibling, &chunk_tree_root)

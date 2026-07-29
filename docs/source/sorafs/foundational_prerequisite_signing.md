@@ -19,15 +19,21 @@ The flow has two phases:
    `SF-2c`, `SF-3`, `SF-4`, `SF-5b`, `SF-6`, `SF-8a`. It atomically creates a
    new binary signing-payload file. It also opens the exact 17 ready lane
    summaries through no-follow directory descriptors and signs their SHA-256
-   digests in canonical aggregate order. The full aggregate gate rehashes the
-   supplied summary bytes and rejects any missing, substituted, reordered, or
-   post-approval summary.
+   digests in canonical aggregate order. `prepare` additionally requires
+   `--topology-qualification-summary`, rehashes its exact bytes, and requires
+   all 17 lanes to contain that identical topology binding. The signed body
+   covers the qualification-summary digest, exact and canonical manifest
+   digests, and deployment context. The full aggregate gate rehashes all
+   supplied bytes and rejects any missing, substituted, reordered,
+   post-approval, topology-mismatched, or context-mismatched input.
 2. The external HSM signs those exact bytes with plain Ed25519. Do not hash,
    wrap, re-encode, or use Ed25519ph. Export exactly 64 raw signature bytes.
    `finalize` revalidates the canonical payload against independently supplied
    deployment and continuity expectations, verifies the detached signature
    against the trusted public key, and atomically creates the final JSON
-   envelope. For a sequence after 1, both phases also require
+   envelope. `finalize` independently takes the same
+   `--topology-qualification-summary`; it does not trust a path or digest
+   copied from the signing request. For a sequence after 1, both phases also require
    `--previous-envelope` and verify its deterministic encoding, SHA-256,
    deployment identity, trusted Ed25519 signature, immediately preceding
    sequence, and earlier timestamp.
@@ -71,6 +77,7 @@ Pass the finalized envelope to
 `scripts/run_sorafs_production_readiness.py` as
 `--foundational-prerequisite-summary`, with the same trusted public key,
 release sequence, predecessor digest, deployment ID, environment, explicit
-clock, and freshness window. The aggregate gate remains authoritative:
+clock, freshness window, and exact `--topology-qualification-summary`. The
+aggregate gate remains authoritative:
 creating or signing this envelope does not make any readiness lane ready and
 does not authorize Taira or Minamoto cutover.

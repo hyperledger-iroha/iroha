@@ -3,18 +3,8 @@ import XCTest
 
 final class ConnectFixtureLoaderTests: XCTestCase {
     func testLoadsBaselineBundleAndMetrics() throws {
-        let loader: ConnectFixtureLoader
-        do {
-            loader = try ConnectFixtureLoader()
-        } catch {
-            throw XCTSkip("Connect fixture bundle unavailable: \(error)")
-        }
-        let bundle: ConnectFixtureBundle
-        do {
-            bundle = try loader.loadBundle()
-        } catch {
-            throw XCTSkip("Connect fixture bundle failed to decode: \(error)")
-        }
+        let loader = try ConnectFixtureLoader()
+        let bundle = try loader.loadBundle()
 
         XCTAssertEqual(bundle.manifest.sessionIDBase64, "Y29ubmVjdC1maXh0dXJlLXNpZCE")
         XCTAssertEqual(bundle.manifest.snapshot.state, .healthy)
@@ -33,12 +23,7 @@ final class ConnectFixtureLoaderTests: XCTestCase {
     }
 
     func testScenarioCoverageAndShape() throws {
-        let bundle: ConnectFixtureBundle
-        do {
-            bundle = try ConnectFixtureLoader().loadBundle()
-        } catch {
-            throw XCTSkip("Connect fixture bundle unavailable: \(error)")
-        }
+        let bundle = try ConnectFixtureLoader().loadBundle()
         let names = Set(bundle.scenarios.map(\.scenario))
         XCTAssertEqual(names, ["heartbeat_loss", "salt_rotation", "multi_observer"])
 

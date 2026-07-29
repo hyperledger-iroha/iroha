@@ -1825,6 +1825,36 @@ function deriveScoreboardTelemetryLabel(options) {
   return "sdk:js";
 }
 
+const GATEWAY_ROLLOUT_PHASE_LABELS_V1 = Object.freeze([
+  "canary",
+  "ramp",
+  "default",
+]);
+const GATEWAY_TRANSPORT_POLICY_LABELS_V1 = Object.freeze([
+  "soranet-first",
+  "soranet-strict",
+  "direct-only",
+]);
+const GATEWAY_ANONYMITY_POLICY_LABELS_V1 = Object.freeze([
+  "anon-guard-pq",
+  "anon-majority-pq",
+  "anon-strict-pq",
+]);
+const GATEWAY_WRITE_MODE_LABELS_V1 = Object.freeze([
+  "read-only",
+  "upload-pq-only",
+]);
+
+function optionalExactGatewayLabel(value, field, labels) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !labels.includes(value)) {
+    throw new TypeError(`${field} must be one of ${labels.join("|")}`);
+  }
+  return value;
+}
+
 function normaliseGatewayOptions(options = {}) {
   if (options == null) {
     return undefined;
@@ -1848,8 +1878,13 @@ function normaliseGatewayOptions(options = {}) {
   if (typeof options.telemetryRegion === "string" && options.telemetryRegion.trim() !== "") {
     native.telemetry_region = options.telemetryRegion.trim();
   }
-  if (typeof options.rolloutPhase === "string" && options.rolloutPhase.trim() !== "") {
-    native.rollout_phase = options.rolloutPhase.trim();
+  const rolloutPhase = optionalExactGatewayLabel(
+    options.rolloutPhase,
+    "rolloutPhase",
+    GATEWAY_ROLLOUT_PHASE_LABELS_V1,
+  );
+  if (rolloutPhase !== undefined) {
+    native.rollout_phase = rolloutPhase;
   }
   if (options.maxPeers !== undefined && options.maxPeers !== null) {
     if (
@@ -1875,26 +1910,50 @@ function normaliseGatewayOptions(options = {}) {
     }
     native.retry_budget = options.retryBudget;
   }
-  if (typeof options.transportPolicy === "string" && options.transportPolicy.trim() !== "") {
-    native.transport_policy = options.transportPolicy.trim();
+  const transportPolicy = optionalExactGatewayLabel(
+    options.transportPolicy,
+    "transportPolicy",
+    GATEWAY_TRANSPORT_POLICY_LABELS_V1,
+  );
+  if (transportPolicy !== undefined) {
+    native.transport_policy = transportPolicy;
   }
-  if (typeof options.anonymityPolicy === "string" && options.anonymityPolicy.trim() !== "") {
-    native.anonymity_policy = options.anonymityPolicy.trim();
+  const anonymityPolicy = optionalExactGatewayLabel(
+    options.anonymityPolicy,
+    "anonymityPolicy",
+    GATEWAY_ANONYMITY_POLICY_LABELS_V1,
+  );
+  if (anonymityPolicy !== undefined) {
+    native.anonymity_policy = anonymityPolicy;
   }
-  if (typeof options.writeMode === "string" && options.writeMode.trim() !== "") {
-    native.write_mode = options.writeMode.trim();
+  const writeMode = optionalExactGatewayLabel(
+    options.writeMode,
+    "writeMode",
+    GATEWAY_WRITE_MODE_LABELS_V1,
+  );
+  if (writeMode !== undefined) {
+    native.write_mode = writeMode;
   }
   if (
     options.policyOverride != null &&
     typeof options.policyOverride === "object"
   ) {
     const override = {};
-    const { transportPolicy, anonymityPolicy } = options.policyOverride;
-    if (typeof transportPolicy === "string" && transportPolicy.trim() !== "") {
-      override.transport_policy = transportPolicy.trim();
+    const overrideTransportPolicy = optionalExactGatewayLabel(
+      options.policyOverride.transportPolicy,
+      "policyOverride.transportPolicy",
+      GATEWAY_TRANSPORT_POLICY_LABELS_V1,
+    );
+    if (overrideTransportPolicy !== undefined) {
+      override.transport_policy = overrideTransportPolicy;
     }
-    if (typeof anonymityPolicy === "string" && anonymityPolicy.trim() !== "") {
-      override.anonymity_policy = anonymityPolicy.trim();
+    const overrideAnonymityPolicy = optionalExactGatewayLabel(
+      options.policyOverride.anonymityPolicy,
+      "policyOverride.anonymityPolicy",
+      GATEWAY_ANONYMITY_POLICY_LABELS_V1,
+    );
+    if (overrideAnonymityPolicy !== undefined) {
+      override.anonymity_policy = overrideAnonymityPolicy;
     }
     if (Object.keys(override).length > 0) {
       native.policy_override = override;

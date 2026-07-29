@@ -47,8 +47,16 @@ python3 scripts/check_sorafs_reference_sdk_fixtures.py
 ```
 
 Use `--check` with `cancel_asset_lock_fixtures` for a read-only byte-parity
-check. Publication uses same-directory synchronized temporary files and atomic
-rename, rejects symlinked/non-regular/hardlinked targets and parent traversal,
-and requires the generated directory to contain only the closed path set plus
-this README. Old development state carrying the one-field layout must be
-discarded and reseeded; V1 has no compatibility decoder or migration.
+check. Both generators also accept a separate `--output-dir PATH` argument
+after Cargo's `--`; the aggregate generator interprets it as the
+`sorafs_manifest` root, while the cancellation generator interprets it as the
+`appeal_finance` directory. `ci/check_sorafs_fixtures.sh` copies the complete
+manifest tree into two isolated temporary roots, regenerates both passes there,
+validates each signed inventory, and requires byte-identical checked-in,
+first-pass, and second-pass manifests.
+
+Cancellation publication uses same-directory synchronized temporary files and
+atomic rename, rejects symlinked/non-regular/hardlinked targets and parent
+traversal, and requires the generated directory to contain only the closed
+path set plus this README. Old development state carrying the one-field layout
+must be discarded and reseeded; V1 has no compatibility decoder or migration.

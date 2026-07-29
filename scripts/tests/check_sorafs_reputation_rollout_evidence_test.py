@@ -354,6 +354,37 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert aggregate_errors == []
 
 
+def test_zero_based_provider_leaf_index_is_canonical(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    provider_path = tmp_path / "provider-provider-a.json"
+    payload = json.loads(provider_path.read_text(encoding="utf-8"))
+    payload["proof"]["leaf_index"] = 0
+    write_json(provider_path, payload)
+
+    assert run_gate(tmp_path, "--require-provider", "provider-a") == 0
+
+
+def test_rollout_context_must_match_across_lane_artifacts(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    metrics_path = tmp_path / "metrics.json"
+    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    payload["environment"] = "staging"
+    write_json(metrics_path, payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-provider",
+        "provider-a",
+        "--summary-out",
+        str(summary),
+    ) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics"]["artifacts"][0]
+    assert "metrics.environment does not match previous value" in artifact["errors"]
+
+
 def test_snapshot_bound_fixture_table_covers_checker_bound_kind_set() -> None:
     assert (
         tuple(kind_name for kind_name, _file_name, _factory in SNAPSHOT_BOUND_FIXTURES)

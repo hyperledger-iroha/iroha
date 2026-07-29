@@ -54,14 +54,20 @@ resolve_node_20_bin() {
   printf '%s\n' "node"
 }
 
-resolve_python_311_bin() {
+resolve_python_312_bin() {
   if [[ -n "${SDK_PYTHON_OVERRIDE}" ]]; then
     printf '%s\n' "${SDK_PYTHON_OVERRIDE}"
     return 0
   fi
 
   local candidate
-  for candidate in python3.11 /opt/homebrew/bin/python3.11 /usr/local/bin/python3.11 python3; do
+  for candidate in \
+    python3.12 \
+    /opt/homebrew/bin/python3.12 \
+    /opt/homebrew/opt/python@3.12/bin/python3.12 \
+    /usr/local/bin/python3.12 \
+    /usr/local/opt/python@3.12/bin/python3.12 \
+    python3; do
     if command -v "${candidate}" >/dev/null 2>&1; then
       command -v "${candidate}"
       return 0
@@ -998,6 +1004,7 @@ required_paths = (
     "ci/check_privacy_swift_sdk.sh",
     "scripts/check_mobile_sdk_artifacts.sh",
     "scripts/check_mobile_sdk_artifacts_test.sh",
+    "scripts/tests/mobile_sdk_python312_contract.sh",
     "crates/connect_norito_bridge/Cargo.toml",
     "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "crates/connect_norito_bridge/include/NoritoBridge.h",
@@ -6273,6 +6280,33 @@ def check_workflow_commands(errors):
             "Privacy SDK guard workflow must cache Rust artifacts for aggregate native Python builds",
             errors,
         )
+        require(
+            re.search(
+                r"(?m)^\s+- uses:\s+actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\s*$",
+                main_job_block,
+            )
+            is not None
+            and re.search(
+                r'(?m)^\s+python-version:\s+"3\.12"\s*$',
+                main_job_block,
+            )
+            is not None,
+            "Privacy SDK guard workflow must pin Python 3.12 for mobile artifact checks",
+            errors,
+        )
+        require(
+            'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"'
+            in main_job_block,
+            "Privacy SDK guard workflow must bind the canonical mobile Python",
+            errors,
+        )
+        if mobile_sdk_artifacts_selftest_command in main_job_block:
+            require(
+                main_job_block.index("MOBILE_SDK_PYTHON_BINARY")
+                < main_job_block.index(mobile_sdk_artifacts_selftest_command),
+                "Privacy SDK guard workflow must bind mobile Python before artifact self-tests",
+                errors,
+            )
     if bridge_header_match is not None:
         require(
             bridge_header_match.start() < main_match.start(),
@@ -6674,8 +6708,8 @@ def check_workflow_runs_python_sdk_tests(errors):
         errors,
     )
     require(
-        re.search(r'(?m)^\s+python-version:\s+"3\.11"\s*$', job_block) is not None,
-        "Privacy SDK guard workflow must pin Python 3.11 for Python SDK tests",
+        re.search(r'(?m)^\s+python-version:\s+"3\.12"\s*$', job_block) is not None,
+        "Privacy SDK guard workflow must pin Python 3.12 for Python SDK tests",
         errors,
     )
     require(
@@ -6704,13 +6738,13 @@ def check_python_sdk_script_prints_python_version(errors):
         errors,
     )
     require(
-        "resolve_python_311_bin()" in script and "python3.11" in script,
-        "Privacy Python SDK script must resolve Python 3.11 before falling back to python3",
+        "resolve_python_312_bin()" in script and "python3.12" in script,
+        "Privacy Python SDK script must resolve Python 3.12 before falling back to python3",
         errors,
     )
     require(
-        'PYTHON_BIN="$(resolve_python_311_bin)"' in script,
-        "Privacy Python SDK script must use the Python 3.11 resolver",
+        'PYTHON_BIN="$(resolve_python_312_bin)"' in script,
+        "Privacy Python SDK script must use the Python 3.12 resolver",
         errors,
     )
     require(
@@ -6734,13 +6768,13 @@ def check_python_sdk_script_prints_python_version(errors):
         errors,
     )
     require(
-        "3.11) ;;" in script,
-        "Privacy Python SDK script must reject non-Python-3.11 runtimes",
+        "3.12) ;;" in script,
+        "Privacy Python SDK script must reject non-Python-3.12 runtimes",
         errors,
     )
     require(
         "recreating privacy Python SDK venv" in script,
-        "Privacy Python SDK script must rebuild stale non-3.11 venvs",
+        "Privacy Python SDK script must rebuild stale non-3.12 venvs",
         errors,
     )
     require(
@@ -10801,8 +10835,8 @@ if mode == "--negative-control-python-sdk-setup-workflow":
 if mode == "--negative-control-python-sdk-version-workflow":
     original = read(workflow_path)
     mutated = original.replace(
+        '          python-version: "3.12"\n',
         '          python-version: "3.11"\n',
-        '          python-version: "3.10"\n',
         1,
     )
     if mutated == original:
@@ -10921,7 +10955,7 @@ if mode == "--negative-control-python-sdk-override-script":
 
 if mode == "--negative-control-python-sdk-resolver-script":
     original = read(python_sdk_command)
-    mutated = original.replace("resolve_python_311_bin()", "resolve_python_bin()", 1)
+    mutated = original.replace("resolve_python_312_bin()", "resolve_python_bin()", 1)
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate Python SDK resolver")
     text_overrides[python_sdk_command] = mutated
@@ -10935,7 +10969,7 @@ if mode == "--negative-control-python-sdk-resolver-script":
 
 if mode == "--negative-control-python-sdk-major-script":
     original = read(python_sdk_command)
-    mutated = original.replace("3.11) ;;", "3.10) ;;")
+    mutated = original.replace("3.12) ;;", "3.11) ;;")
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate Python SDK major matcher")
     text_overrides[python_sdk_command] = mutated
@@ -11105,7 +11139,7 @@ if [[ -n "${MODE}" ]]; then
 fi
 
 SDK_NODE_BIN="$(resolve_node_20_bin)"
-SDK_PYTHON_BIN="$(resolve_python_311_bin)"
+SDK_PYTHON_BIN="$(resolve_python_312_bin)"
 
 PRIVACY_JS_SDK_ROOT="${ROOT_DIR}" \
   PRIVACY_JS_SDK_NODE_BIN="${SDK_NODE_BIN}" \

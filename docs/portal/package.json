@@ -25,6 +25,7 @@
     "preview:wave": "node scripts/preview-feedback-wave.mjs",
     "check:links": "node scripts/check-links.mjs",
     "check:openapi-signatures": "node scripts/check-openapi-signatures.mjs",
+    "check:openapi-release-inputs": "node scripts/verify-openapi-release-inputs.mjs",
     "check:openapi-versions": "node scripts/verify-openapi-versions.mjs",
     "sync-i18n": "node scripts/sync-i18n.mjs",
     "sync-norito-snippets": "node scripts/sync-norito-snippets.mjs",

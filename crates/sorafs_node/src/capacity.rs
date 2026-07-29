@@ -1641,7 +1641,7 @@ mod tests {
                 lane: Some("global".into()),
             }],
             issued_at: 5,
-            deadline_at: 6,
+            deadline_at: 605,
             sla: ReplicationOrderSlaV1 {
                 ingest_deadline_secs: 600,
                 min_availability_percent_milli: 95000,
@@ -1665,8 +1665,8 @@ mod tests {
                     .parse()
                     .expect("public key"),
             ),
-            issued_epoch: 5,
-            deadline_epoch: 6,
+            issued_epoch: order.issued_at,
+            deadline_epoch: order.deadline_at,
             canonical_order: to_bytes(order).expect("encode replication order"),
             assignment_revision: 1,
             provider_completions: Vec::new(),

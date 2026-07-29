@@ -302,6 +302,29 @@ test("SoraFS gateway denial declarations expose only governed catalog evidence",
   const optionNames = options.members.map(propertyName);
   assert.ok(optionNames.includes("cacheVersion"));
   assert.equal(optionNames.includes("moderationTokenKey"), false);
+  const exactOptionTypes = new Map([
+    ["rolloutPhase", '"canary" | "ramp" | "default"'],
+    [
+      "transportPolicy",
+      '"soranet-first" | "soranet-strict" | "direct-only"',
+    ],
+    [
+      "anonymityPolicy",
+      '"anon-guard-pq" | "anon-majority-pq" | "anon-strict-pq"',
+    ],
+    ["writeMode", '"read-only" | "upload-pq-only"'],
+  ]);
+  for (const [name, expectedType] of exactOptionTypes) {
+    const property = options.members.find(
+      (member) => propertyName(member) === name,
+    );
+    assert.ok(property && ts.isPropertySignature(property), `missing ${name}`);
+    assert.equal(
+      property.type?.getText(source),
+      expectedType,
+      `${name} must expose only exact V1 labels`,
+    );
+  }
 
   const failure = findInterface("SorafsGatewayFetchAttemptFailure");
   const policyBlock = failure.members.find(

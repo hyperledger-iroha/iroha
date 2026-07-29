@@ -70,6 +70,7 @@ impl Registers {
         }
     }
 
+    #[cfg(not(feature = "merkle_incremental"))]
     #[inline]
     fn mark_pending(&self, idx: usize) {
         let mut pending = self.pending.lock();

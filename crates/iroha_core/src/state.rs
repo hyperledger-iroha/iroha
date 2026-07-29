@@ -85,7 +85,7 @@ use iroha_data_model::{
     },
     executor::ExecutorDataModel,
     fastpq::{TransferDeltaTranscript, TransferTranscript},
-    governance::types::ParliamentBody,
+    governance::types::{ParliamentBody, ProposalKind},
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
         error::{
@@ -166,6 +166,10 @@ use iroha_data_model::{
     },
     soranet::vpn::VpnLeaseRecordV1,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    validation_fee::{
+        ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateRulesV1,
+        ValidationFeePlainElectorateSnapshotV1,
+    },
 };
 use iroha_executor_data_model::permission::{
     nft::{CanModifyNftMetadata, CanTransferNft},
@@ -4624,10 +4628,8 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) provider_credit_ledger: StorageBlock<'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
-    #[norito(skip)]
     pub(crate) provider_owners: StorageBlock<'world, ProviderId, AccountId>,
     /// Chain-authoritative completion-owner and signer-policy bindings.
-    #[norito(skip)]
     pub(crate) provider_ingest_completion_authorities:
         StorageBlock<'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
@@ -7121,42 +7123,6 @@ pub struct WorldView<'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
-    /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
-    pub(crate) privacy_pgc_accounts: StorageView<
-        'world,
-        crate::privacy_state::PrivacyPgcAccountKeyV1,
-        crate::privacy_state::PrivacyPgcAccountStateV1,
-    >,
-    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
-    pub(crate) privacy_pgc_pool_invariants: StorageView<
-        'world,
-        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
-        crate::privacy_state::PrivacyPgcPoolInvariantV1,
-    >,
-    /// Scoped consumed nullifiers used for deterministic replay prevention.
-    pub(crate) privacy_nullifiers: StorageView<
-        'world,
-        crate::privacy_state::PrivacyNullifierKeyV1,
-        crate::privacy_state::PrivacyStateItemRecordV1,
-    >,
-    /// Scoped commitments admitted by successfully verified privacy actions.
-    pub(crate) privacy_commitments: StorageView<
-        'world,
-        crate::privacy_state::PrivacyCommitmentKeyV1,
-        crate::privacy_state::PrivacyStateItemRecordV1,
-    >,
-    /// Ordered exact root membership retained for privacy proof admission.
-    pub(crate) privacy_roots: StorageView<
-        'world,
-        crate::privacy_state::PrivacyRootKeyV1,
-        crate::privacy_state::PrivacyRootProvenanceV1,
-    >,
-    /// Single current root for each independent namespace and semantic role.
-    pub(crate) privacy_root_heads: StorageView<
-        'world,
-        crate::privacy_state::PrivacyRootHeadKeyV1,
-        crate::privacy_state::PrivacyRootHeadRecordV1,
-    >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
         StorageView<'world, iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
@@ -8851,6 +8817,9 @@ pub struct GovernanceStageApprovals {
     /// never depends on mutable configuration or reconstructed event history.
     #[norito(default)]
     pub approval_gate_height: Option<u64>,
+    /// Canonical validation-fee citizen electorate frozen at the referendum start boundary.
+    #[norito(default)]
+    pub validation_fee_plain_electorate_snapshot: Option<ValidationFeePlainElectorateSnapshotV1>,
 }
 
 impl GovernanceStageApprovals {
@@ -9248,6 +9217,236 @@ impl CitizenshipRecord {
             no_show_strikes: 0,
             misconduct_strikes: 0,
         }
+    }
+}
+
+const VALIDATION_FEE_REQUIRED_PARLIAMENT_BODIES: [ParliamentBody; 7] = [
+    ParliamentBody::RulesCommittee,
+    ParliamentBody::AgendaCouncil,
+    ParliamentBody::InterestPanel,
+    ParliamentBody::ReviewPanel,
+    ParliamentBody::PolicyJury,
+    ParliamentBody::OversightCommittee,
+    ParliamentBody::FmaCommittee,
+];
+
+fn validation_fee_plain_electorate_rules(
+    kind: &ProposalKind,
+) -> Option<&ValidationFeePlainElectorateRulesV1> {
+    match kind {
+        ProposalKind::ValidationFeePolicy(payload) => Some(&payload.plain_electorate_rules),
+        ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+            Some(&payload.plain_electorate_rules)
+        }
+        ProposalKind::DeployContract(_)
+        | ProposalKind::RuntimeUpgrade(_)
+        | ProposalKind::SccpRouteGovernance(_) => None,
+    }
+}
+
+fn build_validation_fee_plain_electorate_snapshot<'a>(
+    proposal_id: [u8; 32],
+    proposal_operator: &AccountId,
+    captured_at_height: u64,
+    approval_gate_height: u64,
+    rules: &ValidationFeePlainElectorateRulesV1,
+    citizens: impl Iterator<Item = (&'a AccountId, &'a CitizenshipRecord)>,
+) -> Result<ValidationFeePlainElectorateSnapshotV1, &'static str> {
+    if approval_gate_height >= captured_at_height {
+        return Err("validation-fee PLAIN electorate approval gate must precede referendum start");
+    }
+    let mut members = Vec::new();
+    for (account_id, record) in citizens {
+        if account_id != &record.owner {
+            return Err("validation-fee citizen storage key differs from its canonical owner");
+        }
+        if record.amount < rules.citizenship_amount {
+            continue;
+        }
+        let eligible = if account_id == proposal_operator {
+            record.bonded_height <= approval_gate_height
+        } else {
+            record.bonded_height > approval_gate_height && record.bonded_height < captured_at_height
+        };
+        if eligible {
+            members.push(ValidationFeePlainElectorateMemberV1 {
+                account_id: account_id.clone(),
+                bonded_height: record.bonded_height,
+                bonded_amount: record.amount.clone(),
+            });
+        }
+    }
+    members.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+    if members.is_empty() {
+        return Err("validation-fee PLAIN electorate snapshot cannot be empty");
+    }
+    let member_count = u64::try_from(members.len()).unwrap_or(u64::MAX);
+    if member_count > rules.max_members {
+        return Err("validation-fee PLAIN electorate exceeds its immutable member cap");
+    }
+    let snapshot = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+        proposal_id,
+        proposal_operator.clone(),
+        captured_at_height,
+        approval_gate_height,
+        members,
+    )?;
+    if let Some(reason) = snapshot.context_error(proposal_id, proposal_operator, rules) {
+        return Err(reason);
+    }
+    Ok(snapshot)
+}
+
+#[cfg(test)]
+mod validation_fee_plain_electorate_snapshot_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::*;
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair =
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn rules(max_members: u64) -> ValidationFeePlainElectorateRulesV1 {
+        ValidationFeePlainElectorateRulesV1 {
+            voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+                .parse()
+                .expect("voting asset id"),
+            ballot_amount: 150_u64.into(),
+            ballot_duration_blocks: 3_600,
+            citizenship_amount: 10_000_u64.into(),
+            max_members,
+            conviction_step_blocks: 100,
+            max_conviction: 6,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            eligibility_rule: iroha_data_model::validation_fee::
+                ValidationFeePlainElectorateEligibilityRuleV1::
+                ProposalOperatorAtOrBeforeGateOthersAfterGate,
+        }
+    }
+
+    #[test]
+    fn snapshot_builder_freezes_only_the_exact_gate_interval() {
+        let proposal_id = [0x51; 32];
+        let proposal_operator = account(1);
+        let after_gate = account(2);
+        let before_gate = account(3);
+        let at_start = account(4);
+        let under_bond = account(5);
+        let approval_gate_height = 100;
+        let captured_at_height = 200;
+        let citizens = vec![
+            (
+                proposal_operator.clone(),
+                CitizenshipRecord::new(
+                    proposal_operator.clone(),
+                    10_000_u64.into(),
+                    approval_gate_height,
+                ),
+            ),
+            (
+                after_gate.clone(),
+                CitizenshipRecord::new(
+                    after_gate.clone(),
+                    10_000_u64.into(),
+                    approval_gate_height + 1,
+                ),
+            ),
+            (
+                before_gate.clone(),
+                CitizenshipRecord::new(
+                    before_gate.clone(),
+                    10_000_u64.into(),
+                    approval_gate_height,
+                ),
+            ),
+            (
+                at_start.clone(),
+                CitizenshipRecord::new(at_start.clone(), 10_000_u64.into(), captured_at_height),
+            ),
+            (
+                under_bond.clone(),
+                CitizenshipRecord::new(
+                    under_bond.clone(),
+                    9_999_u64.into(),
+                    approval_gate_height + 1,
+                ),
+            ),
+        ];
+
+        let snapshot = build_validation_fee_plain_electorate_snapshot(
+            proposal_id,
+            &proposal_operator,
+            captured_at_height,
+            approval_gate_height,
+            &rules(256),
+            citizens
+                .iter()
+                .map(|(account_id, record)| (account_id, record)),
+        )
+        .expect("exact frozen electorate");
+
+        assert_eq!(snapshot.member_count, 2);
+        assert!(snapshot.contains(&proposal_operator));
+        assert!(snapshot.contains(&after_gate));
+        assert!(!snapshot.contains(&before_gate));
+        assert!(!snapshot.contains(&at_start));
+        assert!(!snapshot.contains(&under_bond));
+        assert_eq!(snapshot.invariant_error(), None);
+    }
+
+    #[test]
+    fn snapshot_builder_rejects_corrupt_keys_and_never_truncates() {
+        let proposal_id = [0x52; 32];
+        let proposal_operator = account(1);
+        let other = account(2);
+        let approval_gate_height = 100;
+        let captured_at_height = 200;
+        let eligible = vec![
+            (
+                proposal_operator.clone(),
+                CitizenshipRecord::new(
+                    proposal_operator.clone(),
+                    10_000_u64.into(),
+                    approval_gate_height,
+                ),
+            ),
+            (
+                other.clone(),
+                CitizenshipRecord::new(other.clone(), 10_000_u64.into(), approval_gate_height + 1),
+            ),
+        ];
+        assert_eq!(
+            build_validation_fee_plain_electorate_snapshot(
+                proposal_id,
+                &proposal_operator,
+                captured_at_height,
+                approval_gate_height,
+                &rules(1),
+                eligible
+                    .iter()
+                    .map(|(account_id, record)| (account_id, record)),
+            ),
+            Err("validation-fee PLAIN electorate exceeds its immutable member cap")
+        );
+
+        let corrupt_key = account(3);
+        let corrupt = CitizenshipRecord::new(other, 10_000_u64.into(), approval_gate_height + 1);
+        assert_eq!(
+            build_validation_fee_plain_electorate_snapshot(
+                proposal_id,
+                &proposal_operator,
+                captured_at_height,
+                approval_gate_height,
+                &rules(256),
+                std::iter::once((&corrupt_key, &corrupt)),
+            ),
+            Err("validation-fee citizen storage key differs from its canonical owner")
+        );
     }
 }
 
@@ -19111,12 +19310,6 @@ impl World {
             runtime_upgrades: self.runtime_upgrades.view(),
             privacy_consensus_policy: self.privacy_consensus_policy.view(),
             privacy_activations: self.privacy_activations.view(),
-            privacy_pgc_accounts: self.privacy_pgc_accounts.view(),
-            privacy_pgc_pool_invariants: self.privacy_pgc_pool_invariants.view(),
-            privacy_nullifiers: self.privacy_nullifiers.view(),
-            privacy_commitments: self.privacy_commitments.view(),
-            privacy_roots: self.privacy_roots.view(),
-            privacy_root_heads: self.privacy_root_heads.view(),
             proofs: self.proofs.view(),
             proofs_by_status: self.proofs_by_status.view(),
             proof_tags: self.proof_tags.view(),
@@ -28272,6 +28465,95 @@ impl State {
             }
             let term_blocks = sb.gov.parliament_term_blocks.max(1);
             let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
+            // Freeze the validation-fee citizen electorate from the state committed
+            // immediately before the inclusive referendum start block. Missing or
+            // inconsistent gate/roster state deliberately leaves no snapshot, so
+            // ballots, finalization, and enactment fail closed.
+            let electorate_snapshots_due: Vec<(String, [u8; 32], GovernanceProposalRecord)> = wtx
+                .governance_referenda
+                .iter()
+                .filter_map(|(rid, referendum)| {
+                    if referendum.h_start != now_h
+                        || referendum.mode != GovernanceReferendumMode::Plain
+                    {
+                        return None;
+                    }
+                    let proposal_id = hex::decode(rid)
+                        .ok()
+                        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())?;
+                    let proposal = wtx.governance_proposals.get(&proposal_id)?.clone();
+                    validation_fee_plain_electorate_rules(&proposal.kind)?;
+                    Some((rid.clone(), proposal_id, proposal))
+                })
+                .collect();
+            for (rid, proposal_id, proposal) in electorate_snapshots_due {
+                let Some(mut approvals) = wtx.governance_stage_approvals.get(&rid).cloned() else {
+                    warn!(
+                        referendum_id = %rid,
+                        "validation-fee electorate snapshot omitted: Parliament approvals are missing"
+                    );
+                    continue;
+                };
+                if approvals.validation_fee_plain_electorate_snapshot.is_some() {
+                    continue;
+                }
+                let Some(approval_gate_height) = approvals.approval_gate_height else {
+                    warn!(
+                        referendum_id = %rid,
+                        "validation-fee electorate snapshot omitted: approval gate is missing"
+                    );
+                    continue;
+                };
+                let Some(parliament_snapshot) = proposal.parliament_snapshot.as_ref() else {
+                    warn!(
+                        referendum_id = %rid,
+                        "validation-fee electorate snapshot omitted: Parliament snapshot is missing"
+                    );
+                    continue;
+                };
+                let selection_epoch = parliament_snapshot.selection_epoch;
+                let seven_body_gate_retained = approval_gate_height < now_h
+                    && parliament_snapshot.bodies.selection_epoch == selection_epoch
+                    && VALIDATION_FEE_REQUIRED_PARLIAMENT_BODIES
+                        .iter()
+                        .copied()
+                        .all(|body| {
+                            parliament_snapshot.bodies.rosters.contains_key(&body)
+                                && approvals.quorum_met(body, selection_epoch)
+                                && !approvals.rejection_quorum_met(body, selection_epoch)
+                        });
+                if !seven_body_gate_retained {
+                    warn!(
+                        referendum_id = %rid,
+                        approval_gate_height,
+                        capture_height = now_h,
+                        "validation-fee electorate snapshot omitted: exact seven-body gate is not retained before referendum start"
+                    );
+                    continue;
+                }
+                let rules = validation_fee_plain_electorate_rules(&proposal.kind)
+                    .expect("validation-fee proposal was selected above");
+                match build_validation_fee_plain_electorate_snapshot(
+                    proposal_id,
+                    &proposal.proposer,
+                    now_h,
+                    approval_gate_height,
+                    rules,
+                    wtx.citizens.iter(),
+                ) {
+                    Ok(snapshot) => {
+                        approvals.validation_fee_plain_electorate_snapshot = Some(snapshot);
+                        wtx.governance_stage_approvals.insert(rid, approvals);
+                    }
+                    Err(reason) => {
+                        warn!(
+                            referendum_id = %rid,
+                            %reason,
+                            "validation-fee electorate snapshot omitted: candidate state is invalid"
+                        );
+                    }
+                }
+            }
             // Collect candidates to open (avoid borrow conflicts)
             let to_open: Vec<(String, u64, u64)> = wtx
                 .governance_referenda
@@ -28378,7 +28660,7 @@ impl State {
                             })
                             .is_some_and(|proposal| {
                                 matches!(
-                                    proposal.kind,
+                                    &proposal.kind,
                                     iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
                                         | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
                                 )
@@ -120338,10 +120620,6 @@ seiyaku IdentitylessRawCallback {
         )
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture assembles and signs one complete multi-route admission certificate"
-    )]
     fn queue_plan_admission_certificate_for_state_test(
         state: &State,
         routing_plan: crate::queue::RoutingPlan,

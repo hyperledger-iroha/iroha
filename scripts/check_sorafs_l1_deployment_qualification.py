@@ -41,10 +41,13 @@ from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
 )
+from sorafs_topology_qualification import (  # noqa: E402
+    MANIFEST_SCHEMA,
+    SUMMARY_SCHEMA,
+    canonical_manifest_sha256,
+)
 
 
-MANIFEST_SCHEMA = "sorafs.l1.deployment_qualification.v1"
-SUMMARY_SCHEMA = "sorafs.l1.deployment_qualification.summary.v1"
 MAX_MANIFEST_BYTES = 256 * 1024
 EXPECTED_VALIDATOR_COUNT = 4
 MIN_PROVIDER_COUNT = 2
@@ -52,10 +55,39 @@ MAX_PROVIDER_COUNT = 64
 EXPECTED_GATEWAY_COUNT = 2
 EXPECTED_GOVERNANCE_DAG_COUNT = 2
 EXPECTED_LANE_SLOT_COUNT = 17
+MIN_SIGNED_MODEL_ARTIFACT_COUNT = 1
+MAX_SIGNED_MODEL_ARTIFACT_COUNT = 64
+MAX_SIGNED_MODEL_REVISION = (1 << 63) - 1
 RUNTIME_HANDLE_KINDS = ("monitoring", "hsm", "kms", "webauthn")
+SIGNED_MODEL_SIGNATURE_ALGORITHMS = ("ed25519", "ml-dsa-87")
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*\Z")
 NON_PRODUCTION_HANDLE_COMPONENTS = frozenset(
     {"null", "mock", "test", "dev", "fake", "placeholder"}
+)
+RUNTIME_HANDLE_COMPACT_ROLES = frozenset(
+    {
+        "adapter",
+        "hsm",
+        "kms",
+        "kubo",
+        "monitoring",
+        "provider",
+        "runtime",
+        "service",
+        "signer",
+        "webauthn",
+    }
+)
+MODEL_ARTIFACT_COMPACT_ROLES = frozenset(
+    {
+        "ai",
+        "artifact",
+        "classifier",
+        "model",
+        "moderation",
+        "prescreen",
+        "signer",
+    }
 )
 
 MANIFEST_FIELDS = frozenset(
@@ -68,6 +100,7 @@ MANIFEST_FIELDS = frozenset(
         "governance_dag_instances",
         "runtime_handles",
         "runtime_material_policy",
+        "signed_model_artifacts",
         "lane_slots",
     }
 )
@@ -86,6 +119,17 @@ RUNTIME_MATERIAL_POLICY_FIELDS = frozenset(
         "configuration_contains_credentials",
         "configuration_contains_private_material",
         "external_injection_required",
+    }
+)
+SIGNED_MODEL_ARTIFACT_FIELDS = frozenset(
+    {
+        "artifact_id",
+        "revision",
+        "artifact_sha256",
+        "signature_algorithm",
+        "signature_sha256",
+        "signer_public_key_fingerprint_sha256",
+        "signature_verified",
     }
 )
 LANE_SLOT_FIELDS = frozenset({"gate", "deployment_id", "environment"})
@@ -155,16 +199,43 @@ def _production_runtime_handle(
     ):
         errors.append(f"{label} must be a canonical production runtime handle")
         return None
-    components = value.lower()
-    detected = {
-        component
-        for component in re.split(r"[^a-z0-9]+", components)
-        if component in NON_PRODUCTION_HANDLE_COMPONENTS
-    }
+    detected = _non_production_label_markers(
+        value,
+        compact_roles=RUNTIME_HANDLE_COMPACT_ROLES,
+    )
     if detected:
         errors.append(f"{label} must be a canonical production runtime handle")
         return None
     return value
+
+
+def _non_production_label_markers(
+    value: str,
+    *,
+    compact_roles: frozenset[str],
+) -> set[str]:
+    """Detect explicit or unambiguous compact test-role label components."""
+
+    tokens = tuple(
+        component
+        for component in re.split(r"[^a-z0-9]+", value.lower())
+        if component
+    )
+    detected = {
+        component
+        for component in tokens
+        if component in NON_PRODUCTION_HANDLE_COMPONENTS
+    }
+    for token in tokens:
+        for marker in NON_PRODUCTION_HANDLE_COMPONENTS:
+            for role in compact_roles:
+                if re.fullmatch(
+                    rf"(?:{re.escape(marker)}[0-9]*{re.escape(role)}|"
+                    rf"{re.escape(role)}[0-9]*{re.escape(marker)})[0-9]*",
+                    token,
+                ):
+                    detected.add(marker)
+    return detected
 
 
 def _require_true(value: Any, label: str, errors: list[str]) -> None:
@@ -378,6 +449,109 @@ def _validate_runtime_material_policy(value: Any, errors: list[str]) -> bool:
     return len(errors) == before
 
 
+def _canonical_nonzero_sha256(
+    value: Any,
+    label: str,
+    errors: list[str],
+) -> str | None:
+    """Return one canonical non-zero SHA-256 digest."""
+
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        errors.append(f"{label} must be canonical lowercase SHA-256")
+        return None
+    if not any(bytes.fromhex(value)):
+        errors.append(f"{label} must not be zero")
+        return None
+    return value
+
+
+def _validate_signed_model_artifacts(value: Any, errors: list[str]) -> int:
+    """Validate the digest-only signed model inventory bound to the topology."""
+
+    rows = _row_sequence(value, "signed_model_artifacts", errors)
+    if rows is None:
+        return 0
+    if not MIN_SIGNED_MODEL_ARTIFACT_COUNT <= len(rows) <= MAX_SIGNED_MODEL_ARTIFACT_COUNT:
+        errors.append(
+            "signed_model_artifacts must contain between "
+            f"{MIN_SIGNED_MODEL_ARTIFACT_COUNT} and "
+            f"{MAX_SIGNED_MODEL_ARTIFACT_COUNT} entries"
+        )
+    artifact_ids: list[str] = []
+    artifact_digests: list[str] = []
+    signature_digests: list[str] = []
+    for index, item in enumerate(rows):
+        label = f"signed_model_artifacts[{index}]"
+        row = _closed_object(item, SIGNED_MODEL_ARTIFACT_FIELDS, label, errors)
+        if row is None:
+            continue
+        artifact_id = _canonical_identifier(
+            row.get("artifact_id"),
+            f"{label}.artifact_id",
+            errors,
+        )
+        if artifact_id is not None:
+            forbidden = _non_production_label_markers(
+                artifact_id,
+                compact_roles=MODEL_ARTIFACT_COMPACT_ROLES,
+            )
+            if forbidden:
+                errors.append(f"{label}.artifact_id must identify a production model")
+            else:
+                artifact_ids.append(artifact_id)
+        revision = row.get("revision")
+        if (
+            not isinstance(revision, int)
+            or isinstance(revision, bool)
+            or not 1 <= revision <= MAX_SIGNED_MODEL_REVISION
+        ):
+            errors.append(
+                f"{label}.revision must be an integer in "
+                f"1..{MAX_SIGNED_MODEL_REVISION}"
+            )
+        artifact_digest = _canonical_nonzero_sha256(
+            row.get("artifact_sha256"),
+            f"{label}.artifact_sha256",
+            errors,
+        )
+        if artifact_digest is not None:
+            artifact_digests.append(artifact_digest)
+        signature_digest = _canonical_nonzero_sha256(
+            row.get("signature_sha256"),
+            f"{label}.signature_sha256",
+            errors,
+        )
+        if signature_digest is not None:
+            signature_digests.append(signature_digest)
+        _canonical_nonzero_sha256(
+            row.get("signer_public_key_fingerprint_sha256"),
+            f"{label}.signer_public_key_fingerprint_sha256",
+            errors,
+        )
+        if row.get("signature_algorithm") not in SIGNED_MODEL_SIGNATURE_ALGORITHMS:
+            errors.append(
+                f"{label}.signature_algorithm must be one of "
+                f"{SIGNED_MODEL_SIGNATURE_ALGORITHMS}"
+            )
+        _require_true(
+            row.get("signature_verified"),
+            f"{label}.signature_verified",
+            errors,
+        )
+    for label, values in (
+        ("signed model artifact identities", artifact_ids),
+        ("signed model artifact digests", artifact_digests),
+        ("signed model signature digests", signature_digests),
+    ):
+        if len(values) == len(rows) and len(set(values)) != len(values):
+            errors.append(f"{label} must be unique")
+    return len(rows)
+
+
 def _validate_lane_slots(
     value: Any,
     deployment_id: str | None,
@@ -512,6 +686,10 @@ def validate_manifest(
         None if manifest is None else manifest.get("runtime_material_policy"),
         errors,
     )
+    signed_model_artifact_count = _validate_signed_model_artifacts(
+        None if manifest is None else manifest.get("signed_model_artifacts"),
+        errors,
+    )
     lane_slots_valid = _validate_lane_slots(
         None if manifest is None else manifest.get("lane_slots"),
         deployment_id,
@@ -526,6 +704,7 @@ def validate_manifest(
         "live_evidence_recognized": False,
         "promotion_eligible": False,
         "manifest_sha256": digest,
+        "canonical_manifest_sha256": canonical_manifest_sha256(payload),
         "deployment": {
             "deployment_id": deployment_id,
             "environment": environment,
@@ -536,6 +715,7 @@ def validate_manifest(
         "governance_dag_instance_count": governance_dag_count,
         "runtime_handle_kinds": runtime_handle_kinds,
         "runtime_material_policy_valid": runtime_material_policy_valid,
+        "signed_model_artifact_count": signed_model_artifact_count,
         "required_lane_slots": list(DEFAULT_REQUIRED_GATES),
         "recognized_lane_slot_count": (
             EXPECTED_LANE_SLOT_COUNT if lane_slots_valid else 0
@@ -555,6 +735,7 @@ def _blocked_summary(errors: list[str]) -> dict[str, Any]:
         "live_evidence_recognized": False,
         "promotion_eligible": False,
         "manifest_sha256": None,
+        "canonical_manifest_sha256": None,
         "deployment": {"deployment_id": None, "environment": None},
         "validator_count": 0,
         "storage_provider_count": 0,
@@ -562,6 +743,7 @@ def _blocked_summary(errors: list[str]) -> dict[str, Any]:
         "governance_dag_instance_count": 0,
         "runtime_handle_kinds": [],
         "runtime_material_policy_valid": False,
+        "signed_model_artifact_count": 0,
         "required_lane_slots": list(DEFAULT_REQUIRED_GATES),
         "recognized_lane_slot_count": 0,
         "errors": errors,

@@ -5466,18 +5466,12 @@ export interface SorafsGatewayFetchOptions {
   cacheVersion?: string;
   clientId?: string;
   telemetryRegion?: string;
-  rolloutPhase?:
-    | "canary"
-    | "ramp"
-    | "default"
-    | "stage-a"
-    | "stage-b"
-    | "stage-c";
+  rolloutPhase?: "canary" | "ramp" | "default";
   maxPeers?: number;
   retryBudget?: number;
   transportPolicy?: "soranet-first" | "soranet-strict" | "direct-only";
   anonymityPolicy?: "anon-guard-pq" | "anon-majority-pq" | "anon-strict-pq";
-  writeMode?: "read-only" | "upload-pq-only" | string;
+  writeMode?: "read-only" | "upload-pq-only";
   policyOverride?: SorafsGatewayPolicyOverride;
   localProxy?: SorafsLocalProxyOptions;
   taikaiCache?: SorafsTaikaiCacheOptions;
@@ -5814,7 +5808,10 @@ type NoritoRuntimeNamespaceExport =
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
   | "noritoEncodePrivacyProofEnvelope"
+  | "noritoEncodeSorafsBillingAcknowledgementProofV1"
   | "noritoEncodeTransactionPayloadBatch"
+  | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1"
+  | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1"
   | "validateNoritoFrame"
   | "validateSorafsReplicationOrderPayloadV1"
   | "verifyBlockMerkleProof"
@@ -11234,6 +11231,25 @@ export type SorafsReputationEventStreamOptions =
   signal?: AbortSignal;
 };
 
+export interface SorafsHedgingBillingAuthOptions {
+  canonicalAuth: CanonicalRequestAuth;
+  signal?: AbortSignal;
+}
+
+export interface SorafsBillingStatementListOptions
+  extends SorafsHedgingBillingAuthOptions {
+  expectedCheckpointFingerprintHex: string;
+  afterStatementIdHex?: string;
+  limit: number;
+}
+
+export interface SorafsHedgingProjectionOptions
+  extends SorafsHedgingBillingAuthOptions {
+  expectedCheckpointFingerprintHex: string;
+  afterHex?: string;
+  limit: number;
+}
+
 export type SorafsReputationU64 = number | bigint;
 
 export interface SorafsReputationWeights {
@@ -12930,6 +12946,32 @@ export declare class ToriiClient {
   streamSorafsReputationEvents(
     options: SorafsReputationEventStreamOptions,
   ): AsyncGenerator<SorafsReputationSseEvent, void, unknown>;
+  getSorafsBillingStatus(
+    options: SorafsHedgingBillingAuthOptions,
+  ): Promise<Record<string, unknown>>;
+  listSorafsBillingStatements(
+    options: SorafsBillingStatementListOptions,
+  ): Promise<Record<string, unknown>>;
+  getSorafsBillingStatement(
+    statementIdHex: string,
+    expectedCheckpointFingerprintHex: string,
+    options: SorafsHedgingBillingAuthOptions,
+  ): Promise<Buffer>;
+  acknowledgeSorafsBillingStatement(
+    statementIdHex: string,
+    expectedCheckpointFingerprintHex: string,
+    proof: Readonly<SorafsBillingAcknowledgementProofV1>,
+    options: SorafsHedgingBillingAuthOptions,
+  ): Promise<Record<string, unknown>>;
+  getSorafsBillingReconciliation(
+    options: SorafsHedgingBillingAuthOptions,
+  ): Promise<Record<string, unknown>>;
+  getSorafsHedgingExposure(
+    options: SorafsHedgingProjectionOptions,
+  ): Promise<Record<string, unknown>>;
+  getSorafsHedgingIntents(
+    options: SorafsHedgingProjectionOptions,
+  ): Promise<Record<string, unknown>>;
   getSorafsPinManifest(
     digestHex: string,
     options?: { headers?: Record<string, string>; signal?: AbortSignal },
@@ -14040,6 +14082,16 @@ export function noritoEncodeContractManifestSignaturePayload(
 ): Buffer;
 export function noritoEncodeTransactionPayloadBatch(
   payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
+): Buffer;
+export const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1:
+  "iroha.torii.v1.sorafs.billing.acknowledgement_proof";
+export const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1: 65536;
+export interface SorafsBillingAcknowledgementProofV1 {
+  requestNonceHex: string;
+  authenticationProof: ArrayBufferView | ArrayBuffer | Buffer;
+}
+export function noritoEncodeSorafsBillingAcknowledgementProofV1(
+  proof: Readonly<SorafsBillingAcknowledgementProofV1>,
 ): Buffer;
 export function noritoEncodePrivacyProofEnvelope(envelope: object): Buffer;
 export function noritoDecodePrivacyProofEnvelope(

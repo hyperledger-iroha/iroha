@@ -121,6 +121,25 @@ threshold-signing, and authenticated Governance DAG adapters are injected, so
 these reads become available only from the resulting committed projection.
 There is deliberately no Torii POST or local `reputation publish` CLI fallback.
 
+Finalized-query archive retention is also explicit rather than timer-, age-, or
+capacity-driven. When the sealed retention authority is enabled, an account
+with `CanSetParameters` constructs
+`ReputationFinalizedArchiveRetentionRequestV1` with the exact chain, committed
+ancestor height/hash, monotonic sequence, and preceding request digest, converts
+it with `into_custom_parameter()`, and submits the resulting `SetParameter` in a
+caller-signed transaction through the ordinary transaction ingress. Consensus
+rejects a target that is not an exact committed ancestor of the later
+authorizing block, as well as skips, rollback, equivocation, and cross-chain
+substitution. The supervised daemon acts only when the same request is visible
+under an exact State/Kura/archive-tip projection, prepares the current
+generation fence, refreshes that committed authorization, and then asks the
+independently administered sealed CAS authority to approve and install it.
+Exact authoritative readback is required before checkpoint publication and
+again before deletion. Replays and replicas that lose an identical CAS converge
+as success; a changed request, stale fence, unavailable authority, or
+non-identical CAS fails readiness without deleting an anchor. V1 deliberately
+defines no automatic retention selector and no process-local mutation route.
+
 Successful finite reputation responses include an `ETag` and
 `Cache-Control: private, max-age=30, must-revalidate`. Consumers may repeat the
 same authenticated request with `If-None-Match`; Torii returns
@@ -260,23 +279,43 @@ python3 scripts/run_sorafs_reputation_rollout_evidence.py \
 The collection arguments must include the same `--auth-account=I105` and
 `--auth-private-key-file=PATH`, plus `--publish-evidence=PATH` pointing to a
 reviewed, payload-free result from the external threshold-signing/publication
-worker. The collector validates the key path without reading its contents and
-forwards the two authentication arguments only to the three live read steps;
-it also validates every requested provider id against the exact route grammar
-before deriving an injective, portable sharded path: the exact provider-id
-bytes are lowercase ASCII-hex in components of at most 64 characters beneath
-fixed `provider-by-provider-id` or `verify-by-provider-id` namespaces, ending
-in `artifact.json`. The runner creates only the already-validated parent for
-the current provider step immediately before launch, and rejects traversal or
-symlink substitution; `--dry-run` performs no writes. The expanded response
-arguments reject option-prefix abbreviations and repeated scalar flags before
-parsing; only `--provider-id` and `--provider-proof` are repeatable. The key
-bytes and authentication headers are never placed in the plan or evidence.
-Use `--dry-run` first to print the exact read-only command plan. The helper
+worker. `--torii-url` must be an exact canonical bare HTTPS origin; HTTP is
+accepted only for `localhost` or a literal loopback fixture. The collector
+rejects a path prefix, userinfo, query, fragment, port zero, or non-canonical
+origin before creating the output directory.
+
+The collector validates the key path without reading its contents and forwards
+the two authentication arguments only to the three live read steps. The real
+key-file path remains only in the in-memory subprocess command; dry-run JSON
+and `RUN` notices replace it with
+`--auth-private-key-file=<runtime-only-path>`. It validates every requested
+provider id against the exact route grammar before deriving an injective,
+portable sharded path: the exact provider-id bytes are lowercase ASCII-hex in
+components of at most 64 characters beneath fixed
+`provider-by-provider-id` or `verify-by-provider-id` namespaces. Each live CLI
+result is stored as `source.raw`; only the strict source-bound adapter may
+produce the sibling `artifact.json`. The runner creates only the
+already-validated parent for the current provider step immediately before
+launch and rejects traversal or symlink substitution.
+
+The source adapter requires exact, schema-closed CLI profiles and cross-checks
+the reviewed deployment context, snapshot id, Merkle root, generated time,
+provider count and inventory, governed weights binding, provider identity,
+proof geometry, score, and requested watch cursor. It then emits the
+payload-free canonical evidence profile. The event watch is exactly one poll
+(`--watch-max-polls=1`) so the archived source binds the initial
+`since`/`limit` request. Raw sources use a non-JSON extension and the final
+checker receives every canonical artifact with an explicit evidence kind.
+
+`--dry-run` performs no writes. Expanded response arguments reject
+option-prefix abbreviations and repeated scalar flags before parsing; only
+`--provider-id` and `--provider-proof` are repeatable. Key bytes and
+authentication headers are never placed in the plan or evidence. Use
+`--dry-run` first to print the redacted read-only command plan. The helper
 reads the latest snapshot, fetches each required provider proof, replays
-archived proofs, watches bounded reputation events, and invokes the rollout
-gate with the reviewed external publication evidence. Operators that collected
-the artifacts separately can run the gate directly:
+archived proofs, watches bounded reputation events, adapts every raw result,
+and invokes the rollout gate with the reviewed external publication evidence.
+Operators that collected the artifacts separately can run the gate directly:
 
 ```bash
 python3 scripts/check_sorafs_reputation_rollout_evidence.py \
@@ -289,6 +328,7 @@ python3 scripts/check_sorafs_reputation_rollout_evidence.py \
   --evidence transport=reputation-transport-canary.json \
   --evidence consumption=reputation-consumption-canary.json \
   --require-provider=provider-a \
+  --now-unix="$REVIEWED_NOW_UNIX" \
   --summary-out=reputation-rollout-summary.json
 ```
 

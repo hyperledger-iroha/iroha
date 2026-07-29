@@ -5,6 +5,13 @@ edition = "2024"
 license = "Apache-2.0"
 description = "High-level SoraFS orchestrator facade built on top of sorafs_car"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+] }
+
 [features]
 default = ["cli-orchestrator"]
 cli-orchestrator = [
@@ -15,11 +22,6 @@ cli-orchestrator = [
     "dep:sorafs_manifest",
     "dep:toml",
 ]
-schema-structural = []
-packed-struct = []
-packed-seq = []
-compact-len = []
-compression = []
 local-quic-proxy = ["dep:quinn", "dep:rcgen", "dep:sha2"]
 
 [dependencies]

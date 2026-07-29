@@ -1429,18 +1429,21 @@ fileprivate func tcLoadDaProofFixture() throws -> (manifest: Data, payload: Data
 
     let manifestHex = try String(contentsOf: manifestHexURL, encoding: .utf8)
         .trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let manifestData = Data(hexString: manifestHex) else {
-        throw XCTSkip("failed to decode DA manifest fixture")
-    }
+    let manifestData = try XCTUnwrap(
+        Data(hexString: manifestHex),
+        "failed to decode DA manifest fixture"
+    )
     let payloadData = try Data(contentsOf: payloadURL)
     let manifestJSONData = try Data(contentsOf: manifestJSONURL)
-    guard
-        let manifestObject = try JSONSerialization.jsonObject(with: manifestJSONData) as? [String: Any],
-        let blobArray = manifestObject["blob_hash"] as? [[NSNumber]],
-        let blobBytes = blobArray.first
-    else {
-        throw XCTSkip("blob_hash fixture missing")
-    }
+    let manifestObject = try XCTUnwrap(
+        try JSONSerialization.jsonObject(with: manifestJSONData) as? [String: Any],
+        "DA manifest fixture must be a JSON object"
+    )
+    let blobArray = try XCTUnwrap(
+        manifestObject["blob_hash"] as? [[NSNumber]],
+        "blob_hash fixture missing"
+    )
+    let blobBytes = try XCTUnwrap(blobArray.first, "blob_hash fixture is empty")
     let blobHex = blobBytes.reduce(into: "") { partialResult, value in
         partialResult.append(String(format: "%02x", value.uint8Value))
     }
@@ -8072,13 +8075,12 @@ final class ToriiClientTests: XCTestCase {
         }
     }
 
+    #if canImport(Darwin)
     func testNativeDaProofSummaryGeneratorEmitsExplicitProofs() throws {
-        #if !canImport(Darwin)
-        throw XCTSkip("Norito bridge unavailable on this platform")
-        #else
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("Norito bridge unavailable on this platform")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "Norito bridge unavailable on this platform"
+        )
         let fixture = try tcLoadDaProofFixture()
         let options = ToriiDaProofSummaryOptions(sampleCount: 0, sampleSeed: 42, leafIndexes: [0, 1, 1])
         let summary: ToriiDaProofSummary
@@ -8089,7 +8091,9 @@ final class ToriiClientTests: XCTestCase {
                 options: options
             )
         } catch ToriiClientError.invalidPayload {
-            throw XCTSkip("Native DA proof summary generator unavailable in this environment")
+            try failRequiredNativeTestCapability(
+                "Native DA proof summary generator unavailable in this environment"
+            )
         }
         XCTAssertEqual(summary.blobHashHex.lowercased(), fixture.blobHashHex.lowercased())
         XCTAssertEqual(summary.sampleCount, 0)
@@ -8097,8 +8101,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(summary.proofs.count, 2)
         XCTAssertTrue(summary.proofs.allSatisfy { $0.origin == "explicit" })
         XCTAssertEqual(summary.proofs.first?.leafIndex, 0)
-        #endif
     }
+    #endif
 
     @available(iOS 15.0, macOS 12.0, *)
     func testFetchDaPayloadViaGatewayAttachesProofSummary() async throws {
@@ -13312,7 +13316,6 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testBodyOnlyOfflineSubmissionCodesCannotBecomeDefinitive() async throws {
-        let operationId = String(repeating: "11", count: 32)
         var payload = CompactNoritoWriter()
         for index in 0..<7 {
             payload.writeField(
@@ -19447,9 +19450,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             )
         )
         let nativeMagic = Data([0x4e, 0x52, 0x54, 0x30])
-        guard instruction.prefix(nativeMagic.count) == nativeMagic else {
-            throw XCTSkip("Native transfer InstructionBox bridge is not available in this artifact.")
-        }
+        try requireNativeTestCapability(
+            instruction.prefix(nativeMagic.count) == nativeMagic,
+            "Native transfer InstructionBox bridge is not available in this artifact."
+        )
 
         let wrapped = try ToriiMultisigProposeInstruction(noritoInstructionBoxBytes: instruction)
         let encoded = try JSONEncoder().encode(wrapped)
@@ -21147,7 +21151,9 @@ final class ToriiClientIntegrationTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
         guard let server = ToriiMockProcess() else {
-            throw XCTSkip("python interpreter not available for Torii mock")
+            try failRequiredNativeTestCapability(
+                "python interpreter not available for Torii mock"
+            )
         }
         mock = server
     }
@@ -21741,18 +21747,21 @@ final class ToriiClientIntegrationTests: XCTestCase {
 
         let manifestHex = try String(contentsOf: manifestHexURL, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let manifestData = Data(hexString: manifestHex) else {
-            throw XCTSkip("failed to decode DA manifest fixture")
-        }
+        let manifestData = try XCTUnwrap(
+            Data(hexString: manifestHex),
+            "failed to decode DA manifest fixture"
+        )
         let payloadData = try Data(contentsOf: payloadURL)
         let manifestJSONData = try Data(contentsOf: manifestJSONURL)
-        guard
-            let manifestObject = try JSONSerialization.jsonObject(with: manifestJSONData) as? [String: Any],
-            let blobArray = manifestObject["blob_hash"] as? [[NSNumber]],
-            let blobBytes = blobArray.first
-        else {
-            throw XCTSkip("blob_hash fixture missing")
-        }
+        let manifestObject = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: manifestJSONData) as? [String: Any],
+            "DA manifest fixture must be a JSON object"
+        )
+        let blobArray = try XCTUnwrap(
+            manifestObject["blob_hash"] as? [[NSNumber]],
+            "blob_hash fixture missing"
+        )
+        let blobBytes = try XCTUnwrap(blobArray.first, "blob_hash fixture is empty")
         let blobHex = blobBytes.reduce(into: "") { partialResult, value in
             partialResult.append(String(format: "%02x", value.uint8Value))
         }

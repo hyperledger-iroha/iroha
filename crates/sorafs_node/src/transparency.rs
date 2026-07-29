@@ -2,12 +2,13 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::moderation::ModerationEvidenceViewerAuditReport;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::sorafs::proof_token::{
     ModerationAction as ProofTokenModerationAction, ProofToken,
 };
@@ -76,8 +77,6 @@ const RESERVE_SOURCE_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.reserve.source_payload.v1";
 const RESERVE_PRIVATE_FIELD_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.reserve.private_field.v1";
-const TRANSPARENCY_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
-
 /// One privacy-safe source entry admitted into the local transparency ledger worker.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct TransparencyLedgerSourceEntry {
@@ -1830,7 +1829,9 @@ impl PrivacyAggregateCycleConfig {
             });
         }
         if self.cycle_seconds == 0
-            || self.first_cycle_start_unix % self.cycle_seconds != 0
+            || !self
+                .first_cycle_start_unix
+                .is_multiple_of(self.cycle_seconds)
             || self
                 .first_cycle_start_unix
                 .checked_add(self.cycle_seconds)
@@ -2047,7 +2048,9 @@ impl PrivacyAggregateScheduleConfig {
             });
         }
         if self.cycle_seconds == 0
-            || self.first_cycle_start_unix % self.cycle_seconds != 0
+            || !self
+                .first_cycle_start_unix
+                .is_multiple_of(self.cycle_seconds)
             || self
                 .first_cycle_start_unix
                 .checked_add(self.cycle_seconds)
@@ -2556,6 +2559,7 @@ pub trait PrivacyReleaseAnchorV1: Send + Sync {
         &self,
         expected: PrivacyReleaseAnchorHeadV1,
         next: PrivacyReleaseAnchorHeadV1,
+        lease: &TransparencyLeaderLeaseGrantV1,
     ) -> Result<(), PrivacyReleaseAnchorErrorV1>;
 }
 
@@ -2670,10 +2674,14 @@ impl PrivacyReleaseAnchorV1 for QualifiedPrivacyReleaseAnchorV1 {
         &self,
         expected: PrivacyReleaseAnchorHeadV1,
         next: PrivacyReleaseAnchorHeadV1,
+        lease: &TransparencyLeaderLeaseGrantV1,
     ) -> Result<(), PrivacyReleaseAnchorErrorV1> {
         if !expected.validate()
             || !next.validate()
+            || lease.validate().is_err()
             || expected.query_id() != next.query_id()
+            || lease.scope().query_id() != next.query_id()
+            || lease.scope().cycle_id() != next.release_id()
             || expected
                 .sequence()
                 .checked_add(1)
@@ -2683,7 +2691,9 @@ impl PrivacyReleaseAnchorV1 for QualifiedPrivacyReleaseAnchorV1 {
         }
         self.revalidate()
             .map_err(|_| PrivacyReleaseAnchorErrorV1::Unavailable)?;
-        let result = self.provider.compare_and_set_finalized_head(expected, next);
+        let result = self
+            .provider
+            .compare_and_set_finalized_head(expected, next, lease);
         self.revalidate()
             .map_err(|_| PrivacyReleaseAnchorErrorV1::Unavailable)?;
         result
@@ -2704,6 +2714,16 @@ impl PrivacyCyclePrfOutputV1 {
             return Err(PrivacyCyclePrfInputErrorV1::ZeroOutput);
         }
         Ok(Self(output))
+    }
+
+    /// Copy the hidden output into a runtime-only authenticated transport.
+    ///
+    /// This narrow escape hatch exists for the local runtime-provider broker.
+    /// Callers must keep the returned bytes out of configuration, durable
+    /// state, diagnostics, and logs, and must scrub transport buffers after use.
+    #[must_use]
+    pub fn runtime_transport_bytes(&self) -> [u8; 32] {
+        self.0
     }
 
     fn expose(&self) -> &[u8; 32] {
@@ -2835,40 +2855,1173 @@ impl PrivacyCyclePrfProviderV1 for QualifiedPrivacyCyclePrfProviderV1 {
     }
 }
 
+/// Canonical version of the external transparency leader-lease contract.
+pub const TRANSPARENCY_LEADER_LEASE_VERSION_V1: u16 = 1;
+
+/// Stable, payload-free external leader-lease provider failures.
+///
+/// Except for [`Self::Ambiguous`], implementations must return an error only
+/// after proving that the requested state transition did not take effect.
+/// Protected vendor diagnostics, credentials, and private key identifiers must
+/// remain inside the deployment-owned provider.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum TransparencyLeaderLeaseProviderErrorV1 {
+    /// The external lease service or its quorum is unavailable.
+    #[error("transparency leader lease provider unavailable")]
+    Unavailable,
+    /// Runtime authentication or authorization failed.
+    #[error("transparency leader lease provider authentication failed")]
+    AuthenticationFailed,
+    /// The provider rejected the request due to a bounded service limit.
+    #[error("transparency leader lease provider rate limited")]
+    RateLimited,
+    /// Another holder or fencing token won the atomic lease transition.
+    #[error("transparency leader lease provider conflict")]
+    Conflict,
+    /// The provider cannot prove whether the requested transition took effect.
+    #[error("transparency leader lease provider result is ambiguous")]
+    Ambiguous,
+    /// The provider could not complete the request.
+    #[error("transparency leader lease provider internal failure")]
+    Internal,
+}
+
+/// Stable, payload-free leader-lease boundary failures.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum TransparencyLeaderLeaseErrorV1 {
+    /// The configured or injected production provider failed qualification.
+    #[error(transparent)]
+    ProviderQualification(#[from] TransparencyRuntimeProviderQualificationErrorV1),
+    /// The external provider rejected or could not prove an operation.
+    #[error(transparent)]
+    Provider(#[from] TransparencyLeaderLeaseProviderErrorV1),
+    /// A query, cycle window/id, or public holder identity is malformed.
+    #[error("transparency leader lease scope is invalid")]
+    InvalidScope,
+    /// A caller-supplied lease transition timestamp or expiry is invalid.
+    #[error("transparency leader lease interval is invalid")]
+    InvalidLeaseInterval,
+    /// The external provider returned a malformed or incorrectly bound grant.
+    #[error("transparency leader lease provider returned an invalid grant")]
+    InvalidGrant,
+    /// The external provider returned a malformed or incorrectly bound release receipt.
+    #[error("transparency leader lease provider returned an invalid release receipt")]
+    InvalidReleaseReceipt,
+    /// A non-expired lease is already active in this qualified boundary.
+    #[error("a transparency leader lease is already active")]
+    ActiveLeaseExists,
+    /// No active lease is available for the requested operation.
+    #[error("no transparency leader lease is active")]
+    NoActiveLease,
+    /// The requested query, cycle window/id, or holder differs from the active lease.
+    #[error("transparency leader lease scope does not match the active grant")]
+    ScopeMismatch,
+    /// The active lease expired at or before the supplied observation time.
+    #[error("transparency leader lease is expired")]
+    LeaseExpired,
+    /// The caller-supplied observation time moved behind the accepted high-water mark.
+    #[error("transparency leader lease observation time rolled back")]
+    ObservationTimeRollback,
+    /// A renewal attempted to shorten or otherwise roll back the active lease.
+    #[error("transparency leader lease renewal rolled back lease validity")]
+    LeaseValidityRollback,
+    /// A provider returned a zero, reused, or non-monotonic fencing token.
+    #[error("transparency leader lease fencing token is not strictly monotonic")]
+    NonMonotonicFencingToken,
+    /// A prior provider transition is uncertain and its possible lease has not expired.
+    #[error("transparency leader lease state is indeterminate")]
+    IndeterminateState,
+    /// This qualified wrapper observed a post-startup provider qualification failure.
+    #[error("transparency leader lease provider lineage is terminally unqualified")]
+    ProviderLineagePoisoned,
+    /// The local lease-state lock was poisoned.
+    #[error("transparency leader lease state is unavailable")]
+    StateUnavailable,
+}
+
+/// Exact public query, cycle, and holder identity covered by one leader lease.
+///
+/// `holder_identity` is a public, deployment-stable identity digest. It must
+/// not be a credential, private key, bearer token, personal identifier, or a
+/// digest of any such secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransparencyLeaderLeaseScopeV1 {
+    query_id: [u8; 32],
+    cycle_id: [u8; 16],
+    cycle_start_unix: u64,
+    cycle_end_unix: u64,
+    due_at_unix: u64,
+    holder_identity: [u8; 32],
+}
+
+impl TransparencyLeaderLeaseScopeV1 {
+    /// Construct the canonical scope for one governed publication cycle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero query or holder identities and malformed cycle windows.
+    pub fn try_new(
+        query_id: [u8; 32],
+        window: PrivacyAggregateCycleWindow,
+        holder_identity: [u8; 32],
+    ) -> Result<Self, TransparencyLeaderLeaseErrorV1> {
+        let scope = Self {
+            query_id,
+            cycle_id: privacy_aggregate_cycle_id(
+                query_id,
+                window.cycle_start_unix,
+                window.cycle_end_unix,
+            ),
+            cycle_start_unix: window.cycle_start_unix,
+            cycle_end_unix: window.cycle_end_unix,
+            due_at_unix: window.due_at_unix,
+            holder_identity,
+        };
+        scope.validate()?;
+        Ok(scope)
+    }
+
+    /// Return the stable governed query identity.
+    #[must_use]
+    pub const fn query_id(self) -> [u8; 32] {
+        self.query_id
+    }
+
+    /// Return the deterministic cycle identity.
+    #[must_use]
+    pub const fn cycle_id(self) -> [u8; 16] {
+        self.cycle_id
+    }
+
+    /// Return the exact governed cycle window.
+    #[must_use]
+    pub const fn window(self) -> PrivacyAggregateCycleWindow {
+        PrivacyAggregateCycleWindow {
+            cycle_start_unix: self.cycle_start_unix,
+            cycle_end_unix: self.cycle_end_unix,
+            due_at_unix: self.due_at_unix,
+        }
+    }
+
+    /// Return the public deployment-stable holder identity digest.
+    #[must_use]
+    pub const fn holder_identity(self) -> [u8; 32] {
+        self.holder_identity
+    }
+
+    fn validate(self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        if self.query_id == [0; 32]
+            || self.holder_identity == [0; 32]
+            || self.cycle_start_unix == 0
+            || self.cycle_end_unix <= self.cycle_start_unix
+            || self.due_at_unix < self.cycle_end_unix
+            || self.cycle_id
+                != privacy_aggregate_cycle_id(
+                    self.query_id,
+                    self.cycle_start_unix,
+                    self.cycle_end_unix,
+                )
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidScope);
+        }
+        Ok(())
+    }
+}
+
+/// Exact request to atomically acquire one external transparency leader lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparencyLeaderLeaseAcquireRequestV1 {
+    scope: TransparencyLeaderLeaseScopeV1,
+    acquire_at_unix: u64,
+    expires_at_unix: u64,
+    fencing_floor: u64,
+    provider_binding: TransparencyRuntimeProviderBindingV1,
+}
+
+impl TransparencyLeaderLeaseAcquireRequestV1 {
+    /// Reconstruct one checked acquisition request from its exact public fields.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed scope or lease intervals and an unadvanceable fencing
+    /// floor. Runtime transports must use this constructor after canonical
+    /// decoding so provider implementations never receive unchecked requests.
+    pub fn try_new(
+        scope: TransparencyLeaderLeaseScopeV1,
+        acquire_at_unix: u64,
+        expires_at_unix: u64,
+        fencing_floor: u64,
+        provider_binding: TransparencyRuntimeProviderBindingV1,
+    ) -> Result<Self, TransparencyLeaderLeaseErrorV1> {
+        scope.validate()?;
+        if acquire_at_unix == 0
+            || acquire_at_unix < scope.due_at_unix
+            || expires_at_unix <= acquire_at_unix
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidLeaseInterval);
+        }
+        if fencing_floor == u64::MAX {
+            return Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken);
+        }
+        Ok(Self {
+            scope,
+            acquire_at_unix,
+            expires_at_unix,
+            fencing_floor,
+            provider_binding,
+        })
+    }
+
+    /// Return the exact query, cycle, and holder scope requested.
+    #[must_use]
+    pub const fn scope(&self) -> TransparencyLeaderLeaseScopeV1 {
+        self.scope
+    }
+
+    /// Return the caller-supplied acquisition observation time.
+    #[must_use]
+    pub const fn acquire_at_unix(&self) -> u64 {
+        self.acquire_at_unix
+    }
+
+    /// Return the requested exclusive lease expiry.
+    #[must_use]
+    pub const fn expires_at_unix(&self) -> u64 {
+        self.expires_at_unix
+    }
+
+    /// Return the last fencing token durably accepted by the caller.
+    #[must_use]
+    pub const fn fencing_floor(&self) -> u64 {
+        self.fencing_floor
+    }
+
+    /// Return the exact configured provider identity and public-policy pin.
+    #[must_use]
+    pub const fn provider_binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
+        &self.provider_binding
+    }
+}
+
+/// Public, non-secret grant returned by an external leader-lease provider.
+///
+/// The grant is runtime coordination metadata. It contains no credential,
+/// private key, bearer material, provider diagnostic, or private evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparencyLeaderLeaseGrantV1 {
+    version: u16,
+    lease_id: [u8; 32],
+    scope: TransparencyLeaderLeaseScopeV1,
+    fencing_token: u64,
+    issued_at_unix: u64,
+    expires_at_unix: u64,
+    provider_binding: TransparencyRuntimeProviderBindingV1,
+}
+
+impl TransparencyLeaderLeaseGrantV1 {
+    /// Construct one external provider grant.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed scope, zero identifiers or fencing tokens, invalid
+    /// validity intervals, and malformed provider qualification metadata.
+    pub fn try_new(
+        lease_id: [u8; 32],
+        scope: TransparencyLeaderLeaseScopeV1,
+        fencing_token: u64,
+        issued_at_unix: u64,
+        expires_at_unix: u64,
+        provider_binding: TransparencyRuntimeProviderBindingV1,
+    ) -> Result<Self, TransparencyLeaderLeaseErrorV1> {
+        let grant = Self {
+            version: TRANSPARENCY_LEADER_LEASE_VERSION_V1,
+            lease_id,
+            scope,
+            fencing_token,
+            issued_at_unix,
+            expires_at_unix,
+            provider_binding,
+        };
+        grant.validate()?;
+        Ok(grant)
+    }
+
+    /// Return the lease contract version.
+    #[must_use]
+    pub const fn version(&self) -> u16 {
+        self.version
+    }
+
+    /// Return the provider-issued public lease identity.
+    #[must_use]
+    pub const fn lease_id(&self) -> [u8; 32] {
+        self.lease_id
+    }
+
+    /// Return the exact query, cycle, and holder scope.
+    #[must_use]
+    pub const fn scope(&self) -> TransparencyLeaderLeaseScopeV1 {
+        self.scope
+    }
+
+    /// Return the strictly monotonic external fencing token.
+    #[must_use]
+    pub const fn fencing_token(&self) -> u64 {
+        self.fencing_token
+    }
+
+    /// Return the caller-supplied observation time bound into the grant.
+    #[must_use]
+    pub const fn issued_at_unix(&self) -> u64 {
+        self.issued_at_unix
+    }
+
+    /// Return the exclusive lease expiry.
+    #[must_use]
+    pub const fn expires_at_unix(&self) -> u64 {
+        self.expires_at_unix
+    }
+
+    /// Return the exact provider identity and public-policy qualification.
+    #[must_use]
+    pub const fn provider_binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
+        &self.provider_binding
+    }
+
+    /// Validate every public grant binding before an external fenced use.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scope, lease identity, fencing token,
+    /// validity interval, or provider binding is malformed.
+    pub fn validate(&self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        self.scope.validate()?;
+        if self.version != TRANSPARENCY_LEADER_LEASE_VERSION_V1
+            || self.lease_id == [0; 32]
+            || self.fencing_token == 0
+            || self.issued_at_unix == 0
+            || self.issued_at_unix < self.scope.due_at_unix
+            || self.expires_at_unix <= self.issued_at_unix
+            || !self.provider_binding.qualification().is_valid()
+            || validate_transparency_runtime_provider_handle(self.provider_binding.handle(), true)
+                .is_err()
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidGrant);
+        }
+        Ok(())
+    }
+}
+
+/// Exact request to atomically renew one active external leader lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparencyLeaderLeaseRenewRequestV1 {
+    current_grant: TransparencyLeaderLeaseGrantV1,
+    renew_at_unix: u64,
+    expires_at_unix: u64,
+    fencing_floor: u64,
+}
+
+impl TransparencyLeaderLeaseRenewRequestV1 {
+    /// Reconstruct one checked renewal request from its exact public fields.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed current grants, validity rollback, and an
+    /// unadvanceable fencing floor. Runtime transports must use this
+    /// constructor after canonical decoding.
+    pub fn try_new(
+        current_grant: TransparencyLeaderLeaseGrantV1,
+        renew_at_unix: u64,
+        expires_at_unix: u64,
+        fencing_floor: u64,
+    ) -> Result<Self, TransparencyLeaderLeaseErrorV1> {
+        current_grant.validate()?;
+        if renew_at_unix == 0
+            || renew_at_unix < current_grant.issued_at_unix
+            || renew_at_unix >= current_grant.expires_at_unix
+            || expires_at_unix <= current_grant.expires_at_unix
+            || expires_at_unix <= renew_at_unix
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::LeaseValidityRollback);
+        }
+        if fencing_floor == u64::MAX {
+            return Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken);
+        }
+        Ok(Self {
+            current_grant,
+            renew_at_unix,
+            expires_at_unix,
+            fencing_floor,
+        })
+    }
+
+    /// Return the exact currently accepted grant.
+    #[must_use]
+    pub const fn current_grant(&self) -> &TransparencyLeaderLeaseGrantV1 {
+        &self.current_grant
+    }
+
+    /// Return the caller-supplied renewal observation time.
+    #[must_use]
+    pub const fn renew_at_unix(&self) -> u64 {
+        self.renew_at_unix
+    }
+
+    /// Return the requested new exclusive expiry.
+    #[must_use]
+    pub const fn expires_at_unix(&self) -> u64 {
+        self.expires_at_unix
+    }
+
+    /// Return the last fencing token durably accepted by the caller.
+    #[must_use]
+    pub const fn fencing_floor(&self) -> u64 {
+        self.fencing_floor
+    }
+}
+
+/// Exact request to atomically release one active external leader lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparencyLeaderLeaseReleaseRequestV1 {
+    current_grant: TransparencyLeaderLeaseGrantV1,
+    release_at_unix: u64,
+}
+
+impl TransparencyLeaderLeaseReleaseRequestV1 {
+    /// Reconstruct one checked release request from its exact public fields.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed current grants and release observations outside the
+    /// active lease interval. Runtime transports must use this constructor
+    /// after canonical decoding.
+    pub fn try_new(
+        current_grant: TransparencyLeaderLeaseGrantV1,
+        release_at_unix: u64,
+    ) -> Result<Self, TransparencyLeaderLeaseErrorV1> {
+        current_grant.validate()?;
+        if release_at_unix == 0
+            || release_at_unix < current_grant.issued_at_unix
+            || release_at_unix >= current_grant.expires_at_unix
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::LeaseExpired);
+        }
+        Ok(Self {
+            current_grant,
+            release_at_unix,
+        })
+    }
+
+    /// Return the exact currently accepted grant.
+    #[must_use]
+    pub const fn current_grant(&self) -> &TransparencyLeaderLeaseGrantV1 {
+        &self.current_grant
+    }
+
+    /// Return the caller-supplied release observation time.
+    #[must_use]
+    pub const fn release_at_unix(&self) -> u64 {
+        self.release_at_unix
+    }
+}
+
+/// Public, non-secret receipt proving an exact leader-lease release response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparencyLeaderLeaseReleaseReceiptV1 {
+    version: u16,
+    lease_id: [u8; 32],
+    scope: TransparencyLeaderLeaseScopeV1,
+    fencing_token: u64,
+    released_at_unix: u64,
+    provider_binding: TransparencyRuntimeProviderBindingV1,
+}
+
+impl TransparencyLeaderLeaseReleaseReceiptV1 {
+    /// Construct one external provider release receipt.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed lease identity, scope, fencing token, timestamp, or
+    /// provider qualification metadata.
+    pub fn try_new(
+        lease_id: [u8; 32],
+        scope: TransparencyLeaderLeaseScopeV1,
+        fencing_token: u64,
+        released_at_unix: u64,
+        provider_binding: TransparencyRuntimeProviderBindingV1,
+    ) -> Result<Self, TransparencyLeaderLeaseErrorV1> {
+        let receipt = Self {
+            version: TRANSPARENCY_LEADER_LEASE_VERSION_V1,
+            lease_id,
+            scope,
+            fencing_token,
+            released_at_unix,
+            provider_binding,
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+
+    /// Return the lease contract version.
+    #[must_use]
+    pub const fn version(&self) -> u16 {
+        self.version
+    }
+
+    /// Return the released public lease identity.
+    #[must_use]
+    pub const fn lease_id(&self) -> [u8; 32] {
+        self.lease_id
+    }
+
+    /// Return the exact released query, cycle, and holder scope.
+    #[must_use]
+    pub const fn scope(&self) -> TransparencyLeaderLeaseScopeV1 {
+        self.scope
+    }
+
+    /// Return the released fencing token.
+    #[must_use]
+    pub const fn fencing_token(&self) -> u64 {
+        self.fencing_token
+    }
+
+    /// Return the caller-supplied release observation time.
+    #[must_use]
+    pub const fn released_at_unix(&self) -> u64 {
+        self.released_at_unix
+    }
+
+    /// Return the exact provider identity and public-policy qualification.
+    #[must_use]
+    pub const fn provider_binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
+        &self.provider_binding
+    }
+
+    fn validate(&self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        self.scope.validate()?;
+        if self.version != TRANSPARENCY_LEADER_LEASE_VERSION_V1
+            || self.lease_id == [0; 32]
+            || self.fencing_token == 0
+            || self.released_at_unix == 0
+            || self.released_at_unix < self.scope.due_at_unix
+            || !self.provider_binding.qualification().is_valid()
+            || validate_transparency_runtime_provider_handle(self.provider_binding.handle(), true)
+                .is_err()
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidReleaseReceipt);
+        }
+        Ok(())
+    }
+}
+
+/// Runtime-only external CAS boundary for transparency publisher leadership.
+///
+/// Implementations must atomically serialize acquisition, renewal, and release
+/// across all replicas and issue globally strict monotonic fencing tokens.
+/// They must not persist or log credentials, private keys, bearer material,
+/// private evidence, or personally identifying holder data. Production
+/// implementations also implement
+/// [`ProductionTransparencyLeaderLeaseProviderV1`] and are admitted only
+/// through [`QualifiedTransparencyLeaderLeaseProviderV1`].
+/// This module intentionally supplies no concrete production adapter.
+pub trait TransparencyLeaderLeaseProviderV1: Send + Sync {
+    /// Atomically acquire the exact requested query/cycle lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed provider error when acquisition cannot be proven.
+    fn acquire(
+        &self,
+        request: &TransparencyLeaderLeaseAcquireRequestV1,
+    ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>;
+
+    /// Atomically renew the exact active lease and advance its fencing token.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed provider error when renewal cannot be proven.
+    fn renew(
+        &self,
+        request: &TransparencyLeaderLeaseRenewRequestV1,
+    ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>;
+
+    /// Atomically release the exact active lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed provider error when release cannot be proven.
+    fn release(
+        &self,
+        request: &TransparencyLeaderLeaseReleaseRequestV1,
+    ) -> Result<TransparencyLeaderLeaseReleaseReceiptV1, TransparencyLeaderLeaseProviderErrorV1>;
+}
+
+/// Production qualification extension for an external leader-lease provider.
+///
+/// The deployment must seal qualification revisions monotonically and never
+/// reuse an older revision or public-policy digest after rotation.
+pub trait ProductionTransparencyLeaderLeaseProviderV1:
+    TransparencyLeaderLeaseProviderV1 + ProductionTransparencyRuntimeProviderV1
+{
+}
+
+impl<T> ProductionTransparencyLeaderLeaseProviderV1 for T where
+    T: TransparencyLeaderLeaseProviderV1 + ProductionTransparencyRuntimeProviderV1 + ?Sized
+{
+}
+
+#[derive(Debug)]
+struct TransparencyLeaderLeaseStateV1 {
+    active: Option<TransparencyLeaderLeaseGrantV1>,
+    fencing_floor: u64,
+    last_observed_at_unix: u64,
+    indeterminate_until_unix: Option<u64>,
+    provider_lineage_poisoned: bool,
+}
+
+impl TransparencyLeaderLeaseStateV1 {
+    fn observe(&mut self, observed_at_unix: u64) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        if observed_at_unix == 0 {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidLeaseInterval);
+        }
+        if observed_at_unix < self.last_observed_at_unix {
+            return Err(TransparencyLeaderLeaseErrorV1::ObservationTimeRollback);
+        }
+        self.last_observed_at_unix = observed_at_unix;
+        if self
+            .indeterminate_until_unix
+            .is_some_and(|until| observed_at_unix >= until)
+        {
+            self.indeterminate_until_unix = None;
+            self.active = None;
+        }
+        Ok(())
+    }
+
+    const fn reject_indeterminate(&self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        if self.indeterminate_until_unix.is_some() {
+            return Err(TransparencyLeaderLeaseErrorV1::IndeterminateState);
+        }
+        Ok(())
+    }
+
+    const fn reject_poisoned_lineage(&self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        if self.provider_lineage_poisoned {
+            return Err(TransparencyLeaderLeaseErrorV1::ProviderLineagePoisoned);
+        }
+        Ok(())
+    }
+
+    fn poison_provider_lineage(&mut self) {
+        self.provider_lineage_poisoned = true;
+        self.active = None;
+    }
+
+    fn quarantine_until(&mut self, expires_at_unix: u64) {
+        self.active = None;
+        self.indeterminate_until_unix = Some(
+            self.indeterminate_until_unix
+                .map_or(expires_at_unix, |current| current.max(expires_at_unix)),
+        );
+    }
+}
+
+/// Qualification-pinned, rollback-aware transparency leader-lease boundary.
+///
+/// Construction pins one exact production handle, revision, and public-policy
+/// digest. Every state transition and per-use validation revalidates that pin.
+/// All time decisions use explicit caller-supplied Unix seconds; this boundary
+/// never reads a wall clock and must not be called from deterministic ledger
+/// calculations with nondeterministic inputs.
+///
+/// `fencing_floor` must be restored from the last durably accepted external
+/// token. Zero is valid only for the first activation of a provider lineage.
+/// The deployment-owned provider remains responsible for globally monotonic
+/// CAS state across process and host failure.
+///
+/// Any post-startup qualification failure terminally poisons this wrapper,
+/// including an unavailable qualification service. Recovery requires explicit
+/// requalification and construction of a new wrapper; a provider that later
+/// advertises the old revision cannot revive the prior instance.
+pub struct QualifiedTransparencyLeaderLeaseProviderV1 {
+    binding: TransparencyRuntimeProviderBindingV1,
+    provider: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1>,
+    state: Mutex<TransparencyLeaderLeaseStateV1>,
+}
+
+impl QualifiedTransparencyLeaderLeaseProviderV1 {
+    /// Qualify one exact production provider and seed its durable fencing floor.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the provider is absent, malformed, test-marked,
+    /// substituted, unavailable, stale, or does not match the configured
+    /// revision and public-policy digest, or when the restored fencing floor
+    /// cannot be advanced. Provider diagnostic text is discarded.
+    pub fn try_new(
+        binding: TransparencyRuntimeProviderBindingV1,
+        provider: Option<Arc<dyn ProductionTransparencyLeaderLeaseProviderV1>>,
+        fencing_floor: u64,
+    ) -> Result<Self, TransparencyLeaderLeaseErrorV1> {
+        if fencing_floor == u64::MAX {
+            return Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken);
+        }
+        let provider =
+            provider.ok_or(TransparencyRuntimeProviderQualificationErrorV1::MissingProvider)?;
+        let qualification =
+            qualify_transparency_runtime_provider(binding.handle(), provider.as_ref())?;
+        if qualification != binding.qualification() {
+            return Err(
+                TransparencyRuntimeProviderQualificationErrorV1::ConfiguredQualificationMismatch
+                    .into(),
+            );
+        }
+        Ok(Self {
+            binding,
+            provider,
+            state: Mutex::new(TransparencyLeaderLeaseStateV1 {
+                active: None,
+                fencing_floor,
+                last_observed_at_unix: 0,
+                indeterminate_until_unix: None,
+                provider_lineage_poisoned: false,
+            }),
+        })
+    }
+
+    /// Return the pinned stable opaque provider handle.
+    #[must_use]
+    pub fn handle(&self) -> &str {
+        self.binding.handle()
+    }
+
+    /// Return the pinned public provider qualification.
+    #[must_use]
+    pub const fn qualification(&self) -> TransparencyRuntimeProviderQualificationV1 {
+        self.binding.qualification()
+    }
+
+    /// Return the exact configured provider binding retained by this boundary.
+    #[must_use]
+    pub const fn binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
+        &self.binding
+    }
+
+    /// Revalidate the pinned provider identity and public policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed, payload-free error if the provider is unavailable or
+    /// if its handle, revision, or policy digest changed after startup.
+    pub fn revalidate(&self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?;
+        self.revalidate_provider(&mut state)
+    }
+
+    /// Return the highest fencing token accepted by this boundary.
+    ///
+    /// The caller must durably checkpoint this public value before treating a
+    /// grant as usable across restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the local lease-state lock is unavailable.
+    pub fn fencing_floor(&self) -> Result<u64, TransparencyLeaderLeaseErrorV1> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?
+            .fencing_floor)
+    }
+
+    /// Restore the last durably accepted fencing floor before the first use.
+    ///
+    /// This is a startup-only operation. It fails after any lease observation
+    /// or transition so a live wrapper cannot be rolled back or reseeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unadvanceable floor, state-lock failure, or an
+    /// attempted restore after this wrapper has already been used.
+    pub fn restore_fencing_floor(
+        &self,
+        fencing_floor: u64,
+    ) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        if fencing_floor == u64::MAX {
+            return Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken);
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?;
+        if state.active.is_some()
+            || state.last_observed_at_unix != 0
+            || state.indeterminate_until_unix.is_some()
+            || state.provider_lineage_poisoned
+            || fencing_floor < state.fencing_floor
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken);
+        }
+        self.revalidate_provider(&mut state)?;
+        state.fencing_floor = fencing_floor;
+        Ok(())
+    }
+
+    /// Atomically acquire one exact query/cycle lease.
+    ///
+    /// `acquire_at_unix` and `expires_at_unix` are externally observed public
+    /// timestamps. The provider must enforce its qualified duration and clock
+    /// policy; this boundary verifies exact echoing and monotonicity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on qualification drift, local overlap, invalid time,
+    /// provider conflict or ambiguity, malformed bindings, and reused fencing
+    /// tokens.
+    pub fn acquire(
+        &self,
+        scope: TransparencyLeaderLeaseScopeV1,
+        acquire_at_unix: u64,
+        expires_at_unix: u64,
+    ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseErrorV1> {
+        scope.validate()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?;
+        state.observe(acquire_at_unix)?;
+        state.reject_poisoned_lineage()?;
+        state.reject_indeterminate()?;
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|grant| acquire_at_unix < grant.expires_at_unix)
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::ActiveLeaseExists);
+        }
+        state.active = None;
+        let request = TransparencyLeaderLeaseAcquireRequestV1::try_new(
+            scope,
+            acquire_at_unix,
+            expires_at_unix,
+            state.fencing_floor,
+            self.binding.clone(),
+        )?;
+        self.revalidate_provider(&mut state)?;
+        let result = self.provider.acquire(&request);
+        if let Err(error) = self.revalidate_provider(&mut state) {
+            state.quarantine_until(expires_at_unix);
+            return Err(error);
+        }
+        let grant = match result {
+            Ok(grant) => grant,
+            Err(error) => {
+                if error == TransparencyLeaderLeaseProviderErrorV1::Ambiguous {
+                    state.quarantine_until(expires_at_unix);
+                }
+                return Err(error.into());
+            }
+        };
+        if let Err(error) = self.validate_acquired_grant(&request, &grant) {
+            state.quarantine_until(expires_at_unix);
+            return Err(error);
+        }
+        state.fencing_floor = grant.fencing_token;
+        state.active = Some(grant.clone());
+        Ok(grant)
+    }
+
+    /// Atomically renew the exact active lease.
+    ///
+    /// Every accepted renewal must strictly extend expiry and advance the
+    /// global fencing token.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on scope mismatch, expiry or time rollback, provider
+    /// ambiguity/conflict, qualification drift, malformed responses, and
+    /// non-monotonic fencing tokens.
+    pub fn renew(
+        &self,
+        scope: TransparencyLeaderLeaseScopeV1,
+        renew_at_unix: u64,
+        expires_at_unix: u64,
+    ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseErrorV1> {
+        scope.validate()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?;
+        state.observe(renew_at_unix)?;
+        state.reject_poisoned_lineage()?;
+        state.reject_indeterminate()?;
+        let Some(active) = state.active.clone() else {
+            return Err(TransparencyLeaderLeaseErrorV1::NoActiveLease);
+        };
+        if renew_at_unix >= active.expires_at_unix {
+            state.active = None;
+            return Err(TransparencyLeaderLeaseErrorV1::LeaseExpired);
+        }
+        if scope != active.scope {
+            return Err(TransparencyLeaderLeaseErrorV1::ScopeMismatch);
+        }
+        let request = TransparencyLeaderLeaseRenewRequestV1::try_new(
+            active,
+            renew_at_unix,
+            expires_at_unix,
+            state.fencing_floor,
+        )?;
+        self.revalidate_provider(&mut state)?;
+        let result = self.provider.renew(&request);
+        if let Err(error) = self.revalidate_provider(&mut state) {
+            state.quarantine_until(expires_at_unix);
+            return Err(error);
+        }
+        let grant = match result {
+            Ok(grant) => grant,
+            Err(error) => {
+                if matches!(
+                    error,
+                    TransparencyLeaderLeaseProviderErrorV1::Ambiguous
+                        | TransparencyLeaderLeaseProviderErrorV1::Conflict
+                ) {
+                    state.quarantine_until(expires_at_unix);
+                }
+                return Err(error.into());
+            }
+        };
+        if let Err(error) = self.validate_renewed_grant(&request, &grant) {
+            state.quarantine_until(expires_at_unix);
+            return Err(error);
+        }
+        state.fencing_floor = grant.fencing_token;
+        state.active = Some(grant.clone());
+        Ok(grant)
+    }
+
+    /// Atomically release the exact active lease.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on scope mismatch, expiration or time rollback, provider
+    /// ambiguity/conflict, qualification drift, or an invalid release receipt.
+    pub fn release(
+        &self,
+        scope: TransparencyLeaderLeaseScopeV1,
+        release_at_unix: u64,
+    ) -> Result<TransparencyLeaderLeaseReleaseReceiptV1, TransparencyLeaderLeaseErrorV1> {
+        scope.validate()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?;
+        state.observe(release_at_unix)?;
+        state.reject_poisoned_lineage()?;
+        state.reject_indeterminate()?;
+        let Some(active) = state.active.clone() else {
+            return Err(TransparencyLeaderLeaseErrorV1::NoActiveLease);
+        };
+        if release_at_unix >= active.expires_at_unix {
+            state.active = None;
+            return Err(TransparencyLeaderLeaseErrorV1::LeaseExpired);
+        }
+        if scope != active.scope {
+            return Err(TransparencyLeaderLeaseErrorV1::ScopeMismatch);
+        }
+        let active_expires_at_unix = active.expires_at_unix;
+        let request = TransparencyLeaderLeaseReleaseRequestV1::try_new(active, release_at_unix)?;
+        self.revalidate_provider(&mut state)?;
+        let result = self.provider.release(&request);
+        if let Err(error) = self.revalidate_provider(&mut state) {
+            state.quarantine_until(active_expires_at_unix);
+            return Err(error);
+        }
+        let receipt = match result {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                if matches!(
+                    error,
+                    TransparencyLeaderLeaseProviderErrorV1::Ambiguous
+                        | TransparencyLeaderLeaseProviderErrorV1::Conflict
+                ) {
+                    state.quarantine_until(active_expires_at_unix);
+                }
+                return Err(error.into());
+            }
+        };
+        if let Err(error) = self.validate_release_receipt(&request, &receipt) {
+            state.quarantine_until(active_expires_at_unix);
+            return Err(error);
+        }
+        state.active = None;
+        Ok(receipt)
+    }
+
+    /// Revalidate and return the exact active grant for one security-sensitive use.
+    ///
+    /// The caller must pass the returned fencing token to the external
+    /// publication/readback operation. Local validation alone cannot fence a
+    /// different process; the deployment-owned adapter must reject stale
+    /// tokens atomically.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on qualification drift, scope mismatch, expiration,
+    /// observation-time rollback, uncertain state, or a non-monotonic token.
+    pub fn validate_for_use(
+        &self,
+        scope: TransparencyLeaderLeaseScopeV1,
+        observed_at_unix: u64,
+    ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseErrorV1> {
+        scope.validate()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?;
+        state.observe(observed_at_unix)?;
+        state.reject_poisoned_lineage()?;
+        state.reject_indeterminate()?;
+        self.revalidate_provider(&mut state)?;
+        let Some(active) = state.active.clone() else {
+            return Err(TransparencyLeaderLeaseErrorV1::NoActiveLease);
+        };
+        if observed_at_unix < active.issued_at_unix {
+            return Err(TransparencyLeaderLeaseErrorV1::ObservationTimeRollback);
+        }
+        if observed_at_unix >= active.expires_at_unix {
+            state.active = None;
+            return Err(TransparencyLeaderLeaseErrorV1::LeaseExpired);
+        }
+        if scope != active.scope {
+            return Err(TransparencyLeaderLeaseErrorV1::ScopeMismatch);
+        }
+        active
+            .validate()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::InvalidGrant)?;
+        if active.provider_binding != self.binding {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidGrant);
+        }
+        if active.fencing_token != state.fencing_floor {
+            return Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken);
+        }
+        self.revalidate_provider(&mut state)?;
+        Ok(active)
+    }
+
+    fn revalidate_provider(
+        &self,
+        state: &mut TransparencyLeaderLeaseStateV1,
+    ) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        state.reject_poisoned_lineage()?;
+        if let Err(error) = assert_transparency_runtime_provider_qualification(
+            self.binding.handle(),
+            self.binding.qualification(),
+            self.provider.as_ref(),
+        ) {
+            state.poison_provider_lineage();
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    fn validate_acquired_grant(
+        &self,
+        request: &TransparencyLeaderLeaseAcquireRequestV1,
+        grant: &TransparencyLeaderLeaseGrantV1,
+    ) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        grant
+            .validate()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::InvalidGrant)?;
+        if grant.scope != request.scope
+            || grant.issued_at_unix != request.acquire_at_unix
+            || grant.expires_at_unix != request.expires_at_unix
+            || grant.provider_binding != self.binding
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidGrant);
+        }
+        if grant.fencing_token <= request.fencing_floor {
+            return Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken);
+        }
+        Ok(())
+    }
+
+    fn validate_renewed_grant(
+        &self,
+        request: &TransparencyLeaderLeaseRenewRequestV1,
+        grant: &TransparencyLeaderLeaseGrantV1,
+    ) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        grant
+            .validate()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::InvalidGrant)?;
+        if grant.lease_id != request.current_grant.lease_id
+            || grant.scope != request.current_grant.scope
+            || grant.issued_at_unix != request.renew_at_unix
+            || grant.expires_at_unix != request.expires_at_unix
+            || grant.provider_binding != self.binding
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidGrant);
+        }
+        if grant.fencing_token <= request.fencing_floor
+            || grant.fencing_token <= request.current_grant.fencing_token
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken);
+        }
+        Ok(())
+    }
+
+    fn validate_release_receipt(
+        &self,
+        request: &TransparencyLeaderLeaseReleaseRequestV1,
+        receipt: &TransparencyLeaderLeaseReleaseReceiptV1,
+    ) -> Result<(), TransparencyLeaderLeaseErrorV1> {
+        receipt
+            .validate()
+            .map_err(|_| TransparencyLeaderLeaseErrorV1::InvalidReleaseReceipt)?;
+        if receipt.lease_id != request.current_grant.lease_id
+            || receipt.scope != request.current_grant.scope
+            || receipt.fencing_token != request.current_grant.fencing_token
+            || receipt.released_at_unix != request.release_at_unix
+            || receipt.provider_binding != self.binding
+        {
+            return Err(TransparencyLeaderLeaseErrorV1::InvalidReleaseReceipt);
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for QualifiedTransparencyLeaderLeaseProviderV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QualifiedTransparencyLeaderLeaseProviderV1")
+            .field("binding", &self.binding)
+            .field("provider", &"<runtime-only>")
+            .field("state", &"<runtime-only>")
+            .finish()
+    }
+}
+
 fn validate_transparency_runtime_provider_handle(
     handle: &str,
     configured: bool,
 ) -> Result<(), TransparencyRuntimeProviderQualificationErrorV1> {
-    if handle.is_empty()
-        || handle.len() > TRANSPARENCY_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(if configured {
+    validate_production_runtime_handle(handle).map_err(|error| match (configured, error) {
+        (true, ProductionRuntimeHandleError::InvalidSyntax) => {
             TransparencyRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle
-        } else {
+        }
+        (false, ProductionRuntimeHandleError::InvalidSyntax) => {
             TransparencyRuntimeProviderQualificationErrorV1::InvalidProviderHandle
-        });
-    }
-    let lowercase = handle.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
-        return Err(if configured {
+        }
+        (true, ProductionRuntimeHandleError::TestMarked) => {
             TransparencyRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle
-        } else {
+        }
+        (false, ProductionRuntimeHandleError::TestMarked) => {
             TransparencyRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
-        });
-    }
-    Ok(())
+        }
+    })
 }
 
 fn qualify_transparency_runtime_provider<P: ProductionTransparencyRuntimeProviderV1 + ?Sized>(
@@ -4433,7 +5586,10 @@ fn system_time_to_unix_secs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
+    };
 
     fn xor(value: &str) -> sorafs_manifest::deal::XorQuantity {
         value.parse().expect("canonical XOR quantity")
@@ -4761,6 +5917,8 @@ mod tests {
 
     const TEST_PRF_PROVIDER_HANDLE: &str = "threshold-prf:transparency:primary";
     const TEST_RELEASE_ANCHOR_HANDLE: &str = "governance-dag:transparency:primary";
+    const TEST_LEADER_LEASE_PROVIDER_HANDLE: &str = "sealed-cas:transparency:primary";
+    const TEST_LEADER_LEASE_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xE7; 32];
 
     fn test_prf_provider_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(TEST_PRF_PROVIDER_HANDLE, 1, [0xC7; 32])
@@ -4770,6 +5928,265 @@ mod tests {
     fn test_release_anchor_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(TEST_RELEASE_ANCHOR_HANDLE, 1, [0xD7; 32])
             .expect("valid release-anchor provider binding")
+    }
+
+    fn test_leader_lease_binding(revision: u64) -> TransparencyRuntimeProviderBindingV1 {
+        TransparencyRuntimeProviderBindingV1::try_new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+            revision,
+            TEST_LEADER_LEASE_PROVIDER_POLICY_DIGEST,
+        )
+        .expect("valid leader-lease provider binding")
+    }
+
+    fn test_leader_lease_scope(holder_seed: u8) -> TransparencyLeaderLeaseScopeV1 {
+        TransparencyLeaderLeaseScopeV1::try_new(
+            privacy_config().query_id,
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix: 100,
+                cycle_end_unix: 200,
+                due_at_unix: 210,
+            },
+            [holder_seed; 32],
+        )
+        .expect("valid leader-lease scope")
+    }
+
+    fn qualify_test_leader_lease_provider(
+        provider: &Arc<QualifiedTestLeaderLeaseProvider>,
+        revision: u64,
+        fencing_floor: u64,
+    ) -> QualifiedTransparencyLeaderLeaseProviderV1 {
+        let injected: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> = provider.clone();
+        QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+            test_leader_lease_binding(revision),
+            Some(injected),
+            fencing_floor,
+        )
+        .expect("qualify test leader-lease provider")
+    }
+
+    #[derive(Default)]
+    struct TestLeaderLeaseProviderState {
+        next_fencing_token: u64,
+        active: Option<TransparencyLeaderLeaseGrantV1>,
+    }
+
+    struct QualifiedTestLeaderLeaseProvider {
+        handle: &'static str,
+        substituted: AtomicBool,
+        revision: AtomicU64,
+        qualification_error: AtomicBool,
+        qualification_calls: AtomicUsize,
+        acquire_calls: AtomicUsize,
+        renew_calls: AtomicUsize,
+        release_calls: AtomicUsize,
+        drift_during_operation: AtomicBool,
+        ambiguous_operation: AtomicU8,
+        invalid_response_operation: AtomicU8,
+        forced_fencing_token: AtomicU64,
+        state: Mutex<TestLeaderLeaseProviderState>,
+    }
+
+    impl QualifiedTestLeaderLeaseProvider {
+        fn new(handle: &'static str) -> Self {
+            Self {
+                handle,
+                substituted: AtomicBool::new(false),
+                revision: AtomicU64::new(1),
+                qualification_error: AtomicBool::new(false),
+                qualification_calls: AtomicUsize::new(0),
+                acquire_calls: AtomicUsize::new(0),
+                renew_calls: AtomicUsize::new(0),
+                release_calls: AtomicUsize::new(0),
+                drift_during_operation: AtomicBool::new(false),
+                ambiguous_operation: AtomicU8::new(0),
+                invalid_response_operation: AtomicU8::new(0),
+                forced_fencing_token: AtomicU64::new(0),
+                state: Mutex::new(TestLeaderLeaseProviderState::default()),
+            }
+        }
+
+        fn provider_binding(&self) -> TransparencyRuntimeProviderBindingV1 {
+            TransparencyRuntimeProviderBindingV1::try_new(
+                self.handle,
+                self.revision.load(Ordering::SeqCst),
+                TEST_LEADER_LEASE_PROVIDER_POLICY_DIGEST,
+            )
+            .expect("test provider exposes a valid production-style binding")
+        }
+
+        fn next_fencing_token(
+            &self,
+            state: &mut TestLeaderLeaseProviderState,
+            fencing_floor: u64,
+        ) -> u64 {
+            let forced = self.forced_fencing_token.swap(0, Ordering::SeqCst);
+            if forced != 0 {
+                return forced;
+            }
+            state.next_fencing_token = state
+                .next_fencing_token
+                .max(fencing_floor)
+                .checked_add(1)
+                .expect("test fencing token");
+            state.next_fencing_token
+        }
+
+        fn lease_id(fencing_token: u64) -> [u8; 32] {
+            let mut lease_id = [0xA5; 32];
+            lease_id[..8].copy_from_slice(&fencing_token.to_le_bytes());
+            lease_id
+        }
+
+        fn maybe_drift(&self) {
+            if self.drift_during_operation.swap(false, Ordering::SeqCst) {
+                self.revision.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        fn finish_grant_operation(
+            &self,
+            operation: u8,
+            mut grant: TransparencyLeaderLeaseGrantV1,
+        ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>
+        {
+            if self.invalid_response_operation.swap(0, Ordering::SeqCst) == operation {
+                grant.scope.query_id = [0xF1; 32];
+            }
+            self.maybe_drift();
+            if self.ambiguous_operation.swap(0, Ordering::SeqCst) == operation {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Ambiguous);
+            }
+            Ok(grant)
+        }
+    }
+
+    impl ProductionTransparencyRuntimeProviderV1 for QualifiedTestLeaderLeaseProvider {
+        fn handle(&self) -> &str {
+            if self.substituted.load(Ordering::SeqCst) {
+                "sealed-cas:transparency:secondary"
+            } else {
+                self.handle
+            }
+        }
+
+        fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
+            self.qualification_calls.fetch_add(1, Ordering::SeqCst);
+            if self.qualification_error.load(Ordering::SeqCst) {
+                return Err("must-never-escape: protected lease-provider diagnostic".to_string());
+            }
+            Ok(TransparencyRuntimeProviderQualificationV1::new(
+                self.revision.load(Ordering::SeqCst),
+                TEST_LEADER_LEASE_PROVIDER_POLICY_DIGEST,
+            ))
+        }
+    }
+
+    impl TransparencyLeaderLeaseProviderV1 for QualifiedTestLeaderLeaseProvider {
+        fn acquire(
+            &self,
+            request: &TransparencyLeaderLeaseAcquireRequestV1,
+        ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>
+        {
+            self.acquire_calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(request.provider_binding(), &self.provider_binding());
+            let mut state = self.state.lock().expect("test lease-provider state");
+            if state
+                .active
+                .as_ref()
+                .is_some_and(|active| request.acquire_at_unix() < active.expires_at_unix())
+            {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Conflict);
+            }
+            state.active = None;
+            let fencing_token = self.next_fencing_token(&mut state, request.fencing_floor());
+            let grant = TransparencyLeaderLeaseGrantV1::try_new(
+                Self::lease_id(fencing_token),
+                request.scope(),
+                fencing_token,
+                request.acquire_at_unix(),
+                request.expires_at_unix(),
+                self.provider_binding(),
+            )
+            .expect("test provider acquire grant");
+            state.active = Some(grant.clone());
+            drop(state);
+            self.finish_grant_operation(1, grant)
+        }
+
+        fn renew(
+            &self,
+            request: &TransparencyLeaderLeaseRenewRequestV1,
+        ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>
+        {
+            self.renew_calls.fetch_add(1, Ordering::SeqCst);
+            let mut state = self.state.lock().expect("test lease-provider state");
+            let Some(active) = state.active.as_ref() else {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Conflict);
+            };
+            if active.lease_id() != request.current_grant().lease_id()
+                || active.scope() != request.current_grant().scope()
+                || active.fencing_token() != request.current_grant().fencing_token()
+                || request.renew_at_unix() >= active.expires_at_unix()
+            {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Conflict);
+            }
+            let lease_id = active.lease_id();
+            let scope = active.scope();
+            let fencing_token = self.next_fencing_token(&mut state, request.fencing_floor());
+            let grant = TransparencyLeaderLeaseGrantV1::try_new(
+                lease_id,
+                scope,
+                fencing_token,
+                request.renew_at_unix(),
+                request.expires_at_unix(),
+                self.provider_binding(),
+            )
+            .expect("test provider renewal grant");
+            state.active = Some(grant.clone());
+            drop(state);
+            self.finish_grant_operation(2, grant)
+        }
+
+        fn release(
+            &self,
+            request: &TransparencyLeaderLeaseReleaseRequestV1,
+        ) -> Result<TransparencyLeaderLeaseReleaseReceiptV1, TransparencyLeaderLeaseProviderErrorV1>
+        {
+            self.release_calls.fetch_add(1, Ordering::SeqCst);
+            let mut state = self.state.lock().expect("test lease-provider state");
+            let Some(active) = state.active.as_ref() else {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Conflict);
+            };
+            if active.lease_id() != request.current_grant().lease_id()
+                || active.scope() != request.current_grant().scope()
+                || active.fencing_token() != request.current_grant().fencing_token()
+                || request.release_at_unix() >= active.expires_at_unix()
+            {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Conflict);
+            }
+            let receipt = TransparencyLeaderLeaseReleaseReceiptV1::try_new(
+                active.lease_id(),
+                active.scope(),
+                active.fencing_token(),
+                request.release_at_unix(),
+                self.provider_binding(),
+            )
+            .expect("test provider release receipt");
+            state.active = None;
+            drop(state);
+            let operation = self.invalid_response_operation.swap(0, Ordering::SeqCst);
+            let mut receipt = receipt;
+            if operation == 3 {
+                receipt.fencing_token = receipt.fencing_token.wrapping_add(1);
+            }
+            self.maybe_drift();
+            if self.ambiguous_operation.swap(0, Ordering::SeqCst) == 3 {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Ambiguous);
+            }
+            Ok(receipt)
+        }
     }
 
     struct QualifiedTestPrfProvider {
@@ -4877,6 +6294,7 @@ mod tests {
             &self,
             _expected: PrivacyReleaseAnchorHeadV1,
             _next: PrivacyReleaseAnchorHeadV1,
+            _lease: &TransparencyLeaderLeaseGrantV1,
         ) -> Result<(), PrivacyReleaseAnchorErrorV1> {
             self.compare_and_set_calls.fetch_add(1, Ordering::SeqCst);
             self.maybe_drift();
@@ -5122,16 +6540,25 @@ mod tests {
         assert_eq!(provider.head_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 3);
 
+        let lease = TransparencyLeaderLeaseGrantV1::try_new(
+            [0x21; 32],
+            test_leader_lease_scope(0xE1),
+            1,
+            211,
+            300,
+            test_leader_lease_binding(1),
+        )
+        .expect("valid external lease grant");
         let next = PrivacyReleaseAnchorHeadV1::try_from_parts(
             query_id,
             1,
-            [0x31; 16],
+            lease.scope().cycle_id(),
             [0x41; 32],
             Some([0x51; 32]),
         )
         .expect("valid direct successor");
         qualified
-            .compare_and_set_finalized_head(genesis, next)
+            .compare_and_set_finalized_head(genesis, next, &lease)
             .expect("qualified finalized-head CAS");
         assert_eq!(provider.compare_and_set_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 5);
@@ -5152,7 +6579,7 @@ mod tests {
             .drift_during_operation
             .store(true, Ordering::SeqCst);
         let error = qualified
-            .compare_and_set_finalized_head(genesis, next)
+            .compare_and_set_finalized_head(genesis, next, &lease)
             .expect_err("policy drift during CAS must fail closed");
         assert_eq!(error, PrivacyReleaseAnchorErrorV1::Unavailable);
         assert_eq!(provider.compare_and_set_calls.load(Ordering::SeqCst), 1);
@@ -5183,13 +6610,596 @@ mod tests {
         );
         assert_eq!(
             validate_transparency_runtime_provider_handle(
-                &"a".repeat(TRANSPARENCY_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1 + 1),
+                "https://operator:secret@lease.example?token=credential",
+                true,
+            ),
+            Err(TransparencyRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle)
+        );
+        for invalid in [
+            "https://lease.example/source?token=credential",
+            "https://lease.example/source#fragment",
+            "https://lease.example/%73ource",
+        ] {
+            assert_eq!(
+                validate_transparency_runtime_provider_handle(invalid, true),
+                Err(TransparencyRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle)
+            );
+        }
+        assert_eq!(
+            validate_transparency_runtime_provider_handle(
+                "sealed://sorafs/transparency/dummy",
+                true,
+            ),
+            Err(TransparencyRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle)
+        );
+        assert_eq!(
+            validate_transparency_runtime_provider_handle(
+                &"a".repeat(iroha_config::parameters::PRODUCTION_RUNTIME_HANDLE_MAX_BYTES + 1),
                 false,
             ),
             Err(TransparencyRuntimeProviderQualificationErrorV1::InvalidProviderHandle)
         );
-        validate_transparency_runtime_provider_handle("kms:contest:transparency-production", true)
-            .expect("test markers are matched as exact handle components");
+        validate_transparency_runtime_provider_handle(
+            "sealed://sorafs/contest/transparency-production",
+            true,
+        )
+        .expect("test markers are matched as exact handle components");
+    }
+
+    #[test]
+    fn qualified_leader_lease_provider_rejects_absent_substituted_and_test_marked_adapters() {
+        let error = QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+            test_leader_lease_binding(1),
+            None,
+            0,
+        )
+        .expect_err("enabled leader leasing must reject a missing provider");
+        assert_eq!(
+            error,
+            TransparencyLeaderLeaseErrorV1::ProviderQualification(
+                TransparencyRuntimeProviderQualificationErrorV1::MissingProvider
+            )
+        );
+
+        let substituted = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            "sealed-cas:transparency:secondary",
+        ));
+        let injected: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> = substituted.clone();
+        let error = QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+            test_leader_lease_binding(1),
+            Some(injected),
+            0,
+        )
+        .expect_err("substituted leader-lease provider must fail before qualification");
+        assert_eq!(
+            error,
+            TransparencyLeaderLeaseErrorV1::ProviderQualification(
+                TransparencyRuntimeProviderQualificationErrorV1::SubstitutedProvider
+            )
+        );
+        assert_eq!(substituted.qualification_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(substituted.acquire_calls.load(Ordering::SeqCst), 0);
+
+        let test_marked = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            "mock:sealed-cas:transparency",
+        ));
+        let injected: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> = test_marked.clone();
+        let error = QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+            test_leader_lease_binding(1),
+            Some(injected),
+            0,
+        )
+        .expect_err("test-marked leader-lease provider must fail before qualification");
+        assert_eq!(
+            error,
+            TransparencyLeaderLeaseErrorV1::ProviderQualification(
+                TransparencyRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
+            )
+        );
+        assert_eq!(test_marked.qualification_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(test_marked.acquire_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn qualified_leader_lease_provider_rejects_stale_or_mismatched_qualification() {
+        let stale = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        stale.qualification_error.store(true, Ordering::SeqCst);
+        let injected: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> = stale.clone();
+        let error = QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+            test_leader_lease_binding(1),
+            Some(injected),
+            0,
+        )
+        .expect_err("stale leader-lease provider must fail startup qualification");
+        assert_eq!(
+            error,
+            TransparencyLeaderLeaseErrorV1::ProviderQualification(
+                TransparencyRuntimeProviderQualificationErrorV1::UnavailableOrStale
+            )
+        );
+        assert!(!error.to_string().contains("must-never-escape"));
+        assert!(!format!("{error:?}").contains("must-never-escape"));
+        assert_eq!(stale.acquire_calls.load(Ordering::SeqCst), 0);
+
+        let mismatched = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        mismatched.revision.store(2, Ordering::SeqCst);
+        let injected: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> = mismatched.clone();
+        let error = QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+            test_leader_lease_binding(1),
+            Some(injected),
+            0,
+        )
+        .expect_err("unconfigured leader-lease revision must fail startup");
+        assert_eq!(
+            error,
+            TransparencyLeaderLeaseErrorV1::ProviderQualification(
+                TransparencyRuntimeProviderQualificationErrorV1::ConfiguredQualificationMismatch
+            )
+        );
+        assert_eq!(mismatched.acquire_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn qualified_leader_lease_provider_exposes_only_public_binding_and_fencing_floor() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 41);
+        assert_eq!(qualified.handle(), TEST_LEADER_LEASE_PROVIDER_HANDLE);
+        assert_eq!(qualified.qualification().revision(), 1);
+        assert_eq!(qualified.binding(), &test_leader_lease_binding(1));
+        assert_eq!(qualified.fencing_floor().expect("fencing floor"), 41);
+        let debug = format!("{qualified:?}");
+        assert!(debug.contains("provider: \"<runtime-only>\""));
+        assert!(debug.contains("state: \"<runtime-only>\""));
+        assert!(!debug.contains("must-never-escape"));
+        assert_eq!(provider.acquire_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn qualified_leader_lease_provider_restores_floor_only_before_first_use() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
+
+        qualified
+            .restore_fencing_floor(41)
+            .expect("restore durable fencing floor before first use");
+        assert_eq!(qualified.fencing_floor().expect("fencing floor"), 41);
+        let grant = qualified
+            .acquire(test_leader_lease_scope(0xE2), 220, 260)
+            .expect("acquire above the restored floor");
+        assert_eq!(grant.fencing_token(), 42);
+        assert_eq!(
+            qualified
+                .restore_fencing_floor(42)
+                .expect_err("a live wrapper cannot be reseeded"),
+            TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken
+        );
+    }
+
+    #[test]
+    fn qualified_leader_lease_provider_rejects_an_unadvanceable_fencing_floor() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let injected: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> = provider.clone();
+        let error = QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+            test_leader_lease_binding(1),
+            Some(injected),
+            u64::MAX,
+        )
+        .expect_err("maximum fencing floor cannot issue a strictly greater token");
+        assert_eq!(
+            error,
+            TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken
+        );
+        assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn leader_lease_binds_query_window_cycle_and_holder_exactly() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 7);
+        let scope = test_leader_lease_scope(0x11);
+
+        let acquired = qualified
+            .acquire(scope, 220, 260)
+            .expect("acquire exact leader lease");
+        assert_eq!(acquired.version(), TRANSPARENCY_LEADER_LEASE_VERSION_V1);
+        assert_eq!(acquired.scope(), scope);
+        assert_eq!(
+            acquired.scope().cycle_id(),
+            privacy_aggregate_cycle_id(
+                scope.query_id(),
+                scope.window().cycle_start_unix,
+                scope.window().cycle_end_unix,
+            )
+        );
+        assert_eq!(acquired.fencing_token(), 8);
+        assert_eq!(acquired.issued_at_unix(), 220);
+        assert_eq!(acquired.expires_at_unix(), 260);
+        assert_eq!(acquired.provider_binding(), &test_leader_lease_binding(1));
+        assert_eq!(
+            qualified.acquire(scope, 221, 270),
+            Err(TransparencyLeaderLeaseErrorV1::ActiveLeaseExists)
+        );
+        assert_eq!(provider.acquire_calls.load(Ordering::SeqCst), 1);
+
+        let wrong_holder = test_leader_lease_scope(0x12);
+        assert_eq!(
+            qualified.validate_for_use(wrong_holder, 222),
+            Err(TransparencyLeaderLeaseErrorV1::ScopeMismatch)
+        );
+        let mut wrong_cycle_id = scope;
+        wrong_cycle_id.cycle_id = [0xF2; 16];
+        assert_eq!(
+            qualified.validate_for_use(wrong_cycle_id, 222),
+            Err(TransparencyLeaderLeaseErrorV1::InvalidScope)
+        );
+        let wrong_query = TransparencyLeaderLeaseScopeV1::try_new(
+            [0xB1; 32],
+            scope.window(),
+            scope.holder_identity(),
+        )
+        .expect("valid distinct query scope");
+        assert_eq!(
+            qualified.validate_for_use(wrong_query, 223),
+            Err(TransparencyLeaderLeaseErrorV1::ScopeMismatch)
+        );
+        let wrong_window = TransparencyLeaderLeaseScopeV1::try_new(
+            scope.query_id(),
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix: 200,
+                cycle_end_unix: 300,
+                due_at_unix: 310,
+            },
+            scope.holder_identity(),
+        )
+        .expect("valid distinct cycle scope");
+        assert_eq!(
+            qualified.validate_for_use(wrong_window, 224),
+            Err(TransparencyLeaderLeaseErrorV1::ScopeMismatch)
+        );
+        assert_eq!(
+            qualified
+                .validate_for_use(scope, 225)
+                .expect("validate exact active lease"),
+            acquired
+        );
+        assert_eq!(
+            qualified.validate_for_use(scope, 224),
+            Err(TransparencyLeaderLeaseErrorV1::ObservationTimeRollback)
+        );
+    }
+
+    #[test]
+    fn leader_lease_renews_monotonically_and_releases_exactly() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 7);
+        let scope = test_leader_lease_scope(0x11);
+        let acquired = qualified
+            .acquire(scope, 220, 260)
+            .expect("acquire exact leader lease");
+        assert_eq!(
+            qualified.renew(scope, 230, 250),
+            Err(TransparencyLeaderLeaseErrorV1::LeaseValidityRollback)
+        );
+        assert_eq!(provider.renew_calls.load(Ordering::SeqCst), 0);
+        let renewed = qualified
+            .renew(scope, 230, 300)
+            .expect("renew exact leader lease");
+        assert_eq!(renewed.lease_id(), acquired.lease_id());
+        assert_eq!(renewed.fencing_token(), 9);
+        assert_eq!(renewed.issued_at_unix(), 230);
+        assert_eq!(renewed.expires_at_unix(), 300);
+        assert_eq!(qualified.fencing_floor().expect("renewed floor"), 9);
+
+        let wrong_holder = test_leader_lease_scope(0x12);
+        assert_eq!(
+            qualified.release(wrong_holder, 240),
+            Err(TransparencyLeaderLeaseErrorV1::ScopeMismatch)
+        );
+        let receipt = qualified
+            .release(scope, 240)
+            .expect("release exact leader lease");
+        assert_eq!(receipt.version(), TRANSPARENCY_LEADER_LEASE_VERSION_V1);
+        assert_eq!(receipt.lease_id(), renewed.lease_id());
+        assert_eq!(receipt.scope(), scope);
+        assert_eq!(receipt.fencing_token(), renewed.fencing_token());
+        assert_eq!(receipt.released_at_unix(), 240);
+        assert_eq!(receipt.provider_binding(), &test_leader_lease_binding(1));
+        assert_eq!(
+            qualified.validate_for_use(scope, 241),
+            Err(TransparencyLeaderLeaseErrorV1::NoActiveLease)
+        );
+        assert_eq!(
+            qualified.release(scope, 242),
+            Err(TransparencyLeaderLeaseErrorV1::NoActiveLease)
+        );
+        assert_eq!(provider.release_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn leader_lease_expiry_and_fencing_replay_fail_closed() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
+        let scope = test_leader_lease_scope(0x21);
+
+        let first = qualified.acquire(scope, 220, 250).expect("first lease");
+        assert_eq!(
+            qualified.validate_for_use(scope, 250),
+            Err(TransparencyLeaderLeaseErrorV1::LeaseExpired)
+        );
+        let second = qualified
+            .acquire(scope, 250, 280)
+            .expect("replace expired lease");
+        assert!(second.fencing_token() > first.fencing_token());
+        let renewed = qualified
+            .renew(scope, 260, 300)
+            .expect("first monotonic renewal");
+        provider
+            .forced_fencing_token
+            .store(renewed.fencing_token(), Ordering::SeqCst);
+        assert_eq!(
+            qualified.renew(scope, 270, 330),
+            Err(TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken)
+        );
+        assert_eq!(
+            qualified.validate_for_use(scope, 271),
+            Err(TransparencyLeaderLeaseErrorV1::IndeterminateState)
+        );
+        assert_eq!(
+            qualified.acquire(scope, 329, 360),
+            Err(TransparencyLeaderLeaseErrorV1::IndeterminateState)
+        );
+        let recovered = qualified
+            .acquire(scope, 330, 360)
+            .expect("recover only after the rejected replay grant expires");
+        assert!(recovered.fencing_token() > renewed.fencing_token());
+    }
+
+    #[test]
+    fn leader_lease_ambiguous_and_malformed_results_quarantine_until_expiry() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
+        let scope = test_leader_lease_scope(0x31);
+
+        provider.ambiguous_operation.store(1, Ordering::SeqCst);
+        assert_eq!(
+            qualified.acquire(scope, 220, 260),
+            Err(TransparencyLeaderLeaseErrorV1::Provider(
+                TransparencyLeaderLeaseProviderErrorV1::Ambiguous
+            ))
+        );
+        assert_eq!(
+            qualified.validate_for_use(scope, 230),
+            Err(TransparencyLeaderLeaseErrorV1::IndeterminateState)
+        );
+        assert_eq!(
+            qualified.acquire(scope, 259, 280),
+            Err(TransparencyLeaderLeaseErrorV1::IndeterminateState)
+        );
+        let after_ambiguous = qualified
+            .acquire(scope, 260, 300)
+            .expect("recover after ambiguous acquisition expiry");
+
+        provider
+            .invalid_response_operation
+            .store(2, Ordering::SeqCst);
+        assert_eq!(
+            qualified.renew(scope, 270, 320),
+            Err(TransparencyLeaderLeaseErrorV1::InvalidGrant)
+        );
+        assert_eq!(
+            qualified.validate_for_use(scope, 271),
+            Err(TransparencyLeaderLeaseErrorV1::IndeterminateState)
+        );
+        let after_malformed = qualified
+            .acquire(scope, 320, 350)
+            .expect("recover after malformed renewal response expiry");
+        assert!(after_malformed.fencing_token() > after_ambiguous.fencing_token());
+    }
+
+    #[test]
+    fn leader_lease_provider_rotation_terminally_poisons_the_old_lineage() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
+        let scope = test_leader_lease_scope(0x32);
+        let original = qualified
+            .acquire(scope, 220, 260)
+            .expect("acquire original provider-revision lease");
+        provider.revision.store(2, Ordering::SeqCst);
+        assert_eq!(
+            qualified.validate_for_use(scope, 230),
+            Err(TransparencyRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged.into())
+        );
+        provider.revision.store(1, Ordering::SeqCst);
+        assert_eq!(
+            qualified.validate_for_use(scope, 231),
+            Err(TransparencyLeaderLeaseErrorV1::ProviderLineagePoisoned)
+        );
+        provider.revision.store(2, Ordering::SeqCst);
+
+        let rotated = qualify_test_leader_lease_provider(&provider, 2, original.fencing_token());
+        assert_eq!(
+            rotated.acquire(scope, 231, 270),
+            Err(TransparencyLeaderLeaseErrorV1::Provider(
+                TransparencyLeaderLeaseProviderErrorV1::Conflict
+            ))
+        );
+        let post_rotation = rotated
+            .acquire(scope, 260, 300)
+            .expect("fail over after prior-revision lease expiry");
+        assert!(post_rotation.fencing_token() > original.fencing_token());
+    }
+
+    #[test]
+    fn leader_lease_ambiguous_or_malformed_release_quarantines_use() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
+        let scope = test_leader_lease_scope(0x33);
+        assert_eq!(
+            TransparencyLeaderLeaseReleaseReceiptV1::try_new(
+                [0xA1; 32],
+                scope,
+                1,
+                scope.window().due_at_unix - 1,
+                test_leader_lease_binding(1),
+            ),
+            Err(TransparencyLeaderLeaseErrorV1::InvalidReleaseReceipt)
+        );
+        let original = qualified
+            .acquire(scope, 220, 260)
+            .expect("acquire lease for release checks");
+        provider.ambiguous_operation.store(3, Ordering::SeqCst);
+        assert_eq!(
+            qualified.release(scope, 230),
+            Err(TransparencyLeaderLeaseErrorV1::Provider(
+                TransparencyLeaderLeaseProviderErrorV1::Ambiguous
+            ))
+        );
+        assert_eq!(
+            qualified.validate_for_use(scope, 231),
+            Err(TransparencyLeaderLeaseErrorV1::IndeterminateState)
+        );
+        let after_ambiguous_release = qualified
+            .acquire(scope, 260, 300)
+            .expect("recover only after an ambiguously released lease expires");
+        assert!(after_ambiguous_release.fencing_token() > original.fencing_token());
+
+        provider
+            .invalid_response_operation
+            .store(3, Ordering::SeqCst);
+        assert_eq!(
+            qualified.release(scope, 270),
+            Err(TransparencyLeaderLeaseErrorV1::InvalidReleaseReceipt)
+        );
+        assert_eq!(
+            qualified.validate_for_use(scope, 271),
+            Err(TransparencyLeaderLeaseErrorV1::IndeterminateState)
+        );
+        let recovered = qualified
+            .acquire(scope, 300, 340)
+            .expect("recover after malformed release receipt expiry");
+        assert!(recovered.fencing_token() > after_ambiguous_release.fencing_token());
+    }
+
+    #[test]
+    fn leader_lease_drift_during_operation_terminally_poisons_the_wrapper() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
+        let scope = test_leader_lease_scope(0x34);
+        qualified
+            .acquire(scope, 220, 260)
+            .expect("acquire lease before provider drift");
+        provider
+            .drift_during_operation
+            .store(true, Ordering::SeqCst);
+        assert_eq!(
+            qualified.renew(scope, 230, 300),
+            Err(TransparencyRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged.into())
+        );
+        assert_eq!(
+            qualified.validate_for_use(scope, 231),
+            Err(TransparencyLeaderLeaseErrorV1::ProviderLineagePoisoned)
+        );
+    }
+
+    #[test]
+    fn leader_lease_two_replica_race_and_failover_are_fenced() {
+        let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
+            TEST_LEADER_LEASE_PROVIDER_HANDLE,
+        ));
+        let provider_a: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> = provider.clone();
+        let provider_b: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> = provider.clone();
+        let replica_a = Arc::new(
+            QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+                test_leader_lease_binding(1),
+                Some(provider_a),
+                0,
+            )
+            .expect("qualify replica A lease boundary"),
+        );
+        let replica_b = Arc::new(
+            QualifiedTransparencyLeaderLeaseProviderV1::try_new(
+                test_leader_lease_binding(1),
+                Some(provider_b),
+                0,
+            )
+            .expect("qualify replica B lease boundary"),
+        );
+        let scope_a = test_leader_lease_scope(0x41);
+        let scope_b = test_leader_lease_scope(0x42);
+        let barrier = Arc::new(Barrier::new(2));
+
+        let barrier_a = barrier.clone();
+        let replica_a_thread = replica_a.clone();
+        let attempt_a = std::thread::spawn(move || {
+            barrier_a.wait();
+            replica_a_thread.acquire(scope_a, 220, 260)
+        });
+        let barrier_b = barrier;
+        let replica_b_thread = replica_b.clone();
+        let attempt_b = std::thread::spawn(move || {
+            barrier_b.wait();
+            replica_b_thread.acquire(scope_b, 220, 260)
+        });
+        let result_a = attempt_a.join().expect("replica A join");
+        let result_b = attempt_b.join().expect("replica B join");
+
+        let (winner, winner_scope, winner_grant, loser, loser_scope) = match (result_a, result_b) {
+            (Ok(grant), Err(error)) => {
+                assert_eq!(
+                    error,
+                    TransparencyLeaderLeaseErrorV1::Provider(
+                        TransparencyLeaderLeaseProviderErrorV1::Conflict
+                    )
+                );
+                (replica_a, scope_a, grant, replica_b, scope_b)
+            }
+            (Err(error), Ok(grant)) => {
+                assert_eq!(
+                    error,
+                    TransparencyLeaderLeaseErrorV1::Provider(
+                        TransparencyLeaderLeaseProviderErrorV1::Conflict
+                    )
+                );
+                (replica_b, scope_b, grant, replica_a, scope_a)
+            }
+            outcome => panic!("exactly one replica must acquire the lease: {outcome:?}"),
+        };
+        assert_eq!(provider.acquire_calls.load(Ordering::SeqCst), 2);
+        winner
+            .release(winner_scope, 230)
+            .expect("winner releases exact lease");
+        let failover = loser
+            .acquire(loser_scope, 231, 270)
+            .expect("losing replica acquires after explicit release");
+        assert!(failover.fencing_token() > winner_grant.fencing_token());
+        assert_ne!(
+            failover.scope().holder_identity(),
+            winner_scope.holder_identity()
+        );
     }
 
     #[test]

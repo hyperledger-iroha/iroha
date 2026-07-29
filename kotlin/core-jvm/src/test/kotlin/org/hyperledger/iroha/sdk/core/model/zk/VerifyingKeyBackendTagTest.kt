@@ -193,4 +193,133 @@ class VerifyingKeyBackendTagTest {
             }
         }
     }
+
+    @Test
+    fun `pending production catalog labels remain fail closed`() {
+        for (label in listOf(
+            "halo2-ipa-orchard",
+            "groth16-bls12-377",
+            "fcmp-plus-plus-curve-tree",
+            "lattice-pcs-sis",
+            "miden-stark",
+            "aztec-plonkish-private-kernel",
+            "pq-masp-stark-fri",
+            "anonymous-pgc",
+            "verange",
+            "zkat",
+            "recursive-anonymous-admission",
+            "vega-existing-credential-zk",
+            "silent-threshold-anoncred",
+            "zk-x509",
+            "sis-with-hints",
+        )) {
+            assertTrue(VerifyingKeyBackendTag.fromCatalogLabel(label).isPendingProductionBackend)
+            assertTrue(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
+            assertFalse(VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label))
+        }
+    }
+
+    @Test
+    fun `adversarial pending aliases stay unsupported and noncanonical`() {
+        for (label in listOf(
+            "halo2/ipa/orchard/dev-fixture",
+            "stark/fri/miden/claimed-production",
+            "anonymous-pgc-k-out-of-n-v1-production",
+            "sis-hints-anoncred-pq-v0-devfixture",
+            "groth16/bls12-377/../../prod",
+            "post-quantum-masp/audit-claimed",
+        )) {
+            assertFalse(VerifyingKeyBackendTag.fromCatalogLabel(label).isPendingProductionBackend)
+            assertFalse(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
+            assertFailsWith<IllegalArgumentException>(label) {
+                VerifyingKeyBackendTag.parse(label)
+            }
+        }
+    }
+
+    @Test
+    fun `production verifier classifier rejects unsafe labels and surrounding whitespace`() {
+        for (label in listOf(
+            "",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "halo2/ipa\u0000",
+            "halo2\uFF0Fipa",
+            "halo2/\u200Bipa",
+            "h\u0430lo2/ipa",
+            "HALO2/IPA",
+            "stark/FRI",
+            "halo2/ipa::ivm-execution-v1",
+            "stark/fri/sha256..goldilocks",
+            "halo2/ipa:production-ready",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "stark/fri/audit-signoff",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+            "stark/fri/latest",
+            "stark/fri/attestation",
+            "stark/fri/contest",
+            "stark/fri/random-profile",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/audit-proof-v1",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/dev",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/todo",
+            "stark/fri/t-o-d-o",
+            "stark/fri/draft-only",
+            "stark/fri/d-r-a-f-t",
+            "stark/fri/pending-audit",
+            "stark/fri/replace-before-mainnet",
+            "stark/fri/not-production-ready",
+            "stark/fri/placeholder",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:todo-proof",
+            "halo2/ipa:t-o-d-o-proof",
+            "halo2/ipa:draft-proof",
+            "halo2/ipa:d-r-a-f-t-proof",
+            "halo2/ipa:pending-audit",
+            "halo2/ipa:replace-before-production",
+            "halo2/ipa:not-for-production",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
+            "halo2/pasta/asset-hidden-transfer-public-test",
+            "halo2/ipa/asset-hidden-transfer-public-test",
+            "halo2/ipa:asset-hidden-transfer-public-test",
+            "halo2/pasta/tiny-add",
+            "halo2/ipa/tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/tiny-commit-open",
+            "halo2/pasta/vote-bool-commit",
+            "halo2/ipa/vote-bool-commit",
+            "halo2/ipa:vote-bool-commit",
+            "halo2/pasta/vote-bool-commit-merkle2",
+            "halo2/ipa/vote-bool-commit-merkle8",
+            "halo2/ipa:vote-bool-commit-merkle16",
+            "halo2/pasta/anon-transfer-2x2",
+            "halo2/ipa/anon-transfer-2x2",
+            "halo2/ipa:anon-transfer-2x2",
+            "halo2/pasta/anon-transfer-2x2-merkle2",
+            "halo2/ipa/anon-transfer-2x2-merkle8",
+            "halo2/ipa:anon-transfer-2x2-merkle16",
+        )) {
+            assertFalse(VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label), label)
+            assertFailsWith<IllegalArgumentException>(label) {
+                VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(label)
+            }
+        }
+    }
 }

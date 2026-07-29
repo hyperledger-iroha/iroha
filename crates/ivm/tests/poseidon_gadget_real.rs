@@ -1,5 +1,4 @@
 #![doc = "//! Feature-gated tests for real Poseidon gadget wiring"]
-#![allow(unexpected_cfgs)]
 #[cfg(feature = "zk-halo2-ipa-poseidon")]
 use ivm::halo2::{ECPoint, MintCircuit, MintPublic, MintWitness, verify_merkle_path};
 #[cfg(feature = "zk-halo2-ipa-poseidon")]

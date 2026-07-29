@@ -7,8 +7,10 @@ on:
       - ".github/workflows/mobile_sdk_artifacts.yml"
       - "scripts/build_norito_xcframework.sh"
       - "scripts/exec_with_file_lock.py"
+      - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "scripts/check_android_app_native_archive.py"
       - "scripts/tests/check_android_app_native_archive_test.py"
       - "scripts/norito_bridge_source_seal.py"
@@ -26,11 +28,14 @@ on:
       - "kotlin/**"
       - "java/iroha_android/**"
       - "crates/connect_norito_bridge/**"
+      - "crates/iroha_core/src/smartcontracts/isi/mod.rs"
       - "crates/iroha_core/src/smartcontracts/isi/escrow.rs"
       - "crates/iroha_data_model/src/bin/cancel_asset_lock_fixtures.rs"
       - "crates/iroha_data_model/src/escrow.rs"
       - "crates/iroha_data_model/src/events/data/escrow.rs"
+      - "crates/iroha_data_model/src/isi/mod.rs"
       - "crates/iroha_data_model/src/isi/escrow.rs"
+      - "crates/iroha_data_model/src/isi/registry.rs"
       - "crates/iroha_data_model/src/testing/cancel_asset_lock.rs"
       - "crates/kotodama_lang/src/samples/native_escrow.ko"
       - "crates/kotodama_lang/src/samples/native_escrow.to"
@@ -44,6 +49,9 @@ on:
       - "scripts/check_native_sdk_abi21_artifact.py"
       - "scripts/tests/check_native_sdk_abi21_artifact_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
   push:
     tags:
       - "v*"
@@ -81,8 +89,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - name: Shell syntax
-        run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
+        run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh scripts/tests/mobile_sdk_python312_contract.sh
       - name: Python syntax
         run: python3 -I -m py_compile scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi21_artifact.py scripts/tests/check_native_sdk_abi21_artifact_test.py scripts/exec_with_file_lock.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
       - name: Host native ABI-21 artifact checker fixtures
@@ -95,6 +112,8 @@ jobs:
         run: ci/check_kagemusha_candidate_android_lab.sh
       - name: Artifact checker fixture tests
         run: bash scripts/check_mobile_sdk_artifacts_test.sh
+      - name: Mobile Python 3.12 contract
+        run: bash scripts/tests/mobile_sdk_python312_contract.sh
 
   apple-mobile-sdk:
     needs: checker-self-test
@@ -104,6 +123,15 @@ jobs:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.93.1
@@ -182,6 +210,15 @@ jobs:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
         with:
           distribution: temurin

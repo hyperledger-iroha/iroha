@@ -13,17 +13,19 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use ed25519_dalek::VerifyingKey;
 use iroha_crypto::sha256;
 use norito::json::{Map, Value, to_string_pretty};
-use sorafs_car::{ProfileId, chunker_registry};
+use sorafs_car::chunker_registry;
 use sorafs_manifest::{
     AdvertEndpoint, AvailabilityTier, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ProviderAdvertBuildError,
     ProviderAdvertV1, ProviderCapabilityRangeV1, REFRESH_RECOMMENDATION_SECS, RendezvousTopic,
     SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol, deal::XorQuantity,
-    provider_advert::ProviderCapabilitySoranetPqV1,
+    decode_provider_advert_v1, provider_advert::ProviderCapabilitySoranetPqV1,
 };
 
 const ED25519_PUBLIC_KEY_BYTES: usize = 32;
 const ED25519_SIGNATURE_BYTES: usize = 64;
+const PREPARE_SIGNATURE_PLACEHOLDER: [u8; ED25519_SIGNATURE_BYTES] =
+    [0xA6; ED25519_SIGNATURE_BYTES];
 const PROVIDER_ADVERT_MAX_BYTES: u64 = 1024 * 1024;
 const SIGNING_PAYLOAD_MAX_BYTES: u64 = 1024 * 1024;
 
@@ -45,19 +47,9 @@ fn run() -> Result<(), String> {
                     .split_once('=')
                     .ok_or_else(|| format!("expected key=value option, got: {arg}"))?;
                 match key {
-                    "--profile-id" => {
-                        if opts.profile_handle.is_some() {
-                            return Err(
-                                "use either --profile-id or --chunker-profile (not both)".into()
-                            );
-                        }
-                        opts.profile_id = Some(value.to_string());
-                    }
                     "--chunker-profile" => {
-                        if opts.profile_id.is_some() {
-                            return Err(
-                                "use either --profile-id or --chunker-profile (not both)".into()
-                            );
+                        if opts.profile_handle.is_some() {
+                            return Err("--chunker-profile may only be specified once".into());
                         }
                         opts.profile_handle = Some(value.to_string());
                     }
@@ -210,10 +202,12 @@ fn handle_prepare(opts: EmitOptions) -> Result<(), String> {
 
     let (public_key, fingerprint) =
         load_reviewed_public_key(public_key_path, opts.public_key_fingerprint_sha256.as_ref())?;
+    // Signature bytes are excluded from the signed payload and this advert is never emitted.
+    // Use a non-inert placeholder so strict advert validation remains enabled during preparation.
     let advert = build_advert(
         &opts,
         public_key.to_vec(),
-        vec![0_u8; ED25519_SIGNATURE_BYTES],
+        PREPARE_SIGNATURE_PLACEHOLDER.to_vec(),
     )?;
     let signing_payload = advert
         .signature_payload_bytes()
@@ -361,8 +355,7 @@ fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
         PROVIDER_ADVERT_MAX_BYTES,
         None,
     )?;
-    let advert =
-        norito::decode_from_bytes::<ProviderAdvertV1>(&bytes).map_err(|err| err.to_string())?;
+    let advert = decode_provider_advert_v1(&bytes).map_err(|err| err.to_string())?;
     if advert.signature.algorithm != SignatureAlgorithm::Ed25519 {
         return Err("provider advert must use Ed25519 in V1".into());
     }
@@ -382,7 +375,7 @@ fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
 fn usage() -> &'static str {
     "usage: sorafs_provider_advert <--prepare|--emit|--verify> \
      --prepare|--emit \
-     [--chunker-profile=namespace.name@semver | --profile-id=id] \
+     --chunker-profile=namespace.name@semver \
      --provider-id=hex32 \
      --stake-pool-id=hex32 \
      --stake-amount=canonical_xor_quantity \
@@ -424,13 +417,11 @@ fn build_advert(
 ) -> Result<ProviderAdvertV1, String> {
     chunker_registry::ensure_charter_compliance()
         .map_err(|err| format!("registry charter violation: {err}"))?;
-    let profile_handle = if let Some(handle) = &opts.profile_handle {
-        resolve_profile_handle(handle)?
-    } else if let Some(id) = &opts.profile_id {
-        resolve_profile_handle(id)?
-    } else {
-        return Err("missing required option: --chunker-profile or --profile-id".into());
-    };
+    let profile_handle = opts
+        .profile_handle
+        .as_deref()
+        .ok_or_else(|| "missing required option: --chunker-profile".to_string())
+        .and_then(resolve_profile_handle)?;
     let profile_aliases = chunker_registry::lookup_by_handle(&profile_handle)
         .map(|descriptor| {
             let mut aliases: Vec<String> = descriptor
@@ -508,10 +499,7 @@ fn build_advert(
             .any(|cap| cap.cap_type == CapabilityType::SoraNetHybridPq)
             || opts.soranet_pq.is_some())
     {
-        return Err(
-            "--transport-hint=soranet_relay requires --capability=soranet_pq or --soranet-pq"
-                .into(),
-        );
+        return Err("--transport-hint=soranet requires --soranet-pq".into());
     }
 
     let mut builder = ProviderAdvertV1::builder();
@@ -571,7 +559,7 @@ fn build_advert(
     builder.build().map_err(|err| match err {
         ProviderAdvertBuildError::MissingField(field) => {
             let option = match field {
-                "profile_id" => "--chunker-profile/--profile-id",
+                "profile_id" => "--chunker-profile",
                 "provider_id" => "--provider-id",
                 "stake_pool_id" => "--stake-pool-id",
                 "stake_amount" => "--stake-amount",
@@ -657,7 +645,7 @@ fn build_report(
     );
     body_obj.insert(
         "availability".into(),
-        Value::from(format!("{:?}", advert.body.qos.availability)),
+        Value::from(availability_name(advert.body.qos.availability)),
     );
     body_obj.insert(
         "max_retrieval_latency_ms".into(),
@@ -907,7 +895,6 @@ enum Command {
 
 #[derive(Default)]
 struct EmitOptions {
-    profile_id: Option<String>,
     profile_handle: Option<String>,
     provider_id: Option<[u8; 32]>,
     stake_pool_id: Option<[u8; 32]>,
@@ -948,7 +935,7 @@ struct VerifyOptions {
 }
 
 fn parse_availability(value: &str) -> Result<AvailabilityTier, String> {
-    match value.to_ascii_lowercase().as_str() {
+    match value {
         "hot" => Ok(AvailabilityTier::Hot),
         "warm" => Ok(AvailabilityTier::Warm),
         "cold" => Ok(AvailabilityTier::Cold),
@@ -960,23 +947,22 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
     let (head, payload_str) = value
         .split_once(':')
         .map_or((value, None), |(h, rest)| (h, Some(rest)));
-    let head_lower = head.trim().to_ascii_lowercase();
-    let cap_type = match head_lower.as_str() {
-        "torii" | "torii-gateway" => CapabilityType::ToriiGateway,
-        "quic" | "quic-noise" => CapabilityType::QuicNoise,
-        "soranet" | "soranet-pq" | "soranet_pq" | "soranet-hybrid-pq" => {
-            CapabilityType::SoraNetHybridPq
-        }
-        "potr-mldsa" | "potr_mldsa" => CapabilityType::PotrMlDsa,
-        "range" | "chunk-range" | "chunk_range" => {
+    let cap_type = match head {
+        "torii" => CapabilityType::ToriiGateway,
+        "quic" => CapabilityType::QuicNoise,
+        "potr-mldsa" => CapabilityType::PotrMlDsa,
+        "range" => {
             return Err(
                 "use --range-capability=<key=value,...> to describe chunk-range support".into(),
             );
         }
-        _ if head_lower == "vendor" => CapabilityType::VendorReserved,
+        "soranet" | "soranet-pq" => {
+            return Err("use --soranet-pq=<guard|majority|strict>".into());
+        }
+        "vendor" => CapabilityType::VendorReserved,
         other => {
             return Err(format!(
-                "unknown capability type: {other} (expected torii|quic|soranet|soranet-pq|potr-mldsa|vendor)"
+                "unknown capability type: {other} (expected torii|quic|potr-mldsa|vendor; use --range-capability or --soranet-pq for structured capabilities)"
             ));
         }
     };
@@ -986,16 +972,6 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
         (CapabilityType::PotrMlDsa, None) => {
             return Err("potr-mldsa capability requires a hex ML-DSA-65 public key".into());
         }
-        (CapabilityType::SoraNetHybridPq, Some(rest)) => parse_soranet_pq(rest)?
-            .to_bytes()
-            .map_err(|err| format!("invalid soranet-pq capability: {err}"))?,
-        (CapabilityType::SoraNetHybridPq, None) => ProviderCapabilitySoranetPqV1 {
-            supports_guard: true,
-            supports_majority: false,
-            supports_strict: false,
-        }
-        .to_bytes()
-        .map_err(|err| format!("invalid soranet-pq capability: {err}"))?,
         (_, Some(rest)) => parse_hex_vec(rest)?,
         _ => Vec::new(),
     };
@@ -1003,43 +979,27 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
 }
 
 fn parse_soranet_pq(value: &str) -> Result<ProviderCapabilitySoranetPqV1, String> {
-    let mut supports_guard = false;
-    let mut supports_majority = false;
-    let mut supports_strict = false;
-    let mut seen_level = false;
-    for raw in value.split(|c| [',', '+', '|'].contains(&c)) {
-        let token = raw.trim();
-        if token.is_empty() {
-            continue;
+    let capability = match value {
+        "guard" => ProviderCapabilitySoranetPqV1 {
+            supports_guard: true,
+            supports_majority: false,
+            supports_strict: false,
+        },
+        "majority" => ProviderCapabilitySoranetPqV1 {
+            supports_guard: true,
+            supports_majority: true,
+            supports_strict: false,
+        },
+        "strict" => ProviderCapabilitySoranetPqV1 {
+            supports_guard: true,
+            supports_majority: true,
+            supports_strict: true,
+        },
+        other => {
+            return Err(format!(
+                "unknown soranet-pq level `{other}` (expected exactly guard|majority|strict)"
+            ));
         }
-        seen_level = true;
-        match token.to_ascii_lowercase().as_str() {
-            "guard" | "stage-a" | "stagea" => {
-                supports_guard = true;
-            }
-            "majority" | "stage-b" | "stageb" => {
-                supports_guard = true;
-                supports_majority = true;
-            }
-            "strict" | "stage-c" | "stagec" => {
-                supports_guard = true;
-                supports_majority = true;
-                supports_strict = true;
-            }
-            other => {
-                return Err(format!(
-                    "unknown soranet-pq level `{other}` (expected guard|majority|strict)"
-                ));
-            }
-        }
-    }
-    if !seen_level {
-        supports_guard = true;
-    }
-    let capability = ProviderCapabilitySoranetPqV1 {
-        supports_guard,
-        supports_majority,
-        supports_strict,
     };
     capability
         .validate()
@@ -1048,9 +1008,11 @@ fn parse_soranet_pq(value: &str) -> Result<ProviderCapabilitySoranetPqV1, String
 }
 
 fn parse_range_capability(value: &str) -> Result<ProviderCapabilityRangeV1, String> {
-    let mut capability = ProviderCapabilityRangeV1::default();
     let mut max_span = None;
     let mut min_granularity = None;
+    let mut sparse = None;
+    let mut alignment = None;
+    let mut merkle = None;
     for part in value.split(',') {
         if part.is_empty() {
             return Err("range-capability must not contain empty entries".to_string());
@@ -1059,24 +1021,40 @@ fn parse_range_capability(value: &str) -> Result<ProviderCapabilityRangeV1, Stri
         let (key, raw) = part
             .split_once('=')
             .ok_or_else(|| format!("range-capability requires key=value entries, got: {part}"))?;
-        let key_lower = key.to_ascii_lowercase();
-        match key_lower.as_str() {
-            "max_span" | "max-chunk-span" | "max_chunk_span" => {
+        match key {
+            "max_span" => {
+                if max_span.is_some() {
+                    return Err("range-capability field max_span specified multiple times".into());
+                }
                 let span = parse_u32(raw)?;
                 max_span = Some(span);
             }
-            "min_granularity" | "min-granularity" => {
+            "min_granularity" => {
+                if min_granularity.is_some() {
+                    return Err(
+                        "range-capability field min_granularity specified multiple times".into(),
+                    );
+                }
                 let granularity = parse_u32(raw)?;
                 min_granularity = Some(granularity);
             }
-            "sparse" | "supports_sparse_offsets" | "supports-sparse-offsets" => {
-                capability.supports_sparse_offsets = parse_bool(raw)?;
+            "sparse" => {
+                if sparse.is_some() {
+                    return Err("range-capability field sparse specified multiple times".into());
+                }
+                sparse = Some(parse_bool(raw)?);
             }
-            "alignment" | "requires_alignment" | "requires-alignment" => {
-                capability.requires_alignment = parse_bool(raw)?;
+            "alignment" => {
+                if alignment.is_some() {
+                    return Err("range-capability field alignment specified multiple times".into());
+                }
+                alignment = Some(parse_bool(raw)?);
             }
-            "merkle" | "supports_merkle_proof" | "supports-merkle-proof" => {
-                capability.supports_merkle_proof = parse_bool(raw)?;
+            "merkle" => {
+                if merkle.is_some() {
+                    return Err("range-capability field merkle specified multiple times".into());
+                }
+                merkle = Some(parse_bool(raw)?);
             }
             other => {
                 return Err(format!(
@@ -1085,10 +1063,15 @@ fn parse_range_capability(value: &str) -> Result<ProviderCapabilityRangeV1, Stri
             }
         }
     }
-    capability.max_chunk_span =
-        max_span.ok_or_else(|| "range-capability requires max_span=<u32>".to_string())?;
-    capability.min_granularity = min_granularity
-        .ok_or_else(|| "range-capability requires min_granularity=<u32>".to_string())?;
+    let capability = ProviderCapabilityRangeV1 {
+        max_chunk_span: max_span
+            .ok_or_else(|| "range-capability requires max_span=<u32>".to_string())?,
+        min_granularity: min_granularity
+            .ok_or_else(|| "range-capability requires min_granularity=<u32>".to_string())?,
+        supports_sparse_offsets: sparse.unwrap_or(false),
+        requires_alignment: alignment.unwrap_or(false),
+        supports_merkle_proof: merkle.unwrap_or(false),
+    };
     capability
         .validate()
         .map_err(|err| format!("invalid range capability: {err}"))?;
@@ -1107,17 +1090,27 @@ fn parse_stream_budget(value: &str) -> Result<StreamBudgetV1, String> {
         let (key, raw) = part
             .split_once('=')
             .ok_or_else(|| format!("stream-budget requires key=value entries, got: {part}"))?;
-        let key_lower = key.to_ascii_lowercase();
-        match key_lower.as_str() {
-            "max_in_flight" | "max-in-flight" | "inflight" => {
+        match key {
+            "max_in_flight" => {
+                if max_in_flight.is_some() {
+                    return Err("stream-budget field max_in_flight specified multiple times".into());
+                }
                 let inflight = parse_u16(raw)?;
                 max_in_flight = Some(inflight);
             }
-            "max_bytes_per_sec" | "max-bytes-per-sec" | "max_rate" | "max-rate" => {
+            "max_bytes_per_sec" => {
+                if max_bytes_per_sec.is_some() {
+                    return Err(
+                        "stream-budget field max_bytes_per_sec specified multiple times".into(),
+                    );
+                }
                 let rate = parse_u64(raw)?;
                 max_bytes_per_sec = Some(rate);
             }
-            "burst" | "burst_bytes" | "burst-bytes" => {
+            "burst" => {
+                if burst_bytes.is_some() {
+                    return Err("stream-budget field burst specified multiple times".into());
+                }
                 let burst = parse_u64(raw)?;
                 burst_bytes = Some(burst);
             }
@@ -1156,15 +1149,11 @@ fn parse_transport_hint(value: &str) -> Result<TransportHintV1, String> {
 }
 
 fn parse_transport_protocol(value: &str) -> Result<TransportProtocol, String> {
-    match value.to_ascii_lowercase().as_str() {
-        "torii" | "torii-http" | "torii_http" | "torii-range" | "torii_range" => {
-            Ok(TransportProtocol::ToriiHttpRange)
-        }
-        "quic" | "quic-stream" | "quic_stream" => Ok(TransportProtocol::QuicStream),
-        "soranet" | "relay" | "soranet-relay" | "soranet_relay" => {
-            Ok(TransportProtocol::SoraNetRelay)
-        }
-        "vendor" | "vendor-reserved" | "vendor_reserved" => Ok(TransportProtocol::VendorReserved),
+    match value {
+        "torii" => Ok(TransportProtocol::ToriiHttpRange),
+        "quic" => Ok(TransportProtocol::QuicStream),
+        "soranet" => Ok(TransportProtocol::SoraNetRelay),
+        "vendor" => Ok(TransportProtocol::VendorReserved),
         other => Err(format!(
             "unknown transport protocol: {other} (expected torii|quic|soranet|vendor)"
         )),
@@ -1175,10 +1164,10 @@ fn parse_endpoint(value: &str) -> Result<AdvertEndpoint, String> {
     let (kind_str, host) = value
         .split_once(':')
         .ok_or_else(|| "endpoint requires kind:host".to_string())?;
-    let kind = match kind_str.to_ascii_lowercase().as_str() {
+    let kind = match kind_str {
         "torii" => EndpointKind::Torii,
         "quic" => EndpointKind::Quic,
-        "noritorpc" | "norito-rpc" => EndpointKind::NoritoRpc,
+        "norito-rpc" => EndpointKind::NoritoRpc,
         other => return Err(format!("unknown endpoint kind: {other}")),
     };
     Ok(AdvertEndpoint {
@@ -1196,8 +1185,8 @@ fn parse_endpoint_metadata(value: &str, opts: &mut EmitOptions) -> Result<(), St
         .endpoints
         .last_mut()
         .ok_or_else(|| "endpoint-meta requires at least one --endpoint before it".to_string())?;
-    let key = match key_str.to_ascii_lowercase().as_str() {
-        "tls" | "tls-fingerprint" => EndpointMetadataKey::TlsFingerprint,
+    let key = match key_str {
+        "tls_fingerprint" => EndpointMetadataKey::TlsFingerprint,
         "alpn" => EndpointMetadataKey::Alpn,
         "region" => EndpointMetadataKey::Region,
         other => return Err(format!("unknown endpoint metadata key: {other}")),
@@ -1313,35 +1302,15 @@ fn resolve_profile_handle(input: &str) -> Result<String, String> {
     }
     require_no_ascii_whitespace(input, "chunker profile")?;
     if let Some(descriptor) = chunker_registry::lookup_by_handle(input) {
-        return Ok(format!(
+        let canonical = format!(
             "{}.{}@{}",
             descriptor.namespace, descriptor.name, descriptor.semver
-        ));
-    }
-    if input.as_bytes().iter().all(u8::is_ascii_digit) && !is_canonical_unsigned_decimal(input) {
-        return Err("chunker profile id must be a canonical unsigned decimal integer".to_string());
-    }
-    if is_canonical_unsigned_decimal(input) {
-        let id = parse_u32(input)?;
-        if let Some(descriptor) = chunker_registry::lookup(ProfileId(id)) {
-            return Ok(format!(
-                "{}.{}@{}",
-                descriptor.namespace, descriptor.name, descriptor.semver
-            ));
+        );
+        if input == canonical {
+            return Ok(canonical);
         }
         return Err(format!(
-            "unknown chunker profile id: {id}. Use --list-chunker-profiles to inspect the registry"
-        ));
-    }
-    if let Some(descriptor) = chunker_registry::registry().iter().find(|entry| {
-        entry
-            .aliases
-            .iter()
-            .any(|alias| alias.eq_ignore_ascii_case(input))
-    }) {
-        return Ok(format!(
-            "{}.{}@{}",
-            descriptor.namespace, descriptor.name, descriptor.semver
+            "chunker profile handle `{input}` is not canonical; expected `{canonical}`"
         ));
     }
     Err(format!(
@@ -1489,12 +1458,10 @@ fn require_canonical_hex(value: &str, label: &str) -> Result<(), String> {
 }
 
 fn parse_bool(value: &str) -> Result<bool, String> {
-    match value.to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        other => Err(format!(
-            "expected boolean true/false/1/0/yes/no, got {other}"
-        )),
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(format!("expected boolean true|false, got {other}")),
     }
 }
 
@@ -1821,12 +1788,20 @@ fn platform_no_follow_flag() -> i32 {
 
 fn capability_name(cap: CapabilityType) -> &'static str {
     match cap {
-        CapabilityType::ToriiGateway => "torii",
-        CapabilityType::QuicNoise => "quic",
-        CapabilityType::ChunkRangeFetch => "range",
+        CapabilityType::ToriiGateway => "torii_gateway",
+        CapabilityType::QuicNoise => "quic_noise",
+        CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::PotrMlDsa => "potr_mldsa",
-        CapabilityType::VendorReserved => "vendor",
+        CapabilityType::VendorReserved => "vendor_reserved",
+    }
+}
+
+fn availability_name(availability: AvailabilityTier) -> &'static str {
+    match availability {
+        AvailabilityTier::Hot => "hot",
+        AvailabilityTier::Warm => "warm",
+        AvailabilityTier::Cold => "cold",
     }
 }
 
@@ -1852,10 +1827,10 @@ fn endpoint_metadata_name(key: EndpointMetadataKey) -> &'static str {
 
 fn transport_protocol_name(protocol: TransportProtocol) -> &'static str {
     match protocol {
-        TransportProtocol::ToriiHttpRange => "torii",
-        TransportProtocol::QuicStream => "quic",
-        TransportProtocol::SoraNetRelay => "soranet",
-        TransportProtocol::VendorReserved => "vendor",
+        TransportProtocol::ToriiHttpRange => "torii_http_range",
+        TransportProtocol::QuicStream => "quic_stream",
+        TransportProtocol::SoraNetRelay => "soranet_relay",
+        TransportProtocol::VendorReserved => "vendor_reserved",
     }
 }
 
@@ -1887,7 +1862,7 @@ mod tests {
         let mut advert = build_advert(
             opts,
             public_key.to_vec(),
-            vec![0_u8; ED25519_SIGNATURE_BYTES],
+            PREPARE_SIGNATURE_PLACEHOLDER.to_vec(),
         )
         .expect("advert builds");
         let payload = advert
@@ -1944,7 +1919,7 @@ mod tests {
         let err = write_bytes(&output_path, b"changed").expect_err("reject symlink parent");
 
         assert!(
-            err.contains("parent") && err.contains("must not be a symlink"),
+            err.contains("parent") && err.contains("must be a real directory"),
             "unexpected error: {err}"
         );
         assert!(
@@ -1973,6 +1948,8 @@ mod tests {
         assert!(text.contains("sorafs_provider_advert <--prepare|--emit|--verify>"));
         assert!(!text.contains("signing-key"));
         assert!(!text.contains("--public-key=hex"));
+        assert!(!text.contains("--profile-id"));
+        assert!(text.contains("--chunker-profile=namespace.name@semver"));
         assert!(text.contains("--public-key-fingerprint-sha256"));
     }
 
@@ -2093,7 +2070,7 @@ mod tests {
             }],
             ..EmitOptions::default()
         };
-        let err = parse_endpoint_metadata("tls:AA", &mut opts)
+        let err = parse_endpoint_metadata("tls_fingerprint:AA", &mut opts)
             .expect_err("noncanonical endpoint metadata hex fails");
         assert!(
             err.contains("lowercase even-length hex"),
@@ -2165,6 +2142,176 @@ mod tests {
     }
 
     #[test]
+    fn v1_selector_parsers_reject_compatibility_aliases() {
+        for value in ["HOT", "Hot", " hot", "hot "] {
+            parse_availability(value).expect_err("availability aliases must fail");
+        }
+
+        for value in [
+            "torii-gateway",
+            "quic-noise",
+            "potr_mldsa",
+            "TORII",
+            " torii",
+            "torii ",
+            "chunk-range",
+            "chunk_range",
+            "soranet_pq",
+            "soranet-hybrid-pq",
+        ] {
+            parse_capability(value).expect_err("capability aliases must fail");
+        }
+
+        for value in [
+            "",
+            "Guard",
+            " guard",
+            "guard ",
+            "stage-a",
+            "stagea",
+            "guard+strict",
+            "guard,strict",
+            "guard|strict",
+        ] {
+            parse_soranet_pq(value).expect_err("SoraNet PQ aliases must fail");
+        }
+
+        for value in [
+            "max-chunk-span=16,min_granularity=4",
+            "max_chunk_span=16,min_granularity=4",
+            "max_span=16,min-granularity=4",
+            "max_span=16,min_granularity=4,supports_sparse_offsets=true",
+            "max_span=16,min_granularity=4,requires_alignment=true",
+            "max_span=16,min_granularity=4,supports_merkle_proof=true",
+            "MAX_SPAN=16,min_granularity=4",
+        ] {
+            parse_range_capability(value).expect_err("range field aliases must fail");
+        }
+
+        for value in [
+            "max-in-flight=2,max_bytes_per_sec=1024",
+            "inflight=2,max_bytes_per_sec=1024",
+            "max_in_flight=2,max-bytes-per-sec=1024",
+            "max_in_flight=2,max_rate=1024",
+            "max_in_flight=2,max_bytes_per_sec=1024,burst_bytes=512",
+            "MAX_IN_FLIGHT=2,max_bytes_per_sec=1024",
+        ] {
+            parse_stream_budget(value).expect_err("stream-budget field aliases must fail");
+        }
+
+        for value in [
+            "torii-http",
+            "torii_http",
+            "torii-range",
+            "quic-stream",
+            "quic_stream",
+            "relay",
+            "soranet-relay",
+            "soranet_relay",
+            "vendor-reserved",
+            "vendor_reserved",
+            "TORII",
+        ] {
+            parse_transport_protocol(value).expect_err("transport aliases must fail");
+        }
+
+        for value in [
+            "noritorpc:storage.example",
+            "TORII:storage.example",
+            " torii:storage.example",
+        ] {
+            parse_endpoint(value).expect_err("endpoint aliases must fail");
+        }
+
+        for value in ["tls:11", "tls-fingerprint:11", "TLS_FINGERPRINT:11"] {
+            let mut opts = EmitOptions {
+                endpoints: vec![
+                    parse_endpoint("torii:storage.example").expect("canonical endpoint"),
+                ],
+                ..EmitOptions::default()
+            };
+            parse_endpoint_metadata(value, &mut opts).expect_err("metadata alias must fail");
+        }
+
+        for value in ["1", "0", "yes", "no", "TRUE", "False", " true"] {
+            parse_bool(value).expect_err("boolean aliases must fail");
+        }
+    }
+
+    #[test]
+    fn v1_selector_parsers_accept_exact_canonical_tokens() {
+        for value in ["hot", "warm", "cold"] {
+            let availability = parse_availability(value).expect("canonical availability");
+            assert_eq!(availability_name(availability), value);
+        }
+        for (selector, label) in [
+            ("torii", "torii_gateway"),
+            ("quic", "quic_noise"),
+            ("vendor", "vendor_reserved"),
+        ] {
+            let capability = parse_capability(selector).expect("canonical payload-free capability");
+            assert_eq!(capability_name(capability.cap_type), label);
+        }
+        parse_capability(&format!("potr-mldsa:{}", "11".repeat(1_952)))
+            .expect("canonical PoTR capability");
+        for value in ["guard", "majority", "strict"] {
+            parse_soranet_pq(value).expect("canonical SoraNet PQ level");
+        }
+        parse_range_capability(
+            "max_span=16,min_granularity=4,sparse=true,alignment=false,merkle=true",
+        )
+        .expect("canonical range capability");
+        parse_stream_budget("max_in_flight=2,max_bytes_per_sec=1024,burst=512")
+            .expect("canonical stream budget");
+        for (selector, label) in [
+            ("torii", "torii_http_range"),
+            ("quic", "quic_stream"),
+            ("soranet", "soranet_relay"),
+            ("vendor", "vendor_reserved"),
+        ] {
+            let protocol = parse_transport_protocol(selector).expect("canonical transport");
+            assert_eq!(transport_protocol_name(protocol), label);
+        }
+        for value in [
+            "torii:storage.example",
+            "quic:storage.example",
+            "norito-rpc:storage.example",
+        ] {
+            parse_endpoint(value).expect("canonical endpoint kind");
+        }
+        let mut opts = EmitOptions {
+            endpoints: vec![parse_endpoint("torii:storage.example").expect("canonical endpoint")],
+            ..EmitOptions::default()
+        };
+        for value in ["tls_fingerprint:11", "alpn:11", "region:global"] {
+            parse_endpoint_metadata(value, &mut opts).expect("canonical endpoint metadata");
+        }
+        assert!(parse_bool("true").expect("canonical true"));
+        assert!(!parse_bool("false").expect("canonical false"));
+    }
+
+    #[test]
+    fn structured_selectors_reject_duplicate_fields() {
+        for value in [
+            "max_span=16,max_span=16,min_granularity=4",
+            "max_span=16,min_granularity=4,sparse=true,sparse=false",
+            "max_span=16,min_granularity=4,alignment=true,alignment=false",
+            "max_span=16,min_granularity=4,merkle=true,merkle=false",
+        ] {
+            let err = parse_range_capability(value).expect_err("duplicate range field must fail");
+            assert!(err.contains("multiple times"), "unexpected error: {err}");
+        }
+        for value in [
+            "max_in_flight=2,max_in_flight=3,max_bytes_per_sec=1024",
+            "max_in_flight=2,max_bytes_per_sec=1024,max_bytes_per_sec=2048",
+            "max_in_flight=2,max_bytes_per_sec=1024,burst=512,burst=256",
+        ] {
+            let err = parse_stream_budget(value).expect_err("duplicate budget field must fail");
+            assert!(err.contains("multiple times"), "unexpected error: {err}");
+        }
+    }
+
+    #[test]
     fn reviewed_fingerprint_requires_exact_lowercase_sha256_hex() {
         let fingerprint =
             parse_reviewed_fingerprint(&"ab".repeat(32)).expect("canonical reviewed fingerprint");
@@ -2189,8 +2336,9 @@ mod tests {
     #[test]
     fn trusted_input_rejects_hardlinks() {
         let temp = tempdir().expect("tempdir");
-        let original = temp.path().join("provider.pub");
-        let linked = temp.path().join("provider-copy.pub");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let original = temp_path.join("provider.pub");
+        let linked = temp_path.join("provider-copy.pub");
         fs::write(&original, [0xA5; ED25519_PUBLIC_KEY_BYTES]).expect("write public key");
         fs::hard_link(&original, &linked).expect("create hard link");
 
@@ -2230,8 +2378,9 @@ mod tests {
     #[test]
     fn write_bytes_rejects_existing_hardlinked_output_without_mutation() {
         let temp = tempdir().expect("tempdir");
-        let output = temp.path().join("advert.to");
-        let alias = temp.path().join("advert.alias");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let output = temp_path.join("advert.to");
+        let alias = temp_path.join("advert.alias");
         fs::write(&output, b"existing").expect("write existing output");
         fs::hard_link(&output, &alias).expect("create output hard link");
 
@@ -2275,12 +2424,8 @@ mod tests {
             ..EmitOptions::default()
         };
         let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
-        let advert = build_advert(
-            &opts,
-            signing_key.verifying_key().to_bytes().to_vec(),
-            vec![0; ED25519_SIGNATURE_BYTES],
-        )
-        .expect("advert builds");
+        let mut advert = externally_sign_advert(&opts, &signing_key);
+        advert.signature.signature.fill(0);
 
         let err = verify_advert_signature(&advert)
             .expect_err("all-zero signature material must be rejected");
@@ -2352,21 +2497,6 @@ mod tests {
     }
 
     #[test]
-    fn resolves_numeric_id() {
-        let handle = resolve_profile_handle("1").expect("numeric resolves");
-        assert_eq!(handle, "sorafs.sf1@1.0.0");
-    }
-
-    #[test]
-    fn rejects_noncanonical_numeric_id() {
-        let err = resolve_profile_handle("01").expect_err("padded numeric id must fail");
-        assert!(
-            err.contains("canonical unsigned decimal"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
     fn rejects_whitespace_padded_profile_handle() {
         let err = resolve_profile_handle(" sorafs.sf1@1.0.0")
             .expect_err("whitespace-padded handle must fail");
@@ -2374,18 +2504,17 @@ mod tests {
     }
 
     #[test]
-    fn resolves_alias_with_dash() {
-        let handle = resolve_profile_handle("sorafs-sf1").expect("alias resolves");
-        assert_eq!(handle, "sorafs.sf1@1.0.0");
-    }
-
-    #[test]
-    fn rejects_unknown_id() {
-        let err = resolve_profile_handle("99").expect_err("unknown id must fail");
-        assert!(
-            err.contains("unknown chunker profile id"),
-            "unexpected error message: {err}"
-        );
+    fn rejects_profile_selector_aliases() {
+        for value in [
+            "1",
+            "01",
+            "99",
+            "sorafs-sf1",
+            "sorafs/sf1@1.0.0",
+            "SORAFS.SF1@1.0.0",
+        ] {
+            resolve_profile_handle(value).expect_err("profile selector alias must fail");
+        }
     }
 
     #[test]

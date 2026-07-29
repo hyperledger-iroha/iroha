@@ -186,6 +186,30 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 - Admission rejects an empty mixed batch. At runtime, `iroha_core` executes `InstructionBox` batches via `Execute for InstructionBox`, downcasting to the appropriate `*Box` or concrete instruction. A mixed batch is a global live-state scheduler barrier: each item observes all earlier item effects, and any failure discards every staged effect. Transaction batches containing a call share one signature-bound gas limit across explicit ISIs and calls, with one fee settlement for the transaction. Trigger actions support the same ordered atomic batch and share one deterministic trigger gas budget across all items in an invocation. Code: `crates/iroha_core/src/smartcontracts/isi/mod.rs` and `crates/iroha_core/src/executor.rs`.
 - Runtime executor validation budget (user-provided executor): base `executor.fuel` from parameters plus optional transaction metadata `additional_fuel` (`u64`), shared across instruction/trigger validations within the transaction.
 
+The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
+Version 3 remains the historical introduction point for the append-only mixed
+batch above. Version 4 changes canonical validation-fee governance bytes by
+requiring exact `plain_electorate_rules` in policy and payout-lifecycle
+proposal instructions, retaining those rules in enacted registry entries, and
+binding finalized authorization to the frozen PLAIN electorate. The rules fix
+the voting asset, ballot and citizenship amounts, inclusive ballot duration,
+member cap, conviction, turnout, threshold, and closed eligibility rule. Taira
+requires PLAIN only and an exact 3,600-block window
+(`h_end = h_start + 3,599`).
+
+At `h_start`, after the seven-body Parliament gate, consensus persists a
+`ValidationFeePlainElectorateSnapshotV1`: the proposal id/operator, capture and
+gate heights, exact member count, canonical member records, and
+domain-separated roster root. The corresponding
+`ValidationFeeParliamentAuthorizationV1` retains the snapshot
+root/count/capture/gate anchors. Ballot admission and tallying reject accounts
+outside the full frozen roster. Finalization and enactment recheck that
+snapshot, while registry validation and the verified policy projection recheck
+the proposal-bound rules and retained anchors. An enacted policy is admitted
+only when `effective_from_height = enacted_at_height + 120,960`; both earlier
+and later activation fail closed. SDKs must reject a node advertising any
+other data-model version before submission.
+
 ---
 
 ## Invariants and Notes (from tests and guards)

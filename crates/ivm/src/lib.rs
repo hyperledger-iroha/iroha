@@ -1,5 +1,4 @@
 //! # Iroha VM (IVM)
-#![allow(unexpected_cfgs)]
 // Clippy hygiene: justified global allows
 // - upper_case_acronyms: IVM is a proper name used pervasively in the API.
 // - type_complexity: some internal tuples/locks intentionally carry rich types.

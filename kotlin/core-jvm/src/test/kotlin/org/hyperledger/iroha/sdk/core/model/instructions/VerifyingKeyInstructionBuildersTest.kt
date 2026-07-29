@@ -38,7 +38,7 @@ class VerifyingKeyInstructionBuildersTest {
     }
 
     @Test
-    fun `register and update reject labels outside the verifier registry`() {
+    fun `register and update reject unsupported production verifier backends`() {
         val record = sampleRecord("halo2/ipa")
 
         for (backend in unsafeBackends.filter { it.isNotEmpty() }) {
@@ -218,6 +218,20 @@ class VerifyingKeyInstructionBuildersTest {
         "stark/fri/latest",
         "stark/fri/attestation",
         "stark/fri/contest",
+        "stark/fri/random-profile",
+        "stark/fri/sha512-goldilocks",
+        "stark/fri/audit-proof-v1",
+        "halo2/ipa:production-ready",
+        "halo2/ipa:mainnet-ready",
+        "halo2/ipa:release-ready",
+        "halo2/ipa:certified-mainnet",
+        "halo2/ipa:third-party-audited",
+        "stark/fri/audit-signoff",
+        "stark/fri/boi-audited",
+        "stark/fri/external-security-review",
+        "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+        "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+        "stark/fri/a-u-d-i-t-c-l-a-i-m",
         "stark/fri/dev-fixture",
         "stark/fri/d-e-v-f-i-x-t-u-r-e",
         "stark/fri/dev",

@@ -3830,7 +3830,7 @@ pub struct JsDaProofRecord {
     pub segment_leaves_hex: Vec<String>,
     #[doc = "Hex digests for each segment-level branch."]
     pub chunk_segments_hex: Vec<String>,
-    #[doc = "Total number of chunks committed by the PoR root."]
+    #[doc = "Total number of chunks committed by the `PoR` root."]
     pub chunk_count: JsU64,
     #[doc = "Hex digests in the chunk-level Merkle authentication path."]
     pub chunk_merkle_path_hex: Vec<String>,
@@ -5248,8 +5248,7 @@ fn build_scoreboard_metadata_value(
         "anonymity_policy_override_label".into(),
         anonymity_override_label.map_or(Value::Null, Value::from),
     );
-    let write_mode_label = config.write_mode.label().replace('_', "-");
-    metadata.insert("write_mode".into(), Value::from(write_mode_label));
+    metadata.insert("write_mode".into(), Value::from(config.write_mode.label()));
     metadata.insert(
         "write_mode_enforces_pq".into(),
         Value::from(config.write_mode.enforces_pq_only()),
@@ -5306,7 +5305,7 @@ fn build_gateway_metadata(
                 config.fetch.provider_failure_threshold
             ))
         })?;
-    let write_mode_label = config.write_mode.label().replace('_', "-");
+    let write_mode_label = config.write_mode.label().to_string();
     let write_mode_enforces_pq = config.write_mode.enforces_pq_only();
 
     Ok(JsGatewayMetadata {
@@ -5373,14 +5372,8 @@ fn apply_gateway_options(
         config.telemetry_region = Some(trimmed.to_string());
     }
     if let Some(phase) = options.rollout_phase.as_ref() {
-        let trimmed = phase.trim();
-        if trimmed.is_empty() {
-            return Err(invalid_arg("rolloutPhase must not be empty when provided"));
-        }
-        let parsed = RolloutPhase::parse(trimmed).ok_or_else(|| {
-            invalid_arg(
-                "rolloutPhase must be one of 'canary', 'ramp', 'default', or stage_a/stage_b/stage_c aliases",
-            )
+        let parsed = RolloutPhase::parse(phase).ok_or_else(|| {
+            invalid_arg("rolloutPhase must be one of 'canary', 'ramp', or 'default'")
         })?;
         config.rollout_phase = parsed;
         if config.anonymity_policy_override.is_none() {
@@ -5388,26 +5381,14 @@ fn apply_gateway_options(
         }
     }
     if let Some(policy) = options.transport_policy.as_ref() {
-        let trimmed = policy.trim();
-        if trimmed.is_empty() {
-            return Err(invalid_arg(
-                "transportPolicy must not be empty when provided",
-            ));
-        }
-        config.transport_policy = TransportPolicy::parse(trimmed).ok_or_else(|| {
+        config.transport_policy = TransportPolicy::parse(policy).ok_or_else(|| {
             invalid_arg(
                 "transportPolicy must be one of 'soranet-first', 'soranet-strict', or 'direct-only'",
             )
         })?;
     }
     if let Some(policy) = options.anonymity_policy.as_ref() {
-        let trimmed = policy.trim();
-        if trimmed.is_empty() {
-            return Err(invalid_arg(
-                "anonymityPolicy must not be empty when provided",
-            ));
-        }
-        config.anonymity_policy = AnonymityPolicy::parse(trimmed).ok_or_else(|| {
+        config.anonymity_policy = AnonymityPolicy::parse(policy).ok_or_else(|| {
             invalid_arg(
                 "anonymityPolicy must be one of 'anon-guard-pq', 'anon-majority-pq', or 'anon-strict-pq'",
             )
@@ -5415,14 +5396,8 @@ fn apply_gateway_options(
         config.anonymity_policy_override = Some(config.anonymity_policy);
     }
     if let Some(mode) = options.write_mode.as_ref() {
-        let trimmed = mode.trim();
-        if trimmed.is_empty() {
-            return Err(invalid_arg("writeMode must not be empty when provided"));
-        }
-        config.write_mode = WriteModeHint::parse(trimmed).ok_or_else(|| {
-            invalid_arg(
-                "writeMode must be one of 'read-only', 'read_only', 'upload-pq-only', or 'upload_pq_only'",
-            )
+        config.write_mode = WriteModeHint::parse(mode).ok_or_else(|| {
+            invalid_arg("writeMode must be one of 'read-only' or 'upload-pq-only'")
         })?;
     }
     if let Some(proxy_cfg) = options.local_proxy.as_ref() {
@@ -7006,7 +6981,7 @@ pub fn sorafs_validate_pdp_bundle_json(
     json::to_string(&outcome).map_err(norito_to_napi)
 }
 
-/// Validate a bounded heterogeneous SoraFS fixture bundle and its canonical
+/// Validate a bounded heterogeneous `SoraFS` fixture bundle and its canonical
 /// cross-links, returning `ValidationOutcomeV1` JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API boundary requires owned inputs
@@ -8269,6 +8244,13 @@ fn validate_validation_fee_payout_binding(
 fn validation_fee_plain_electorate_rules_from_json(
     payload: &str,
 ) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
+    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
+    validation_fee_plain_electorate_rules_from_json_value(value)
+}
+
+fn validation_fee_plain_electorate_rules_from_json_value(
+    value: json::Value,
+) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
     const RULES_FIELDS: &[&str] = &[
         "voting_asset_id",
         "ballot_amount",
@@ -8284,7 +8266,6 @@ fn validation_fee_plain_electorate_rules_from_json(
     ];
     const ELIGIBILITY_RULE_FIELDS: &[&str] = &["rule", "value"];
 
-    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
     let json::Value::Object(fields) = &value else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -8345,6 +8326,7 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
     const INSTRUCTION_FIELDS: &[&str] = &[
         "policy",
         "payout_lifecycle_proposal_id",
+        "plain_electorate_rules",
         "referendum_window",
         "mode",
     ];
@@ -8368,6 +8350,12 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
         json::Value::Null => None,
         value => Some(json::from_value::<[u8; 32]>(value).map_err(norito_to_napi)?),
     };
+    let plain_electorate_rules =
+        validation_fee_plain_electorate_rules_from_json_value(required_value(
+            &mut fields,
+            "plain_electorate_rules",
+            "ProposeValidationFeePolicy",
+        )?)?;
     let referendum_window = match required_value(
         &mut fields,
         "referendum_window",
@@ -8407,6 +8395,7 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
     Ok(ProposeValidationFeePolicy {
         policy,
         payout_lifecycle_proposal_id,
+        plain_electorate_rules,
         referendum_window,
         mode,
     }
@@ -11187,6 +11176,10 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::to_value(&propose.payout_lifecycle_proposal_id).map_err(norito_to_napi)?,
         );
         inner.insert(
+            "plain_electorate_rules".to_owned(),
+            json::to_value(&propose.plain_electorate_rules).map_err(norito_to_napi)?,
+        );
+        inner.insert(
             "referendum_window".to_owned(),
             json::to_value(&propose.referendum_window).map_err(norito_to_napi)?,
         );
@@ -12374,7 +12367,7 @@ const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
 
 const PRIVACY_COMPONENT_ALGORITHM_IDS: &[&str] = &["verange-transparent-range-v1"];
 const PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS: &[&str] = &[];
-const PRIVACY_EXPOSED_READINESS_CLAIM_FRAGMENTS: &[&str] = &[
+const PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS: &[&str] = &[
     "productionready",
     "productionhardened",
     "productionenabled",
@@ -13616,7 +13609,7 @@ fn privacy_entrypoint_compact_lowercase(entrypoint: &str) -> String {
 
 fn privacy_exposed_label_claims_production_readiness(value: &str) -> bool {
     let compact = privacy_entrypoint_compact_lowercase(value);
-    PRIVACY_EXPOSED_READINESS_CLAIM_FRAGMENTS
+    PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS
         .iter()
         .any(|fragment| compact.contains(fragment))
 }
@@ -14357,7 +14350,9 @@ fn privacy_request_has_invalid_catalog_shape(request: &PrivacyProofRequestV1) ->
         || !privacy_sdk_entrypoint_is_portable(&request.entrypoint)
 }
 
-fn privacy_request_has_exposed_readiness_claim_text_field(request: &PrivacyProofRequestV1) -> bool {
+fn privacy_request_has_exposed_production_claim_text_field(
+    request: &PrivacyProofRequestV1,
+) -> bool {
     privacy_request_text_fields(request)
         .iter()
         .any(|field| privacy_exposed_label_claims_production_readiness(field))
@@ -14531,7 +14526,7 @@ fn privacy_result_for_request(
             );
         }
 
-        if privacy_request_has_exposed_readiness_claim_text_field(&request) {
+        if privacy_request_has_exposed_production_claim_text_field(&request) {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request text fields must not claim production/mainnet/audit readiness",
@@ -14861,10 +14856,6 @@ pub struct JsTransactionPayload {
 }
 
 /// Exact unsigned transaction draft used by the fee quote-to-sign flow.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the payload-prefixed field names are the stable public JavaScript transaction-draft API"
-)]
 #[napi(object)]
 pub struct JsTransactionPayloadDraft {
     /// Canonical Norito JSON for `TransactionPayload`, sent unchanged to `/v1/fees/quote`.
@@ -18894,7 +18885,7 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn privacy_request_rejects_exposed_readiness_claims_without_reflection() {
+    fn privacy_request_rejects_exposed_production_claims_without_reflection() {
         for (field, value) in [
             ("algorithm_id", "forged-mainnet-ready-algorithm"),
             ("algorithm_id", "claimed-mainnet-algorithm"),
@@ -18933,7 +18924,7 @@ seiyaku Privacy {
             assert_subslice_absent(
                 &encoded,
                 value.as_bytes(),
-                "readiness-claim request failure result",
+                "production-claim request failure result",
             );
         }
     }
@@ -21731,6 +21722,19 @@ seiyaku Privacy {
             .to_owned()
     }
 
+    fn register_citizen_json(owner: &AccountId, amount: json::Value) -> json::Value {
+        json::Value::Object(json::Map::from_iter([(
+            "RegisterCitizen".to_owned(),
+            json::Value::Object(json::Map::from_iter([
+                (
+                    "owner".to_owned(),
+                    json::Value::String(account_json_literal(owner)),
+                ),
+                ("amount".to_owned(), amount),
+            ])),
+        )]))
+    }
+
     fn canonical_owner_literal(_domain: &str) -> String {
         account_json_literal(&sample_account("wonderland"))
     }
@@ -21896,22 +21900,29 @@ seiyaku Privacy {
         let mut provider_id = [0u8; 32];
         provider_id
             .copy_from_slice(&hex::decode(provider_id_hex).expect("decode provider identifier"));
-        let token = StreamTokenV1::sign(
-            StreamTokenBodyV1 {
-                token_id: "01TESTTOKEN0000000000000000".to_string(),
-                manifest_cid: hex::decode(manifest_id_hex).expect("decode manifest id"),
-                provider_id,
-                profile_handle: profile.to_string(),
-                max_streams,
-                ttl_epoch: 9_999_999_999,
-                rate_limit_bytes: 8 * 1024 * 1024,
-                issued_at: 1_735_000_000,
-                requests_per_minute: 120,
-                token_pk_version: 1,
-            },
-            &ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]),
+        let body = StreamTokenBodyV1 {
+            token_id: "01TESTTOKEN0000000000000000".to_string(),
+            manifest_cid: hex::decode(manifest_id_hex).expect("decode manifest id"),
+            provider_id,
+            profile_handle: profile.to_string(),
+            max_streams,
+            ttl_epoch: 9_999_999_999,
+            rate_limit_bytes: 8 * 1024 * 1024,
+            issued_at: 1_735_000_000,
+            requests_per_minute: 120,
+            token_pk_version: 1,
+        };
+        let signing_key =
+            KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519).expect("derive test key");
+        let signature = Signature::try_new(
+            signing_key.private_key(),
+            &body.signing_payload_bytes().expect("stream token preimage"),
         )
         .expect("sign stream token");
+        let token = StreamTokenV1 {
+            body,
+            signature: signature.payload().to_vec(),
+        };
         let bytes = norito::to_bytes(&token).expect("encode stream token");
         BASE64.encode(bytes)
     }
@@ -22035,6 +22046,120 @@ seiyaku Privacy {
         opts.write_mode = Some("upload-pq-only".to_string());
         apply_gateway_options(&mut config, &opts).expect("apply write mode");
         assert_eq!(config.write_mode, WriteModeHint::UploadPqOnly);
+    }
+
+    #[test]
+    fn gateway_policy_options_accept_exact_v1_labels() {
+        let mut config = OrchestratorConfig::default();
+        let mut opts = empty_gateway_options();
+        opts.rollout_phase = Some("default".to_string());
+        opts.transport_policy = Some("direct-only".to_string());
+        opts.anonymity_policy = Some("anon-strict-pq".to_string());
+        opts.write_mode = Some("read-only".to_string());
+
+        apply_gateway_options(&mut config, &opts).expect("apply exact V1 policy labels");
+
+        assert_eq!(config.rollout_phase, RolloutPhase::Default);
+        assert_eq!(config.transport_policy, TransportPolicy::DirectOnly);
+        assert_eq!(config.anonymity_policy, AnonymityPolicy::StrictPq);
+        assert_eq!(
+            config.anonymity_policy_override,
+            Some(AnonymityPolicy::StrictPq)
+        );
+        assert_eq!(config.write_mode, WriteModeHint::ReadOnly);
+    }
+
+    #[test]
+    fn gateway_policy_options_reject_all_noncanonical_labels() {
+        for alias in [
+            "stage_a", "stage-a", "stagea", "stage_b", "stage-b", "stageb", "stage_c", "stage-c",
+            "stagec", "ga", "CANARY", "Ramp", "DEFAULT", " canary", "canary ", "", "unknown",
+        ] {
+            let mut config = OrchestratorConfig::default();
+            let mut opts = empty_gateway_options();
+            opts.rollout_phase = Some(alias.to_string());
+            let error = apply_gateway_options(&mut config, &opts)
+                .expect_err("rollout aliases must fail closed");
+            assert!(
+                error.to_string().contains("rolloutPhase must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
+        for alias in [
+            "soranet_first",
+            "soranet_strict",
+            "soranet_only",
+            "soranet-only",
+            "direct_only",
+            "SORANET-FIRST",
+            "Soranet-Strict",
+            "DIRECT-ONLY",
+            " soranet-first",
+            "soranet-first ",
+            "",
+            "unknown",
+        ] {
+            let mut config = OrchestratorConfig::default();
+            let mut opts = empty_gateway_options();
+            opts.transport_policy = Some(alias.to_string());
+            let error = apply_gateway_options(&mut config, &opts)
+                .expect_err("transport aliases must fail closed");
+            assert!(
+                error.to_string().contains("transportPolicy must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
+        for alias in [
+            "anon_guard_pq",
+            "anon_majority_pq",
+            "anon_strict_pq",
+            "stage_a",
+            "stage-a",
+            "stagea",
+            "stage_b",
+            "stage-b",
+            "stageb",
+            "stage_c",
+            "stage-c",
+            "stagec",
+            "ANON-GUARD-PQ",
+            "Anon-Majority-Pq",
+            "ANON-STRICT-PQ",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+            "",
+            "unknown",
+        ] {
+            let mut config = OrchestratorConfig::default();
+            let mut opts = empty_gateway_options();
+            opts.anonymity_policy = Some(alias.to_string());
+            let error = apply_gateway_options(&mut config, &opts)
+                .expect_err("anonymity aliases must fail closed");
+            assert!(
+                error.to_string().contains("anonymityPolicy must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
+        for alias in [
+            "read_only",
+            "upload_pq_only",
+            "READ-ONLY",
+            "Upload-Pq-Only",
+            " read-only",
+            "read-only ",
+            "",
+            "unknown",
+        ] {
+            let mut config = OrchestratorConfig::default();
+            let mut opts = empty_gateway_options();
+            opts.write_mode = Some(alias.to_string());
+            let error = apply_gateway_options(&mut config, &opts)
+                .expect_err("write-mode aliases must fail closed");
+            assert!(
+                error.to_string().contains("writeMode must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -23900,6 +24025,7 @@ seiyaku Privacy {
         let instruction: InstructionBox = ProposeValidationFeePolicy {
             policy,
             payout_lifecycle_proposal_id,
+            plain_electorate_rules: validation_fee_plain_electorate_rules_fixture(),
             referendum_window: Some(AtWindow {
                 lower: 100,
                 upper: 140,
@@ -23985,6 +24111,7 @@ seiyaku Privacy {
         let instruction: InstructionBox = ProposeValidationFeePolicy {
             policy: validation_fee_policy_fixture(None),
             payout_lifecycle_proposal_id: None,
+            plain_electorate_rules: validation_fee_plain_electorate_rules_fixture(),
             referendum_window: Some(AtWindow {
                 lower: 100,
                 upper: 140,
@@ -24150,13 +24277,16 @@ seiyaku Privacy {
                 "voting_mode".to_owned(),
                 json::Value::String("Plain".to_owned()),
             );
-        let error = validation_fee_policy_proposal_fingerprint_v1(
+        let result = validation_fee_policy_proposal_fingerprint_v1(
             json::to_json(&validation_fee_policy_fixture(None))
                 .expect("validation-fee policy JSON"),
             None,
             json::to_json(&value).expect("legacy plain electorate rules JSON"),
-        )
-        .expect_err("unknown plain electorate rule fields must fail closed");
+        );
+        let error = match result {
+            Ok(_) => panic!("unknown plain electorate rule fields must fail closed"),
+            Err(error) => error,
+        };
         assert!(error.reason.contains("must contain exactly"));
     }
 
@@ -24164,12 +24294,15 @@ seiyaku Privacy {
     fn validation_fee_payout_lifecycle_fingerprint_rejects_invalid_binding() {
         let mut payout_binding = validation_fee_payout_binding_fixture();
         payout_binding.code_hash = [0; 32];
-        let error = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+        let result = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
             json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
             json::to_json(&validation_fee_plain_electorate_rules_fixture())
                 .expect("plain electorate rules JSON"),
-        )
-        .expect_err("invalid payout binding must fail closed");
+        );
+        let error = match result {
+            Ok(_) => panic!("invalid payout binding must fail closed"),
+            Err(error) => error,
+        };
         assert!(error.reason.contains("code hash must be non-zero"));
     }
 
@@ -24616,12 +24749,10 @@ seiyaku Privacy {
         let owner = sample_account("wonderland");
         let wide = "340282366920938463463374607431768211456.25";
         for amount in ["1.25", wide] {
-            let instruction = value_to_instruction(norito_json!({
-                "RegisterCitizen": {
-                    "owner": account_json_literal(&owner),
-                    "amount": amount,
-                }
-            }))
+            let instruction = value_to_instruction(register_citizen_json(
+                &owner,
+                json::Value::String(amount.to_owned()),
+            ))
             .expect("canonical citizen-bond Quantity must deserialize");
             let register = instruction
                 .as_any()
@@ -24655,13 +24786,8 @@ seiyaku Privacy {
             ("object", json::Value::Object(json::Map::new())),
         ];
         for (case, amount) in invalid {
-            let error = value_to_instruction(norito_json!({
-                "RegisterCitizen": {
-                    "owner": account_json_literal(&owner),
-                    "amount": amount,
-                }
-            }))
-            .expect_err("invalid citizen-bond Quantity must be rejected");
+            let error = value_to_instruction(register_citizen_json(&owner, amount))
+                .expect_err("invalid citizen-bond Quantity must be rejected");
             assert!(
                 error.reason.contains("RegisterCitizen.amount"),
                 "unexpected {case} rejection: {}",
@@ -26103,7 +26229,7 @@ seiyaku Privacy {
             json::Value::String("-1".to_owned()),
             json::Value::String("01".to_owned()),
             json::Value::String("1.0".to_owned()),
-            json::Value::Number(json::Number::from(1_u32)),
+            json::Value::Number(json::Number::from(1_u64)),
         ] {
             let mut payload = canonical_payload.clone();
             payload

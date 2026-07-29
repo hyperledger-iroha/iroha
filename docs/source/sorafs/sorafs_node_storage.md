@@ -104,13 +104,31 @@ state_dir = "/var/lib/iroha/sorafs/reputation"
 window_start_height = 1
 window_end_height = 100_000
 finalized_query_handle = "ledger.finalized.primary"
+journal_transaction_submitter_handle = "queue.reputation.journal"
+journal_transaction_submitter_revision = 1
+journal_transaction_submitter_policy_digest_hex = "<chain-and-handle-bound-lowercase-32-byte-hex>"
 threshold_signer_handle = "hsm.reputation.threshold"
+threshold_signer_revision = 1
+threshold_signer_policy_digest_hex = "<trust-policy-digest-lowercase-32-byte-hex>"
 governance_dag_handle = "governance.dag.publisher"
+governance_dag_revision = 1
+governance_dag_policy_digest_hex = "<publisher-peer-and-key-policy-digest-lowercase-32-byte-hex>"
 governance_publisher_peer_id = "12D3KooWReviewedPublisher"
 governance_publisher_public_key_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 poll_interval_ms = 1_000
 page_items = 64
 max_pages_per_batch = 4_096
+
+[sorafs.storage.por_replay_archive]
+enabled = false
+poll_interval_ms = 1_000
+max_records_per_tick = 64
+# Enabling also requires the following public binding fields:
+# handle = "hsm://sorafs/por-replay-archive/primary"
+# archive_id_hex = "8181818181818181818181818181818181818181818181818181818181818181"
+# revision = 1
+# policy_digest_hex = "8282828282828282828282828282828282828282828282828282828282828282"
+# signing_public_key_hex = "<canonical-strong-ed25519-public-key>"
 
 [sorafs.storage.hedging_billing_runtime]
 enabled = false
@@ -160,13 +178,31 @@ adverts:
   external publication reconciler. Enabling it requires storage, an absolute
   trust-policy path and private state directory, a non-zero finalized release
   window, weights totaling exactly 10,000 basis points, bounded query/checkpoint
-  settings, and production opaque handles for all three runtime-only adapters.
-  Handles containing null/mock/test/development components are rejected, and
-  no file or environment credential field exists. `irohad` also verifies each
-  injected adapter reports the configured identity before opening checkpoints.
+  settings, and a production opaque handle, non-zero revision, and exact
+  lowercase non-zero 32-byte public-policy digest for every runtime-only
+  adapter. The standard launcher resolves the journal submitter, threshold
+  signer, and Governance DAG publisher/readback roles through broker slots 32,
+  33, and 34. Handles containing null/mock/test/development components are
+  rejected, and no file or environment credential field exists. `irohad`
+  qualifies every injected adapter against all three public binding components
+  before opening checkpoints and around every operation.
   Overall readiness remains false under
-  `V1-BLOCK-REPUTATION-RUNTIME-01` until the active journal-policy reader and
-  durable PoR/token native transaction submit/reconcile worker are shipped.
+  `V1-BLOCK-REPUTATION-RUNTIME-01` until genuine deployment adapters and
+  qualification evidence exist.
+- `por_replay_archive`: opt-in authenticated immutable retention for compacted
+  finalized PoR replay records. It requires storage and the committed
+  reputation runtime. Configuration pins only one production handle, immutable
+  archive identity, non-zero revision and public-policy digest, a strong
+  Ed25519 receipt-verification key, and bounded poll/work limits. The standard
+  launcher resolves slot 46 through the deployment registry, rechecks the live
+  binding before use, and rejects missing, extra, stale, drifting, substituted,
+  or test-marked providers. Each supervised tick first admits and durably
+  acknowledges at most `max_records_per_tick` PoR terminal outcomes through the
+  reputation outbox, then appends and checkpoints at most that many contiguous
+  acknowledged records. Challenge and verdict replay automatically use the
+  same qualified archive. Credentials and the Ed25519 private key have no
+  config or log representation. This is the interface and launcher wiring, not
+  a shipped deployment backend or external HSM/archive qualification record.
 - `hedging_billing_runtime`: opt-in finalized-ledger billing projector,
   statement-delivery reconciler, and deterministic hedge-intent generator.
   Enabling it requires storage, absolute private state and canonical public
@@ -225,10 +261,20 @@ populate it fail closed.
 adapter boundary and validate the injected node's screening enablement,
 authority digest, and exact non-secret quarantine provider handle, revision,
 and public-policy digest. The node requalifies the wrapper around every
-wrap/unwrap operation and discards recovered key material on drift. The
-standard `irohad` launcher still supplies no concrete provider adapter, so a
-screening-enabled reference deployment intentionally fails startup until
-`V1-BLOCK-AI-QUARANTINE-KMS-01` is resolved.
+wrap/unwrap operation and discards recovered key material on drift. On Linux
+and macOS, stock `irohad` resolves the wrapper through the fixed authenticated
+runtime-provider broker. The handshake additionally pins the active public
+`pkcs11:`/`kms:` key handle, and the bounded canonical operations revalidate it
+around each use. Wrap failures retain a fixed payload-free ambiguity class and
+are never replayed after uncertain dispatch; unwrap is read-only and maps
+transport uncertainty to unavailable. The broker overwrites every
+secret-bearing canonical/frame/request/response buffer on drop, applies the
+moderation frame ceiling before body allocation, and shares one bounded inbound
+operation budget across admitted sessions. The repository still supplies no
+genuine deployment-owned backend or operator credential, so a
+screening-enabled reference deployment fails startup until the configured
+broker service injects one and `V1-BLOCK-AI-QUARANTINE-KMS-01` is qualified
+externally.
 - `runtime.event_history_limit`: per-stream replay ceiling. Repair, reputation,
   orderbook, and moderation histories retain the newest events while keeping a
   separate monotonic high-water sequence. Gap-aware replay reports when a
@@ -435,6 +481,17 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   completion stores the full context for audit; an exact replay remains
   idempotent after a later owner or signer-policy rotation, while an old
   uncommitted completion fails.
+- Completion signing has separate public deployment bindings for the governed
+  signer resolver and leaf HSM/KMS signer. Configuration gives the resolver its
+  own handle, non-zero revision, and non-zero public-policy digest, then binds
+  the signer by its exact handle, non-zero adapter revision, complete chain
+  signer-policy tuple, explicit `ed25519` or `ml-dsa` algorithm, and matching
+  canonical public key. It never contains a credential or private key. Startup
+  compares both bindings before and after readiness; each resolution and
+  signature repeats the applicable handle, qualification, policy, algorithm,
+  public-key, and finalized-owner checks. Test-marked, stale, rotated, or
+  substituted providers fail closed and returned transaction bytes are not
+  accepted after post-operation drift.
 - The production completion outbox treats the injected external sealed
   checkpoint store as authoritative. Configuration binds that provider by the
   exact stable `checkpoint_store_handle`, non-zero
@@ -456,10 +513,34 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   one predecessor behind that head; it can never seed, replace, or override
   external state. Enabled startup requires the configured authenticated-source,
   governed-signer-resolver, and sealed-checkpoint providers and rejects
-  missing, substituted, stale, or test-marked providers. This checkpoint
-  boundary does not supply the still-open production authenticated
-  multi-provider transport, governance-aware HSM/KMS signer resolver, or
-  provider-indexed committed query/archive.
+  missing, substituted, stale, or test-marked providers. The standard
+  authenticated source-pool coordinator has its own configured production
+  handle, non-zero revision, and non-zero public-policy digest; requires at
+  least two distinct non-local provider identities and distinct production
+  child handles; accepts only complete strictly ordered finalized source lists;
+  and rechecks each child identity and readiness before and after fetch.
+  `irohad` freezes the exact payload-free pool qualification and provider
+  inventory across startup readiness, every supervised tick, and every fetch.
+  Endpoint, stream-grant, credential, and payload material remains inside
+  runtime-only child adapters and is not copied into pool metadata,
+  configuration, or durable state. The commit-owned capture path publishes a
+  bounded Kura-authenticated provider index at every finalized anchor, and the
+  runtime pages that immutable archive rather than scanning the live head. The
+  archive has exact restart reconciliation, typed below-retention-floor
+  failures, and an explicit generation/key/finality-fenced compaction protocol.
+  Preparation is read-only and binds the exact fence, checkpoint digest, and
+  complete canonical-checkpoint digest. Installation first advances a separate
+  per-chain sealed monotonic CAS record, resolves ambiguous writes by exact
+  authoritative readback, and only then publishes the checkpoint and unlinks
+  its prefix. Manual mode is the default and rejects every checkpoint candidate
+  at startup; authority mode recovers only the exact approved checkpoint and
+  rejects missing, substituted, stale, or test-marked providers. This closes
+  source selection, top-level and child qualification fencing, the public
+  resolver/signer qualification contract, and the local indexed archive and
+  retention-authority protocol only: concrete
+  governance-advert/stream-grant/pinned-HTTPS child transports, a concrete
+  governance-aware HSM/KMS signer backend with atomic rotation/revocation
+  enforcement, and the deployment-owned sealed-CAS backend remain open.
 - Manual completion tooling must supply that complete context through
   `sorafs_tx_stdin_builder complete-order`; the retired three-field completion
   form and offline Izanami completion recipe are not accepted.

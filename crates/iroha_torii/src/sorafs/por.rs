@@ -35,7 +35,7 @@ use iroha_futures::supervisor::ShutdownSignal;
 use norito::json::{self, Value as JsonValue};
 use norito::{
     codec::{Decode, Encode},
-    decode_from_bytes,
+    decode_from_bytes, decode_from_bytes_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
     to_bytes,
 };
@@ -61,6 +61,19 @@ use tokio::time::{MissedTickBehavior, interval};
 const POR_STATUS_EXPORT_VERSION_V1: u8 = 1;
 const POR_COORDINATOR_SNAPSHOT_VERSION_V1: u8 = 1;
 const MAX_POR_COORDINATOR_RECORDS: usize = 65_536;
+const MAX_POR_COORDINATOR_FORCED_PROVIDERS: usize = 4_096;
+const MAX_POR_COORDINATOR_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_POR_COORDINATOR_DECODE_ALLOCATED_BYTES: usize = 512 * 1024 * 1024;
+
+const fn por_coordinator_decode_limits() -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        MAX_POR_COORDINATOR_RECORDS,
+        MAX_POR_COORDINATOR_SNAPSHOT_BYTES,
+        MAX_POR_COORDINATOR_SNAPSHOT_BYTES,
+        MAX_POR_COORDINATOR_DECODE_ALLOCATED_BYTES,
+        64,
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PorCoordinatorVerdictOutcome {
@@ -205,12 +218,21 @@ pub enum PorStatusExportValidationError {
     InvalidStatus(#[source] sorafs_manifest::por::PorChallengeStatusValidationError),
 }
 
+/// Durable exact report material and its publication acknowledgement.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct PreparedWeeklyReportV1 {
+    report: PorWeeklyReportV1,
+    published: bool,
+}
+
 /// Aggregate coordinator for PoR challenge lifecycle.
 #[derive(Debug, Clone)]
 pub struct PorCoordinator {
     records: Arc<DashMap<[u8; 32], ChallengeRecord>>,
     /// Tracks recent forced challenges so we can flag providers missing VRFs.
     forced_providers: Arc<RwLock<HashMap<[u8; 32], BTreeSet<u64>>>>,
+    /// Exact report material prepared before durable Governance DAG publication.
+    prepared_weekly_report: Arc<RwLock<Option<PreparedWeeklyReportV1>>>,
     persistence: Option<Arc<PorPersistence>>,
     mutation_lock: Arc<Mutex<()>>,
     pipeline_lock: Arc<tokio::sync::Mutex<()>>,
@@ -223,6 +245,7 @@ impl PorCoordinator {
         Self {
             records: Arc::new(DashMap::new()),
             forced_providers: Arc::new(RwLock::new(HashMap::new())),
+            prepared_weekly_report: Arc::new(RwLock::new(None)),
             persistence: None,
             mutation_lock: Arc::new(Mutex::new(())),
             pipeline_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -237,10 +260,11 @@ impl PorCoordinator {
     /// be loaded from disk.
     pub fn with_persistence<P: Into<PathBuf>>(path: P) -> Result<Self, PorPersistenceError> {
         let persistence = Arc::new(PorPersistence::new(path.into()));
-        let (records, forced) = persistence.load()?;
+        let (records, forced, prepared_weekly_report) = persistence.load()?;
         Ok(Self {
             records,
             forced_providers: forced,
+            prepared_weekly_report,
             persistence: Some(persistence),
             mutation_lock: Arc::new(Mutex::new(())),
             pipeline_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -558,12 +582,6 @@ impl PorCoordinator {
             let previous = entry.clone();
             entry.verdict = Some(recorded_verdict);
             entry.repair_task_id = repair_task_id;
-            if entry.proof_digest.is_none() {
-                entry.proof_digest = verdict.proof_digest;
-            }
-            if entry.responded_at.is_none() {
-                entry.responded_at = Some(verdict.decided_at);
-            }
             previous
         };
         if let Err(error) = self.persist() {
@@ -657,7 +675,111 @@ impl PorCoordinator {
         &self,
         cycle: PorReportIsoWeek,
     ) -> Result<PorWeeklyReportV1, PorCoordinatorError> {
-        self.weekly_report_at(cycle, unix_now())
+        if let Some(prepared) = self.prepared_weekly_report.read().as_ref()
+            && prepared.report.cycle == cycle
+        {
+            return Ok(prepared.report.clone());
+        }
+        let generated_at = canonical_weekly_report_generated_at(cycle)?;
+        self.weekly_report_at(cycle, generated_at)
+    }
+
+    /// Prepare and durably retain the exact report bytes before publication.
+    ///
+    /// Exact retries for the same cycle return the retained report even if
+    /// coordinator history changes after the first preparation. A pending
+    /// report must be marked published before the next cycle can be prepared.
+    /// Catch-up advances one ISO week per call so outages cannot skip cycles.
+    fn prepare_weekly_report(
+        &self,
+        cycle: PorReportIsoWeek,
+    ) -> Result<PreparedWeeklyReportV1, PorCoordinatorError> {
+        cycle
+            .validate()
+            .map_err(PorCoordinatorError::InvalidIsoWeek)?;
+        let _mutation = self.mutation_lock.lock();
+        let requested_marker = iso_week_marker(cycle);
+        if let Some(existing) = self.prepared_weekly_report.read().as_ref() {
+            let existing_marker = iso_week_marker(existing.report.cycle);
+            if existing_marker == requested_marker {
+                return Ok(existing.clone());
+            }
+            if existing_marker > requested_marker {
+                return Err(PorCoordinatorError::WeeklyReportCycleRollback {
+                    prepared: existing.report.cycle,
+                    requested: cycle,
+                });
+            }
+            if !existing.published {
+                return Err(PorCoordinatorError::WeeklyReportPublicationPending {
+                    prepared: existing.report.cycle,
+                    requested: cycle,
+                });
+            }
+        }
+
+        let cycle = self
+            .prepared_weekly_report
+            .read()
+            .as_ref()
+            .map_or(Ok(cycle), |existing| {
+                next_iso_week(existing.report.cycle).and_then(|next| {
+                    if iso_week_marker(next) <= requested_marker {
+                        Ok(next)
+                    } else {
+                        Err(PorCoordinatorError::WeeklyReportCycleRollback {
+                            prepared: existing.report.cycle,
+                            requested: cycle,
+                        })
+                    }
+                })
+            })?;
+        let generated_at = canonical_weekly_report_generated_at(cycle)?;
+        let prepared_report = PreparedWeeklyReportV1 {
+            report: self.weekly_report_at(cycle, generated_at)?,
+            published: false,
+        };
+        let previous = {
+            let mut prepared = self.prepared_weekly_report.write();
+            prepared.replace(prepared_report.clone())
+        };
+        if let Err(error) = self.persist() {
+            *self.prepared_weekly_report.write() = previous;
+            return Err(error);
+        }
+        Ok(prepared_report)
+    }
+
+    /// Persist the publication acknowledgement for an exact prepared report.
+    fn mark_weekly_report_published(
+        &self,
+        report: &PorWeeklyReportV1,
+    ) -> Result<(), PorCoordinatorError> {
+        let _mutation = self.mutation_lock.lock();
+        let previous = {
+            let mut prepared = self.prepared_weekly_report.write();
+            let Some(current) = prepared.as_mut() else {
+                return Err(PorCoordinatorError::WeeklyReportPreparationConflict {
+                    cycle: report.cycle,
+                });
+            };
+            if current.report != *report {
+                return Err(PorCoordinatorError::WeeklyReportPreparationConflict {
+                    cycle: report.cycle,
+                });
+            }
+            if current.published {
+                return Ok(());
+            }
+            let previous = current.clone();
+            current.published = true;
+            previous
+        };
+        if let Err(error) = self.persist() {
+            *self.prepared_weekly_report.write() = Some(previous);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn weekly_report_at(
@@ -675,8 +797,12 @@ impl PorCoordinator {
             .iter()
             .map(|entry| entry.value().to_status())
             .filter(|status| {
-                let issued =
-                    OffsetDateTime::from_unix_timestamp(status.issued_at as i64).unwrap_or(start);
+                let Ok(issued_at) = i64::try_from(status.issued_at) else {
+                    return false;
+                };
+                let Ok(issued) = OffsetDateTime::from_unix_timestamp(issued_at) else {
+                    return false;
+                };
                 issued >= start && issued < end
             })
             .collect();
@@ -821,7 +947,8 @@ impl PorCoordinator {
             forced.sort_by(|left, right| left.0.cmp(&right.0));
             drop(forced_guard);
 
-            persistence.store(&records, &forced)?;
+            let prepared_weekly_report = self.prepared_weekly_report.read().clone();
+            persistence.store(&records, &forced, prepared_weekly_report.as_ref())?;
         }
         Ok(())
     }
@@ -964,12 +1091,6 @@ impl ChallengeRecord {
             if verdict.outcome != AuditOutcomeV1::Success {
                 status.failure_reason.clone_from(&verdict.failure_reason);
             }
-            if status.responded_at.is_none() {
-                status.responded_at = Some(verdict.decided_at);
-            }
-            if status.proof_digest.is_none() {
-                status.proof_digest = verdict.proof_digest;
-            }
         } else if self.challenge.forced {
             status.status = PorChallengeOutcome::Forced;
         }
@@ -1058,7 +1179,7 @@ impl ChallengeRecord {
                 if verdict.canonical_digest == [0; 32] {
                     return Err("verdict canonical digest cannot be zero".to_owned());
                 }
-                self.proof_submitted_at.or(Some(verdict.decided_at))
+                self.proof_submitted_at
             }
         };
         if self.responded_at != expected_responded_at {
@@ -1137,6 +1258,7 @@ struct PorCoordinatorSnapshot {
     version: u8,
     records: Vec<ChallengeRecordSnapshot>,
     forced: Vec<ForcedProviderSnapshot>,
+    prepared_weekly_report: Option<PreparedWeeklyReportV1>,
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for PorCoordinatorSnapshot {
@@ -1145,7 +1267,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PorCoordinatorSnapshot {
     }
 }
 
-const MAX_POR_COORDINATOR_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const SECURE_TEMP_RETRIES: usize = 8;
 
 #[derive(Debug, Error)]
@@ -1615,20 +1736,25 @@ impl PorPersistence {
         (
             Arc<DashMap<[u8; 32], ChallengeRecord>>,
             Arc<RwLock<HashMap<[u8; 32], BTreeSet<u64>>>>,
+            Arc<RwLock<Option<PreparedWeeklyReportV1>>>,
         ),
         PorPersistenceError,
     > {
         let records = Arc::new(DashMap::new());
         let forced = Arc::new(RwLock::new(HashMap::new()));
+        let prepared_weekly_report = Arc::new(RwLock::new(None));
 
         let Some(bytes) = secure_read_bytes(&self.path, MAX_POR_COORDINATOR_SNAPSHOT_BYTES)
             .map_err(|error| PorPersistenceError::Secure(error.to_string()))?
         else {
-            return Ok((records, forced));
+            return Ok((records, forced, prepared_weekly_report));
         };
 
-        let snapshot = decode_from_bytes::<PorCoordinatorSnapshot>(&bytes)
-            .map_err(|err| PorPersistenceError::Decode(err.to_string()))?;
+        let snapshot = decode_from_bytes_with_limits::<PorCoordinatorSnapshot>(
+            &bytes,
+            por_coordinator_decode_limits(),
+        )
+        .map_err(|err| PorPersistenceError::Decode(err.to_string()))?;
         let canonical = to_bytes(&snapshot).map_err(PorPersistenceError::Encode)?;
         if canonical != bytes {
             return Err(PorPersistenceError::Decode(
@@ -1641,7 +1767,9 @@ impl PorPersistence {
             });
         }
 
-        if snapshot.records.len() > 65_536 || snapshot.forced.len() > 4_096 {
+        if snapshot.records.len() > MAX_POR_COORDINATOR_RECORDS
+            || snapshot.forced.len() > MAX_POR_COORDINATOR_FORCED_PROVIDERS
+        {
             return Err(PorPersistenceError::Decode(
                 "snapshot entry count exceeds production bounds".to_owned(),
             ));
@@ -1705,7 +1833,25 @@ impl PorPersistence {
         }
         drop(forced_guard);
 
-        Ok((records, forced))
+        if let Some(prepared) = snapshot.prepared_weekly_report {
+            prepared.report.validate().map_err(|error| {
+                PorPersistenceError::Decode(format!("prepared weekly report is invalid: {error}"))
+            })?;
+            let expected_generated_at = canonical_weekly_report_generated_at(prepared.report.cycle)
+                .map_err(|error| {
+                    PorPersistenceError::Decode(format!(
+                        "prepared weekly report cycle is invalid: {error}"
+                    ))
+                })?;
+            if prepared.report.generated_at != expected_generated_at {
+                return Err(PorPersistenceError::Decode(
+                    "prepared weekly report does not use its canonical cycle boundary".to_owned(),
+                ));
+            }
+            *prepared_weekly_report.write() = Some(prepared);
+        }
+
+        Ok((records, forced, prepared_weekly_report))
     }
 
     /// Store the supplied coordinator snapshot to disk.
@@ -1717,6 +1863,7 @@ impl PorPersistence {
         &self,
         records: &[ChallengeRecord],
         forced: &[([u8; 32], Vec<u64>)],
+        prepared_weekly_report: Option<&PreparedWeeklyReportV1>,
     ) -> Result<(), PorPersistenceError> {
         let snapshot = PorCoordinatorSnapshot {
             version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
@@ -1728,6 +1875,7 @@ impl PorPersistence {
                     epochs: epochs.clone(),
                 })
                 .collect(),
+            prepared_weekly_report: prepared_weekly_report.cloned(),
         };
 
         let bytes = to_bytes(&snapshot).map_err(PorPersistenceError::Encode)?;
@@ -3169,22 +3317,36 @@ impl PorCoordinatorRuntime {
     ///
     /// Returns [`PorAutomationError`] when the timestamp cannot be converted
     /// into a valid ISO week.
-    fn compute_iso_marker(now_secs: u64) -> Result<(PorReportIsoWeek, u64), PorAutomationError> {
+    fn compute_completed_iso_marker(
+        now_secs: u64,
+    ) -> Result<(PorReportIsoWeek, u64), PorAutomationError> {
         let ts = i64::try_from(now_secs).map_err(|_| PorAutomationError::TimestampOverflow)?;
         let datetime = OffsetDateTime::from_unix_timestamp(ts)
             .map_err(|_| PorAutomationError::TimestampOverflow)?;
         let (year, week, _) = datetime.to_iso_week_date();
         let year_u16 = u16::try_from(year).map_err(|_| PorAutomationError::TimestampOverflow)?;
-        let cycle = PorReportIsoWeek {
+        let current_cycle = PorReportIsoWeek {
             year: year_u16,
             week,
+        };
+        current_cycle
+            .validate()
+            .map_err(PorCoordinatorError::InvalidIsoWeek)
+            .map_err(PorAutomationError::Coordinator)?;
+        let (current_cycle_start, _) =
+            iso_week_bounds(current_cycle).map_err(PorAutomationError::Coordinator)?;
+        let completed_cycle_time = current_cycle_start - Duration::seconds(1);
+        let (completed_year, completed_week, _) = completed_cycle_time.to_iso_week_date();
+        let cycle = PorReportIsoWeek {
+            year: u16::try_from(completed_year)
+                .map_err(|_| PorAutomationError::TimestampOverflow)?,
+            week: completed_week,
         };
         cycle
             .validate()
             .map_err(PorCoordinatorError::InvalidIsoWeek)
             .map_err(PorAutomationError::Coordinator)?;
-        let marker = (u64::from(cycle.year) << 8) | u64::from(cycle.week);
-        Ok((cycle, marker))
+        Ok((cycle, iso_week_marker(cycle)))
     }
 
     /// Publish a weekly report if the ISO week marker has advanced.
@@ -3193,17 +3355,25 @@ impl PorCoordinatorRuntime {
     ///
     /// Returns [`PorAutomationError`] when report generation or publishing fails.
     fn publish_weekly_report_if_needed(&self, now_secs: u64) -> Result<(), PorAutomationError> {
-        let (cycle, marker) = Self::compute_iso_marker(now_secs)?;
+        let (cycle, marker) = Self::compute_completed_iso_marker(now_secs)?;
         if self.last_report_marker.load(AtomicOrdering::SeqCst) == marker {
             return Ok(());
         }
-        let report = self
+        let prepared = self
             .coordinator
-            .weekly_report(cycle.clone())
+            .prepare_weekly_report(cycle)
             .map_err(PorAutomationError::Coordinator)?;
-        self.publisher.publish_weekly_report(report)?;
-        self.last_report_marker
-            .store(marker, AtomicOrdering::SeqCst);
+        if !prepared.published {
+            self.publisher
+                .publish_weekly_report(prepared.report.clone())?;
+            self.coordinator
+                .mark_weekly_report_published(&prepared.report)
+                .map_err(PorAutomationError::Coordinator)?;
+        }
+        self.last_report_marker.store(
+            iso_week_marker(prepared.report.cycle),
+            AtomicOrdering::SeqCst,
+        );
         Ok(())
     }
 
@@ -3622,6 +3792,30 @@ pub enum PorCoordinatorError {
     /// Failed to compute ISO week bounds from the supplied data.
     #[error("failed to compute ISO week bounds")]
     IsoWeekComputation,
+    /// A prepared report cannot be replaced by an older reporting cycle.
+    #[error(
+        "weekly report cycle rollback from prepared {prepared} to requested {requested} is forbidden"
+    )]
+    WeeklyReportCycleRollback {
+        /// Newest cycle whose exact report bytes are already retained.
+        prepared: PorReportIsoWeek,
+        /// Older cycle requested by the scheduler.
+        requested: PorReportIsoWeek,
+    },
+    /// A later cycle cannot replace report bytes that have not been published.
+    #[error("weekly report {prepared} is still pending publication; cannot advance to {requested}")]
+    WeeklyReportPublicationPending {
+        /// Cycle whose exact prepared bytes still require publication.
+        prepared: PorReportIsoWeek,
+        /// Newer cycle requested by the scheduler.
+        requested: PorReportIsoWeek,
+    },
+    /// Publication acknowledgement did not match the retained prepared report.
+    #[error("weekly report publication acknowledgement for {cycle} has no exact prepared report")]
+    WeeklyReportPreparationConflict {
+        /// Cycle named by the conflicting acknowledgement.
+        cycle: PorReportIsoWeek,
+    },
     /// Underlying persistence failed.
     #[error("persistence failure: {0}")]
     Persistence(#[from] PorPersistenceError),
@@ -3645,6 +3839,35 @@ fn iso_week_bounds(
         .assume_utc();
     let end = start + Duration::weeks(1);
     Ok((start, end))
+}
+
+fn iso_week_marker(cycle: PorReportIsoWeek) -> u64 {
+    (u64::from(cycle.year) << 8) | u64::from(cycle.week)
+}
+
+fn next_iso_week(cycle: PorReportIsoWeek) -> Result<PorReportIsoWeek, PorCoordinatorError> {
+    cycle
+        .validate()
+        .map_err(PorCoordinatorError::InvalidIsoWeek)?;
+    let (_, next_start) = iso_week_bounds(cycle)?;
+    let (year, week, _) = next_start.to_iso_week_date();
+    let next = PorReportIsoWeek {
+        year: u16::try_from(year).map_err(|_| PorCoordinatorError::IsoWeekComputation)?,
+        week,
+    };
+    next.validate()
+        .map_err(PorCoordinatorError::InvalidIsoWeek)?;
+    Ok(next)
+}
+
+fn canonical_weekly_report_generated_at(
+    cycle: PorReportIsoWeek,
+) -> Result<u64, PorCoordinatorError> {
+    cycle
+        .validate()
+        .map_err(PorCoordinatorError::InvalidIsoWeek)?;
+    let (_, end) = iso_week_bounds(cycle)?;
+    u64::try_from(end.unix_timestamp()).map_err(|_| PorCoordinatorError::IsoWeekComputation)
 }
 
 // ------------- Tests -------------
@@ -4670,6 +4893,9 @@ mod tests {
                 challenge.challenge_id
             )))
         );
+        assert_eq!(status.responded_at, None);
+        assert_eq!(status.proof_digest, None);
+        assert_eq!(status.verifier_latency_ms, None);
         status.validate().expect("canonical failed status");
         let cycle = PorReportIsoWeek {
             year: 2023,
@@ -4679,6 +4905,34 @@ mod tests {
         assert_eq!(report.challenges_total, 1);
         assert_eq!(report.challenges_failed, 1);
         assert_eq!(report.top_offenders.len(), 1);
+        assert_eq!(
+            report.generated_at,
+            canonical_weekly_report_generated_at(cycle).expect("canonical report boundary")
+        );
+        assert_eq!(
+            norito::to_bytes(&report).expect("encode report"),
+            norito::to_bytes(&coordinator.weekly_report(cycle).expect("repeat report"))
+                .expect("encode repeated report"),
+            "identical coordinator history must produce identical report bytes"
+        );
+    }
+
+    #[test]
+    fn weekly_report_excludes_timestamps_outside_supported_time_domain() {
+        let coordinator = PorCoordinator::new();
+        let mut challenge = sample_challenge(true);
+        challenge.issued_at = u64::MAX - 600;
+        challenge.deadline_at = u64::MAX;
+        coordinator.record_challenge(&challenge).expect("challenge");
+
+        let report = coordinator
+            .weekly_report(PorReportIsoWeek {
+                year: 2023,
+                week: 46,
+            })
+            .expect("report");
+        assert_eq!(report.challenges_total, 0);
+        assert!(report.top_offenders.is_empty());
     }
 
     fn record_failed_forced_challenge(
@@ -4809,6 +5063,104 @@ mod tests {
         assert_eq!(status.repair_task_id, None);
     }
 
+    #[test]
+    fn prepared_weekly_report_survives_restart_and_history_changes() {
+        let dir = tempdir().expect("temp dir");
+        let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
+        let cycle = PorReportIsoWeek {
+            year: 2023,
+            week: 46,
+        };
+
+        let prepared = {
+            let coordinator =
+                PorCoordinator::with_persistence(&snapshot_path).expect("coordinator");
+            record_failed_forced_challenge(&coordinator, 1, 11, 1_700_000_000);
+            let prepared = coordinator
+                .prepare_weekly_report(cycle)
+                .expect("prepare report");
+            assert_eq!(prepared.report.challenges_total, 1);
+            assert!(!prepared.published);
+
+            record_failed_forced_challenge(&coordinator, 2, 12, 1_700_000_100);
+            assert_eq!(
+                coordinator
+                    .weekly_report(cycle)
+                    .expect("retained report")
+                    .challenges_total,
+                1
+            );
+            assert_eq!(
+                coordinator
+                    .weekly_report_at(
+                        cycle,
+                        canonical_weekly_report_generated_at(cycle)
+                            .expect("canonical report boundary"),
+                    )
+                    .expect("recomputed report")
+                    .challenges_total,
+                2
+            );
+            prepared
+        };
+
+        let coordinator =
+            PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
+        let replay = coordinator
+            .prepare_weekly_report(cycle)
+            .expect("retry prepared report");
+        assert_eq!(replay, prepared);
+        assert_eq!(
+            norito::to_bytes(&replay.report).expect("encode replay"),
+            norito::to_bytes(&prepared.report).expect("encode prepared")
+        );
+        assert!(matches!(
+            coordinator.prepare_weekly_report(PorReportIsoWeek {
+                year: 2023,
+                week: 45,
+            }),
+            Err(PorCoordinatorError::WeeklyReportCycleRollback { .. })
+        ));
+        assert!(matches!(
+            coordinator.prepare_weekly_report(PorReportIsoWeek {
+                year: 2023,
+                week: 0,
+            }),
+            Err(PorCoordinatorError::InvalidIsoWeek(_))
+        ));
+        assert!(matches!(
+            coordinator.prepare_weekly_report(PorReportIsoWeek {
+                year: 2023,
+                week: 48,
+            }),
+            Err(PorCoordinatorError::WeeklyReportPublicationPending { .. })
+        ));
+
+        let mut substituted = replay.report.clone();
+        substituted.generated_at = substituted.generated_at.saturating_add(1);
+        assert!(matches!(
+            coordinator.mark_weekly_report_published(&substituted),
+            Err(PorCoordinatorError::WeeklyReportPreparationConflict { .. })
+        ));
+        coordinator
+            .mark_weekly_report_published(&replay.report)
+            .expect("persist publication acknowledgement");
+        let catch_up = coordinator
+            .prepare_weekly_report(PorReportIsoWeek {
+                year: 2023,
+                week: 48,
+            })
+            .expect("prepare first missing cycle");
+        assert_eq!(
+            catch_up.report.cycle,
+            PorReportIsoWeek {
+                year: 2023,
+                week: 47,
+            }
+        );
+        assert!(!catch_up.published);
+    }
+
     #[cfg(feature = "app_api")]
     mod runtime {
         use std::{
@@ -4929,6 +5281,37 @@ mod tests {
             }
         }
 
+        struct FailOnceWeeklyPublisher {
+            attempts: AtomicUsize,
+            reports: Mutex<Vec<PorWeeklyReportV1>>,
+        }
+
+        impl PorGovernancePublisher for FailOnceWeeklyPublisher {
+            fn is_ready(&self) -> bool {
+                true
+            }
+
+            fn publish_challenge(
+                &self,
+                _publication: PorChallengePublicationV1,
+            ) -> Result<(), sorafs_node::GovernancePublishError> {
+                Ok(())
+            }
+
+            fn publish_weekly_report(
+                &self,
+                report: PorWeeklyReportV1,
+            ) -> Result<(), sorafs_node::GovernancePublishError> {
+                self.reports.lock().push(report);
+                if self.attempts.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
+                    return Err(sorafs_node::GovernancePublishError::Io(
+                        std::io::Error::other("injected weekly publication failure"),
+                    ));
+                }
+                Ok(())
+            }
+        }
+
         struct NotReadyPublisher;
 
         impl PorGovernancePublisher for NotReadyPublisher {
@@ -4979,6 +5362,125 @@ mod tests {
                 3_600,
                 900,
                 300,
+            );
+        }
+
+        #[test]
+        fn scheduler_reports_only_the_previous_completed_iso_week() {
+            let current_cycle = PorReportIsoWeek {
+                year: 2025,
+                week: 12,
+            };
+            let (current_start, _) =
+                iso_week_bounds(current_cycle).expect("current ISO week bounds");
+            let now_secs =
+                u64::try_from(current_start.unix_timestamp()).expect("positive timestamp") + 60;
+            let (completed, marker) = PorCoordinatorRuntime::compute_completed_iso_marker(now_secs)
+                .expect("completed cycle");
+            assert_eq!(
+                completed,
+                PorReportIsoWeek {
+                    year: 2025,
+                    week: 11,
+                }
+            );
+            assert_eq!(marker, iso_week_marker(completed));
+            assert_eq!(
+                canonical_weekly_report_generated_at(completed)
+                    .expect("canonical completed-cycle timestamp"),
+                u64::try_from(current_start.unix_timestamp()).expect("positive timestamp")
+            );
+        }
+
+        #[test]
+        fn scheduler_replays_exact_prepared_report_after_restart() {
+            let dir = tempdir().expect("temp dir");
+            let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
+            let current_cycle = PorReportIsoWeek {
+                year: 2025,
+                week: 13,
+            };
+            let (current_start, _) =
+                iso_week_bounds(current_cycle).expect("current ISO week bounds");
+            let now_secs =
+                u64::try_from(current_start.unix_timestamp()).expect("positive timestamp") + 60;
+            let challenge = sample_challenge(true);
+            let randomness = PorRandomness {
+                epoch_id: challenge.epoch_id,
+                issued_at_unix: challenge.issued_at,
+                response_window_secs: challenge.deadline_at - challenge.issued_at,
+                drand_round: challenge.drand_round,
+                drand_randomness: challenge.drand_randomness,
+                drand_signature: challenge.drand_signature,
+            };
+            let storage = Arc::new(ReplaySafeStorage {
+                planned: Vec::new(),
+                recorded: Arc::new(Mutex::new(None)),
+            });
+            let publisher = Arc::new(FailOnceWeeklyPublisher {
+                attempts: AtomicUsize::new(0),
+                reports: Mutex::new(Vec::new()),
+            });
+
+            {
+                let coordinator = Arc::new(
+                    PorCoordinator::with_persistence(&snapshot_path).expect("coordinator"),
+                );
+                let runtime = PorCoordinatorRuntime::new_with_publisher(
+                    storage.clone(),
+                    coordinator,
+                    Arc::new(StaticRandomnessProvider { randomness }),
+                    Arc::new(StaticVrfProvider::default()),
+                    publisher.clone(),
+                    3_600,
+                    900,
+                    300,
+                );
+                assert!(matches!(
+                    runtime.publish_weekly_report_if_needed(now_secs),
+                    Err(PorAutomationError::Governance(_))
+                ));
+            }
+
+            let coordinator =
+                Arc::new(PorCoordinator::with_persistence(&snapshot_path).expect("reload"));
+            let runtime = PorCoordinatorRuntime::new_with_publisher(
+                storage,
+                Arc::clone(&coordinator),
+                Arc::new(StaticRandomnessProvider { randomness }),
+                Arc::new(StaticVrfProvider::default()),
+                publisher.clone(),
+                3_600,
+                900,
+                300,
+            );
+            runtime
+                .publish_weekly_report_if_needed(now_secs)
+                .expect("exact prepared report retry succeeds");
+            runtime
+                .publish_weekly_report_if_needed(now_secs)
+                .expect("same cycle is already acknowledged");
+
+            let reports = publisher.reports.lock();
+            assert_eq!(reports.len(), 2);
+            assert_eq!(
+                norito::to_bytes(&reports[0]).expect("encode first attempt"),
+                norito::to_bytes(&reports[1]).expect("encode retry")
+            );
+            assert_eq!(
+                reports[1].cycle,
+                PorReportIsoWeek {
+                    year: 2025,
+                    week: 12,
+                }
+            );
+            assert_eq!(publisher.attempts.load(AtomicOrdering::SeqCst), 2);
+            assert!(
+                coordinator
+                    .prepared_weekly_report
+                    .read()
+                    .as_ref()
+                    .is_some_and(|prepared| prepared.published)
             );
         }
 

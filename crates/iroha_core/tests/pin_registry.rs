@@ -969,10 +969,6 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
     );
 }
 
-fn default_block_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0)
-}
-
 fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
     let nz_height = NonZeroU64::new(height).expect("height must be non-zero");
     iroha_data_model::block::BlockHeader::new(nz_height, None, None, None, 0, 0)

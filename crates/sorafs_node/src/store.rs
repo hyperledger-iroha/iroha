@@ -3859,17 +3859,16 @@ impl StorageBackend {
                         context: "PoR sampled leaf index host width",
                     })
                 })?;
-                let (chunk_idx, segment_idx, leaf_idx) =
-                    por_tree.leaf_path(leaf_index).ok_or_else(|| {
-                        StorageError::ChunkStore(ChunkStoreError::PorInvariant {
-                            context: "canonical PoR sample leaf path",
-                        })
-                    })?;
+                let (chunk_idx, segment_idx, leaf_idx) = por_tree.leaf_path(leaf_index).ok_or({
+                    StorageError::ChunkStore(ChunkStoreError::PorInvariant {
+                        context: "canonical PoR sample leaf path",
+                    })
+                })?;
                 let mut payload = ManifestPayload::new(manifest);
                 let proof = por_tree
                     .prove_leaf_with(chunk_idx, segment_idx, leaf_idx, &mut payload)
                     .map_err(StorageError::ChunkStore)?;
-                let proof = proof.ok_or_else(|| {
+                let proof = proof.ok_or({
                     StorageError::ChunkStore(ChunkStoreError::PorInvariant {
                         context: "canonical PoR sample proof path",
                     })
@@ -5073,9 +5072,80 @@ fn set_atomic_parent_open_flags(options: &mut fs::OpenOptions) {
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(
+    target_os = "android",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))
+))]
+compile_error!("SoraFS filesystem flags are not qualified for this Android architecture");
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("SoraFS filesystem flags are not qualified for this Unix target");
+
+#[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    0x400000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "aarch64", target_arch = "arm")
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x20000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x20000
 }
 
 #[cfg(all(
@@ -5100,39 +5170,78 @@ fn platform_no_follow_flag() -> i32 {
     0x2000_0000
 }
 
+#[cfg(all(target_os = "android", target_arch = "riscv64"))]
+fn platform_directory_only_flag() -> i32 {
+    0x200000
+}
+
 #[cfg(all(
-    unix,
+    target_os = "android",
+    any(target_arch = "aarch64", target_arch = "arm")
+))]
+fn platform_directory_only_flag() -> i32 {
+    0x4000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+fn platform_directory_only_flag() -> i32 {
+    0x10000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+fn platform_directory_only_flag() -> i32 {
+    0x4000
+}
+
+#[cfg(all(
+    target_os = "linux",
     not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
     ))
 ))]
-fn platform_no_follow_flag() -> i32 {
-    0
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_directory_only_flag() -> i32 {
-    0o200000
+    0x10000
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn platform_directory_only_flag() -> i32 {
     0x0010_0000
 }
 
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android", target_os = "macos"))
-))]
+#[cfg(target_os = "freebsd")]
 fn platform_directory_only_flag() -> i32 {
-    0
+    0x0002_0000
+}
+
+#[cfg(target_os = "dragonfly")]
+fn platform_directory_only_flag() -> i32 {
+    0x0800_0000
+}
+
+#[cfg(target_os = "openbsd")]
+fn platform_directory_only_flag() -> i32 {
+    0x0002_0000
+}
+
+#[cfg(target_os = "netbsd")]
+fn platform_directory_only_flag() -> i32 {
+    0x0020_0000
 }
 
 fn write_manifest_metadata(
@@ -5412,6 +5521,119 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    // Keep one target-gated assertion for every ABI branch. Overlapping branches
+    // fail with duplicate definitions; missing branches fail to resolve the flag.
+    #[cfg(all(
+        target_os = "linux",
+        any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        )
+    ))]
+    #[test]
+    fn linux_directory_open_flags_match_low_flag_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+        assert_eq!(platform_directory_only_flag(), 0x4000);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        ))
+    ))]
+    #[test]
+    fn linux_directory_open_flags_match_generic_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+        assert_eq!(platform_directory_only_flag(), 0x10000);
+    }
+
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "aarch64", target_arch = "arm")
+    ))]
+    #[test]
+    fn android_arm_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+        assert_eq!(platform_directory_only_flag(), 0x4000);
+    }
+
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "x86", target_arch = "x86_64")
+    ))]
+    #[test]
+    fn android_x86_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+        assert_eq!(platform_directory_only_flag(), 0x10000);
+    }
+
+    #[cfg(all(target_os = "android", target_arch = "riscv64"))]
+    #[test]
+    fn android_riscv64_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x400000);
+        assert_eq!(platform_directory_only_flag(), 0x200000);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "riscv32", target_arch = "riscv64")
+    ))]
+    #[test]
+    fn linux_riscv_directory_open_flags_remain_generic_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+        assert_eq!(platform_directory_only_flag(), 0x10000);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x2000_0000);
+        assert_eq!(platform_directory_only_flag(), 0x0010_0000);
+    }
+
+    #[cfg(target_os = "ios")]
+    #[test]
+    fn ios_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0010_0000);
+    }
+
+    #[cfg(target_os = "freebsd")]
+    #[test]
+    fn freebsd_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0002_0000);
+    }
+
+    #[cfg(target_os = "dragonfly")]
+    #[test]
+    fn dragonfly_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0800_0000);
+    }
+
+    #[cfg(target_os = "openbsd")]
+    #[test]
+    fn openbsd_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0002_0000);
+    }
+
+    #[cfg(target_os = "netbsd")]
+    #[test]
+    fn netbsd_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0020_0000);
+    }
 
     fn temp_config(temp_dir: &TempDir) -> StorageConfig {
         let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");

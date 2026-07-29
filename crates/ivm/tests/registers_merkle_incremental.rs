@@ -6,6 +6,8 @@
 use iroha_crypto::MerkleTree;
 #[cfg(feature = "merkle_incremental")]
 use ivm::Registers;
+#[cfg(feature = "merkle_incremental")]
+use sha2::Digest;
 
 #[cfg(feature = "merkle_incremental")]
 fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
@@ -19,12 +21,15 @@ fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
 #[test]
 fn registers_incremental_matches_canonical_rebuild() {
     let mut regs = Registers::new();
-    let mut gpr = [0u64; 512];
-    let mut tags = [false; 512];
+    let mut gpr = [0u64; 256];
+    let mut tags = [false; 256];
 
     // Perform a sequence of mixed writes and tag updates
     for i in 1..=2000u32 {
-        let idx = (i as usize) % 512;
+        let idx = (i as usize) % 256;
+        if idx == 0 {
+            continue;
+        }
         if i % 7 == 0 {
             tags[idx] = !tags[idx];
             regs.set_tag(idx, tags[idx]);
@@ -47,7 +52,7 @@ fn registers_incremental_matches_canonical_rebuild() {
     assert_eq!(root, regs.merkle_root());
 
     // Path equality at a few indices
-    for &idx in &[0usize, 3, 17, 255, 511] {
+    for &idx in &[0usize, 3, 17, 127, 255] {
         let proof = canonical.get_proof(idx as u32).expect("proof");
         let path_bytes: Vec<[u8; 32]> = proof
             .audit_path()

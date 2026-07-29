@@ -22,8 +22,8 @@ use iroha_data_model::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
             ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy, PinStatus,
             ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
-            ProviderIngestFinalizedAnchorV1, ReplicationOrderId, ReplicationOrderRecord,
-            ReplicationOrderStatus, StorageClass,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord, ReplicationOrderId,
+            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
     },
 };
@@ -361,6 +361,73 @@ fn alias_snapshot(alias: &ManifestAliasRecord) -> json::Map {
     alias_obj
 }
 
+fn order_completion_snapshot(completion: &ReplicationOrderCompletionRecord) -> Value {
+    let mut map = json::Map::new();
+    map.insert(
+        "provider_id_hex".into(),
+        Value::String(hex::encode(completion.provider_id.as_bytes())),
+    );
+    map.insert(
+        "completed_by".into(),
+        Value::String(completion.completed_by.to_string()),
+    );
+    map.insert(
+        "completion_epoch".into(),
+        Value::from(completion.completion_epoch),
+    );
+    map.insert(
+        "assignment_revision".into(),
+        Value::from(completion.assignment_revision),
+    );
+    map.insert(
+        "expected_owner".into(),
+        Value::String(completion.completion_authority.provider_owner.to_string()),
+    );
+    map.insert(
+        "signer_policy_id_hex".into(),
+        Value::String(hex::encode(
+            completion.completion_authority.signer_policy.policy_id,
+        )),
+    );
+    map.insert(
+        "signer_policy_revision".into(),
+        Value::from(completion.completion_authority.signer_policy.revision),
+    );
+    map.insert(
+        "signer_policy_predecessor_digest_hex".into(),
+        completion
+            .completion_authority
+            .signer_policy
+            .predecessor_digest
+            .map_or(Value::Null, |digest| Value::String(hex::encode(digest))),
+    );
+    map.insert(
+        "signer_policy_digest_hex".into(),
+        Value::String(hex::encode(
+            completion.completion_authority.signer_policy.policy_digest,
+        )),
+    );
+    map.insert(
+        "finalized_height".into(),
+        Value::from(completion.finalized_anchor.height),
+    );
+    map.insert(
+        "finalized_block_hash_hex".into(),
+        Value::String(hex::encode(completion.finalized_anchor.block_hash)),
+    );
+    Value::Object(map)
+}
+
+fn order_assignment_snapshot(assignment: &ReplicationAssignmentV1) -> Value {
+    let mut map = json::Map::new();
+    map.insert(
+        "provider_id_hex".into(),
+        Value::String(hex::encode(assignment.provider_id)),
+    );
+    map.insert("slice_gib".into(), Value::from(assignment.slice_gib));
+    Value::Object(map)
+}
+
 fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     let order_payload: ReplicationOrderV1 =
         norito::decode_from_bytes(&order.canonical_order).expect("decode order payload");
@@ -400,62 +467,7 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     let provider_completions = order
         .provider_completions
         .iter()
-        .map(|completion| {
-            let mut map = json::Map::new();
-            map.insert(
-                "provider_id_hex".into(),
-                Value::String(hex::encode(completion.provider_id.as_bytes())),
-            );
-            map.insert(
-                "completed_by".into(),
-                Value::String(completion.completed_by.to_string()),
-            );
-            map.insert(
-                "completion_epoch".into(),
-                Value::from(completion.completion_epoch),
-            );
-            map.insert(
-                "assignment_revision".into(),
-                Value::from(completion.assignment_revision),
-            );
-            map.insert(
-                "expected_owner".into(),
-                Value::String(completion.completion_authority.provider_owner.to_string()),
-            );
-            map.insert(
-                "signer_policy_id_hex".into(),
-                Value::String(hex::encode(
-                    completion.completion_authority.signer_policy.policy_id,
-                )),
-            );
-            map.insert(
-                "signer_policy_revision".into(),
-                Value::from(completion.completion_authority.signer_policy.revision),
-            );
-            map.insert(
-                "signer_policy_predecessor_digest_hex".into(),
-                completion
-                    .completion_authority
-                    .signer_policy
-                    .predecessor_digest
-                    .map_or(Value::Null, |digest| Value::String(hex::encode(digest))),
-            );
-            map.insert(
-                "signer_policy_digest_hex".into(),
-                Value::String(hex::encode(
-                    completion.completion_authority.signer_policy.policy_digest,
-                )),
-            );
-            map.insert(
-                "finalized_height".into(),
-                Value::from(completion.finalized_anchor.height),
-            );
-            map.insert(
-                "finalized_block_hash_hex".into(),
-                Value::String(hex::encode(completion.finalized_anchor.block_hash)),
-            );
-            Value::Object(map)
-        })
+        .map(order_completion_snapshot)
         .collect();
     order_obj.insert(
         "provider_completions".into(),
@@ -468,15 +480,7 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     let assignments = order_payload
         .assignments
         .iter()
-        .map(|assignment| {
-            let mut map = json::Map::new();
-            map.insert(
-                "provider_id_hex".into(),
-                Value::String(hex::encode(assignment.provider_id)),
-            );
-            map.insert("slice_gib".into(), Value::from(assignment.slice_gib));
-            Value::Object(map)
-        })
+        .map(order_assignment_snapshot)
         .collect::<Vec<_>>();
     order_obj.insert("assignments".into(), Value::Array(assignments));
     order_obj.insert(
@@ -570,8 +574,7 @@ fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '
         let definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(
             fee_asset_id
                 .try_name()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "xor".to_owned()),
+                .map_or_else(|| "xor".to_owned(), ToString::to_string),
         );
         Register::asset_definition(definition)
             .execute(&alice(), tx)

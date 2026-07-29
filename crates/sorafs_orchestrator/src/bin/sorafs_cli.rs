@@ -8,7 +8,7 @@ use std::{
     fmt::Write as FmtWrite,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
     io::{self, BufReader, BufWriter, Cursor, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process,
     str::FromStr,
@@ -71,7 +71,7 @@ use norito::{
 use reqwest::{
     StatusCode,
     blocking::Client as HttpClient,
-    header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE},
+    header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
     redirect::Policy as RedirectPolicy,
 };
 #[cfg(test)]
@@ -95,6 +95,11 @@ use sorafs_car::{
     taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata},
 };
 use sorafs_chunker::ChunkProfile;
+use sorafs_manifest::por::{
+    POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+    POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1, decode_por_challenge_status_page_v1,
+    decode_por_weekly_report_v1,
+};
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
@@ -2221,6 +2226,16 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     } else {
         None
     };
+    let effective_limit = match limit {
+        Some(limit) => usize::try_from(limit)
+            .map_err(|_| format!("`--limit={limit}` cannot be represented on this platform"))?,
+        None => POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+    };
+    if effective_limit > POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 {
+        return Err(format!(
+            "`--limit={effective_limit}` exceeds the PoR status page maximum of {POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1}"
+        ));
+    }
 
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
@@ -2240,9 +2255,7 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(status) = status_param {
         serializer.append_pair("status", status.as_str());
     }
-    if let Some(limit) = limit {
-        serializer.append_pair("limit", &limit.to_string());
-    }
+    serializer.append_pair("limit", &effective_limit.to_string());
     if let Some(token) = page_token {
         serializer.append_pair("page_token", token.trim());
     }
@@ -2260,17 +2273,42 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
         .send()
         .map_err(|err| format!("failed to request PoR status from `{endpoint}`: {err}"))?;
     let status = response.status();
-    let body = response
-        .bytes()
+    if response.content_length().is_some_and(|length| {
+        length
+            > u64::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                .expect("PoR status response bound fits u64")
+    }) {
+        return Err(format!(
+            "PoR status response exceeds the {}-byte canonical limit",
+            POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
+        ));
+    }
+    let response_read_limit = u64::try_from(
+        POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
+            .checked_add(1)
+            .expect("PoR status response bound can be incremented"),
+    )
+    .expect("PoR status response bound fits u64");
+    let mut body = Vec::new();
+    response
+        .take(response_read_limit)
+        .read_to_end(&mut body)
         .map_err(|err| format!("failed to read PoR status response: {err}"))?;
+    if body.len() > POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 {
+        return Err(format!(
+            "PoR status response exceeds the {}-byte canonical limit",
+            POR_CHALLENGE_STATUS_PAGE_MAX_CANONICAL_BYTES_V1
+        ));
+    }
     if !status.is_success() {
         return Err(format!(
             "Torii responded with status {status} for `por status`: {}",
             body_snippet(&body)
         ));
     }
-    let statuses: Vec<PorChallengeStatusV1> = decode_from_bytes(&body)
-        .map_err(|err| format!("failed to decode PoR status records: {err}"))?;
+    let statuses: Vec<PorChallengeStatusV1> =
+        decode_por_challenge_status_page_v1(&body, effective_limit)
+            .map_err(|err| format!("failed to decode PoR status records: {err}"))?;
 
     match output_format {
         StatusOutputFormat::Table => {
@@ -2427,16 +2465,40 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
         .send()
         .map_err(|err| format!("failed to request PoR report from `{endpoint}`: {err}"))?;
     let status = response.status();
-    let body = response
-        .bytes()
+    if response.content_length().is_some_and(|length| {
+        length
+            > u64::try_from(POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1)
+                .expect("weekly PoR report bound fits u64")
+    }) {
+        return Err(format!(
+            "PoR report response exceeds the {}-byte canonical limit",
+            POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1
+        ));
+    }
+    let response_read_limit = u64::try_from(
+        POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1
+            .checked_add(1)
+            .expect("weekly PoR report bound can be incremented"),
+    )
+    .expect("weekly PoR report bound fits u64");
+    let mut body = Vec::new();
+    response
+        .take(response_read_limit)
+        .read_to_end(&mut body)
         .map_err(|err| format!("failed to read PoR report response: {err}"))?;
+    if body.len() > POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1 {
+        return Err(format!(
+            "PoR report response exceeds the {}-byte canonical limit",
+            POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1
+        ));
+    }
     if !status.is_success() {
         return Err(format!(
             "PoR report fetch failed with status {status}: {}",
             body_snippet(&body)
         ));
     }
-    let report: PorWeeklyReportV1 = decode_from_bytes(&body)
+    let report: PorWeeklyReportV1 = decode_por_weekly_report_v1(&body)
         .map_err(|err| format!("failed to decode PoR weekly report: {err}"))?;
     report
         .validate()
@@ -2799,7 +2861,7 @@ fn usage() -> String {
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
@@ -2855,7 +2917,7 @@ fn reputation_usage() -> String {
 
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
         .to_string()
 }
 
@@ -3054,8 +3116,7 @@ fn build_gateway_scoreboard_metadata(input: &GatewayScoreboardMetadataInput<'_>)
             .override_label
             .map_or(Value::Null, Value::from),
     );
-    let write_mode_label = input.write_mode.label().replace('_', "-");
-    metadata.insert("write_mode".into(), Value::from(write_mode_label));
+    metadata.insert("write_mode".into(), Value::from(input.write_mode.label()));
     metadata.insert(
         "write_mode_enforces_pq".into(),
         Value::from(input.write_mode.enforces_pq_only()),
@@ -3203,67 +3264,54 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             }
             telemetry_region = Some(trimmed.to_string());
         } else if let Some(rest) = arg.strip_prefix("--rollout-phase=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--rollout-phase` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = RolloutPhase::parse(&normalized).ok_or_else(|| {
-                "`--rollout-phase` must be one of canary|ramp|default (stage-a|stage-b|stage-c aliases accepted)"
-                    .to_string()
+            let parsed = RolloutPhase::parse(rest).ok_or_else(|| {
+                "`--rollout-phase` must be one of canary|ramp|default".to_string()
             })?;
             rollout_phase = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--transport-policy=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--transport-policy` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = TransportPolicy::parse(&normalized).ok_or_else(|| {
+            let parsed = TransportPolicy::parse(rest).ok_or_else(|| {
                 "`--transport-policy` must be one of soranet-first|soranet-strict|direct-only"
                     .to_string()
             })?;
             transport_policy = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--anonymity-policy=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--anonymity-policy` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = AnonymityPolicy::parse(&normalized).ok_or_else(|| {
-                "`--anonymity-policy` must be one of stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq".to_string()
+            let parsed = AnonymityPolicy::parse(rest).ok_or_else(|| {
+                "`--anonymity-policy` must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq"
+                    .to_string()
             })?;
             anonymity_policy = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--write-mode=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--write-mode` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = WriteModeHint::parse(&normalized).ok_or_else(|| {
-                "`--write-mode` must be one of read-only|read_only|upload-pq-only|upload_pq_only"
-                    .to_string()
+            let parsed = WriteModeHint::parse(rest).ok_or_else(|| {
+                "`--write-mode` must be one of read-only|upload-pq-only".to_string()
             })?;
             write_mode = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--transport-policy-override=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--transport-policy-override` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = TransportPolicy::parse(&normalized).ok_or_else(|| {
+            let parsed = TransportPolicy::parse(rest).ok_or_else(|| {
                 "`--transport-policy-override` must be one of soranet-first|soranet-strict|direct-only"
                     .to_string()
             })?;
             transport_policy_override = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--anonymity-policy-override=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
+            if rest.is_empty() {
                 return Err("`--anonymity-policy-override` must not be empty".into());
             }
-            let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-            let parsed = AnonymityPolicy::parse(&normalized).ok_or_else(|| {
-                "`--anonymity-policy-override` must be one of stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq"
+            let parsed = AnonymityPolicy::parse(rest).ok_or_else(|| {
+                "`--anonymity-policy-override` must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq"
                     .to_string()
             })?;
             anonymity_policy_override = Some(parsed);
@@ -17078,9 +17126,7 @@ impl ReputationFetchFormat {
         match raw {
             "table" => Ok(Self::Table),
             "json" => Ok(Self::Json),
-            other => Err(format!(
-                "unsupported reputation fetch format `{other}`; expected `table` or `json`"
-            )),
+            _ => Err("unsupported reputation fetch format; expected `table` or `json`".to_owned()),
         }
     }
 }
@@ -17101,10 +17147,44 @@ fn read_reputation_snapshot(path: &Path) -> Result<ReputationSnapshotV1, String>
 }
 
 fn reputation_endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
-    Url::parse(torii_url)
-        .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
+    if torii_url.is_empty() || torii_url.trim() != torii_url {
+        return Err("`--torii-url` must be an exact canonical URL without padding".to_owned());
+    }
+    let parsed =
+        Url::parse(torii_url).map_err(|_| "`--torii-url` must be a valid URL".to_owned())?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "`--torii-url` must include a host".to_owned())?;
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && is_loopback) {
+        return Err(
+            "`--torii-url` must use HTTPS; HTTP is permitted only for loopback fixtures".to_owned(),
+        );
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("`--torii-url` must not include userinfo".to_owned());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("`--torii-url` must not include a query or fragment".to_owned());
+    }
+    if parsed.port() == Some(0) {
+        return Err("`--torii-url` must not use port zero".to_owned());
+    }
+    let canonical_origin = parsed.origin().ascii_serialization();
+    let canonical_origin_with_slash = format!("{canonical_origin}/");
+    if parsed.path() != "/"
+        || (torii_url != canonical_origin && torii_url != canonical_origin_with_slash)
+    {
+        return Err(
+            "`--torii-url` must be an exact canonical bare origin without a path prefix".to_owned(),
+        );
+    }
+    parsed
         .join(route)
-        .map_err(|err| format!("failed to build reputation endpoint URL: {err}"))
+        .map_err(|_| "failed to build reputation endpoint URL".to_owned())
 }
 
 fn reputation_events_endpoint(
@@ -17132,6 +17212,19 @@ fn read_reputation_response_bounded(
     context: &str,
 ) -> Result<(StatusCode, Vec<u8>), String> {
     let status = response.status();
+    if !status.is_success() {
+        return Ok((status, Vec::new()));
+    }
+    let mut content_types = response.headers().get_all(CONTENT_TYPE).iter();
+    let content_type_is_canonical = content_types
+        .next()
+        .is_some_and(|value| value.as_bytes() == b"application/json")
+        && content_types.next().is_none();
+    if !content_type_is_canonical {
+        return Err(format!(
+            "Torii {context} response must use canonical Content-Type application/json"
+        ));
+    }
     let content_encoding_headers = response.headers().get_all(CONTENT_ENCODING);
     let mut content_encodings = content_encoding_headers.iter();
     let identity_only = match content_encodings.next() {
@@ -17143,18 +17236,37 @@ fn read_reputation_response_bounded(
             "Torii {context} response must use identity content encoding"
         ));
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > REPUTATION_RESPONSE_MAX_BYTES)
-    {
+    let mut content_lengths = response.headers().get_all(CONTENT_LENGTH).iter();
+    let content_length = content_lengths
+        .next()
+        .map(|value| {
+            let raw = value.as_bytes();
+            if raw.is_empty()
+                || !raw.iter().all(u8::is_ascii_digit)
+                || raw.len() > 1 && raw.starts_with(b"0")
+            {
+                return Err(format!(
+                    "Torii {context} response Content-Length must be canonical unsigned decimal"
+                ));
+            }
+            let raw = std::str::from_utf8(raw).map_err(|_| {
+                format!("Torii {context} response Content-Length must be canonical ASCII")
+            })?;
+            raw.parse::<u64>()
+                .map_err(|_| format!("Torii {context} response Content-Length does not fit u64"))
+        })
+        .transpose()?;
+    if content_lengths.next().is_some() {
+        return Err(format!(
+            "Torii {context} response must not contain duplicate Content-Length headers"
+        ));
+    }
+    if content_length.is_some_and(|length| length > REPUTATION_RESPONSE_MAX_BYTES) {
         return Err(format!(
             "Torii {context} response declared more than {REPUTATION_RESPONSE_MAX_BYTES} bytes"
         ));
     }
-    let initial_capacity = response
-        .content_length()
-        .unwrap_or(0)
-        .min(REPUTATION_RESPONSE_MAX_BYTES);
+    let initial_capacity = content_length.unwrap_or(0);
     let initial_capacity = usize::try_from(initial_capacity)
         .map_err(|_| format!("Torii {context} response length does not fit usize"))?;
     let mut body = Vec::new();
@@ -17164,9 +17276,15 @@ fn read_reputation_response_bounded(
         .take(REPUTATION_RESPONSE_MAX_BYTES + 1)
         .read_to_end(&mut body)
         .map_err(|_| format!("failed to read Torii {context} response body"))?;
-    if u64::try_from(body.len()).unwrap_or(u64::MAX) > REPUTATION_RESPONSE_MAX_BYTES {
+    let body_len = u64::try_from(body.len()).unwrap_or(u64::MAX);
+    if body_len > REPUTATION_RESPONSE_MAX_BYTES {
         return Err(format!(
             "Torii {context} response exceeded {REPUTATION_RESPONSE_MAX_BYTES} bytes"
+        ));
+    }
+    if content_length.is_some_and(|length| length != body_len) {
+        return Err(format!(
+            "Torii {context} response body length did not match Content-Length"
         ));
     }
     Ok((status, body))
@@ -21878,14 +21996,18 @@ mod tests {
 
     fn reputation_response_fixture(
         status: &str,
+        content_type: Option<&str>,
         content_length: Option<u64>,
         content_encoding: Option<&str>,
+        extra_headers: &str,
         body: Vec<u8>,
     ) -> (SocketAddr, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind reputation fixture server");
         let address = listener.local_addr().expect("reputation fixture address");
         let status = status.to_owned();
+        let content_type = content_type.map(str::to_owned);
         let content_encoding = content_encoding.map(str::to_owned);
+        let extra_headers = extra_headers.to_owned();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener
                 .accept()
@@ -21909,9 +22031,12 @@ mod tests {
             let encoding_header = content_encoding
                 .map(|encoding| format!("Content-Encoding: {encoding}\r\n"))
                 .unwrap_or_default();
+            let type_header = content_type
+                .map(|content_type| format!("Content-Type: {content_type}\r\n"))
+                .unwrap_or_default();
             write!(
                 stream,
-                "HTTP/1.1 {status}\r\n{length_header}{encoding_header}Connection: close\r\n\r\n"
+                "HTTP/1.1 {status}\r\n{type_header}{length_header}{encoding_header}{extra_headers}Connection: close\r\n\r\n"
             )
             .expect("write reputation fixture headers");
             let _ = stream.write_all(&body);
@@ -22131,8 +22256,10 @@ mod tests {
 
         let (address, handle) = reputation_response_fixture(
             "200 OK",
+            Some("application/json"),
             Some(REPUTATION_RESPONSE_MAX_BYTES + 1),
             None,
+            "",
             Vec::new(),
         );
         let response = client
@@ -22146,8 +22273,14 @@ mod tests {
 
         let streamed_size = usize::try_from(REPUTATION_RESPONSE_MAX_BYTES + 1)
             .expect("reputation response cap fits usize");
-        let (address, handle) =
-            reputation_response_fixture("200 OK", None, None, vec![b' '; streamed_size]);
+        let (address, handle) = reputation_response_fixture(
+            "200 OK",
+            Some("application/json"),
+            None,
+            None,
+            "",
+            vec![b' '; streamed_size],
+        );
         let response = client
             .get(format!("http://{address}/streamed-oversize"))
             .send()
@@ -22163,8 +22296,10 @@ mod tests {
         exact_success[..2].copy_from_slice(b"{}");
         let (address, handle) = reputation_response_fixture(
             "200 OK",
+            Some("application/json"),
             Some(REPUTATION_RESPONSE_MAX_BYTES),
             Some("identity"),
+            "",
             exact_success,
         );
         let response = client
@@ -22181,8 +22316,10 @@ mod tests {
         exact_error[..secret_provider.len()].copy_from_slice(secret_provider.as_bytes());
         let (address, handle) = reputation_response_fixture(
             "500 Internal Server Error",
+            None,
             Some(REPUTATION_RESPONSE_MAX_BYTES),
             None,
+            "",
             exact_error,
         );
         let response = client
@@ -22195,8 +22332,14 @@ mod tests {
         assert!(error.contains("500 Internal Server Error"));
         assert!(!error.contains(secret_provider));
 
-        let (address, handle) =
-            reputation_response_fixture("200 OK", Some(2), Some("gzip"), b"{}".to_vec());
+        let (address, handle) = reputation_response_fixture(
+            "200 OK",
+            Some("application/json"),
+            Some(2),
+            Some("gzip"),
+            "",
+            b"{}".to_vec(),
+        );
         let response = client
             .get(format!("http://{address}/encoded"))
             .send()
@@ -22208,9 +22351,95 @@ mod tests {
     }
 
     #[test]
+    fn reputation_response_reader_requires_canonical_http_metadata() {
+        let client = reputation_http_client().expect("hardened reputation client");
+        let fixtures = [
+            (None, Some(2), "", "canonical Content-Type application/json"),
+            (
+                Some("application/json; charset=utf-8"),
+                Some(2),
+                "",
+                "canonical Content-Type application/json",
+            ),
+            (
+                Some("application/json"),
+                None,
+                "Content-Length: 02\r\n",
+                "canonical unsigned decimal",
+            ),
+            (
+                Some("application/json"),
+                Some(2),
+                "Content-Length: 2\r\n",
+                "duplicate Content-Length",
+            ),
+        ];
+        for (content_type, content_length, extra_headers, expected_error) in fixtures {
+            let (address, handle) = reputation_response_fixture(
+                "200 OK",
+                content_type,
+                content_length,
+                None,
+                extra_headers,
+                b"{}".to_vec(),
+            );
+            let response = client
+                .get(format!("http://{address}/malformed-metadata"))
+                .send()
+                .expect("malformed-metadata fixture response");
+            let error = read_json_response(response, "reputation test")
+                .expect_err("noncanonical response metadata must fail");
+            handle.join().expect("malformed-metadata fixture exits");
+            assert!(
+                error.contains(expected_error),
+                "unexpected error for malformed metadata: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn reputation_endpoint_requires_a_canonical_secure_origin() {
+        let secure = reputation_endpoint("https://torii.example/", "v1/sorafs/reputation/latest")
+            .expect("canonical HTTPS origin");
+        assert_eq!(
+            secure.as_str(),
+            "https://torii.example/v1/sorafs/reputation/latest"
+        );
+        let loopback = reputation_endpoint("http://127.0.0.1:8080", "v1/sorafs/reputation/latest")
+            .expect("loopback HTTP fixture origin");
+        assert_eq!(
+            loopback.as_str(),
+            "http://127.0.0.1:8080/v1/sorafs/reputation/latest"
+        );
+
+        let secret_marker = "runtime-private-marker";
+        for invalid in [
+            "http://torii.example",
+            "https://torii.example/path",
+            "https://torii.example/?query=1",
+            "https://torii.example/#fragment",
+            "https://runtime-private-marker@torii.example",
+            " https://torii.example",
+            "https://torii.example:0",
+            "HTTPS://torii.example",
+        ] {
+            let error = reputation_endpoint(invalid, "v1/sorafs/reputation/latest")
+                .expect_err("noncanonical reputation origin must fail");
+            assert!(!error.contains(invalid));
+            assert!(!error.contains(secret_marker));
+        }
+    }
+
+    #[test]
     fn reputation_requests_advertise_identity_encoding_only() {
-        let (address, handle) =
-            reputation_response_fixture("200 OK", Some(2), None, b"{}".to_vec());
+        let (address, handle) = reputation_response_fixture(
+            "200 OK",
+            Some("application/json"),
+            Some(2),
+            None,
+            "",
+            b"{}".to_vec(),
+        );
         let endpoint = Url::parse(&format!("http://{address}/v1/sorafs/reputation/latest"))
             .expect("fixture endpoint");
         let client = reputation_http_client().expect("hardened reputation client");
@@ -22233,7 +22462,7 @@ mod tests {
             .to_i105_for_discriminant(753)
             .expect("Kana-bearing canonical I105");
         assert!(
-            literal.chars().any(|character| !character.is_ascii()),
+            !literal.is_ascii(),
             "fixture must exercise I105 Kana bytes: {literal}"
         );
 
@@ -23621,8 +23850,7 @@ fn build_fetch_summary(
         "rollout_phase".into(),
         Value::from(options.rollout_phase.label()),
     );
-    let write_mode_label = options.write_mode.label().replace('_', "-");
-    root.insert("write_mode".into(), Value::from(write_mode_label));
+    root.insert("write_mode".into(), Value::from(options.write_mode.label()));
     root.insert(
         "write_mode_enforces_pq".into(),
         Value::from(options.write_mode.enforces_pq_only()),

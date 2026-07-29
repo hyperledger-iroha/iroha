@@ -951,7 +951,8 @@ mod tests {
             ReplicationOrderStatus::Completed(8),
         );
         let projection =
-            build_test_projection(identity, &[approved.clone()], &[completed]).expect("projection");
+            build_test_projection(identity, std::slice::from_ref(&approved), &[completed])
+                .expect("projection");
         assert_eq!(
             projection.providers_for_content(&approved.1.root_cid),
             Some(&BTreeSet::from([provider]))
@@ -963,7 +964,7 @@ mod tests {
         ] {
             let order = sample_order(8, &approved, &[provider], status);
             assert!(
-                build_test_projection(identity, &[approved.clone()], &[order])
+                build_test_projection(identity, std::slice::from_ref(&approved), &[order])
                     .expect("inactive order projection")
                     .all_providers()
                     .is_empty()
@@ -1102,7 +1103,7 @@ mod tests {
             ReplicationOrderStatus::Completed(11),
         );
         assert_eq!(
-            build_test_projection(identity, &[manifest.clone()], &[future]),
+            build_test_projection(identity, std::slice::from_ref(&manifest), &[future]),
             Err(RoutingAuthorityError::Corrupt)
         );
 
@@ -1114,7 +1115,7 @@ mod tests {
         );
         corrupt.1.canonical_order.push(0);
         assert_eq!(
-            build_test_projection(identity, &[manifest.clone()], &[corrupt]),
+            build_test_projection(identity, std::slice::from_ref(&manifest), &[corrupt]),
             Err(RoutingAuthorityError::Corrupt)
         );
 

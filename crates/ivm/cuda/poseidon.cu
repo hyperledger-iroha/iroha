@@ -314,10 +314,9 @@ extern "C" __global__ void poseidon2_permute_kernel(
     KernelStatus* status_out
 ) {
     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx == 0 && status_out != nullptr) {
-        status_out[0].code = STATUS_OK;
-        status_out[0].detail = 0;
-    }
+    // The host initializes status_out before launch. Never reset it in the
+    // kernel: CUDA blocks are unordered, so thread 0 could erase an error
+    // already published by another block.
     if (idx >= batch_len) {
         return;
     }
@@ -347,10 +346,9 @@ extern "C" __global__ void poseidon6_permute_kernel(
     KernelStatus* status_out
 ) {
     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx == 0 && status_out != nullptr) {
-        status_out[0].code = STATUS_OK;
-        status_out[0].detail = 0;
-    }
+    // The host initializes status_out before launch. Never reset it in the
+    // kernel: CUDA blocks are unordered, so thread 0 could erase an error
+    // already published by another block.
     if (idx >= batch_len) {
         return;
     }

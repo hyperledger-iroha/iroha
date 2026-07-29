@@ -58,7 +58,7 @@ Aquí Norito JSON, está conectado al SDK y al SDK.
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```احفظ الملف عبر طبقات `iroha_config` المعتادة (`defaults/`, usuario, real) حتى
 ترث عمليات النشر الحتمية الحدود نفسها على جميع العقد. لملف respaldo مباشر فقط

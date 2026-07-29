@@ -9,6 +9,7 @@
 
 use std::{fmt, sync::Arc};
 
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_core::{
     smartcontracts::isi::sorafs_proof_outcome::read_sorafs_proof_outcome_signer_policy_in_finalized_view,
     state::{State, StateReadOnly},
@@ -665,28 +666,15 @@ pub trait PotrProviderSignerV1: Send + Sync {
 }
 
 fn validate_potr_runtime_handle(handle: &str) -> Result<(), PotrRuntimeSignerConfigError> {
-    if handle.is_empty()
-        || handle.len() > 256
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(PotrRuntimeSignerConfigError::InvalidProviderHandle);
+    match validate_production_runtime_handle(handle) {
+        Ok(()) => Ok(()),
+        Err(ProductionRuntimeHandleError::InvalidSyntax) => {
+            Err(PotrRuntimeSignerConfigError::InvalidProviderHandle)
+        }
+        Err(ProductionRuntimeHandleError::TestMarked) => {
+            Err(PotrRuntimeSignerConfigError::TestMarkedProviderHandle)
+        }
     }
-    let lowercase = handle.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
-        return Err(PotrRuntimeSignerConfigError::TestMarkedProviderHandle);
-    }
-    Ok(())
 }
 
 fn qualify_gateway_signer(
@@ -2761,7 +2749,30 @@ mod tests {
     }
 
     #[test]
-    fn runtime_bindings_reject_test_markers_and_invalid_qualification() {
+    fn runtime_bindings_use_central_handle_grammar_and_reject_invalid_qualification() {
+        PotrRuntimeProviderBindingV1::try_new(
+            "pkcs11:prod/potr.gateway-v1_slot-a",
+            GATEWAY_SIGNER_ID,
+            GATEWAY_QUALIFICATION,
+        )
+        .expect("canonical production provider handle");
+        for handle in [
+            "https://operator:secret@potr-signer",
+            "https://potr-signer/path?credential=secret",
+            "https://potr-signer/path#fragment",
+            "pkcs11:prod/%70otr-signer",
+            "pkcs11:prod\\potr-signer",
+        ] {
+            assert_eq!(
+                PotrRuntimeProviderBindingV1::try_new(
+                    handle,
+                    GATEWAY_SIGNER_ID,
+                    GATEWAY_QUALIFICATION,
+                )
+                .expect_err("forbidden runtime-handle character must fail closed"),
+                PotrRuntimeSignerConfigError::InvalidProviderHandle
+            );
+        }
         assert_eq!(
             PotrRuntimeProviderBindingV1::try_new(
                 "hsm:dummy:potr",

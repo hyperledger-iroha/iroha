@@ -62,6 +62,7 @@ import {
   getCurveEntryByPublicKeyMulticodec,
 } from "./curveRegistry.js";
 import {
+  noritoEncodeSorafsBillingAcknowledgementProofV1,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeTransactionPayloadBatch,
   validateNoritoFrame,
@@ -139,6 +140,8 @@ const SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES = 1024 * 1024;
 const SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const SORAFS_REPUTATION_JSON_MAX_BYTES = 4 * 1024 * 1024;
 const SORAFS_REPUTATION_EVENT_DEFAULT_LIMIT_V1 = 50;
+const SORAFS_HEDGING_BILLING_JSON_MAX_BYTES = 1024 * 1024;
+const SORAFS_BILLING_STATEMENT_MAX_BYTES = 22 * 1024 * 1024;
 const BOUNDED_JSON_MAX_STREAM_CHUNKS = 64 * 1024;
 const JSON_CLONE_MAX_DEPTH = 128;
 const JSON_CLONE_MAX_NODES = 100_000;
@@ -270,7 +273,7 @@ const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
   "iroha_sccp::TairaSccpMessageProofV1";
 const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
   "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
-const EXPECTED_DATA_MODEL_VERSION = 3;
+const EXPECTED_DATA_MODEL_VERSION = 4;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -1247,6 +1250,19 @@ const SORAFS_REPUTATION_STREAM_OPTION_KEYS = new Set([
   "since",
   "limit",
   "headers",
+  "canonicalAuth",
+]);
+const SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS = new Set(["canonicalAuth"]);
+const SORAFS_BILLING_STATEMENT_LIST_OPTION_KEYS = new Set([
+  "expectedCheckpointFingerprintHex",
+  "afterStatementIdHex",
+  "limit",
+  "canonicalAuth",
+]);
+const SORAFS_HEDGING_PROJECTION_OPTION_KEYS = new Set([
+  "expectedCheckpointFingerprintHex",
+  "afterHex",
+  "limit",
   "canonicalAuth",
 ]);
 const SORAFS_ORDERBOOK_READ_OPTION_KEYS = new Set([
@@ -4552,6 +4568,338 @@ export class ToriiClient {
       this._streamSse("/v1/sorafs/reputation/events/stream", streamOptions),
       params?.since ?? "0",
     );
+  }
+
+  _requireSorafsHedgingBillingIdentityEncoding(response, context) {
+    let contentEncoding;
+    try {
+      contentEncoding = this._getHeader(response, "content-encoding");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected an unreadable Content-Encoding header`,
+      );
+      throw error;
+    }
+    if (
+      contentEncoding !== null &&
+      contentEncoding.toLowerCase() !== "identity"
+    ) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected a transformed response body`,
+      );
+      throw new TypeError(`${context} Content-Encoding must be identity`);
+    }
+  }
+
+  async _getSorafsHedgingBillingJson(
+    path,
+    { params, canonicalAuth, signal, context },
+  ) {
+    const auth = buildSorafsReputationRequestAuth(
+      { canonicalAuth },
+      this._config.defaultHeaders,
+      context,
+    );
+    setHeader(auth.headers, "Accept-Encoding", "identity");
+    const response = await this._request("GET", path, {
+      headers: auth.headers,
+      canonicalAuth: auth.canonicalAuth,
+      disableRetries: true,
+      params,
+      redirect: "error",
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_HEDGING_BILLING_JSON_MAX_BYTES,
+      context,
+      { signal },
+    );
+    return ensureRecord(payload, `${context} response`);
+  }
+
+  /**
+   * Fetch the authenticated supervised SoraFS billing-projector status.
+   * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getSorafsBillingStatus(options) {
+    const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
+      options,
+      "getSorafsBillingStatus",
+      SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS,
+    );
+    return this._getSorafsHedgingBillingJson("/v1/sorafs/billing/status", {
+      canonicalAuth,
+      context: "SoraFS billing status endpoint",
+      signal,
+    });
+  }
+
+  /**
+   * List one exact-checkpoint page of statements owned by the authenticated account.
+   * @param {{expectedCheckpointFingerprintHex: string, afterStatementIdHex?: string, limit: number, canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async listSorafsBillingStatements(options) {
+    const { signal, rest, canonicalAuth } =
+      normalizeSorafsHedgingBillingOptions(
+        options,
+        "listSorafsBillingStatements",
+        SORAFS_BILLING_STATEMENT_LIST_OPTION_KEYS,
+      );
+    const params = {
+      expected_checkpoint_fingerprint: normalizeSorafsHedgingBillingDigest(
+        rest.expectedCheckpointFingerprintHex,
+        "listSorafsBillingStatements.expectedCheckpointFingerprintHex",
+      ),
+    };
+    if (
+      rest.afterStatementIdHex !== undefined &&
+      rest.afterStatementIdHex !== null
+    ) {
+      params.after_statement_id = normalizeSorafsHedgingBillingDigest(
+        rest.afterStatementIdHex,
+        "listSorafsBillingStatements.afterStatementIdHex",
+      );
+    }
+    params.limit = normalizeSorafsHedgingBillingLimit(
+      rest.limit,
+      "listSorafsBillingStatements.limit",
+    );
+    return this._getSorafsHedgingBillingJson(
+      "/v1/sorafs/billing/statements",
+      {
+        canonicalAuth,
+        context: "SoraFS billing statements endpoint",
+        params,
+        signal,
+      },
+    );
+  }
+
+  /**
+   * Fetch one exact owned published billing statement as canonical Norito bytes.
+   * @param {string} statementIdHex
+   * @param {string} expectedCheckpointFingerprintHex
+   * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Buffer>}
+   */
+  async getSorafsBillingStatement(
+    statementIdHex,
+    expectedCheckpointFingerprintHex,
+    options,
+  ) {
+    const normalizedStatementId = normalizeSorafsHedgingBillingDigest(
+      statementIdHex,
+      "getSorafsBillingStatement.statementIdHex",
+    );
+    const normalizedCheckpoint = normalizeSorafsHedgingBillingDigest(
+      expectedCheckpointFingerprintHex,
+      "getSorafsBillingStatement.expectedCheckpointFingerprintHex",
+    );
+    const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
+      options,
+      "getSorafsBillingStatement",
+      SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS,
+    );
+    const context = "SoraFS billing statement endpoint";
+    const auth = buildSorafsReputationRequestAuth(
+      { canonicalAuth },
+      this._config.defaultHeaders,
+      "getSorafsBillingStatement",
+      { accept: APPLICATION_NORITO },
+    );
+    setHeader(auth.headers, "Accept-Encoding", "identity");
+    const response = await this._request(
+      "GET",
+      `/v1/sorafs/billing/statements/${normalizedStatementId}`,
+      {
+        headers: auth.headers,
+        canonicalAuth: auth.canonicalAuth,
+        disableRetries: true,
+        params: {
+          expected_checkpoint_fingerprint: normalizedCheckpoint,
+        },
+        redirect: "error",
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    let contentType;
+    try {
+      contentType = this._getHeader(response, "content-type");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected an unreadable Content-Type header`,
+      );
+      throw error;
+    }
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected a non-Norito response body`,
+      );
+      throw new TypeError(
+        `${context} must use the application/x-norito media type`,
+      );
+    }
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      SORAFS_BILLING_STATEMENT_MAX_BYTES,
+      context,
+      { signal },
+    );
+    return Buffer.from(bytes);
+  }
+
+  /**
+   * Submit one canonical owner acknowledgement for a published statement.
+   * @param {string} statementIdHex
+   * @param {string} expectedCheckpointFingerprintHex
+   * @param {{requestNonceHex: string, authenticationProof: ArrayBufferView | ArrayBuffer | Buffer}} proof
+   * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async acknowledgeSorafsBillingStatement(
+    statementIdHex,
+    expectedCheckpointFingerprintHex,
+    proof,
+    options,
+  ) {
+    const normalizedStatementId = normalizeSorafsHedgingBillingDigest(
+      statementIdHex,
+      "acknowledgeSorafsBillingStatement.statementIdHex",
+    );
+    const normalizedCheckpoint = normalizeSorafsHedgingBillingDigest(
+      expectedCheckpointFingerprintHex,
+      "acknowledgeSorafsBillingStatement.expectedCheckpointFingerprintHex",
+    );
+    const body = noritoEncodeSorafsBillingAcknowledgementProofV1(proof);
+    const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
+      options,
+      "acknowledgeSorafsBillingStatement",
+      SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS,
+    );
+    const context = "SoraFS billing acknowledgement endpoint";
+    const auth = buildSorafsReputationRequestAuth(
+      { canonicalAuth },
+      this._config.defaultHeaders,
+      "acknowledgeSorafsBillingStatement",
+    );
+    setHeader(auth.headers, "Content-Type", APPLICATION_NORITO);
+    setHeader(auth.headers, "Accept-Encoding", "identity");
+    const response = await this._request(
+      "POST",
+      `/v1/sorafs/billing/statements/${normalizedStatementId}/acknowledgements`,
+      {
+        body,
+        canonicalAuth: auth.canonicalAuth,
+        disableRetries: true,
+        headers: auth.headers,
+        params: {
+          expected_checkpoint_fingerprint: normalizedCheckpoint,
+        },
+        redirect: "error",
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_HEDGING_BILLING_JSON_MAX_BYTES,
+      context,
+      { signal },
+    );
+    return ensureRecord(payload, `${context} response`);
+  }
+
+  /**
+   * Fetch payload-free billing delivery reconciliation status.
+   * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getSorafsBillingReconciliation(options) {
+    const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
+      options,
+      "getSorafsBillingReconciliation",
+      SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS,
+    );
+    return this._getSorafsHedgingBillingJson(
+      "/v1/sorafs/billing/reconciliation",
+      {
+        canonicalAuth,
+        context: "SoraFS billing reconciliation endpoint",
+        signal,
+      },
+    );
+  }
+
+  /**
+   * Fetch one exact-checkpoint page of finalized SoraFS hedging exposure.
+   * @param {{expectedCheckpointFingerprintHex: string, afterHex?: string, limit: number, canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getSorafsHedgingExposure(options) {
+    return this._getSorafsHedgingProjection(
+      "/v1/sorafs/hedging/exposure",
+      options,
+      "getSorafsHedgingExposure",
+      "SoraFS hedging exposure endpoint",
+    );
+  }
+
+  /**
+   * Fetch one exact-checkpoint page of governed SoraFS hedge intents.
+   * This read-only method cannot submit automatic hedge execution.
+   * @param {{expectedCheckpointFingerprintHex: string, afterHex?: string, limit: number, canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getSorafsHedgingIntents(options) {
+    return this._getSorafsHedgingProjection(
+      "/v1/sorafs/hedging/intents",
+      options,
+      "getSorafsHedgingIntents",
+      "SoraFS hedging intents endpoint",
+    );
+  }
+
+  async _getSorafsHedgingProjection(path, options, methodContext, responseContext) {
+    const { signal, rest, canonicalAuth } =
+      normalizeSorafsHedgingBillingOptions(
+        options,
+        methodContext,
+        SORAFS_HEDGING_PROJECTION_OPTION_KEYS,
+      );
+    const params = {
+      expected_checkpoint_fingerprint: normalizeSorafsHedgingBillingDigest(
+        rest.expectedCheckpointFingerprintHex,
+        `${methodContext}.expectedCheckpointFingerprintHex`,
+      ),
+    };
+    if (rest.afterHex !== undefined && rest.afterHex !== null) {
+      params.after = normalizeSorafsHedgingBillingDigest(
+        rest.afterHex,
+        `${methodContext}.afterHex`,
+      );
+    }
+    params.limit = normalizeSorafsHedgingBillingLimit(
+      rest.limit,
+      `${methodContext}.limit`,
+    );
+    return this._getSorafsHedgingBillingJson(path, {
+      canonicalAuth,
+      context: responseContext,
+      params,
+      signal,
+    });
   }
 
   /**
@@ -29077,6 +29425,58 @@ function normalizeReputationSnapshotIdHex(value, context) {
     );
   }
   return value;
+}
+
+function normalizeSorafsHedgingBillingDigest(value, context) {
+  const digest = requireExactLowerHex32String(value, context);
+  if (/^0{64}$/u.test(digest)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context} must be nonzero`,
+      context,
+    );
+  }
+  return digest;
+}
+
+function normalizeSorafsHedgingBillingLimit(value, context) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > 100
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} must be an integer from 1 through 100`,
+      context,
+    );
+  }
+  return value;
+}
+
+function normalizeSorafsHedgingBillingOptions(
+  options,
+  context,
+  allowedKeys,
+) {
+  const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    options,
+    context,
+  );
+  assertSupportedOptionKeys(rest, allowedKeys, `${context} options`);
+  const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+    rest.canonicalAuth,
+    `${context}.canonicalAuth`,
+  );
+  if (!canonicalAuth) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options.canonicalAuth is required`,
+      `${context}.canonicalAuth`,
+    );
+  }
+  return { signal, rest, canonicalAuth };
 }
 
 const SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS = new Set([

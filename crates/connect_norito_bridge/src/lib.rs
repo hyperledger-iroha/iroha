@@ -109,6 +109,10 @@ mod kagemusha_candidate_scenario;
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;
+// Increment whenever any NativeSignerBridge JNI method descriptor changes.
+// The bridge-wide ABI number alone cannot distinguish two ABI-21 artifacts
+// whose JVM calling conventions differ.
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 1;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DETACHED_TRANSACTION_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -401,6 +405,10 @@ where
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
     CONNECT_NORITO_BRIDGE_ABI_VERSION
+}
+
+fn native_signer_jni_contract_revision() -> u32 {
+    NATIVE_SIGNER_JNI_CONTRACT_REVISION
 }
 
 fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
@@ -1453,7 +1461,7 @@ const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
 
 const PRIVACY_COMPONENT_ALGORITHM_IDS: &[&str] = &["verange-transparent-range-v1"];
 const PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS: &[&str] = &[];
-const PRIVACY_EXPOSED_READINESS_CLAIM_FRAGMENTS: &[&str] = &[
+const PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS: &[&str] = &[
     "productionready",
     "productionhardened",
     "productionenabled",
@@ -2697,7 +2705,7 @@ fn privacy_entrypoint_compact_lowercase(entrypoint: &str) -> String {
 
 fn privacy_exposed_label_claims_production_readiness(value: &str) -> bool {
     let compact = privacy_compact_ascii_lowercase(value);
-    PRIVACY_EXPOSED_READINESS_CLAIM_FRAGMENTS
+    PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS
         .iter()
         .any(|fragment| compact.contains(fragment))
 }
@@ -3438,7 +3446,9 @@ fn privacy_request_has_invalid_catalog_shape(request: &PrivacyProofRequestV1) ->
         || !privacy_sdk_entrypoint_is_portable(&request.entrypoint)
 }
 
-fn privacy_request_has_exposed_readiness_claim_text_field(request: &PrivacyProofRequestV1) -> bool {
+fn privacy_request_has_exposed_production_claim_text_field(
+    request: &PrivacyProofRequestV1,
+) -> bool {
     privacy_request_text_fields(request)
         .iter()
         .any(|field| privacy_exposed_label_claims_production_readiness(field))
@@ -3612,7 +3622,7 @@ fn privacy_result_for_request(
             );
         }
 
-        if privacy_request_has_exposed_readiness_claim_text_field(&request) {
+        if privacy_request_has_exposed_production_claim_text_field(&request) {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request text fields must not claim production/mainnet/audit readiness",
@@ -8764,10 +8774,9 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
 
     fn parsed_verifier(
         &self,
-    ) -> BridgeResult<Arc<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>> {
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4> {
         self.validate_live_inventory()?;
-        Ok(Arc::new(
-            iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_candidate_artifact_loader(
+        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_candidate_artifact_loader(
                 &self.candidate,
                 self.candidate_sha256,
                 self.manifest_sha256,
@@ -8777,8 +8786,7 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
                     })
                 },
             )
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?,
-        ))
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
     fn parsed_prover(
@@ -8833,21 +8841,13 @@ impl KagemushaRecursiveSpendArtifactSetViewV4
     fn runtime_verifier(
         &self,
     ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4> {
-        let artifacts = self.candidate_verifier_artifacts()?;
-        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(
-            &artifacts,
-        )
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
+        self.parsed_verifier()
     }
 
     fn runtime_prover(
         &self,
     ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
-        let artifacts = self.candidate_prover_artifacts()?;
-        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(
-            &artifacts,
-        )
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
+        self.parsed_prover()
     }
 
     fn verify_topup_roster_binding(
@@ -15642,9 +15642,7 @@ fn validate_kagemusha_candidate_evidence_lab_ordered_inventory_v4(
         || handles
             .iter()
             .any(|handle| !is_kagemusha_candidate_evidence_lab_artifact_handle_v4(*handle))
-        || expected_descriptor_sha256
-            .iter()
-            .any(|digest| *digest == [0; 32])
+        || expected_descriptor_sha256.contains(&[0; 32])
         || expected_descriptor_sha256
             .iter()
             .copied()
@@ -15999,8 +15997,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
                         drop(installed.candidate_payload(profile.parity, descriptor.kind)?);
                     }
                 }
-                drop(installed.candidate_verifier_artifacts()?);
-                drop(installed.candidate_prover_artifacts()?);
+                drop(installed.parsed_verifier()?);
+                drop(installed.parsed_prover()?);
                 let mut active = kagemusha_candidate_evidence_lab_installed_registry_v4()
                     .lock()
                     .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
@@ -20729,7 +20727,9 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     #[test]
     fn recursive_spend_v4_production_feature_opens_only_the_authenticated_release_gate() {
-        assert!(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE);
+        const {
+            assert!(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE);
+        }
         require_kagemusha_recursive_spend_production_promotion_v4()
             .expect("production feature promotes the compiled proof backend");
 
@@ -22545,13 +22545,10 @@ mod kagemusha_bridge_tests {
             Ok(names)
         }
 
-        fn expected_inventory<'a>(
-            expected: &'a [ProductionSbdAcceptanceExpectedFileV1],
+        fn expected_inventory(
+            expected: &[ProductionSbdAcceptanceExpectedFileV1],
         ) -> std::io::Result<(
-            std::collections::BTreeMap<
-                std::path::PathBuf,
-                &'a ProductionSbdAcceptanceExpectedFileV1,
-            >,
+            std::collections::BTreeMap<std::path::PathBuf, &ProductionSbdAcceptanceExpectedFileV1>,
             std::collections::BTreeSet<std::path::PathBuf>,
         )> {
             let mut files = std::collections::BTreeMap::new();
@@ -40794,6 +40791,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignerContractRevision(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    native_signer_jni_contract_revision() as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -41023,6 +41035,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    native_signer_jni_contract_revision() as jni::sys::jint
 }
 
 #[cfg(any(
@@ -48137,6 +48164,11 @@ mod tests {
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
 
     #[test]
+    fn native_signer_jni_contract_revision_is_the_v1_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 1);
+    }
+
+    #[test]
     fn disabled_local_fetch_integrity_maps_to_options_error() {
         for field in ["verify_digests", "verify_lengths"] {
             assert_eq!(
@@ -49924,7 +49956,7 @@ mod tests {
     }
 
     #[test]
-    fn privacy_request_rejects_exposed_readiness_claims_without_reflection() {
+    fn privacy_request_rejects_exposed_production_claims_without_reflection() {
         for (field, value) in [
             ("algorithm_id", "forged-mainnet-ready-algorithm"),
             ("algorithm_id", "claimed-mainnet-algorithm"),
@@ -49963,7 +49995,7 @@ mod tests {
             assert_subslice_absent(
                 &encoded,
                 value.as_bytes(),
-                "readiness-claim request failure result",
+                "production-claim request failure result",
             );
         }
     }

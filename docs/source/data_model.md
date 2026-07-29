@@ -135,6 +135,37 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
   - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` with hashing helpers.
   - `ExecutionStep(ConstVec<InstructionBox>)`: a single ordered batch of instructions in a transaction.
 
+The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
+Version 3 remains the historical introduction point for the append-only mixed
+batch above. Version 4 changes canonical validation-fee governance bytes by
+requiring exact `plain_electorate_rules` in policy and payout-lifecycle
+proposal instructions, retaining those rules in enacted registry entries, and
+binding finalized authorization to a frozen PLAIN electorate. SDKs must reject
+a node advertising any other data-model version before submission.
+
+### Validation-fee PLAIN governance
+
+- `ValidationFeePlainElectorateRulesV1` is part of each native proposal
+  fingerprint. It fixes the voting asset, ballot amount and duration,
+  citizenship amount, member cap, conviction parameters, turnout and approval
+  threshold, and the closed proposal-operator eligibility rule. The
+  first-release cap is 256 members; Taira retains an exact 3,600-block
+  inclusive referendum window and permits PLAIN finalization only.
+- `ValidationFeePlainElectorateSnapshotV1` freezes the electorate at the
+  referendum's `h_start` boundary after the seven-body approval gate. Its
+  canonical, duplicate-free members retain account id, uninterrupted
+  `bonded_height`, and exact `bonded_amount`; the snapshot also binds the
+  proposal id/operator, capture and gate heights, member count, and a
+  domain-separated `roster_root`. The proposal operator must have bonded at or
+  before the gate; every other member must have bonded strictly after the gate
+  and before capture.
+- `ValidationFeeParliamentAuthorizationV1` retains the snapshot root, count,
+  capture height, and approval-gate height alongside the proposal fingerprint,
+  Parliament roster root, referendum window, PLAIN finalization, and enactment
+  height. Registry validation requires these anchors and thresholds to match
+  the retained rules, and requires
+  `effective_from_height = enacted_at_height + 120,960` exactly.
+
 ## Blocks
 
 - `SignedBlock` (versioned) encapsulates:

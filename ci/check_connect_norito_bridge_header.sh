@@ -30,6 +30,11 @@ SELF_TESTS=(
   --self-test-missing-privacy-header-symbol
   --self-test-bad-privacy-signature
   --self-test-missing-privacy-rust-symbol
+  --self-test-missing-sorafs-reference-header-symbol
+  --self-test-missing-sorafs-reference-rust-symbol
+  --self-test-bad-sorafs-reference-bundle-signature
+  --self-test-bad-sorafs-reference-bundle-layout
+  --self-test-bad-sorafs-reference-bundle-limit
   --self-test-umbrella-drift
 )
 
@@ -137,6 +142,9 @@ SORAFS_REFERENCE_EXPORTS = {
     "connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt",
     "connect_norito_sorafs_reference_derive_orderbook_order_id",
     "connect_norito_sorafs_reference_sign_orderbook_payload",
+    "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
+    "connect_norito_sorafs_reference_validate_bundle_json",
+    "connect_norito_sorafs_reference_validate_governance_json",
     "connect_norito_sorafs_reference_validate_hedging_json",
     "connect_norito_sorafs_reference_validate_governance_dag_block_json",
     "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
@@ -191,6 +199,7 @@ def canonical_rust_type(value: str) -> str:
         "c_uchar": "uint8_t",
         "c_ulong": "unsignedlong",
         "usize": "size_t",
+        "ConnectNoritoSorafsReferenceBundlePayload": "ConnectNoritoSorafsReferenceBundlePayload",
         "ConnectNoritoSorafsReferenceInput": "ConnectNoritoSorafsReferenceInput",
         "u8": "uint8_t",
         "u16": "uint16_t",
@@ -327,6 +336,8 @@ for name, expected_parameter_count in expected_privacy_signatures.items():
 exact("Rust SoraFS reference", SORAFS_REFERENCE_EXPORTS, rust_exports("connect_norito_sorafs_reference_"))
 exact("C header SoraFS reference", SORAFS_REFERENCE_EXPORTS, header_exports("connect_norito_sorafs_reference_"))
 for name, expected in {
+    "CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_PAYLOADS_V1": "64",
+    "CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_TOTAL_BYTES_V1": "67108864",
     "CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1": "64",
     "CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1": "32",
     "CONNECT_NORITO_SORAFS_REFERENCE_MAX_INPUT_BYTES_V1": "67108864",
@@ -351,6 +362,17 @@ if re.search(
     header,
 ) is None:
     raise SystemExit("C header SoraFS governance input descriptor layout drift")
+if re.search(
+    r"typedef\s+struct\s+ConnectNoritoSorafsReferenceBundlePayload\s*\{\s*"
+    r"uint32_t\s+kind\s*;\s*"
+    r"const\s+uint8_t\s*\*\s*bytes_ptr\s*;\s*"
+    r"size_t\s+bytes_len\s*;\s*"
+    r"const\s+uint8_t\s*\*\s*label_ptr\s*;\s*"
+    r"size_t\s+label_len\s*;\s*"
+    r"\}\s*ConnectNoritoSorafsReferenceBundlePayload\s*;",
+    header,
+) is None:
+    raise SystemExit("C header SoraFS bundle payload descriptor layout drift")
 
 rust_detached = rust_exports("connect_norito_detached_transaction_") | rust_exports("connect_norito_canonical_json_")
 header_detached = header_exports("connect_norito_detached_transaction_") | header_exports("connect_norito_canonical_json_")
@@ -663,6 +685,31 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_rust}" \
         "iroha_privacy_build_proof_v1" \
         "removed_iroha_privacy_build_proof_v1"
+      ;;
+    --self-test-missing-sorafs-reference-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json" \
+        "removed_connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json"
+      ;;
+    --self-test-missing-sorafs-reference-rust-symbol)
+      replace_once "${tmp_rust}" \
+        'pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json' \
+        'pub unsafe extern "C" fn removed_connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json'
+      ;;
+    --self-test-bad-sorafs-reference-bundle-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_sorafs_reference_validate_bundle_json\s*\(\s*)const ConnectNoritoSorafsReferenceBundlePayload\*' \
+        '\g<1>ConnectNoritoSorafsReferenceBundlePayload*'
+      ;;
+    --self-test-bad-sorafs-reference-bundle-layout)
+      replace_regex_once "${tmp_header}" \
+        '(typedef struct ConnectNoritoSorafsReferenceBundlePayload\s*\{\s*)uint32_t kind' \
+        '\g<1>uint16_t kind'
+      ;;
+    --self-test-bad-sorafs-reference-bundle-limit)
+      replace_once "${tmp_header}" \
+        "#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_PAYLOADS_V1 64" \
+        "#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_PAYLOADS_V1 63"
       ;;
     --self-test-umbrella-drift)
       replace_once "${tmp_umbrella}" \

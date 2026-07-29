@@ -57,6 +57,21 @@ max_pins = 20000
 por_sample_interval_secs = 900
 alias = "tenant.alpha"
 
+[sorafs.storage.por_replay_archive]
+enabled = false
+poll_interval_ms = 1000
+max_records_per_tick = 64
+max_successor_receipts = 1024
+max_successor_proof_bytes = 1048576
+
+[sorafs.storage.native_transaction_signers.proof_outcome]
+handle = "hsm://sorafs/proof-outcome/primary"
+authority = "sorauﾛ1Pb72ﾍzV4oiPXRｸｶhQﾙnﾖRaEHｾnPBAｴHWUqﾙﾇｴﾒﾅQTEYGF"
+algorithm = "ed25519"
+public_key_hex = "8ba62848cf767d72e7f7f4b9d2d7ba07fee33760f79abe5597a51520e292a0cb"
+revision = 1
+policy_digest_hex = "9191919191919191919191919191919191919191919191919191919191919191"
+
 [sorafs.storage.provider_ingest_runtime]
 enabled = false
 scan_interval_ms = 1000
@@ -69,15 +84,24 @@ source_lease_renew_interval_ms = 15000
 signer_timeout_ms = 30000
 ingress_timeout_ms = 30000
 completion_transaction_ttl_ms = 300000
-max_snapshot_rows = 256
-max_snapshot_bytes = 134217728
-max_finalized_lag_blocks = 2
+
+[sorafs.storage.provider_ingest_runtime.finalized_archive]
+relative_root = "provider-ingest-finalized-archive-v1"
+max_record_bytes = 134217728
+max_archive_entries = 1000000
+max_total_bytes = 68719476736
+max_providers_per_anchor = 1024
+max_orders_per_provider = 256
+max_total_orders_per_anchor = 256
+max_page_rows = 64
+max_kura_tip_lag_blocks = 2
 
 [sorafs.storage.provider_ingest_runtime.outbox]
 max_active_entries = 128
 max_terminal_entries = 4096
 max_attempts = 8
 checkpoint_max_bytes = 67108864
+checkpoint_operation_timeout_ms = 30000
 source_lease_ttl_ms = 60000
 retry_base_delay_ms = 1000
 retry_max_delay_ms = 300000

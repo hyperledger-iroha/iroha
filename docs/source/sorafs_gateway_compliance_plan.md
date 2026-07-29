@@ -29,7 +29,10 @@ runtime dependency is absent, unavailable, substituted, stale, test-marked, or
 only partially configured. Each DNS resolution, HTTPS fetch, and ACME order is
 fenced by identity checks before and after the operation; returned addresses,
 response bytes, certificates, and keys are discarded on drift. This
-controller/runtime integration ships locally.
+controller/runtime integration ships locally. The standard launcher does not
+construct a process-local feed transport or ACME fallback: configured provider
+bindings require the exact deployment-owned injected instances before Torii
+startup.
 
 Torii now exposes six canonical, account-signed, governed-operator routes:
 authenticated feed fetch and durable status reads plus canonical-Norito-JSON

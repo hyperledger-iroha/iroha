@@ -22,6 +22,7 @@ use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_data_model::{
     account::{AccountId, ParsedAccountId},
     events::data::sorafs::SorafsModerationLedgerEventKind,
@@ -76,8 +77,6 @@ pub const MODERATION_TRANSACTION_TTL_MS_V1: u64 = 5 * 60 * 1_000;
 pub const MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1: u64 = 30_000;
 /// Exact first-release lease for signer, ingress, lookup, and terminal-sink work.
 pub const MODERATION_EXTERNAL_WORK_LEASE_MS_V1: u64 = 30_000;
-/// Maximum accepted opaque runtime-provider handle size.
-pub const MODERATION_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 /// Initial retry delay for a panel-notification delivery.
 pub const MODERATION_PANEL_NOTIFICATION_BACKOFF_BASE_MS_V1: u64 = 1_000;
 /// Maximum retry delay for a panel-notification delivery.
@@ -605,36 +604,20 @@ fn validate_moderation_runtime_provider_handle(
     handle: &str,
     configured: bool,
 ) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
-    if handle.is_empty()
-        || handle.len() > MODERATION_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(if configured {
+    validate_production_runtime_handle(handle).map_err(|error| match (configured, error) {
+        (true, ProductionRuntimeHandleError::InvalidSyntax) => {
             ModerationRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle
-        } else {
+        }
+        (false, ProductionRuntimeHandleError::InvalidSyntax) => {
             ModerationRuntimeProviderQualificationErrorV1::InvalidProviderHandle
-        });
-    }
-    let lowercase = handle.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
-        return Err(if configured {
+        }
+        (true, ProductionRuntimeHandleError::TestMarked) => {
             ModerationRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle
-        } else {
+        }
+        (false, ProductionRuntimeHandleError::TestMarked) => {
             ModerationRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
-        });
-    }
-    Ok(())
+        }
+    })
 }
 
 fn map_runtime_provider_qualification_error(
@@ -5986,15 +5969,14 @@ fn validate_retired_envelope_history(
                 "retired signed-envelope history is invalid".to_owned(),
             ));
         }
-        if let Some((height, finalized_at_unix_ms, created_at_unix_ms)) = previous_retirement {
-            if record.retired_at_finalized_height <= height
+        if let Some((height, finalized_at_unix_ms, created_at_unix_ms)) = previous_retirement
+            && (record.retired_at_finalized_height <= height
                 || record.retired_at_finalized_unix_ms < finalized_at_unix_ms
-                || record.created_at_unix_ms <= created_at_unix_ms
-            {
-                return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                    "retired signed-envelope history is not monotonic".to_owned(),
-                ));
-            }
+                || record.created_at_unix_ms <= created_at_unix_ms)
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "retired signed-envelope history is not monotonic".to_owned(),
+            ));
         }
         previous_retirement = Some((
             record.retired_at_finalized_height,
@@ -8624,6 +8606,43 @@ mod tests {
     }
 
     #[test]
+    fn runtime_provider_handles_use_canonical_production_grammar() {
+        for handle in [
+            "hsm://sorafs/moderation/signer-primary",
+            "https-pinned-source-pool:moderation-ingress-primary",
+        ] {
+            assert_eq!(
+                validate_moderation_runtime_provider_handle(handle, true),
+                Ok(())
+            );
+        }
+        for handle in [
+            "hsm://sorafs/moderation/operator@signer",
+            "hsm://sorafs/moderation/signer?token",
+            "hsm://sorafs/moderation/signer#fragment",
+            "hsm://sorafs/moderation/%73igner",
+            "hsm://sorafs/moderation/signer\\primary",
+        ] {
+            assert_eq!(
+                validate_moderation_runtime_provider_handle(handle, true),
+                Err(ModerationRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle)
+            );
+            assert_eq!(
+                validate_moderation_runtime_provider_handle(handle, false),
+                Err(ModerationRuntimeProviderQualificationErrorV1::InvalidProviderHandle)
+            );
+        }
+        assert_eq!(
+            validate_moderation_runtime_provider_handle("hsm://sorafs/moderation/dummy", true,),
+            Err(ModerationRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle)
+        );
+        assert_eq!(
+            validate_moderation_runtime_provider_handle("hsm://sorafs/moderation/dummy", false,),
+            Err(ModerationRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
+        );
+    }
+
+    #[test]
     fn external_providers_are_qualified_before_checkpoint_access() {
         let temp = TempDir::new().expect("tempdir");
         let mut config = config(&temp, "missing/checkpoint.bin");
@@ -9676,11 +9695,7 @@ mod tests {
         )
         .expect("orchestrator");
         orchestrator
-            .submit(
-                authority.clone(),
-                policy_action(active_policy.clone()),
-                [0x83; 32],
-            )
+            .submit(authority.clone(), policy_action(active_policy), [0x83; 32])
             .expect("initial submission");
         let (operation_id, _, first_signed, first_timing, _) = retained_envelope(&orchestrator);
         submitter.set_lookup(

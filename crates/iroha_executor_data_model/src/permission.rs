@@ -913,7 +913,7 @@ pub mod sorafs {
     }
 
     permission! {
-        /// Permission to submit policy-authorized PoR or stream-token reputation entries.
+        /// Permission to submit policy-authorized `PoR` or stream-token reputation entries.
         #[derive(Copy)]
         pub struct CanRecordSorafsReputationJournal;
     }

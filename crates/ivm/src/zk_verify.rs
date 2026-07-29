@@ -1,5 +1,4 @@
 //! Norito payloads and helpers for ZK verify syscalls using Halo2 (transparent IPA).
-#![allow(unexpected_cfgs)]
 
 #[cfg(feature = "goldilocks_backend")]
 use iroha_zkp_halo2::backend::goldilocks;

@@ -6,6 +6,12 @@ use norito::{
     decode_from_bytes,
 };
 
+#[derive(NoritoSerialize)]
+struct FixedFields {
+    tag: u8,
+    digest: [u8; 32],
+}
+
 fn frame_payload<T: NoritoSerialize>(minor: u8, flags: u8, payload: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(norito::core::Header::SIZE + payload.len());
     bytes.extend_from_slice(b"NRT0");
@@ -85,6 +91,30 @@ fn field_bitset_requires_packed_struct_and_compact_len() {
         &[],
     );
     decode_from_bytes::<()>(&bytes).expect("complete field bitset combination must be accepted");
+}
+
+#[test]
+fn encoder_rejects_incomplete_field_bitset_dependencies() {
+    let value = FixedFields {
+        tag: 7,
+        digest: [0xA5; 32],
+    };
+    for flags in [
+        header_flags::FIELD_BITSET,
+        header_flags::FIELD_BITSET | header_flags::COMPACT_LEN,
+        header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT,
+    ] {
+        norito::core::reset_decode_state();
+        let error = {
+            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            norito::to_bytes(&value).expect_err("encoder must reject incomplete dependencies")
+        };
+        assert!(matches!(
+            error,
+            Error::UnsupportedFeature("layout flag combination")
+        ));
+    }
+    norito::core::reset_decode_state();
 }
 
 #[test]

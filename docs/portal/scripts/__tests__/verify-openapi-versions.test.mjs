@@ -46,11 +46,12 @@ test('OpenAPI provenance accepts explicit V2 dirty and clean state', () => {
       version: 2,
       generator_commit: 'cd'.repeat(20),
       generator_dirty: false,
+      generator_source_sha256_hex: 'ef'.repeat(32),
     }),
     {
       dirty: false,
       commit: 'cd'.repeat(20),
-      sourceSha256Hex: null,
+      sourceSha256Hex: 'ef'.repeat(32),
     },
   );
 });
@@ -111,27 +112,63 @@ test('OpenAPI provenance rejects dirty-state ambiguity and release smuggling', (
     ],
     [
       'short clean commit',
-      {generator_commit: 'ab'.repeat(19)},
+      {
+        generator_commit: 'ab'.repeat(19),
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
       {},
       /exactly 40 lowercase hexadecimal/i,
     ],
     [
       'uppercase clean commit',
-      {generator_commit: 'AB'.repeat(20)},
+      {
+        generator_commit: 'AB'.repeat(20),
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
       {},
       /exactly 40 lowercase hexadecimal/i,
     ],
     [
       'nonhex clean commit',
-      {generator_commit: 'gg'.repeat(20)},
+      {
+        generator_commit: 'gg'.repeat(20),
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
       {},
       /exactly 40 lowercase hexadecimal/i,
     ],
     [
       'padded clean commit',
-      {generator_commit: ` ${'ab'.repeat(20)} `},
+      {
+        generator_commit: ` ${'ab'.repeat(20)} `,
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
       {},
       /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'zero clean commit',
+      {
+        generator_commit: '00'.repeat(20),
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
+      {},
+      /nonzero Git commit/i,
+    ],
+    [
+      'missing clean source digest',
+      {generator_commit: 'ab'.repeat(20)},
+      {},
+      /requires generator_source_sha256_hex/i,
+    ],
+    [
+      'zero clean source digest',
+      {
+        generator_commit: 'ab'.repeat(20),
+        generator_source_sha256_hex: '00'.repeat(32),
+      },
+      {},
+      /must be nonzero/i,
     ],
   ]) {
     assert.throws(
@@ -192,7 +229,7 @@ test('verifyOpenApiVersions validates recorded metadata', async () => {
   await verifyOpenApiVersions(context);
 });
 
-test('verifyOpenApiVersions binds mutable manifests to the expected commit', async () => {
+test('verifyOpenApiVersions binds mutable manifests to an explicit source pin', async () => {
   const context = await setupFixture();
   await verifyOpenApiVersions({
     ...context,
@@ -204,7 +241,7 @@ test('verifyOpenApiVersions binds mutable manifests to the expected commit', asy
         ...context,
         expectedGeneratorCommit: 'cd'.repeat(20),
       }),
-    /generator_commit .* does not match checked-out commit/i,
+    /generator_commit .* does not match expected source commit/i,
   );
   await assert.rejects(
     () =>
@@ -552,6 +589,8 @@ async function writeManifest(manifestPath, artifactPath, options) {
     generated_unix_ms: 123,
     generator_commit: options.generatorCommit ?? 'ab'.repeat(20),
     generator_dirty: false,
+    generator_source_sha256_hex:
+      options.generatorSourceSha256Hex ?? 'cd'.repeat(32),
     artifact: {
       path: artifactPath,
       bytes: options.bytes ?? 0,

@@ -8,15 +8,19 @@ description = "Deterministic XOR settlement primitives shared across Iroha lanes
 documentation = "https://docs.iroha.tech"
 repository = "https://github.com/hyperledger-iroha/iroha"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+] }
+
 [lib]
 path = "src/lib.rs"
 
 [features]
 default = []
-compact-len = []
 json = []
-packed-struct = []
-schema-structural = []
 
 [dependencies]
 derive_more = { workspace = true, features = ["display", "from"] }

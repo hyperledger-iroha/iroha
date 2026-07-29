@@ -307,6 +307,121 @@ fn read_active_policy(
     Ok(Some(record))
 }
 
+/// Return the complete active recorder-policy predecessor chain in ascending
+/// revision order from one immutable world view.
+///
+/// This is a crate-internal capture primitive for the finalized reputation
+/// archive. It never substitutes current state for the supplied view and
+/// fails closed when the active record, any predecessor artifact, or the
+/// direct revision/digest/activation ordering is malformed. `maximum_records`
+/// is a hard allocation and traversal bound.
+pub(crate) fn read_reputation_authority_policy_history(
+    world: &impl WorldReadOnly,
+    maximum_records: usize,
+) -> Result<Vec<ReputationJournalAuthorityPolicyRecordV1>, InstructionExecutionError> {
+    if maximum_records == 0 {
+        return Err(invalid_parameter(
+            "reputation recorder-policy history bound must be non-zero",
+        ));
+    }
+    let mut current = read_active_policy(world)?
+        .ok_or_else(|| invalid_parameter("SoraFS reputation recorder policy is not configured"))?;
+    let mut descending = Vec::new();
+    loop {
+        if descending.len() >= maximum_records {
+            return Err(corrupt_state(
+                "reputation recorder-policy history exceeds the finalized capture bound",
+            ));
+        }
+        validate_policy_predecessor(world, &current)?;
+        let revision = current.policy.revision;
+        let predecessor_digest = current.policy.predecessor_policy_digest;
+        descending.push(current);
+        match (revision, predecessor_digest) {
+            (1, None) => break,
+            (1, Some(_)) => {
+                return Err(corrupt_state(
+                    "first reputation recorder policy unexpectedly has a predecessor",
+                ));
+            }
+            (_, None) => {
+                return Err(corrupt_state(
+                    "reputation recorder-policy history ended before revision one",
+                ));
+            }
+            (_, Some(predecessor_digest)) => {
+                let predecessor =
+                    read_policy_history(world, &predecessor_digest)?.ok_or_else(|| {
+                        corrupt_state(
+                            "reputation recorder-policy predecessor is missing from immutable history",
+                        )
+                    })?;
+                let successor = descending.last().ok_or_else(|| {
+                    corrupt_state("reputation recorder-policy traversal lost its current successor")
+                })?;
+                if predecessor.policy.revision.checked_add(1) != Some(successor.policy.revision)
+                    || successor.policy.predecessor_policy_digest != Some(predecessor.policy_digest)
+                    || predecessor.activated_at_unix_ms > successor.activated_at_unix_ms
+                {
+                    return Err(corrupt_state(
+                        "reputation recorder-policy history is skipped, substituted, or non-monotonic",
+                    ));
+                }
+                current = predecessor;
+            }
+        }
+    }
+    descending.reverse();
+    Ok(descending)
+}
+
+fn read_policy_at_source_time(
+    world: &impl WorldReadOnly,
+    active: ReputationJournalAuthorityPolicyRecordV1,
+    policy_digest: [u8; 32],
+    source_time_unix_ms: u64,
+) -> Result<ReputationJournalAuthorityPolicyRecordV1, InstructionExecutionError> {
+    let requested = read_policy_history(world, &policy_digest)?.ok_or_else(|| {
+        invalid_parameter("reputation entry references unknown recorder-policy history")
+    })?;
+    if requested.policy.revision > active.policy.revision {
+        return Err(invalid_parameter(
+            "reputation entry references a recorder policy newer than the active policy",
+        ));
+    }
+
+    let mut cursor = active;
+    let mut successor_activated_at = None;
+    loop {
+        validate_policy_predecessor(world, &cursor)?;
+        if cursor.policy.revision == requested.policy.revision {
+            if cursor != requested {
+                return Err(corrupt_state(
+                    "reputation recorder-policy history is not on the active predecessor chain",
+                ));
+            }
+            if source_time_unix_ms < cursor.activated_at_unix_ms
+                || successor_activated_at
+                    .is_some_and(|activated_at| source_time_unix_ms >= activated_at)
+            {
+                return Err(invalid_parameter(
+                    "reputation source observation falls outside its recorder-policy activation interval",
+                ));
+            }
+            return Ok(cursor);
+        }
+        let predecessor_digest = cursor.policy.predecessor_policy_digest.ok_or_else(|| {
+            corrupt_state(
+                "active reputation recorder-policy lineage ended before the requested revision",
+            )
+        })?;
+        successor_activated_at = Some(cursor.activated_at_unix_ms);
+        cursor = read_policy_history(world, &predecessor_digest)?.ok_or_else(|| {
+            corrupt_state("active reputation recorder-policy predecessor history is missing")
+        })?;
+    }
+}
+
 fn read_journal_head(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ReputationJournalHeadStateV1>, InstructionExecutionError> {
@@ -457,16 +572,20 @@ fn validate_event_indexes(
     world: &impl WorldReadOnly,
     record: &ReputationJournalCommittedEventRecordV1,
 ) -> Result<(), InstructionExecutionError> {
-    let policy =
-        read_policy_history(world, &record.entry.authority_policy_digest)?.ok_or_else(|| {
-            corrupt_state("reputation event references missing immutable recorder-policy history")
-        })?;
-    validate_policy_predecessor(world, &policy)?;
-    if policy.activated_at_unix_ms > record.entry.source_time_unix_ms {
-        return Err(corrupt_state(
-            "reputation source observation predates its recorder-policy activation",
-        ));
-    }
+    let active = read_active_policy(world)?.ok_or_else(|| {
+        corrupt_state("reputation event exists without an active recorder policy")
+    })?;
+    let policy = read_policy_at_source_time(
+        world,
+        active,
+        record.entry.authority_policy_digest,
+        record.entry.source_time_unix_ms,
+    )
+    .map_err(|error| {
+        corrupt_state(format!(
+            "reputation event violates recorder-policy activation history: {error}"
+        ))
+    })?;
     record
         .entry
         .validate_at_commit(&policy.policy, record.recorded_at_unix_ms)
@@ -536,21 +655,20 @@ fn ensure_no_event_after_head(
                 .starts_with(EVENT_STATE_KEY_PREFIX)
                 .then_some(key)
         });
-    match (head, first) {
+    let head = match (head, first) {
         (None, None) => return Ok(()),
         (None, Some(_)) => {
             return Err(corrupt_state(
                 "reputation journal contains events without a journal head",
             ));
         }
-        (Some(_), Some(key)) if key == &event_key(1) => {}
+        (Some(head), Some(key)) if key == &event_key(1) => head,
         (Some(_), _) => {
             return Err(corrupt_state(
                 "reputation journal does not begin at global sequence one",
             ));
         }
-    }
-    let head = head.expect("event-prefix validation returned early without a journal head");
+    };
     let terminal_key = event_key(head.last_sequence);
     for (key, _) in world.smart_contract_state().range(terminal_key.clone()..) {
         if !key.to_string().starts_with(EVENT_STATE_KEY_PREFIX) {
@@ -691,23 +809,24 @@ fn validate_entry_commit_context(
     entry: &ReputationJournalEntryV1,
     recorded_at_unix_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
-    let policy = read_active_policy(world)?
+    let active = read_active_policy(world)?
         .ok_or_else(|| invalid_parameter("SoraFS reputation recorder policy is not configured"))?;
-    if policy.activated_at_unix_ms > recorded_at_unix_ms {
+    if active.activated_at_unix_ms > recorded_at_unix_ms {
         return Err(corrupt_state(
             "active reputation policy activation is later than the executing block",
         ));
     }
-    if entry.source_time_unix_ms < policy.activated_at_unix_ms {
-        return Err(invalid_parameter(
-            "reputation source observation predates the active recorder policy",
-        ));
-    }
+    let policy = read_policy_at_source_time(
+        world,
+        active,
+        entry.authority_policy_digest,
+        entry.source_time_unix_ms,
+    )?;
     entry
         .validate_at_commit(&policy.policy, recorded_at_unix_ms)
         .map_err(|error| {
             invalid_parameter(format!(
-                "reputation entry does not match the active recorder policy: {error}"
+                "reputation entry does not match its source-time recorder policy: {error}"
             ))
         })
 }
@@ -1650,6 +1769,7 @@ mod tests {
         sorafs::{
             capacity::CapacityDeclarationRecord,
             reputation::{
+                PorTerminalOutcomeV1, PorTerminalStatusV1,
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
                 StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
             },
@@ -1714,8 +1834,11 @@ mod tests {
             source_time_unix_ms,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
-                validation_id: [unique; 32],
-                request_digest: [unique.wrapping_add(1); 32],
+                binding: iroha_data_model::sorafs::reputation::StreamTokenValidationBindingV1 {
+                    gateway_id: [unique; 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [unique.wrapping_add(1); 32],
+                },
                 token_body_digest: Some([unique.wrapping_add(2); 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: source_time_unix_ms,
@@ -1723,6 +1846,40 @@ mod tests {
             }),
         )
         .expect("canonical token reputation entry")
+    }
+
+    fn por_entry_at(
+        authority: &AccountId,
+        provider_id: ProviderId,
+        policy_digest: [u8; 32],
+        unique: u8,
+        source_time_unix_ms: u64,
+    ) -> ReputationJournalEntryV1 {
+        ReputationJournalEntryV1::try_new(
+            provider_id,
+            policy_digest,
+            authority.clone(),
+            source_time_unix_ms,
+            None,
+            ReputationJournalPayloadV1::PorTerminal(PorTerminalOutcomeV1 {
+                challenge_id: [unique; 32],
+                manifest_digest: [0x41; 32],
+                epoch_id: 7,
+                drand_round: 11,
+                forced: false,
+                sample_count: 4,
+                failed_samples: 0,
+                issued_at_unix_ms: source_time_unix_ms - 2_000,
+                deadline_at_unix_ms: source_time_unix_ms - 500,
+                responded_at_unix_ms: Some(source_time_unix_ms - 750),
+                decided_at_unix_ms: source_time_unix_ms,
+                proof_digest: Some([0x42; 32]),
+                repair_task_id: None,
+                verifier_latency_ms: Some(17),
+                status: PorTerminalStatusV1::Verified,
+            }),
+        )
+        .expect("canonical PoR reputation entry")
     }
 
     fn state_with_reputation_accounts() -> (State, AccountId, AccountId, ProviderId) {
@@ -1882,6 +2039,15 @@ mod tests {
             second_record.policy.predecessor_policy_digest,
             Some(first_digest)
         );
+        assert_eq!(
+            read_reputation_authority_policy_history(transaction.world(), 2)
+                .expect("read exact bounded policy history"),
+            vec![first_record.clone(), second_record.clone()]
+        );
+        assert!(
+            read_reputation_authority_policy_history(transaction.world(), 1).is_err(),
+            "an undersized immutable-history bound must fail closed"
+        );
 
         SetSorafsReputationJournalAuthorityPolicy::new(first)
             .execute(&authority, &mut transaction)
@@ -1899,6 +2065,90 @@ mod tests {
                 .policy_digest,
             second_digest
         );
+    }
+
+    #[test]
+    fn por_append_uses_source_time_policy_across_rotation_and_replay() {
+        let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
+        let first = policy(&authority);
+        let first_digest = first.canonical_digest().expect("first policy digest");
+        transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
+            SetSorafsReputationJournalAuthorityPolicy::new(first.clone())
+                .execute(&authority, transaction)
+        })
+        .expect("activate first recorder policy");
+
+        let queued_before_rotation = por_entry_at(
+            &authority,
+            provider_id,
+            first_digest,
+            0x61,
+            TEST_NOW_MS + 100,
+        );
+        let mut successor = first;
+        successor.revision = 2;
+        successor.predecessor_policy_digest = Some(first_digest);
+        let successor_digest = successor
+            .canonical_digest()
+            .expect("successor policy digest");
+        transact_test(&mut state, 2, TEST_NOW_MS + 200, |transaction| {
+            SetSorafsReputationJournalAuthorityPolicy::new(successor.clone())
+                .execute(&authority, transaction)
+        })
+        .expect("rotate recorder policy");
+
+        transact_test(&mut state, 3, TEST_NOW_MS + 300, |transaction| {
+            AppendSorafsPorReputationJournalEntry::new(queued_before_rotation.clone())
+                .execute(&authority, transaction)?;
+            AppendSorafsPorReputationJournalEntry::new(queued_before_rotation.clone())
+                .execute(&authority, transaction)?;
+            assert_eq!(
+                read_journal_head(transaction.world())?
+                    .ok_or_else(|| corrupt_state("missing PoR reputation journal head"))?
+                    .last_sequence,
+                1,
+                "an exact crash replay must remain idempotent after policy rotation"
+            );
+            let retained = read_event(transaction.world(), 1)?
+                .ok_or_else(|| corrupt_state("missing retained historical PoR entry"))?;
+            validate_event_indexes(transaction.world(), &retained)?;
+            Ok(())
+        })
+        .expect("commit source-time-valid queued PoR terminal");
+
+        let superseded_at_boundary = por_entry_at(
+            &authority,
+            provider_id,
+            first_digest,
+            0x62,
+            TEST_NOW_MS + 200,
+        );
+        let current = por_entry_at(
+            &authority,
+            provider_id,
+            successor_digest,
+            0x63,
+            TEST_NOW_MS + 250,
+        );
+        transact_test(&mut state, 4, TEST_NOW_MS + 400, |transaction| {
+            let error = AppendSorafsPorReputationJournalEntry::new(superseded_at_boundary)
+                .execute(&authority, transaction)
+                .expect_err("the successor activation boundary belongs to the successor");
+            assert!(
+                error
+                    .to_string()
+                    .contains("outside its recorder-policy activation interval")
+            );
+            AppendSorafsPorReputationJournalEntry::new(current).execute(&authority, transaction)?;
+            assert_eq!(
+                read_journal_head(transaction.world())?
+                    .ok_or_else(|| corrupt_state("missing PoR reputation journal head"))?
+                    .last_sequence,
+                2
+            );
+            Ok(())
+        })
+        .expect("reject stale policy material and commit successor material atomically");
     }
 
     #[test]
@@ -1935,8 +2185,11 @@ mod tests {
         let digest = policy.canonical_digest().expect("policy digest");
         let payload = ReputationJournalPayloadV1::StreamTokenValidation(
             iroha_data_model::sorafs::reputation::StreamTokenValidationOutcomeV1 {
-                validation_id: [0x11; 32],
-                request_digest: [0x22; 32],
+                binding: iroha_data_model::sorafs::reputation::StreamTokenValidationBindingV1 {
+                    gateway_id: [0x11; 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [0x22; 32],
+                },
                 token_body_digest: Some([0x33; 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: 1_000,

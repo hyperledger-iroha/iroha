@@ -16,8 +16,10 @@ use iroha_data_model::sorafs::{
 };
 
 use crate::{
+    governance::GovernanceDagRuntimeProviderQualificationV1,
     metering::SmoothingConfig,
     pdp_provider::{PDP_PROVIDER_POLICY_VERSION_V1, PdpProviderProtocolPolicyV1},
+    por::{PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveProofBoundsV1},
     provider_ingest_outbox::{
         ProviderIngestCheckpointProviderBindingV1, ProviderIngestOutboxPolicyV1,
     },
@@ -45,6 +47,7 @@ pub struct StorageConfig {
     moderation_screening_authority_bundle_digest: Option<[u8; 32]>,
     moderation_quarantine_key_provider:
         Option<actual::SorafsModerationQuarantineKeyProviderBinding>,
+    por_replay_archive_policy: Option<PorReplayArchivePolicyV1>,
     pdp_provider: PdpProviderProtocolPolicyV1,
     provider_ingest_outbox_policy: Option<ProviderIngestOutboxPolicyV1>,
     provider_ingest_checkpoint_provider: Option<ProviderIngestCheckpointProviderBindingV1>,
@@ -60,12 +63,145 @@ pub struct StorageConfig {
     privacy_aggregate_policy: Option<PrivacyAggregatePolicyConfig>,
     privacy_cycle_prf_provider_binding: Option<TransparencyRuntimeProviderBindingV1>,
     privacy_release_anchor_provider_binding: Option<TransparencyRuntimeProviderBindingV1>,
+    privacy_leader_lease_provider_binding: Option<TransparencyRuntimeProviderBindingV1>,
+    privacy_fenced_publisher_binding: Option<TransparencyRuntimeProviderBindingV1>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
     governance_dir: Option<PathBuf>,
     governance_dag_publisher_peer_id: Option<String>,
     governance_dag_signer_handle: Option<String>,
+    governance_dag_signer_qualification: Option<GovernanceDagRuntimeProviderQualificationV1>,
     governance_dag_publisher_public_key_hex: Option<String>,
+    governance_dag_checkpoint_store_handle: Option<String>,
+    governance_dag_checkpoint_store_qualification:
+        Option<GovernanceDagRuntimeProviderQualificationV1>,
     penalty: PenaltySettings,
+}
+
+/// Exact public binding and bounded worker policy for finalized PoR archival.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PorReplayArchivePolicyV1 {
+    runtime_handle: String,
+    binding: PorFinalizedReplayArchiveBindingV1,
+    poll_interval: Duration,
+    max_records_per_tick: u32,
+    max_successor_receipts: u32,
+    max_successor_proof_bytes: u64,
+}
+
+impl PorReplayArchivePolicyV1 {
+    /// Construct a validated archive policy without admitting secret material.
+    ///
+    /// # Errors
+    ///
+    /// Rejects non-production handles, invalid public archive bindings, and
+    /// worker bounds outside the supported V1 envelope.
+    pub fn try_new(
+        runtime_handle: impl Into<String>,
+        binding: PorFinalizedReplayArchiveBindingV1,
+        poll_interval: Duration,
+        max_records_per_tick: u32,
+        max_successor_receipts: u32,
+        max_successor_proof_bytes: u64,
+    ) -> Result<Self, String> {
+        let runtime_handle = runtime_handle.into();
+        if !iroha_config::parameters::is_production_runtime_handle(&runtime_handle) {
+            return Err("PoR replay archive requires a production runtime handle".to_owned());
+        }
+        PorFinalizedReplayArchiveBindingV1::try_new(
+            binding.archive_id,
+            binding.revision,
+            binding.policy_digest,
+            binding.signing_public_key,
+        )
+        .map_err(|_| "PoR replay archive public binding is invalid".to_owned())?;
+        let poll_interval_ms = u64::try_from(poll_interval.as_millis())
+            .map_err(|_| "PoR replay archive poll interval is too large".to_owned())?;
+        if Duration::from_millis(poll_interval_ms) != poll_interval {
+            return Err("PoR replay archive poll interval must use whole milliseconds".to_owned());
+        }
+        if !(iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::POLL_INTERVAL_MIN_MS
+            ..=iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::POLL_INTERVAL_MAX_MS)
+            .contains(&poll_interval_ms)
+        {
+            return Err("PoR replay archive poll interval is outside the V1 bounds".to_owned());
+        }
+        if max_records_per_tick == 0
+            || max_records_per_tick
+                > iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::MAX_RECORDS_PER_TICK_LIMIT
+        {
+            return Err("PoR replay archive tick bound is outside the V1 bounds".to_owned());
+        }
+        if max_successor_receipts == 0
+            || max_successor_receipts
+                > iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::MAX_SUCCESSOR_RECEIPTS_LIMIT
+        {
+            return Err(
+                "PoR replay archive successor-receipt bound is outside the V1 bounds".to_owned(),
+            );
+        }
+        if max_successor_proof_bytes == 0
+            || max_successor_proof_bytes
+                > iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::MAX_SUCCESSOR_PROOF_BYTES_LIMIT
+        {
+            return Err(
+                "PoR replay archive successor-proof byte bound is outside the V1 bounds".to_owned(),
+            );
+        }
+        Ok(Self {
+            runtime_handle,
+            binding,
+            poll_interval,
+            max_records_per_tick,
+            max_successor_receipts,
+            max_successor_proof_bytes,
+        })
+    }
+
+    /// Stable deployment-owned runtime-provider handle.
+    #[must_use]
+    pub fn runtime_handle(&self) -> &str {
+        &self.runtime_handle
+    }
+
+    /// Exact public archive identity and receipt-verification policy.
+    #[must_use]
+    pub const fn binding(&self) -> PorFinalizedReplayArchiveBindingV1 {
+        self.binding
+    }
+
+    /// Supervised reconciliation and compaction cadence.
+    #[must_use]
+    pub const fn poll_interval(&self) -> Duration {
+        self.poll_interval
+    }
+
+    /// Maximum records reconciled and compacted in one tick.
+    #[must_use]
+    pub const fn max_records_per_tick(&self) -> u32 {
+        self.max_records_per_tick
+    }
+
+    /// Maximum successor receipts accepted before proof decoding continues.
+    #[must_use]
+    pub const fn max_successor_receipts(&self) -> u32 {
+        self.max_successor_receipts
+    }
+
+    /// Maximum canonical bytes accepted for one successor-receipt proof.
+    #[must_use]
+    pub const fn max_successor_proof_bytes(&self) -> u64 {
+        self.max_successor_proof_bytes
+    }
+
+    /// Exact lookup-proof resource bounds.
+    #[must_use]
+    pub fn proof_bounds(&self) -> PorFinalizedReplayArchiveProofBoundsV1 {
+        PorFinalizedReplayArchiveProofBoundsV1::try_new(
+            self.max_successor_receipts,
+            self.max_successor_proof_bytes,
+        )
+        .expect("validated finalized PoR replay-archive proof bounds")
+    }
 }
 
 impl StorageConfig {
@@ -79,6 +215,12 @@ impl StorageConfig {
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Exact policy for the deployment-owned finalized PoR replay archive.
+    #[must_use]
+    pub fn por_replay_archive_policy(&self) -> Option<&PorReplayArchivePolicyV1> {
+        self.por_replay_archive_policy.as_ref()
     }
 
     /// Exact on-chain provider identity projected into this storage worker.
@@ -251,6 +393,22 @@ impl StorageConfig {
         self.privacy_release_anchor_provider_binding.as_ref()
     }
 
+    /// Exact production external leader-lease binding for privacy cycles.
+    #[must_use]
+    pub fn privacy_leader_lease_provider_binding(
+        &self,
+    ) -> Option<&TransparencyRuntimeProviderBindingV1> {
+        self.privacy_leader_lease_provider_binding.as_ref()
+    }
+
+    /// Exact production fused Governance publisher binding for privacy cycles.
+    #[must_use]
+    pub fn privacy_fenced_publisher_binding(
+        &self,
+    ) -> Option<&TransparencyRuntimeProviderBindingV1> {
+        self.privacy_fenced_publisher_binding.as_ref()
+    }
+
     /// Optional config-backed evidence-viewer audit-report due-cycle scheduler.
     #[must_use]
     pub fn evidence_viewer_audit_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
@@ -275,10 +433,32 @@ impl StorageConfig {
         self.governance_dag_signer_handle.as_ref()
     }
 
+    /// Exact configured public-policy qualification of the runtime DAG signer.
+    #[must_use]
+    pub fn governance_dag_signer_qualification(
+        &self,
+    ) -> Option<GovernanceDagRuntimeProviderQualificationV1> {
+        self.governance_dag_signer_qualification
+    }
+
     /// Canonical Ed25519 public key bound to the runtime Governance DAG signer.
     #[must_use]
     pub fn governance_dag_publisher_public_key_hex(&self) -> Option<&String> {
         self.governance_dag_publisher_public_key_hex.as_ref()
+    }
+
+    /// Opaque production handle for the sealed local Governance DAG producer store.
+    #[must_use]
+    pub fn governance_dag_checkpoint_store_handle(&self) -> Option<&String> {
+        self.governance_dag_checkpoint_store_handle.as_ref()
+    }
+
+    /// Exact configured public-policy qualification of the sealed producer store.
+    #[must_use]
+    pub fn governance_dag_checkpoint_store_qualification(
+        &self,
+    ) -> Option<GovernanceDagRuntimeProviderQualificationV1> {
+        self.governance_dag_checkpoint_store_qualification
     }
 
     /// Penalty policy applied to PoR failures.
@@ -331,6 +511,24 @@ impl StorageConfig {
             moderation_screening_authority_bundle_digest: storage
                 .moderation_screening_authority_bundle_digest,
             moderation_quarantine_key_provider: storage.moderation_quarantine_key_provider.clone(),
+            por_replay_archive_policy: storage.por_replay_archive.as_ref().map(|archive| {
+                let binding = PorFinalizedReplayArchiveBindingV1::try_new(
+                    archive.archive_id,
+                    archive.revision,
+                    archive.policy_digest,
+                    archive.signing_public_key,
+                )
+                .expect("iroha_config validated the finalized PoR archive binding");
+                PorReplayArchivePolicyV1::try_new(
+                    archive.handle.clone(),
+                    binding,
+                    archive.poll_interval,
+                    archive.max_records_per_tick,
+                    archive.max_successor_receipts,
+                    archive.max_successor_proof_bytes,
+                )
+                .expect("iroha_config validated the finalized PoR archive worker policy")
+            }),
             pdp_provider: PdpProviderProtocolPolicyV1 {
                 version: PDP_PROVIDER_POLICY_VERSION_V1,
                 max_pending_records: storage.pdp_provider.max_pending_records,
@@ -351,6 +549,7 @@ impl StorageConfig {
                     max_terminal_entries: runtime.outbox.max_terminal_entries,
                     max_attempts: runtime.outbox.max_attempts,
                     checkpoint_max_bytes: runtime.outbox.checkpoint_max_bytes.0,
+                    checkpoint_operation_timeout_ms: runtime.outbox.checkpoint_operation_timeout_ms,
                     source_lease_ttl_ms: runtime.outbox.source_lease_ttl_ms,
                     retry_base_delay_ms: runtime.outbox.retry_base_delay_ms,
                     retry_max_delay_ms: runtime.outbox.retry_max_delay_ms,
@@ -386,13 +585,44 @@ impl StorageConfig {
                 .release_anchor_provider
                 .as_ref()
                 .map(transparency_runtime_provider_binding),
+            privacy_leader_lease_provider_binding: storage
+                .privacy_aggregates
+                .leader_lease_provider
+                .as_ref()
+                .map(transparency_runtime_provider_binding),
+            privacy_fenced_publisher_binding: storage
+                .privacy_aggregates
+                .fenced_privacy_publisher
+                .as_ref()
+                .map(transparency_runtime_provider_binding),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
             governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
             governance_dag_signer_handle: storage.governance_dag_signer_handle.clone(),
+            governance_dag_signer_qualification: storage
+                .governance_dag_signer_revision
+                .zip(storage.governance_dag_signer_policy_digest)
+                .map(|(revision, policy_digest)| {
+                    GovernanceDagRuntimeProviderQualificationV1::new(revision, policy_digest)
+                }),
             governance_dag_publisher_public_key_hex: storage
                 .governance_dag_publisher_public_key_hex
                 .clone(),
+            governance_dag_checkpoint_store_handle: storage
+                .governance_dag_service
+                .checkpoint_store_handle
+                .clone(),
+            governance_dag_checkpoint_store_qualification: storage
+                .governance_dag_service
+                .checkpoint_store_revision
+                .zip(
+                    storage
+                        .governance_dag_service
+                        .checkpoint_store_policy_digest,
+                )
+                .map(|(revision, policy_digest)| {
+                    GovernanceDagRuntimeProviderQualificationV1::new(revision, policy_digest)
+                }),
             penalty: PenaltySettings::from_policy(penalty),
         }
     }
@@ -517,6 +747,13 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Configure the deployment-owned finalized PoR replay archive.
+    #[must_use]
+    pub fn por_replay_archive_policy(mut self, policy: Option<PorReplayArchivePolicyV1>) -> Self {
+        self.inner.por_replay_archive_policy = policy;
+        self
+    }
+
     /// Override the durable admission-bound PDP provider protocol policy.
     #[must_use]
     pub fn pdp_provider_policy(mut self, policy: PdpProviderProtocolPolicyV1) -> Self {
@@ -633,6 +870,26 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Override the exact production external leader-lease binding.
+    #[must_use]
+    pub fn privacy_leader_lease_provider_binding(
+        mut self,
+        binding: Option<TransparencyRuntimeProviderBindingV1>,
+    ) -> Self {
+        self.inner.privacy_leader_lease_provider_binding = binding;
+        self
+    }
+
+    /// Override the exact production fused Governance publisher binding.
+    #[must_use]
+    pub fn privacy_fenced_publisher_binding(
+        mut self,
+        binding: Option<TransparencyRuntimeProviderBindingV1>,
+    ) -> Self {
+        self.inner.privacy_fenced_publisher_binding = binding;
+        self
+    }
+
     /// Override the optional config-backed evidence-viewer audit-report scheduler.
     #[must_use]
     pub fn evidence_viewer_audit_schedule(
@@ -671,6 +928,16 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Override the exact public-policy qualification of the runtime DAG signer.
+    #[must_use]
+    pub fn governance_dag_signer_qualification(
+        mut self,
+        qualification: Option<GovernanceDagRuntimeProviderQualificationV1>,
+    ) -> Self {
+        self.inner.governance_dag_signer_qualification = qualification;
+        self
+    }
+
     /// Override the Ed25519 public key bound to the runtime Governance DAG signer.
     #[must_use]
     pub fn governance_dag_publisher_public_key_hex<S: Into<Option<String>>>(
@@ -678,6 +945,26 @@ impl StorageConfigBuilder {
         public_key_hex: S,
     ) -> Self {
         self.inner.governance_dag_publisher_public_key_hex = public_key_hex.into();
+        self
+    }
+
+    /// Override the opaque sealed local-producer checkpoint-store handle.
+    #[must_use]
+    pub fn governance_dag_checkpoint_store_handle<S: Into<Option<String>>>(
+        mut self,
+        handle: S,
+    ) -> Self {
+        self.inner.governance_dag_checkpoint_store_handle = handle.into();
+        self
+    }
+
+    /// Override the exact public-policy qualification of the sealed producer store.
+    #[must_use]
+    pub fn governance_dag_checkpoint_store_qualification(
+        mut self,
+        qualification: Option<GovernanceDagRuntimeProviderQualificationV1>,
+    ) -> Self {
+        self.inner.governance_dag_checkpoint_store_qualification = qualification;
         self
     }
 
@@ -1073,19 +1360,32 @@ impl PrivacyAggregatePolicyConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error when the public identifier, privacy parameters, policy
-    /// digest, or durable composition-budget policy is not canonical.
+    /// Returns an error when the cycle policy, public identifier, privacy
+    /// parameters, policy digest, or durable composition-budget policy is not
+    /// canonical.
     pub fn new(
-        query_id: [u8; 32],
-        first_cycle_start_unix: u64,
-        cycle_seconds: u64,
-        aggregate_id_prefix: String,
-        populations: Vec<PrivacyAggregatePopulationV1>,
-        metrics: Vec<PrivacyAggregateMetricSchemaV1>,
-        privacy: ModerationPrivacyParametersV1,
-        policy_digest: [u8; 32],
+        cycle: PrivacyAggregateCycleConfig,
         composition_budget: PrivacyCompositionBudgetPolicyV1,
     ) -> Result<Self, String> {
+        cycle
+            .validate()
+            .map_err(|error| format!("privacy aggregate query is invalid: {error}"))?;
+        if !cycle.metadata.is_empty() {
+            return Err(
+                "governed privacy aggregate policy must not contain runtime metadata".to_string(),
+            );
+        }
+        let PrivacyAggregateCycleConfig {
+            query_id,
+            first_cycle_start_unix,
+            cycle_seconds,
+            aggregate_id_prefix,
+            populations,
+            metrics,
+            privacy,
+            policy_digest,
+            metadata: _,
+        } = cycle;
         if query_id == [0; 32] {
             return Err("privacy aggregate query id must be nonzero".to_string());
         }
@@ -1110,20 +1410,6 @@ impl PrivacyAggregatePolicyConfig {
                 "privacy composition budget must be bound to the stable query id".to_string(),
             );
         }
-        let cycle = PrivacyAggregateCycleConfig {
-            query_id,
-            first_cycle_start_unix,
-            cycle_seconds,
-            aggregate_id_prefix: aggregate_id_prefix.clone(),
-            populations: populations.clone(),
-            metrics: metrics.clone(),
-            privacy,
-            policy_digest,
-            metadata: Vec::new(),
-        };
-        cycle
-            .validate()
-            .map_err(|error| format!("privacy aggregate query is invalid: {error}"))?;
         Ok(Self {
             query_id,
             first_cycle_start_unix,
@@ -1262,14 +1548,17 @@ impl PrivacyAggregatePolicyConfigExt for actual::SorafsPrivacyAggregateSchedule 
         };
         Some(
             PrivacyAggregatePolicyConfig::new(
-                query_id,
-                self.first_cycle_start_unix,
-                self.cycle_seconds,
-                self.aggregate_id_prefix,
-                populations,
-                metrics,
-                privacy,
-                policy_digest,
+                PrivacyAggregateCycleConfig {
+                    query_id,
+                    first_cycle_start_unix: self.first_cycle_start_unix,
+                    cycle_seconds: self.cycle_seconds,
+                    aggregate_id_prefix: self.aggregate_id_prefix,
+                    populations,
+                    metrics,
+                    privacy,
+                    policy_digest,
+                    metadata: Vec::new(),
+                },
                 composition_budget,
             )
             .unwrap_or_else(|error| {
@@ -1831,6 +2120,17 @@ mod tests {
             Some(PathBuf::from("/tmp/sorafs-reputation-policy.to"));
         actual.hedging_feed_trust_policy_path =
             Some(PathBuf::from("/tmp/sorafs-hedging-policy.to"));
+        actual.governance_dag_publisher_peer_id =
+            Some("12D3KooWGovernanceConfigPrimary".to_owned());
+        actual.governance_dag_signer_handle =
+            Some("pkcs11:governance-dag:config-primary".to_owned());
+        actual.governance_dag_signer_revision = Some(31);
+        actual.governance_dag_signer_policy_digest = Some([0xA7; 32]);
+        actual.governance_dag_publisher_public_key_hex = Some("a8".repeat(32));
+        actual.governance_dag_service.checkpoint_store_handle =
+            Some("sealed:governance-dag:producer-primary".to_owned());
+        actual.governance_dag_service.checkpoint_store_revision = Some(37);
+        actual.governance_dag_service.checkpoint_store_policy_digest = Some([0xB7; 32]);
         actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
             enabled: true,
             cycle_seconds: 12,
@@ -1855,6 +2155,16 @@ mod tests {
                 handle: "governance-dag:transparency:primary".to_owned(),
                 revision: 9,
                 policy_digest: [0xE1; 32],
+            }),
+            leader_lease_provider: Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                handle: "sealed-cas:transparency:leader-primary".to_owned(),
+                revision: 11,
+                policy_digest: [0xF1; 32],
+            }),
+            fenced_privacy_publisher: Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                handle: "governance-cas:transparency:privacy-primary".to_owned(),
+                revision: 13,
+                policy_digest: [0x91; 32],
             }),
             ..actual::SorafsPrivacyAggregateSchedule::default()
         };
@@ -1938,6 +2248,23 @@ mod tests {
             Some(&PathBuf::from("/tmp/sorafs-hedging-policy.to"))
         );
         assert_eq!(
+            cfg.governance_dag_signer_qualification(),
+            Some(GovernanceDagRuntimeProviderQualificationV1::new(
+                31, [0xA7; 32]
+            ))
+        );
+        assert_eq!(
+            cfg.governance_dag_checkpoint_store_handle()
+                .map(String::as_str),
+            Some("sealed:governance-dag:producer-primary")
+        );
+        assert_eq!(
+            cfg.governance_dag_checkpoint_store_qualification(),
+            Some(GovernanceDagRuntimeProviderQualificationV1::new(
+                37, [0xB7; 32]
+            ))
+        );
+        assert_eq!(
             cfg.privacy_aggregate_schedule(),
             Some(PrivacyAggregateScheduleConfig {
                 first_cycle_start_unix: 120,
@@ -1974,6 +2301,28 @@ mod tests {
                     [0xE1; 32],
                 )
                 .expect("valid release-anchor provider binding")
+            )
+        );
+        assert_eq!(
+            cfg.privacy_leader_lease_provider_binding(),
+            Some(
+                &TransparencyRuntimeProviderBindingV1::try_new(
+                    "sealed-cas:transparency:leader-primary",
+                    11,
+                    [0xF1; 32],
+                )
+                .expect("valid test binding"),
+            )
+        );
+        assert_eq!(
+            cfg.privacy_fenced_publisher_binding(),
+            Some(
+                &TransparencyRuntimeProviderBindingV1::try_new(
+                    "governance-cas:transparency:privacy-primary",
+                    13,
+                    [0x91; 32],
+                )
+                .expect("valid fused privacy publisher binding"),
             )
         );
         assert_eq!(cycle_policy.privacy.epsilon_numerator, Some(4));
@@ -2033,6 +2382,55 @@ mod tests {
         assert_eq!(cfg.privacy_aggregate_policy(), None);
         assert_eq!(cfg.privacy_cycle_prf_provider_binding(), None);
         assert_eq!(cfg.privacy_release_anchor_provider_binding(), None);
+        assert_eq!(cfg.privacy_leader_lease_provider_binding(), None);
+        assert_eq!(cfg.privacy_fenced_publisher_binding(), None);
+    }
+
+    #[test]
+    fn privacy_fenced_publisher_builder_preserves_exact_binding_and_default_is_none() {
+        assert_eq!(
+            StorageConfig::default().privacy_fenced_publisher_binding(),
+            None
+        );
+        let binding = TransparencyRuntimeProviderBindingV1::try_new(
+            "governance-cas:transparency:privacy-secondary",
+            17,
+            [0x92; 32],
+        )
+        .expect("valid fused privacy publisher binding");
+        let config = StorageConfig::builder()
+            .privacy_fenced_publisher_binding(Some(binding.clone()))
+            .build();
+        assert_eq!(config.privacy_fenced_publisher_binding(), Some(&binding));
+    }
+
+    #[test]
+    fn governance_dag_checkpoint_store_builder_preserves_config_authority() {
+        assert_eq!(
+            StorageConfig::default().governance_dag_checkpoint_store_handle(),
+            None
+        );
+        assert_eq!(
+            StorageConfig::default().governance_dag_checkpoint_store_qualification(),
+            None
+        );
+        let qualification = GovernanceDagRuntimeProviderQualificationV1::new(41, [0xC7; 32]);
+        let config = StorageConfig::builder()
+            .governance_dag_checkpoint_store_handle(Some(
+                "sealed:governance-dag:producer-secondary".to_owned(),
+            ))
+            .governance_dag_checkpoint_store_qualification(Some(qualification))
+            .build();
+        assert_eq!(
+            config
+                .governance_dag_checkpoint_store_handle()
+                .map(String::as_str),
+            Some("sealed:governance-dag:producer-secondary")
+        );
+        assert_eq!(
+            config.governance_dag_checkpoint_store_qualification(),
+            Some(qualification)
+        );
     }
 
     #[test]
@@ -2049,6 +2447,108 @@ mod tests {
     }
 
     #[test]
+    fn por_replay_archive_policy_preserves_exact_public_binding_and_strict_bounds() {
+        let signing_public_key = ed25519_dalek::SigningKey::from_bytes(&[0x44; 32])
+            .verifying_key()
+            .to_bytes();
+        let binding = PorFinalizedReplayArchiveBindingV1::try_new(
+            [0x41; 32],
+            7,
+            [0x42; 32],
+            signing_public_key,
+        )
+        .expect("valid archive binding");
+        let policy = PorReplayArchivePolicyV1::try_new(
+            "hsm://sorafs/por-replay-archive/primary",
+            binding,
+            Duration::from_millis(750),
+            31,
+            73,
+            8_192,
+        )
+        .expect("valid archive policy");
+
+        assert_eq!(
+            policy.runtime_handle(),
+            "hsm://sorafs/por-replay-archive/primary"
+        );
+        assert_eq!(policy.binding(), binding);
+        assert_eq!(policy.poll_interval(), Duration::from_millis(750));
+        assert_eq!(policy.max_records_per_tick(), 31);
+        assert_eq!(policy.max_successor_receipts(), 73);
+        assert_eq!(policy.max_successor_proof_bytes(), 8_192);
+        assert!(
+            PorReplayArchivePolicyV1::try_new(
+                "hsm://sorafs/por-replay-archive/test-provider",
+                binding,
+                Duration::from_millis(750),
+                31,
+                73,
+                8_192,
+            )
+            .is_err()
+        );
+        assert!(
+            PorReplayArchivePolicyV1::try_new(
+                "hsm://sorafs/por-replay-archive/primary",
+                binding,
+                Duration::from_micros(750_001),
+                31,
+                73,
+                8_192,
+            )
+            .is_err()
+        );
+        assert!(
+            PorReplayArchivePolicyV1::try_new(
+                "hsm://sorafs/por-replay-archive/primary",
+                binding,
+                Duration::from_millis(750),
+                0,
+                73,
+                8_192,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn actual_por_replay_archive_projects_into_node_storage_config() {
+        let signing_public_key = ed25519_dalek::SigningKey::from_bytes(&[0x45; 32])
+            .verifying_key()
+            .to_bytes();
+        let mut actual = actual::SorafsStorage::default();
+        actual.por_replay_archive = Some(actual::SorafsPorReplayArchive {
+            handle: "hsm://sorafs/por-replay-archive/secondary".to_owned(),
+            archive_id: [0x51; 32],
+            revision: 9,
+            policy_digest: [0x52; 32],
+            signing_public_key,
+            poll_interval: Duration::from_secs(2),
+            max_records_per_tick: 17,
+            max_successor_receipts: 37,
+            max_successor_proof_bytes: 16_384,
+        });
+
+        let config = StorageConfig::from(&actual);
+        let policy = config
+            .por_replay_archive_policy()
+            .expect("projected replay-archive policy");
+        assert_eq!(
+            policy.runtime_handle(),
+            "hsm://sorafs/por-replay-archive/secondary"
+        );
+        assert_eq!(policy.binding().archive_id, [0x51; 32]);
+        assert_eq!(policy.binding().revision, 9);
+        assert_eq!(policy.binding().policy_digest, [0x52; 32]);
+        assert_eq!(policy.binding().signing_public_key, signing_public_key);
+        assert_eq!(policy.poll_interval(), Duration::from_secs(2));
+        assert_eq!(policy.max_records_per_tick(), 17);
+        assert_eq!(policy.max_successor_receipts(), 37);
+        assert_eq!(policy.max_successor_proof_bytes(), 16_384);
+    }
+
+    #[test]
     fn repair_and_gc_configs_preserve_fields() {
         let repair = actual::SorafsRepair {
             enabled: true,
@@ -2056,7 +2556,6 @@ mod tests {
             heartbeat_interval_secs: 45,
             max_attempts: 6,
             worker_concurrency: 12,
-            ..Default::default()
         };
 
         let cfg = RepairConfig::from(&repair);
@@ -2072,7 +2571,6 @@ mod tests {
             interval_secs: 300,
             max_deletions_per_run: 2_000,
             retention_grace_secs: 86_400,
-            ..Default::default()
         };
 
         let gc_cfg = GcConfig::from(&gc);

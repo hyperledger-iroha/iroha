@@ -370,6 +370,11 @@ pub struct SignedReputationSnapshotV1 {
 impl SignedReputationSnapshotV1 {
     /// Validate all policy-independent structure and embedded scoring evidence.
     pub fn validate_structure(&self) -> Result<(), SignedReputationSnapshotError> {
+        preflight_canonical_encoded_len(
+            "signed reputation snapshot",
+            self,
+            MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES,
+        )?;
         if self.version != SIGNED_REPUTATION_SNAPSHOT_VERSION_V1 {
             return Err(
                 SignedReputationSnapshotError::UnsupportedSignedSnapshotVersion {
@@ -693,16 +698,7 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     value: &T,
     max_bytes: usize,
 ) -> Result<Vec<u8>, SignedReputationSnapshotError> {
-    let exact_payload_len = value
-        .encoded_len_exact()
-        .ok_or(SignedReputationSnapshotError::EncodedLengthUnavailable { payload })?;
-    if exact_payload_len > max_bytes {
-        return Err(SignedReputationSnapshotError::EncodedPayloadTooLarge {
-            payload,
-            len: exact_payload_len,
-            max: max_bytes,
-        });
-    }
+    preflight_canonical_encoded_len(payload, value, max_bytes)?;
     let bytes = norito::to_bytes(value)
         .map_err(|error| SignedReputationSnapshotError::Encoding(error.to_string()))?;
     if bytes.len() > max_bytes {
@@ -713,6 +709,32 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
         });
     }
     Ok(bytes)
+}
+
+fn preflight_canonical_encoded_len<T: norito::NoritoSerialize>(
+    payload: &'static str,
+    value: &T,
+    max_bytes: usize,
+) -> Result<usize, SignedReputationSnapshotError> {
+    if let Some(len) = value.encoded_len_exact()
+        && len > max_bytes
+    {
+        return Err(SignedReputationSnapshotError::EncodedPayloadTooLarge {
+            payload,
+            len,
+            max: max_bytes,
+        });
+    }
+    let exact_payload_len = norito::core::encoded_payload_len(value)
+        .map_err(|_| SignedReputationSnapshotError::EncodedLengthUnavailable { payload })?;
+    if exact_payload_len > max_bytes {
+        return Err(SignedReputationSnapshotError::EncodedPayloadTooLarge {
+            payload,
+            len: exact_payload_len,
+            max: max_bytes,
+        });
+    }
+    Ok(exact_payload_len)
 }
 
 fn validate_signer_id(signer_id: &str) -> Result<(), SignedReputationSnapshotError> {
@@ -1261,6 +1283,30 @@ mod tests {
                 payload: "test payload",
                 len: 17,
                 max: 16,
+            })
+        );
+    }
+
+    #[test]
+    fn signed_snapshot_size_preflight_accepts_boundary_and_rejects_one_over() {
+        let (_, envelope) = signed_snapshot();
+        let exact = norito::core::encoded_payload_len(&envelope)
+            .expect("signed snapshot canonical length must be countable");
+
+        assert_eq!(
+            preflight_canonical_encoded_len("signed reputation snapshot", &envelope, exact),
+            Ok(exact)
+        );
+        assert_eq!(
+            preflight_canonical_encoded_len(
+                "signed reputation snapshot",
+                &envelope,
+                exact.saturating_sub(1),
+            ),
+            Err(SignedReputationSnapshotError::EncodedPayloadTooLarge {
+                payload: "signed reputation snapshot",
+                len: exact,
+                max: exact.saturating_sub(1),
             })
         );
     }

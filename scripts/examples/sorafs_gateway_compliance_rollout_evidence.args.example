@@ -28,3 +28,4 @@ catalog_promotion,controller_runtime,moderation_toggle,gateway_reload,enforcemen
 1
 --min-honey-probes
 4
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

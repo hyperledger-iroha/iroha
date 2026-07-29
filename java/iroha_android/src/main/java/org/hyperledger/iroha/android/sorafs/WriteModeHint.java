@@ -1,7 +1,5 @@
 package org.hyperledger.iroha.android.sorafs;
 
-import java.util.Locale;
-
 /**
  * Mirrors {@code sorafs_orchestrator::WriteModeHint}.
  *
@@ -10,9 +8,9 @@ import java.util.Locale;
  */
 public enum WriteModeHint {
   /** Default behaviour for read/replication workloads. */
-  READ_ONLY("read_only"),
+  READ_ONLY("read-only"),
   /** Enforce PQ-only transport for upload workloads. */
-  UPLOAD_PQ_ONLY("upload_pq_only");
+  UPLOAD_PQ_ONLY("upload-pq-only");
 
   private final String label;
 
@@ -26,18 +24,16 @@ public enum WriteModeHint {
   }
 
   /**
-   * Parse an incoming label. Returns {@code null} when the value does not map to a known hint.
+   * Parse one exact canonical V1 label. Returns {@code null} for every alias or unknown value.
    */
   public static WriteModeHint fromLabel(final String raw) {
     if (raw == null) {
       return null;
     }
-    final String normalised = raw.trim().toLowerCase(Locale.ROOT).replace('-', '_');
-    return switch (normalised) {
-      case "read_only" -> READ_ONLY;
-      case "upload_pq_only" -> UPLOAD_PQ_ONLY;
+    return switch (raw) {
+      case "read-only" -> READ_ONLY;
+      case "upload-pq-only" -> UPLOAD_PQ_ONLY;
       default -> null;
     };
   }
 }
-

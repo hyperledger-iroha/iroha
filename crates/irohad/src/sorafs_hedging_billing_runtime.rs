@@ -15,7 +15,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, bail};
-use iroha_config::parameters::actual::SorafsHedgingBillingRuntime;
+use iroha_config::parameters::{actual::SorafsHedgingBillingRuntime, is_production_runtime_handle};
 use iroha_data_model::ChainId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_manifest::hedging::signed::HedgingFeedTrustPolicyV1;
@@ -30,8 +30,8 @@ use sorafs_node::hedging_billing_service::{
     HedgingBillingJournalVerifier, HedgingBillingProjectionAnchorV1,
     HedgingBillingProjectionPageRequestV1, HedgingBillingReconciliationStatusV1,
     HedgingBillingRuntimeApiErrorV1, HedgingBillingRuntimeApiV1,
-    HedgingBillingRuntimeProviderQualificationV1, HedgingBillingRuntimeProviderV1,
-    HedgingBillingService, HedgingBillingServicePolicyV1, QualifiedHedgingBillingRuntimeProviderV1,
+    HedgingBillingRuntimeProviderQualificationV1, HedgingBillingService,
+    HedgingBillingServicePolicyV1, QualifiedHedgingBillingRuntimeProviderV1,
 };
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
@@ -246,107 +246,31 @@ impl HedgingBillingRuntimeHandleV1 {
         }
     }
 
-    fn reconcile_once(&self) -> Result<()> {
-        let _tick_guard = match self.tick_lock.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let finalized_head = match probe_dependencies(
-            &self.inner.config,
-            &self.inner.policy,
-            &self.inner.dependencies,
-        ) {
-            Ok(head) => head,
-            Err(error) => {
-                self.external_dependencies_healthy
-                    .store(false, Ordering::Release);
-                self.last_tick_healthy.store(false, Ordering::Release);
-                self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
-                return Err(error);
-            }
-        };
-        let projection_anchor = match self.inner.service.api_projection_anchor() {
-            Ok(anchor) => anchor,
-            Err(error) => {
-                self.external_dependencies_healthy
-                    .store(false, Ordering::Release);
-                self.last_tick_healthy.store(false, Ordering::Release);
-                self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
-                return Err(eyre::eyre!(
-                    "inspect finalized billing projection anchor: {error}"
-                ));
-            }
-        };
-        {
-            let previous_head_guard = match self.latest_finalized_head.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if previous_head_guard
-                .is_some_and(|previous| !finalized_head_extends(previous, finalized_head))
-            {
-                self.external_dependencies_healthy
-                    .store(false, Ordering::Release);
-                self.last_tick_healthy.store(false, Ordering::Release);
-                self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
-                bail!("finalized billing query head regressed or equivocated");
-            }
-        }
-        if !projection_at_or_before_head(projection_anchor.finalized_cursor, finalized_head) {
-            self.external_dependencies_healthy
-                .store(false, Ordering::Release);
-            self.last_tick_healthy.store(false, Ordering::Release);
-            self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
-            bail!("finalized billing query head conflicts with durable projector cursor");
-        }
+    fn mark_tick_failed(&self, error: eyre::Report) -> eyre::Report {
         self.external_dependencies_healthy
-            .store(true, Ordering::Release);
-        let delivery_scan_sequence = self.delivery_scan_sequence.fetch_add(1, Ordering::Relaxed);
-        let outcome = match reconcile_once(&self.inner, delivery_scan_sequence, finalized_head) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                self.external_dependencies_healthy
-                    .store(false, Ordering::Release);
-                self.last_tick_healthy.store(false, Ordering::Release);
-                self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
-                return Err(error);
-            }
-        };
-        let projection_anchor = match self.inner.service.api_projection_anchor() {
-            Ok(anchor) => anchor,
-            Err(error) => {
-                self.external_dependencies_healthy
-                    .store(false, Ordering::Release);
-                self.last_tick_healthy.store(false, Ordering::Release);
-                self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
-                return Err(eyre::eyre!(
-                    "inspect finalized billing projection anchor after reconciliation: {error}"
-                ));
-            }
-        };
+            .store(false, Ordering::Release);
+        self.last_tick_healthy.store(false, Ordering::Release);
+        self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
+        error
+    }
+
+    fn verify_projection_at_or_before_head(
+        &self,
+        finalized_head: HedgingBillingFinalizedCursorV1,
+        operation: &'static str,
+    ) -> Result<()> {
+        let projection_anchor = self
+            .inner
+            .service
+            .api_projection_anchor()
+            .map_err(|error| eyre::eyre!("{operation}: {error}"))?;
         if !projection_at_or_before_head(projection_anchor.finalized_cursor, finalized_head) {
-            self.external_dependencies_healthy
-                .store(false, Ordering::Release);
-            self.last_tick_healthy.store(false, Ordering::Release);
-            self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
             bail!("finalized billing query head conflicts with durable projector cursor");
         }
-        {
-            let mut finalized_head_guard = match self.latest_finalized_head.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if finalized_head_guard
-                .is_some_and(|previous| !finalized_head_extends(previous, finalized_head))
-            {
-                self.external_dependencies_healthy
-                    .store(false, Ordering::Release);
-                self.last_tick_healthy.store(false, Ordering::Release);
-                self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
-                bail!("finalized billing query head changed concurrently");
-            }
-            *finalized_head_guard = Some(finalized_head);
-        }
+        Ok(())
+    }
+
+    fn record_successful_tick(&self, outcome: &TickOutcome) {
         self.last_tick_healthy.store(true, Ordering::Release);
         let mut freshness_guard = match self.last_successful_tick.lock() {
             Ok(guard) => guard,
@@ -377,6 +301,62 @@ impl HedgingBillingRuntimeHandleV1 {
         self.counters
             .acknowledgements_reconciled
             .fetch_add(outcome.acknowledgements_reconciled, Ordering::Relaxed);
+    }
+
+    fn reconcile_once(&self) -> Result<()> {
+        let _tick_guard = match self.tick_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let finalized_head = probe_dependencies(
+            &self.inner.config,
+            &self.inner.policy,
+            &self.inner.dependencies,
+        )
+        .map_err(|error| self.mark_tick_failed(error))?;
+        self.verify_projection_at_or_before_head(
+            finalized_head,
+            "inspect finalized billing projection anchor",
+        )
+        .map_err(|error| self.mark_tick_failed(error))?;
+        {
+            let previous_head_guard = match self.latest_finalized_head.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if previous_head_guard
+                .is_some_and(|previous| !finalized_head_extends(previous, finalized_head))
+            {
+                return Err(self.mark_tick_failed(eyre::eyre!(
+                    "finalized billing query head regressed or equivocated"
+                )));
+            }
+        }
+        self.external_dependencies_healthy
+            .store(true, Ordering::Release);
+        let delivery_scan_sequence = self.delivery_scan_sequence.fetch_add(1, Ordering::Relaxed);
+        let outcome = reconcile_once(&self.inner, delivery_scan_sequence, finalized_head)
+            .map_err(|error| self.mark_tick_failed(error))?;
+        self.verify_projection_at_or_before_head(
+            finalized_head,
+            "inspect finalized billing projection anchor after reconciliation",
+        )
+        .map_err(|error| self.mark_tick_failed(error))?;
+        {
+            let mut finalized_head_guard = match self.latest_finalized_head.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if finalized_head_guard
+                .is_some_and(|previous| !finalized_head_extends(previous, finalized_head))
+            {
+                return Err(self.mark_tick_failed(eyre::eyre!(
+                    "finalized billing query head changed concurrently"
+                )));
+            }
+            *finalized_head_guard = Some(finalized_head);
+        }
+        self.record_successful_tick(&outcome);
         Ok(())
     }
 }
@@ -470,9 +450,9 @@ impl HedgingBillingRuntimeApiV1 for HedgingBillingRuntimeHandleV1 {
 /// incapable adapters fail startup before the private checkpoint is opened.
 pub(crate) fn start(
     config: SorafsHedgingBillingRuntime,
-    chain_id: ChainId,
+    chain_id: &ChainId,
     policy: HedgingBillingServicePolicyV1,
-    feed_policy: Arc<HedgingFeedTrustPolicyV1>,
+    feed_policy: &Arc<HedgingFeedTrustPolicyV1>,
     dependencies: HedgingBillingRuntimeDependenciesV1,
     shutdown_signal: ShutdownSignal,
 ) -> Result<(HedgingBillingRuntimeHandleV1, Child)> {
@@ -533,16 +513,16 @@ pub(crate) fn start(
 
 fn assemble(
     config: SorafsHedgingBillingRuntime,
-    chain_id: ChainId,
+    chain_id: &ChainId,
     policy: HedgingBillingServicePolicyV1,
-    feed_policy: Arc<HedgingFeedTrustPolicyV1>,
+    feed_policy: &Arc<HedgingFeedTrustPolicyV1>,
     dependencies: HedgingBillingRuntimeDependenciesV1,
 ) -> Result<HedgingBillingRuntimeHandleV1> {
     validate_actual_config(&config)?;
     policy
         .validate()
         .wrap_err("validate configured hedging/billing service policy")?;
-    if policy.chain_id != chain_id {
+    if &policy.chain_id != chain_id {
         bail!("hedging/billing service policy chain identity does not match iroha_config");
     }
     if policy
@@ -954,7 +934,7 @@ fn validate_actual_config(config: &SorafsHedgingBillingRuntime) -> Result<()> {
         &config.acknowledgement_authority_handle,
         &config.epoch_witness_store_handle,
     ] {
-        if !is_production_handle(handle) {
+        if !is_production_runtime_handle(handle) {
             bail!("committed hedging/billing runtime dependency handle is not production-safe");
         }
     }
@@ -1003,31 +983,10 @@ fn absolute_leaf(path: &std::path::Path) -> bool {
 }
 
 fn validate_dependency_handle(label: &str, expected: &str, actual: &str) -> Result<()> {
-    if !is_production_handle(actual) || actual != expected {
+    if !is_production_runtime_handle(actual) || actual != expected {
         bail!("{label} identity does not match committed hedging/billing configuration");
     }
     Ok(())
-}
-
-fn is_production_handle(handle: &str) -> bool {
-    if handle.is_empty()
-        || handle.len() > 256
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return false;
-    }
-    let lowercase = handle.to_ascii_lowercase();
-    !lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
-            )
-        })
 }
 
 #[cfg(feature = "telemetry")]
@@ -1037,26 +996,56 @@ fn record_status_metrics(handle: &HedgingBillingRuntimeHandleV1) {
     };
     match handle.status() {
         Ok(status) => metrics.record_sorafs_hedging_billing_runtime_status(
-            status.live,
-            status.ready,
-            status.external_dependencies_healthy,
-            status.automatic_hedge_execution_enabled,
-            status.last_tick_fresh,
-            status.finalized_projection_ready,
-            status.service.finalized_height,
-            status.finalized_head_height,
-            status.finalized_lag_blocks,
-            status.service.next_event_sequence,
-            status.service.ready_for_signing,
-            status.service.ready_for_publication,
-            status.service.publication_ambiguous,
-            status.service.published,
-            status.service.acknowledged,
-            status.service.dead_letter,
-            status.service.hedge_intents,
+            iroha_telemetry::metrics::SorafsHedgingBillingRuntimeMetricSnapshot {
+                runtime: iroha_telemetry::metrics::SorafsRuntimeHealthMetricSnapshot {
+                    live: status.live,
+                    ready: status.ready,
+                    external_dependencies_ready: status.external_dependencies_healthy,
+                },
+                projection:
+                    iroha_telemetry::metrics::SorafsHedgingBillingProjectionMetricSnapshot {
+                        automatic_execution_enabled: status.automatic_hedge_execution_enabled,
+                        last_tick_fresh: status.last_tick_fresh,
+                        finalized_projection_ready: status.finalized_projection_ready,
+                    },
+                finalized_height: status.service.finalized_height,
+                finalized_head_height: status.finalized_head_height,
+                finalized_lag_blocks: status.finalized_lag_blocks,
+                next_event_sequence: status.service.next_event_sequence,
+                ready_for_signing: status.service.ready_for_signing,
+                ready_for_publication: status.service.ready_for_publication,
+                publication_ambiguous: status.service.publication_ambiguous,
+                published: status.service.published,
+                acknowledged: status.service.acknowledged,
+                dead_letter: status.service.dead_letter,
+                hedge_intents: status.service.hedge_intents,
+            },
         ),
         Err(_) => metrics.record_sorafs_hedging_billing_runtime_status(
-            false, false, false, false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0,
+            iroha_telemetry::metrics::SorafsHedgingBillingRuntimeMetricSnapshot {
+                runtime: iroha_telemetry::metrics::SorafsRuntimeHealthMetricSnapshot {
+                    live: false,
+                    ready: false,
+                    external_dependencies_ready: false,
+                },
+                projection:
+                    iroha_telemetry::metrics::SorafsHedgingBillingProjectionMetricSnapshot {
+                        automatic_execution_enabled: false,
+                        last_tick_fresh: false,
+                        finalized_projection_ready: false,
+                    },
+                finalized_height: 0,
+                finalized_head_height: 0,
+                finalized_lag_blocks: 0,
+                next_event_sequence: 0,
+                ready_for_signing: 0,
+                ready_for_publication: 0,
+                publication_ambiguous: 0,
+                published: 0,
+                acknowledged: 0,
+                dead_letter: 1,
+                hedge_intents: 0,
+            },
         ),
     }
 }
@@ -1103,8 +1092,8 @@ mod tests {
         HedgingBillingExternalError, HedgingBillingFinalizedEventPageV1,
         HedgingBillingFinalizedPeriodCloseV1, HedgingBillingJournalCommitmentV1,
         HedgingBillingQueryPositionV1, HedgingBillingRuntimeAdapterIdentityV1,
-        HedgingBillingRuntimeProviderReadinessErrorV1, HedgingBillingTransitionAuthorityV1,
-        SignedGovernedBillingStatementV1,
+        HedgingBillingRuntimeProviderReadinessErrorV1, HedgingBillingRuntimeProviderV1,
+        HedgingBillingTransitionAuthorityV1, SignedGovernedBillingStatementV1,
     };
     use tempfile::TempDir;
 
@@ -1593,6 +1582,26 @@ mod tests {
         )
     }
 
+    #[test]
+    fn production_config_rejects_credential_parameter_and_dummy_handles() {
+        let feed_policy = feed_policy();
+        let policy = service_policy(&feed_policy);
+        for rejected in [
+            "https://operator:secret@billing.example",
+            "https://billing.example/query?token=secret",
+            "https://billing.example/query#fragment",
+            "hsm://billing/dummy/signer",
+        ] {
+            let temp = TempDir::new().expect("tempdir");
+            let mut config = config(temp.path().join("state"), &policy);
+            config.statement_signer_handle = rejected.to_owned();
+            assert!(
+                validate_actual_config(&config).is_err(),
+                "{rejected:?} must fail before runtime construction"
+            );
+        }
+    }
+
     fn dependencies_with_head(
         policy: &HedgingBillingServicePolicyV1,
         query_handle: &str,
@@ -1716,9 +1725,9 @@ mod tests {
         let policy = service_policy(&feed_policy);
         let error = assemble(
             config(state_dir.clone(), &policy),
-            ChainId::from(CHAIN_ID),
+            &ChainId::from(CHAIN_ID),
             policy.clone(),
-            Arc::new(feed_policy),
+            &Arc::new(feed_policy),
             dependencies(
                 &policy,
                 "ledger.billing.finalized.substituted",
@@ -1783,9 +1792,9 @@ mod tests {
 
             let error = assemble(
                 config,
-                ChainId::from(CHAIN_ID),
+                &ChainId::from(CHAIN_ID),
                 policy.clone(),
-                Arc::new(feed_policy.clone()),
+                &Arc::new(feed_policy.clone()),
                 dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
             )
             .expect_err("stale provider qualification must fail startup");
@@ -1809,9 +1818,9 @@ mod tests {
         let policy = service_policy(&feed_policy);
         let error = assemble(
             config(state_dir.clone(), &policy),
-            ChainId::from(CHAIN_ID),
+            &ChainId::from(CHAIN_ID),
             policy.clone(),
-            Arc::new(feed_policy),
+            &Arc::new(feed_policy),
             dependencies(
                 &policy,
                 QUERY_HANDLE,
@@ -1836,9 +1845,9 @@ mod tests {
         let policy = service_policy(&feed_policy);
         let error = assemble(
             config(state_dir.clone(), &policy),
-            ChainId::from(CHAIN_ID),
+            &ChainId::from(CHAIN_ID),
             policy.clone(),
-            Arc::new(feed_policy),
+            &Arc::new(feed_policy),
             dependencies(
                 &policy,
                 QUERY_HANDLE,
@@ -1865,9 +1874,9 @@ mod tests {
         let query_ready = Arc::new(AtomicBool::new(true));
         let handle = assemble(
             config.clone(),
-            ChainId::from(CHAIN_ID),
+            &ChainId::from(CHAIN_ID),
             policy.clone(),
-            Arc::new(feed_policy.clone()),
+            &Arc::new(feed_policy.clone()),
             dependencies(&policy, QUERY_HANDLE, true, Arc::clone(&query_ready)),
         )
         .expect("assemble committed hedging/billing runtime");
@@ -1931,9 +1940,9 @@ mod tests {
 
         let restarted = assemble(
             config,
-            ChainId::from(CHAIN_ID),
+            &ChainId::from(CHAIN_ID),
             policy.clone(),
-            Arc::new(feed_policy),
+            &Arc::new(feed_policy),
             dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
         )
         .expect("reopen committed hedging/billing runtime");
@@ -1954,6 +1963,19 @@ mod tests {
         );
     }
 
+    fn set_finalized_head(
+        head: &Mutex<HedgingBillingFinalizedCursorV1>,
+        height: u64,
+        block_hash: [u8; 32],
+        finalized_at_unix: u64,
+    ) {
+        *head.lock().expect("head state") = HedgingBillingFinalizedCursorV1 {
+            height,
+            block_hash,
+            finalized_at_unix,
+        };
+    }
+
     #[test]
     fn finalized_head_regression_and_equivocation_fail_closed() {
         let temp = TempDir::new().expect("tempdir");
@@ -1966,9 +1988,9 @@ mod tests {
         }));
         let handle = assemble(
             config(temp.path().join("billing-state"), &policy),
-            ChainId::from(CHAIN_ID),
+            &ChainId::from(CHAIN_ID),
             policy.clone(),
-            Arc::new(feed_policy),
+            &Arc::new(feed_policy),
             dependencies_with_head(
                 &policy,
                 QUERY_HANDLE,
@@ -1995,11 +2017,7 @@ mod tests {
             .projection_anchor()
             .expect("projection anchor before invalid head");
 
-        *head.lock().expect("head state") = HedgingBillingFinalizedCursorV1 {
-            height: 2,
-            block_hash: [0x43; 32],
-            finalized_at_unix: 1_800_000_002,
-        };
+        set_finalized_head(&head, 2, [0x43; 32], 1_800_000_002);
         let equivocation = handle
             .reconcile_once()
             .expect_err("same-height finalized-head equivocation must fail");
@@ -2022,11 +2040,7 @@ mod tests {
             "invalid head observations must be rejected before projection work"
         );
 
-        *head.lock().expect("head state") = HedgingBillingFinalizedCursorV1 {
-            height: 3,
-            block_hash: [0x44; 32],
-            finalized_at_unix: 1_800_000_003,
-        };
+        set_finalized_head(&head, 3, [0x44; 32], 1_800_000_003);
         handle
             .reconcile_once()
             .expect("a later authenticated head recovers");
@@ -2040,11 +2054,7 @@ mod tests {
         assert_eq!(handle.metrics().successful_ticks, 2);
         assert_eq!(handle.metrics().failed_ticks, 1);
 
-        *head.lock().expect("head state") = HedgingBillingFinalizedCursorV1 {
-            height: 2,
-            block_hash: [0x42; 32],
-            finalized_at_unix: 1_800_000_004,
-        };
+        set_finalized_head(&head, 2, [0x42; 32], 1_800_000_004);
         let regression = handle
             .reconcile_once()
             .expect_err("finalized-head height regression must fail");
@@ -2073,9 +2083,9 @@ mod tests {
         let policy = service_policy(&feed_policy);
         let handle = assemble(
             config(temp.path().join("billing-state"), &policy),
-            ChainId::from(CHAIN_ID),
+            &ChainId::from(CHAIN_ID),
             policy.clone(),
-            Arc::new(feed_policy),
+            &Arc::new(feed_policy),
             dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
         )
         .expect("assemble committed hedging/billing runtime");

@@ -71,8 +71,9 @@ export function validateReleaseOpenApiDocument(
 /**
  * Validate the V2 OpenAPI generator provenance contract.
  *
- * Dirty development manifests must be unsigned, omit no required fields, and
- * bind the exact non-generated source state with a lowercase SHA-256 digest.
+ * Every manifest binds the canonical generator-input inventory with a
+ * lowercase, nonzero SHA-256 digest. Dirty development manifests must also be
+ * unsigned and cannot be release-verified.
  */
 export function validateOpenApiGeneratorProvenance(
   manifest,
@@ -88,15 +89,19 @@ export function validateOpenApiGeneratorProvenance(
   const dirty = dirtyField;
   const commit = manifest?.generator_commit;
   const sourceDigest = manifest?.generator_source_sha256_hex;
+  if (
+    typeof sourceDigest !== 'string' ||
+    !SHA256_HEX.test(sourceDigest) ||
+    /^0{64}$/.test(sourceDigest)
+  ) {
+    throw new Error(
+      `${label} provenance requires generator_source_sha256_hex as 64 lowercase hexadecimal characters and it must be nonzero`,
+    );
+  }
 
   if (dirty) {
     if (commit !== null) {
       throw new Error(`${label} dirty provenance must set generator_commit to null`);
-    }
-    if (typeof sourceDigest !== 'string' || !SHA256_HEX.test(sourceDigest)) {
-      throw new Error(
-        `${label} dirty provenance requires generator_source_sha256_hex as 64 lowercase hexadecimal characters`,
-      );
     }
     if (signed) {
       throw new Error(`${label} dirty provenance must not be signed`);
@@ -112,10 +117,10 @@ export function validateOpenApiGeneratorProvenance(
       `${label} clean provenance requires generator_commit as exactly 40 lowercase hexadecimal characters`,
     );
   }
-  if (Object.hasOwn(manifest, 'generator_source_sha256_hex')) {
-    throw new Error(`${label} clean provenance must omit generator_source_sha256_hex`);
+  if (/^0{40}$/.test(commit)) {
+    throw new Error(`${label} generator_commit must identify a nonzero Git commit`);
   }
-  return {dirty: false, commit, sourceSha256Hex: null};
+  return {dirty: false, commit, sourceSha256Hex: sourceDigest};
 }
 
 function isObject(value) {

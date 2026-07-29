@@ -38,33 +38,66 @@ index. Publish-index, CAR queue, and runtime digest/kind lookup responses keep
 full match counts visible while bounding returned `entries`, `segments`, or
 `blocks` arrays through `limit` (default 50, max 500).
 
+V1 now separates binary schema ceilings from mutable JSON state: canonical
+producer source payloads are capped at 64 MiB, node/block/head signing and CID
+payloads at 128 MiB, and a complete canonical block at 128 MiB plus a checked
+64 KiB signature/envelope allowance. The filesystem producer exercises the
+exact canonical source serialization through an allocation-free counting sink
+before writing source, latest, or JSON artifacts, rejects any supplied-length
+substitution, and proves the parent-bearing node and block upper bounds with
+checked fixed-envelope arithmetic. It no longer clones the source payload or
+allocates dummy node/block/CID frames during preflight. Block and source readers
+use their respective binary limits;
+runtime indexes, JSON mirrors, queues, and signed heads retain the independent
+64 MiB mutable-state limit. The public service's `max_request_bytes` default
+and minimum are `134283264`, so a block admitted by the canonical schema cannot
+be rejected only by the service transport setting. Per-variant semantic
+collection/string ceilings are enforced before nested validation.
+
 The `sorafs_governance_dag` service implementation, exposed through the public
 `run_governance_dag_service` library launcher, is the always-on production
-service. It loads its policy from `iroha_config`, validates the complete signed local DAG,
-uploads and recursively pins every new block plus the signed head through a
-pinned IPFS API, verifies pin state, reads every object back, and publishes the
-head with either authenticated HTTP compare-and-swap or IPNS resolve/publish/
-resolve compare-and-swap. An authenticated checkpoint and write-ahead publish
-intent live in a deployment-injected sealed monotonic store, making restart
-recovery fail closed across partial block, head, and mirror publication. Every
-outbound control-plane request is authenticated through a rotation-aware
-runtime provider selected by an opaque configuration handle. Signer,
-authenticator, and checkpoint providers must also return a non-zero public
-policy revision and digest; startup pins those qualifications before opening
-publisher/checkpoint state or resolving publication endpoints, and every
-operation rejects handle or qualification drift. Canonical configuration and
-runtime validation reject null/mock/test/dev/fake/placeholder handle
-components. The public
+service. It loads its policy from `iroha_config` and accepts a local signed DAG
+only when the producer's separate sealed checkpoint authenticates the exact
+canonical root, signer/store qualifications, block count, head, and index
+digests and no producer write-ahead intent is active. The service performs this
+check on both sides of its bounded source read so a concurrent producer cannot
+publish filesystem state before its checkpoint CAS commits. It then uploads
+and recursively pins every new block plus the signed head through a pinned IPFS
+API, verifies pin state, reads every object back, and publishes the head with
+either authenticated HTTP compare-and-swap or IPNS resolve/publish/resolve
+compare-and-swap. A service-specific authenticated checkpoint and write-ahead
+publish intent live in the same deployment-injected sealed monotonic store
+under distinct slots, making restart recovery fail closed across partial
+block, head, and mirror publication. Every outbound control-plane request is
+authenticated through a rotation-aware runtime provider selected by an opaque
+configuration handle. Signer, authenticator, and checkpoint providers must
+also return a non-zero public policy revision and digest; startup pins those
+qualifications before opening publisher/checkpoint state or resolving
+publication endpoints, and every operation rejects handle or qualification
+drift. Canonical configuration and runtime validation reject
+null/mock/test/dev/fake/placeholder handle components. The public
 `run_governance_dag_service_with_runtime_registry` launcher resolves one exact
 set of those stable handles through a deployment-owned registry and then uses
 the same pre-state qualification path. Missing, stale, rejected, incomplete,
 substituted, or test-marked registry results fail with typed redacted errors
 before service state is opened. The same process serves a bounded public mirror,
-head, block, node, checkpoint, health, and Prometheus surface. What remains for SF-12 is
-deployment-owned HSM/authenticator/sealed-store adapters, supervised
-deployment/package integration, optional RocksDB/IPLD storage if the JSON mirror cannot meet
-deployment scale, and captured multi-instance public rollout evidence—not an
-unimplemented IPFS/IPNS publisher.
+head, block, node, checkpoint, health, and Prometheus surface. The stock
+`irohad` launcher now resolves the embedded signer, sealed-CAS store, and
+IPFS/head request authenticators through a platform-fixed, service-UID-owned
+local broker on Linux and macOS. Its bounded canonical Norito protocol binds
+the chain, exact provider catalog, fresh session, qualification metadata,
+monotonic request identity, operation, and payload; unsupported roles and
+platforms fail closed. Request authentication is a hard cut to a signed
+canonical descriptor and envelope: configuration pins each strong Ed25519
+verification key plus bounded freshness/skew policy, every outbound operation
+requalifies the exact provider, and bearer/cookie/alias representations are
+rejected. The source tree supplies both the authenticated client and an
+injected broker-server library boundary. SF-12 still requires a supervised
+deployment-owned broker executable, genuine HSM/sealed-store and authenticated
+Kubo/head backends, deployment/package integration, optional RocksDB/IPLD
+storage if the JSON mirror cannot meet deployment scale, and captured
+multi-instance public rollout evidence—not an unimplemented IPFS/IPNS
+publisher.
 
 Implemented foundations include:
 - `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`,
@@ -86,7 +119,19 @@ Implemented foundations include:
   ballot lifecycle, appeal finance, orderbook settlement, and canonical PoR
   challenge/report evidence. The filesystem implementation and its unsigned
   assembly constructor are crate-private; production startup requires the
-  configured publisher identity plus a matching runtime-injected signer.
+  configured publisher identity plus matching runtime-injected signer and
+  config-pinned sealed-CAS checkpoint store. Before the first append the
+  producer seals an empty-root identity. Each later append seals an exact
+  producer-specific intent containing the direct successor checkpoint,
+  predecessor revision, and exact block/head/index length-and-digest
+  descriptors before changing the filesystem. The block, head, and full index
+  are first written and read back through one bounded local staging root; the
+  sealed intent never embeds those artifact bytes and is independently capped
+  at 64 KiB. Restart authenticates every staged artifact against the sealed
+  descriptors before reconciling the intent and auditing the live root. The audit bounds
+  entry and aggregate bytes and verifies canonical JSON/Norito, sidecars,
+  source payloads, signatures, CIDs, lineage, reverse maps, and head/index
+  agreement.
   Each successful filesystem publish now updates a
   local `sorafs.governance_dag.local_publish_index.v1` `publish-index.json` with
   artifact paths, BLAKE3 digests, payload-kind counts, digest lookup maps, and
@@ -94,20 +139,32 @@ Implemented foundations include:
   `sorafs.governance_dag.local_car_queue.v1` `car-queue.json` entry and
   assembled CARv2 segment under `car-segments/` for that publication. With
   `sorafs.storage.governance_dag_publisher_peer_id`,
-  `sorafs.storage.governance_dag_signer_handle`, and
-  `sorafs.storage.governance_dag_publisher_public_key_hex` configured, and a
-  matching `GovernanceDagRuntimeSigner` injected through `NodeRuntimeDeps`,
+  `sorafs.storage.governance_dag_signer_handle`,
+  `sorafs.storage.governance_dag_signer_revision`,
+  `sorafs.storage.governance_dag_signer_policy_digest_hex`, and
+  `sorafs.storage.governance_dag_publisher_public_key_hex` configured as one
+  all-or-nothing public binding, plus the checkpoint-store handle, revision,
+  and policy digest under
+  `[sorafs.storage.governance_dag_service]`, and matching
+  `GovernanceDagRuntimeSigner` and `GovernanceDagSealedCheckpointStore`
+  implementations injected through `NodeRuntimeDeps`,
   deal settlements, reputation snapshots, moderation ballot lifecycle events,
   appeal finance reports, weekly rollups, appeal finance settlement receipts,
   and orderbook settlement receipts also append to the local signed runtime DAG;
   duplicate publishes are idempotent and malformed runtime DAG index state
-  fails closed. Provider construction rejects missing, stale, unqualified, or
+  fails closed. A dormant binding without `governance_dag_dir` or one attached
+  to disabled storage is rejected. Producer checkpoint-store state remains
+  required when the public service is disabled; service checkpoint/intent
+  state is not reused as producer authority. Provider construction rejects missing,
+  stale, unqualified, or
   test-marked adapters; mismatched handles, peer identities, public keys,
-  malformed/weak Ed25519 points; provider identity/policy-revision/digest
-  drift; invalid signatures; and signer outages without exposing provider
-  diagnostics. Embedded-node startup completes that signer qualification
-  before opening any durable worker or publisher state. No signing-key file
-  setting or compatibility loader remains. A filesystem publisher now holds an
+  malformed/weak Ed25519 points; a revision or policy digest that differs from
+  the exact configured qualification; provider identity/policy drift between
+  two startup reads or around signing; invalid signatures; and signer outages
+  without exposing provider diagnostics. Embedded-node startup completes both
+  qualification reads and every exact comparison before opening any durable
+  worker or publisher state. No signing-key file setting or compatibility
+  loader remains. A filesystem publisher now holds an
   exclusive lock on its root
   for its full lifetime and serializes the artifact files, publish index, CAR
   queue, and signed block/head update as one in-process publication transaction,
@@ -116,6 +173,59 @@ Implemented foundations include:
   is acknowledged. The exclusive lock and mutable publish, CAR
   queue, and runtime-DAG JSON indexes reject symlinks and hard links; indexes
   are bounded at 64 MiB and must remain the same file throughout each read.
+  Implicit signer or store rotation remains deliberately rejected. The explicit
+  rotation path now appends a canonical Norito key-transition envelope
+  independently signed by the outgoing and incoming runtime signers. Each
+  envelope carries monotonic outgoing/incoming segment revisions and the digest
+  of a transition body that binds the canonical producer root, exact
+  predecessor sealed-checkpoint revision, current block/head digests,
+  predecessor and successor index digests, both publisher identities and
+  Ed25519 keys, both signer/store handles, revisions and policy digests, and the
+  current archive head. The transition block count is the incoming segment's
+  activation boundary. Recovery reconstructs the bounded archived-plus-live
+  lineage, verifies every retained block under the authority active at its
+  sequence, and binds the head to the actual tip segment. A rotation with no
+  intervening block therefore retains the outgoing-signed head until the
+  incoming authority appends its first block.
+  The producer checkpoint generation advances independently for blocks,
+  qualification transitions, and qualification archives, so same-store
+  rotation cannot reuse a sealed generation.
+
+  The active qualification journal is capped at 64 transitions. Compaction
+  writes a canonical, current-signer-authenticated immutable archive of at most
+  64 transitions, reads it and its digest sidecar back, then advances the exact
+  archive digest through sealed monotonic CAS and reads that checkpoint back
+  before pruning the live prefix. At most 64 linked archives are accepted.
+  Restart finishes either a staged pre-CAS archive or a post-CAS/pre-prune
+  archive idempotently. Canonical validation rejects tamper, fork, rollback,
+  duplicate, truncation, trailing bytes, and provider-qualification
+  substitution. This compacts provider-qualification history only: the current
+  full DAG block index is not yet a release-complete retention design. The
+  producer intent now binds that full index by length and BLAKE3 digest while
+  the bytes remain in durable local staging, so sealed-CAS decoding is
+  independent of index history length. A bounded authenticated block-prefix
+  retention protocol remains required for long-running deployments. On the filesystem-flag-qualified
+  Linux, Android, macOS, iOS, FreeBSD, OpenBSD, NetBSD, and DragonFly targets,
+  producer, service source, service state, and mirror roots now require their
+  role-specific owner/mode policy, an exact canonical lexical path without
+  symlink components, and a retained `O_DIRECTORY|O_NOFOLLOW` handle for the
+  root and every ancestor. Other Unix targets, and Android architectures outside
+  arm, aarch64, x86, x86_64, and riscv64, fail compilation until their native
+  flags and target tests are qualified.
+  Device, inode, owner, mode, and effective-UID identity are revalidated around
+  publication, recovery, source reads, state changes, and mirror operations;
+  sticky writable ancestors are accepted only for a trusted owner. This catches
+  cross-UID pathname replacement under the ordinary Unix mode model. Producer
+  and service descendants are now opened, enumerated, promoted, recovered, and
+  locked relative to retained directory handles on Linux, macOS, and Windows,
+  with no-follow semantics and exact object-identity rechecks. Linux requires
+  two identical bounded descriptor-xattr snapshots and rejects protected
+  extended ACL namespaces; macOS requires two identical bounded descriptor ACL
+  snapshots and rejects untrusted mutation grants. Windows pins the root owner
+  SID, validates two identical self-relative security descriptors with bounded
+  SID/ACE traversal, rejects untrusted mutation grants, and retains file IDs
+  through crash recovery and atomic-temp cleanup. macOS configuration must use
+  the physical canonical path (for example `/private/var/...`, not `/var/...`).
   The local filesystem sink also updates the Governance DAG backlog gauge from
   CAR queue pending segment counts and refreshes the local signed runtime-head
   age gauge when runtime DAG state is written or de-duplicated.
@@ -268,7 +378,11 @@ Still outstanding:
   the typed `MissingRuntimeProviderRegistry` error before state access.
   Supported deployment packages link the library, inject their audited runtime
   registry programmatically, and provide the concrete adapters; no credential,
-  private-key, environment, or provider-file fallback exists.
+  private-key, environment, or provider-file fallback exists. The standalone
+  launcher accepts one bounded, self-contained service TOML; unresolved
+  `extends` is rejected rather than silently reading an incomplete overlay.
+- Define the bounded protocol needed to prune the authenticated DAG block
+  prefix.
 - Decide from measured production scale whether the bounded authenticated JSON
   mirror is sufficient; add a RocksDB/IPLD backend only if the governed
   deployment profile requires it.
@@ -703,6 +817,12 @@ publisher rather than synthesized from the pre-publication filesystem hooks.
   boundary is a public library launcher with opaque signer/authenticator/store
   traits; all former service key/token paths and the embedded signer-key path
   are removed.
+- Done addendum: the embedded producer has an explicit old/new dual-signed,
+  predecessor/head/index-bound signer/store qualification journal, independent
+  sealed transition/archive generations, and bounded signed archive compaction
+  with durable archive/checkpoint readback before prune and restart-safe staged
+  replay. This is provider-qualification retention; it does not claim a
+  deployed HSM/sealed-store backend or DAG block-prefix compaction.
 - Remaining: implement the deployment-owned provider adapters, package and
   supervise two service instances, decide whether production scale requires the
   optional RocksDB/IPLD mirror, add any operator convenience commands required

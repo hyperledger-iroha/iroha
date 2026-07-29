@@ -5857,11 +5857,28 @@ impl ValidSingularQuery for FindSorafsRepairEvents {
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<RepairFinalizedEventPageV1, QueryExecutionFail> {
-        read_repair_status(state_ro.world())
-            .map_err(repair_query_failure)?
-            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))?;
+        let status =
+            read_repair_status_or_prove_empty(state_ro.world()).map_err(repair_query_failure)?;
         let finalized_cursor =
             resolve_repair_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        if status.tasks == 0 {
+            checked_repair_query_limit(self.limit)?;
+            if self.after.is_some() {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let page = RepairFinalizedEventPageV1 {
+                finalized_cursor,
+                events: Vec::new(),
+                has_more: false,
+                next_after: None,
+            };
+            ensure_repair_query_encoded_budget(
+                &page,
+                REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+                "committed repair event page",
+            )?;
+            return Ok(page);
+        }
         query_repair_event_page(self, state_ro, finalized_cursor)
     }
 }
@@ -6300,6 +6317,24 @@ mod sorafs_tests {
         })
         .expect("commit repair fixture");
         state
+    }
+
+    #[test]
+    fn repair_committed_event_query_returns_anchored_empty_page_for_proven_empty_state() {
+        let mut state = make_state();
+        let header = repair_block_header(1, 4_000_000);
+        let block_hash = iroha_crypto::HashOf::new(&header);
+        state.push_block_hash_for_testing(block_hash);
+
+        let page = FindSorafsRepairEvents::new(None, None, 10)
+            .execute(&state.view())
+            .expect("proven-empty repair state has an anchored empty event page");
+
+        assert_eq!(page.finalized_cursor.height, 1);
+        assert_eq!(page.finalized_cursor.block_hash, *block_hash.as_ref());
+        assert!(page.events.is_empty());
+        assert!(!page.has_more);
+        assert!(page.next_after.is_none());
     }
 
     fn repair_report(

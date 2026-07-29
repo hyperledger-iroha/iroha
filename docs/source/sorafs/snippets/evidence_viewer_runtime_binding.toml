@@ -1,0 +1,39 @@
+# Non-secret production binding example. Deployment credentials and every
+# private signing/encryption key belong only inside the injected providers.
+[sorafs.storage]
+enabled = true
+
+[sorafs.storage.evidence_viewer]
+enabled = true
+checkpoint_path = "/var/lib/iroha/sorafs/evidence-viewer.norito"
+checkpoint_max_bytes = 67108864
+checkpoint_store_handle = "sealed.evidence-viewer.checkpoints.primary"
+checkpoint_store_revision = 15
+checkpoint_store_policy_digest_hex = "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+
+webauthn_rp_id = "review.example"
+webauthn_allowed_origins = ["https://review.example"]
+webauthn_handle = "webauthn.evidence.primary"
+webauthn_revision = 11
+webauthn_policy_digest_hex = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+
+grant_handle = "kms.evidence.grants.primary"
+grant_revision = 12
+grant_policy_digest_hex = "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+
+erasure_handle = "kms.evidence.erasure.primary"
+erasure_revision = 13
+erasure_policy_digest_hex = "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+
+compaction_archive_handle = "object-lock.evidence.compaction.primary"
+compaction_archive_id_hex = "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6"
+compaction_archive_revision = 16
+compaction_archive_policy_digest_hex = "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+compaction_archive_public_key_hex = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+compaction_interval_ms = 60000
+compaction_max_records = 256
+
+receipt_signer_handle = "hsm.evidence.receipts.primary"
+receipt_signer_revision = 14
+receipt_signer_policy_digest_hex = "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
+receipt_signer_public_key_hex = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"

@@ -2204,7 +2204,8 @@ mod tests {
         capacity::{CapacityDisputeEvidence, CapacityDisputeId},
         reputation::{
             PorTerminalOutcomeV1, PorTerminalStatusV1, ReputationJournalPayloadV1,
-            StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
+            StreamTokenValidationBindingV1, StreamTokenValidationOutcomeV1,
+            StreamTokenValidationStatusV1,
         },
     };
 
@@ -2387,8 +2388,11 @@ mod tests {
             1_700_000_002_000,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
-                validation_id: [0x84; 32],
-                request_digest: [0x85; 32],
+                binding: StreamTokenValidationBindingV1 {
+                    gateway_id: [0x84; 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [0x85; 32],
+                },
                 token_body_digest: Some([0x86; 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: 1_700_000_002_000,

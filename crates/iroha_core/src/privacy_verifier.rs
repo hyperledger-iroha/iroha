@@ -1619,8 +1619,9 @@ mod tests {
             VerifiedPrivacyLedgerEffectsV1::AnonymousPgcPayment(effect) => effect,
             VerifiedPrivacyLedgerEffectsV1::None => panic!("missing PGC ledger effect"),
             VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(_)
-            | VerifiedPrivacyLedgerEffectsV1::ZkAmsProvisionAccount(_) => {
-                panic!("unexpected ZK-AMS ledger effect")
+            | VerifiedPrivacyLedgerEffectsV1::ZkAmsProvisionAccount(_)
+            | VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(_) => {
+                panic!("unexpected non-PGC ledger effect")
             }
         };
         assert_eq!(effect.namespace(), fixture.namespace);

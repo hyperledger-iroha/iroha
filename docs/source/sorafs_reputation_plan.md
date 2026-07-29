@@ -41,15 +41,22 @@ newly authenticated `since` request.
 Strict non-secret `iroha_config` policy construction and the supervised
 finalized-query/threshold-signing/publication worker are implemented. The
 current-head `State` adapter was removed because it cannot satisfy an immutable
-historical exact-anchor query: enabling the runtime now requires a
-deployment-injected `ReputationFinalizedQueryV1`. The queue-backed journal
-submitter signs and enqueues PoR and counted stream-token append transactions,
-while the committed publication projection is exposed to Torii only after a
-fresh successful reconciliation and authenticated Governance DAG readback.
-Production immutable historical-query, threshold-signer, authenticated DAG
-publication/readback/head-inclusion, PoR-terminal-owner, and
-stream-token-owner adapters remain open. The integrated Rust build, lint, and
-test matrix for these changes is also pending.
+historical exact-anchor query. Standard `irohad` now owns the configured compact
+archive, zero-gap reconciles its committed State tip against Kura-authenticated
+V2 finality before Sumeragi startup, installs the same archive in the V2 apply
+corridor, and constructs `ReputationFinalizedQueryV1` from it. Every fresh
+projection is captured after Kura finality and the durable WSV checkpoint but
+before live State publication; failure is restart-required. An independently
+authenticated journal-transaction submitter remains injected, and the daemon
+does not construct a queue-backed submitter or adapt the validator key. The
+committed publication projection is exposed to Torii only after a fresh
+successful reconciliation and authenticated Governance DAG readback.
+Production threshold-signing, authenticated DAG publication/readback/head
+inclusion, and stream-token-owner adapters remain open. The PoR owner now
+retains sequence/digest-bound terminal work and the standard launcher
+supervises exact durable admission and acknowledgement before authenticated
+replay-archive compaction. The integrated Rust build, lint, and test matrix for
+these changes is also pending.
 
 The existing snapshot foundation includes canonical Norito/JSON schemas,
 fixed-point scoring, trust-edge iteration, degradation flags, Merkle proofs,
@@ -86,7 +93,7 @@ Checked-in response-file examples cover provider and metrics canaries.
 ## Target Architecture
 | Component | Responsibility | Notes |
 |-----------|----------------|-------|
-| Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration, the queue-backed journal submitter, exact historical-query injection boundary, and supervised scheduling/reconciliation are wired; the production historical adapter, integrated validation, and reviewed deployment evidence remain open. |
+| Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration requires deployment-injected authenticated journal submission; no validator-key or queue-backed fallback is constructed. The standard daemon owns the compact Kura-authenticated historical archive/query and captures it at the V2 commit boundary. Integrated validation and reviewed deployment evidence remain open. |
 | Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection. |
 | Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open. |
 | API gateway (`sorafs_reputation_api`) | Exposes authenticated read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Exact empty-body GETs require the signature quartet or exact witness. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |
@@ -114,16 +121,20 @@ Checked-in response-file examples cover provider and metrics canaries.
 
 ## Data Sources & Normalisation
 - **PoR/PDP/PoTR**: success ratios are derived from the native PoR journal and
-  finalized proof-outcome feed. The queue-backed governed PoR and counted
-  stream-token transaction submitter is present; the actual PoR/token owners
-  still need to invoke its durable callbacks.
+  finalized proof-outcome feed. The externally authenticated PoR and counted
+  stream-token journal-submission boundary is present. The PoR owner invokes
+  its exact durable callback through the supervised replay-archive worker; the
+  actual regional stream-token owner still needs to invoke its callback.
 - **Latency**: P95 latency from PoTR receipts (hot/warm tiers). Normalise to `[0,1]` by mapping 0 ms→1.0, 90 s→0 (hot) / 5 min→0 (warm).
 - **Disputes**: count governance disputes resolved against provider per 1k
   orders. Native capacity-dispute `Opened` and `Resolved` journal transitions
   are authoritative; capacity telemetry never creates a dispute implicitly.
 - **Token violations**: rate of throttle breaches and unauthorized access
-  attempts. Native stream-token validation admission is implemented; the
-  regional gateway transaction forwarder remains open.
+  attempts. Native stream-token validation admission uses a hard-cut
+  gateway-id/non-zero-sequence/request-context binding and a bounded durable
+  per-gateway high-water mark. Exact replay is idempotent; stale or substituted
+  sequence reuse fails closed across restart. The regional gateway transaction
+  forwarder remains open.
 - **Repair escalations**: projected from the existing finalized native repair
   event feed.
 - **Orderbook and settlement**: projected from the existing finalized native
@@ -272,10 +283,14 @@ publication authority.
   retry, dead-letter, exact signed-envelope binding, acknowledgement, canonical
   corruption checks, full public trust-policy/quorum/revocation/freshness
   verification, and payload-free status/metrics. Standard-daemon config,
-  trust-policy injection, state-backed query scheduling, queue-backed journal
-  submission/finality reconciliation, supervision, and payload-free status are
-  wired. External threshold-signing and authenticated Governance DAG adapters,
-  integrated Rust validation, and reviewed deployment evidence remain open.
+  trust-policy injection, daemon-owned immutable-query scheduling, externally
+  authenticated journal submission/finality reconciliation, supervision, and
+  payload-free status are wired. The configured compact archive is
+  Kura-authenticated at startup and captured after Kura finality plus the WSV
+  checkpoint and before State publication. The standard daemon has no
+  validator-key or queue-backed journal fallback. External threshold-signing
+  and authenticated Governance DAG adapters, integrated Rust validation, and
+  reviewed deployment evidence remain open.
 - Torii exposes only read handlers at `GET /v1/sorafs/reputation/latest` and
   `GET /v1/sorafs/reputation/providers/{provider_id}`. The provider endpoint
   returns the latest provider record with a Merkle proof. Historical lookup and
@@ -384,10 +399,22 @@ publication authority.
   runtime-only key path, then collects the deployed read-only bundle with
   bounded `sorafs_cli reputation snapshot|fetch|watch|verify` commands. The
   collector validates but never reads the key file and forwards the two
-  authentication arguments only to live reads. It supports shell-style
-  `@ARGFILE` response files, checks provider proof coverage before touching a
-  live Torii endpoint, and then runs the evidence gate. Its `--dry-run` output
-  includes the checker-backed
+  authentication arguments only to live reads; the key-file path is redacted
+  from dry-run JSON and `RUN` notices while the original stays in the in-memory
+  subprocess command. It accepts only an exact canonical bare HTTPS Torii
+  origin, with HTTP limited to localhost or literal-loopback fixtures, before
+  output mutation. It supports shell-style `@ARGFILE` response files, checks
+  provider proof coverage before touching a live Torii endpoint, and requires
+  one exact event-watch poll.
+  Each live result is written to a non-JSON `.raw` source, then passed through
+  `scripts/build_sorafs_reputation_canary.py` in strict source-bound mode. That
+  adapter schema-closes the raw CLI profile, binds it to the reviewed
+  publication and generated latest evidence, cross-checks snapshot/root/time,
+  context, count/inventory, weights, provider/proof/score, and watch cursor,
+  and emits only the canonical payload-free canary. The final checker command
+  labels every input with an explicit evidence kind and does not recursively
+  rediscover the same generated artifacts. Its `--dry-run` output includes the
+  checker-backed
   `evidence_contract` map for publish/latest, provider, events, verify,
   metrics, transport, and consumption artifacts, and the runner validates the
   schema-closed collection plan, external evidence map, evidence contract, and
@@ -417,19 +444,40 @@ publication authority.
     startup/shutdown, restart-safe checkpoint opening, payload-free
     readiness/status, and bounded Prometheus metrics for the committed
     projector/publication reconciler. Missing, null/test-marked, or
-    identity-substituted finalized-query, threshold-signer, and Governance DAG
-    adapters fail startup.
-  - Implemented: `QueuedReputationJournalTransactionSubmitterV1` signs and
-    submits typed PoR/token append transactions through the normal queue.
-    `IrohaRuntimeDeps` accepts an identity-pinned immutable historical
-    `ReputationFinalizedQueryV1`; the unsound current-head state adapter and
-    fallback were removed. Missing exact historical capability now fails
-    startup instead of fabricating a fixed view.
-  - Open under `V1-BLOCK-REPUTATION-RUNTIME-01`: deployment-owned
-    immutable historical finalized-query,
-    `ReputationThresholdSignerClientV1` and
-    `ReputationGovernanceDagClientV1` adapters; concrete PoR-terminal and
-    stream-token callback-owner wiring; current DAG head/inclusion proof;
+    identity-substituted threshold-signer and Governance DAG adapters fail
+    startup. The finalized query is daemon-owned and archive-backed rather than
+    injectable.
+  - Implemented: The threshold-signer boundary pins its production handle to
+    the canonical trust-policy digest, which covers policy identity/version,
+    quorum, the ordered Ed25519 public-key set, and revocations; startup and
+    every signing call revalidate the binding before and after use, and every
+    returned envelope is verified against the same policy. Governance DAG
+    provider qualification now binds both the configured publisher peer
+    identity and exact Ed25519 public key, so a same-key different-peer adapter
+    fails before the reputation checkpoint opens. No private key, credential,
+    endpoint, or signed payload enters the qualification.
+  - Implemented: `IrohaRuntimeDeps` requires an externally authenticated
+    journal-transaction submitter. The queue-backed validator-key submitter,
+    the unsound current-head state adapter, and both fallbacks were removed.
+    The immutable historical query is no longer injectable: the daemon opens
+    the explicitly bounded archive, performs zero-gap reconciliation against
+    the authenticated Kura tip, preserves the activation floor when first
+    enabled on a nonempty chain, and constructs the query from that archive.
+    The same archive is threaded through Sumeragi and durably captures each
+    fresh height after Kura finality and the WSV checkpoint but before
+    `StateBlock::commit`; a capture failure requires committed recovery.
+  - Implemented: Daemon startup applies the runtime's complete exact-request
+    bootstrap-view validator—anchor identity and chain/height, authority-policy
+    activation time, canonical continuation, non-zero bounded request limit,
+    and exact finalized cursor—before opening the reputation checkpoint. This
+    closes bootstrap response admission.
+  - Open under `V1-BLOCK-REPUTATION-RUNTIME-01`:
+    deployment-owned implementations behind broker slot 32
+    (`ReputationJournalTransactionSubmitterV1`), slot 33
+    (`ReputationThresholdSignerClientV1`), and slot 34
+    (`ReputationGovernanceDagClientV1`); concrete stream-token callback-owner
+    wiring; genuine qualification of the configured PoR replay archive and HSM
+    signer; current DAG head/inclusion proof;
     integrated Rust validation; and reviewed four-peer rotation, recovery,
     retry, and failover evidence remain outstanding. No ledger page,
     credential, signature, or acknowledgement may be synthesized as a
@@ -619,11 +667,12 @@ publication authority.
 ## Rollout Plan
 1. Complete integrated source validation, then add the remaining authenticated
    journal transaction/query SDK builders.
-2. Supply and exercise the immutable historical finalized-query adapter plus
-   the queue-backed governed PoR/regional counted stream-token transaction
-   submitter; wire the actual PoR and token owners to the durable callbacks.
-   The projector already consumes the committed proof, unified journal,
-   repair, orderbook, and reserve query families.
+2. Exercise the daemon-owned immutable historical archive/query plus the
+   externally authenticated governed PoR/regional counted stream-token
+   transaction submitter and qualified PoR replay archive; wire the actual
+   stream-token owner to the durable callback. The projector already consumes
+   the committed proof, unified journal, repair, orderbook, and reserve query
+   families.
 3. Supply external threshold signer and authenticated Governance DAG
    publication/readback/head-inclusion adapters to the already-supervised
    runtime. Reconcile canonical publication acknowledgements without
@@ -651,6 +700,11 @@ Completed local foundations:
   `RegisterCapacityDispute` → `Opened` integration, and atomic
   `ResolveSorafsCapacityDispute` → revision-two `Resolved` integration. Proof
   telemetry remains penalty/alert input and cannot mutate the dispute map.
+- Sequence/digest-bound PoR terminal ownership, exact durable reputation
+  admission/acknowledgement, and reputation-first authenticated replay-archive
+  compaction are wired into the standard launcher. Stream-token admission has
+  a bounded restart-safe per-gateway sequence fence; its regional callback
+  owner remains a deployment integration item.
 - Canonical reputation schemas, scoring, penalties, smoothing, trust-edge
   iteration, snapshot validation, Merkle roots, and provider proofs.
 - Governance DAG payload validation and the keyless finalized multi-feed
@@ -731,13 +785,13 @@ Completed local foundations:
 
 Remaining production gates:
 
-- Complete integrated source validation; expose dedicated authenticated SDK
-  journal transaction/query builders; validate the wired fixed-view
-  active-policy query and durable queue-backed PoR/countable-token submission
+- Expose dedicated authenticated SDK journal transaction/query builders;
+  validate the wired fixed-view
+  active-policy query, externally authenticated PoR/countable-token submission,
   and finality reconciler; validate the existing committed-derived GET/event
-  reads under restart and failover; deploy external threshold-signing and authenticated
-  Governance DAG publication/readback adapters; and complete reviewed
-  four-peer rotation, retry/failover, and recovery evidence.
+  reads under restart and failover; deploy external threshold-signing and
+  authenticated Governance DAG publication/readback adapters; and complete
+  reviewed four-peer rotation, retry/failover, and recovery evidence.
 - Capture live run evidence for snapshot freshness, ingest lag, low-score
   handling, SSE/WebSocket event delivery, and routing/incentive consumption,
   then publish a `ready` summary from

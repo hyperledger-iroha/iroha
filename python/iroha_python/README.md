@@ -681,6 +681,40 @@ ingestion = client.get_sorafs_por_ingestion_status(manifest_hex="ab" * 32)
 for provider in ingestion.providers:
     print(provider.provider_id_hex, provider.pending_challenges, provider.failures_total)
 
+# Read exact-checkpoint SoraFS billing and hedging projections. These helpers
+# require per-request canonical account authentication, never retry or follow
+# redirects, and enforce the Torii 1 MiB JSON / 22 MiB statement response caps.
+billing_auth = ToriiCanonicalRequestAuth(
+    account_id=os.environ["IROHA_ACCOUNT_ID"],
+    signer=external_request_signer,
+)
+checkpoint = os.environ["SORAFS_BILLING_CHECKPOINT_HEX"]
+statements = client.list_sorafs_billing_statements(
+    expected_checkpoint_fingerprint_hex=checkpoint,
+    limit=25,
+    canonical_auth=billing_auth,
+)
+statement_id = statements["items"][0]["statement_id_hex"]
+statement_norito = client.get_sorafs_billing_statement(
+    statement_id,
+    checkpoint,
+    canonical_auth=billing_auth,
+)
+client.acknowledge_sorafs_billing_statement(
+    statement_id,
+    checkpoint,
+    request_nonce_hex=secrets.token_hex(32),
+    authentication_proof=external_owner_proof,
+    canonical_auth=billing_auth,
+)
+exposure = client.get_sorafs_hedging_exposure(
+    expected_checkpoint_fingerprint_hex=checkpoint,
+    limit=100,
+    canonical_auth=billing_auth,
+)
+# Reconciliation is billing-manager-only; exposure/intents require a treasury
+# or hedging observer role. No automatic hedge-execution mutation is exposed.
+
 # `status_bytes`, `weekly_report`, and the export helper all return Norito payloads.
 # Decode them with the `norito` crate or via `norito.decode(...)` when the matching schema is available.
 

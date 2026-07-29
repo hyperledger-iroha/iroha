@@ -61,6 +61,7 @@ use iroha_crypto::{
         token::{AdmissionToken, MintError as AdmissionTokenMintError, compute_issuer_fingerprint},
     },
 };
+use iroha_torii_shared::sorafs_hedging_billing_api::BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 as SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1;
 use norito::json::{Map, Number, Value};
 use rand::{
     CryptoRng, RngCore, SeedableRng,
@@ -515,7 +516,6 @@ impl Run for ReserveCommand {
 }
 
 const SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1: u16 = 100;
-const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1: usize = 64 * 1024;
 
 fn required_nonzero_lower_hex32(value: &str, flag: &str) -> Result<String> {
     if value.len() != 64
@@ -4985,7 +4985,8 @@ pub struct FetchArgs {
     /// compliance drills captured in `roadmap.md`.
     #[arg(long = "transport-policy", value_name = "POLICY")]
     pub transport_policy: Option<String>,
-    /// Override the staged anonymity policy (default `stage-a` / `anon-guard-pq`; accepts `anon-*` or `stage-*` labels).
+    /// Override the anonymity policy with an exact V1 label (`anon-guard-pq`,
+    /// `anon-majority-pq`, or `anon-strict-pq`).
     #[arg(long = "anonymity-policy", value_name = "POLICY")]
     pub anonymity_policy: Option<String>,
     /// Hint that tightens PQ expectations for write paths (`read-only` or `upload-pq-only`).
@@ -4994,7 +4995,7 @@ pub struct FetchArgs {
     /// Force the orchestrator to stay on a specific transport stage (`soranet-first`, `soranet-strict`, or `direct-only`).
     #[arg(long = "transport-policy-override", value_name = "POLICY")]
     pub transport_policy_override: Option<String>,
-    /// Force the orchestrator to stay on a specific anonymity stage (`stage-a`, `anon-guard-pq`, etc.).
+    /// Force the orchestrator to stay on an exact V1 anonymity policy.
     #[arg(long = "anonymity-policy-override", value_name = "POLICY")]
     pub anonymity_policy_override: Option<String>,
     /// Path to the persisted guard cache (Norito-encoded guard set).
@@ -6193,11 +6194,10 @@ fn parse_transport_policy_flag(
     flag: &'static str,
 ) -> Result<Option<TransportPolicy>> {
     if let Some(raw) = value {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
+        if raw.is_empty() {
             return Err(eyre!("{flag} must not be empty"));
         }
-        TransportPolicy::parse(trimmed)
+        TransportPolicy::parse(raw)
             .ok_or_else(|| {
                 eyre!("{flag} must be one of `soranet-first`, `soranet-strict`, or `direct-only`")
             })
@@ -6212,15 +6212,14 @@ fn parse_anonymity_policy_flag(
     flag: &'static str,
 ) -> Result<Option<AnonymityPolicy>> {
     if let Some(raw) = value {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
+        if raw.is_empty() {
             return Err(eyre!("{flag} must not be empty"));
         }
-        AnonymityPolicy::parse(trimmed)
+        AnonymityPolicy::parse(raw)
             .ok_or_else(|| {
                 eyre!(
-                    "{flag} must be one of `anon-guard-pq`, `stage-a`, `anon-majority-pq`, \
-                 `stage-b`, `anon-strict-pq`, or `stage-c`"
+                    "{flag} must be one of `anon-guard-pq`, `anon-majority-pq`, or \
+                     `anon-strict-pq`"
                 )
             })
             .map(Some)
@@ -6234,13 +6233,12 @@ fn parse_write_mode_flag(
     flag: &'static str,
 ) -> Result<Option<WriteModeHint>> {
     if let Some(raw) = value {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
+        if raw.is_empty() {
             return Err(eyre!("{flag} must not be empty"));
         }
-        WriteModeHint::parse(trimmed).ok_or_else(|| {
-            eyre!("{flag} must be one of `read-only`, `read_only`, `upload-pq-only`, or `upload_pq_only`")
-        }).map(Some)
+        WriteModeHint::parse(raw)
+            .ok_or_else(|| eyre!("{flag} must be one of `read-only` or `upload-pq-only`"))
+            .map(Some)
     } else {
         Ok(None)
     }
@@ -20478,33 +20476,93 @@ mod tests {
     }
 
     #[test]
-    fn parse_transport_policy_flag_rejects_blank_input() {
-        let value = "   ".to_string();
-        let err =
-            parse_transport_policy_flag(Some(&value), "--transport-policy").expect_err("blank");
-        assert!(
-            err.to_string().contains("must not be empty"),
-            "unexpected error message: {err}"
-        );
+    fn parse_transport_policy_flag_rejects_noncanonical_inputs() {
+        for rejected in [
+            "",
+            " ",
+            " soranet-first",
+            "soranet-first ",
+            "SORANET-FIRST",
+            "soranet_first",
+            "soranet_strict",
+            "direct_only",
+            "soranet-only",
+            "soranet_only",
+        ] {
+            let rejected_value = rejected.to_owned();
+            assert!(
+                parse_transport_policy_flag(Some(&rejected_value), "--transport-policy").is_err(),
+                "noncanonical transport label `{rejected}` must fail"
+            );
+        }
     }
 
     #[test]
-    fn parse_anonymity_policy_flag_accepts_stage_alias() {
-        let value = "stage-b".to_string();
+    fn parse_anonymity_policy_flag_accepts_canonical_value() {
+        let value = "anon-majority-pq".to_string();
         let parsed = parse_anonymity_policy_flag(Some(&value), "--anonymity-policy-override")
             .expect("parse anonymity policy");
         assert_eq!(parsed, Some(AnonymityPolicy::MajorityPq));
     }
 
     #[test]
-    fn parse_anonymity_policy_flag_rejects_unknown() {
-        let value = "anon-unknown".to_string();
-        let err = parse_anonymity_policy_flag(Some(&value), "--anonymity-policy")
-            .expect_err("unsupported anonymity policy must be rejected");
-        assert!(
-            err.to_string().contains("anon-guard-pq"),
-            "error should point to the canonical staged policies: {err}"
-        );
+    fn parse_anonymity_policy_flag_rejects_noncanonical_inputs() {
+        for rejected in [
+            "",
+            " ",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+            "ANON-GUARD-PQ",
+            "anon_guard_pq",
+            "anon_majority_pq",
+            "anon_strict_pq",
+            "stage-a",
+            "stage_a",
+            "stagea",
+            "stage-b",
+            "stage_b",
+            "stageb",
+            "stage-c",
+            "stage_c",
+            "stagec",
+            "anon-unknown",
+        ] {
+            let rejected_value = rejected.to_owned();
+            assert!(
+                parse_anonymity_policy_flag(Some(&rejected_value), "--anonymity-policy").is_err(),
+                "noncanonical anonymity label `{rejected}` must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_write_mode_flag_accepts_only_exact_v1_labels() {
+        for (label, expected) in [
+            ("read-only", WriteModeHint::ReadOnly),
+            ("upload-pq-only", WriteModeHint::UploadPqOnly),
+        ] {
+            let label_value = label.to_owned();
+            assert_eq!(
+                parse_write_mode_flag(Some(&label_value), "--write-mode")
+                    .expect("canonical write mode"),
+                Some(expected)
+            );
+        }
+        for rejected in [
+            "",
+            " ",
+            " read-only",
+            "read-only ",
+            "READ-ONLY",
+            "read_only",
+            "upload_pq_only",
+        ] {
+            let rejected_value = rejected.to_owned();
+            assert!(
+                parse_write_mode_flag(Some(&rejected_value), "--write-mode").is_err(),
+                "noncanonical write-mode label `{rejected}` must fail"
+            );
+        }
     }
 
     #[test]

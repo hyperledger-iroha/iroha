@@ -201,6 +201,9 @@ halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5
 snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 kaigi_zk = { path = "../kaigi_zk", optional = true }
+orchard = { git = "https://github.com/zcash/orchard.git", rev = "9d07047d32c4787e1b7964b4cf4fa0286c93824c", default-features = false, features = ["circuit", "multicore", "std"] }
+incrementalmerkletree = "=0.8.2"
+nonempty = "=0.11.0"
 
 dashmap = { workspace = true }
 eyre = { workspace = true }
@@ -244,6 +247,7 @@ iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 hex = { workspace = true }
 expect-test = { workspace = true }
 rcgen = "0.14.5"
+rand_08 = { package = "rand", version = "=0.8.7" }
 
 [[bench]]
 name = "validation"

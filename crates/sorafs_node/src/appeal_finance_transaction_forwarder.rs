@@ -14,6 +14,7 @@ use std::{
 };
 
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::numeric::{Quantity, XorQuantity};
 use iroha_data_model::{
     ChainId,
@@ -52,8 +53,6 @@ pub const APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1: u8 = 1;
 pub const APPEAL_FINANCE_RUNTIME_PROVIDER_QUALIFICATION_VERSION_V1: u8 = 1;
 /// Sealed checkpoint record schema version.
 pub const APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_VERSION_V1: u8 = 1;
-/// Maximum opaque runtime provider handle length.
-pub const APPEAL_FINANCE_CHECKPOINT_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 /// Maximum canonical wrapper overhead beyond the embedded checkpoint bytes.
 pub const APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 4 * 1024;
 
@@ -1196,6 +1195,7 @@ impl AppealFinanceTransactionForwarder {
         let prepared = PreparedOperation::decode_signed_transaction(
             signed_transaction_bytes,
             &entry.chain_id,
+            &entry.authority,
             entry.expected_record.clone(),
             entry.reconciliation_context.clone(),
             self.policy.max_transaction_bytes,
@@ -1733,6 +1733,7 @@ impl PreparedOperation {
     fn decode_signed_transaction(
         bytes: &[u8],
         expected_chain_id: &ChainId,
+        expected_authority: &AccountId,
         expected_record: Option<AssetEscrowRecord>,
         reconciliation_context: Vec<u8>,
         max_transaction_bytes: usize,
@@ -1755,6 +1756,7 @@ impl PreparedOperation {
             != bytes
             || transaction.verify_signature().is_err()
             || transaction.chain() != expected_chain_id
+            || transaction.authority() != expected_authority
         {
             return Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction);
         }
@@ -2234,6 +2236,7 @@ fn validate_checkpoint(
             let signed = PreparedOperation::decode_signed_transaction(
                 bytes,
                 &entry.chain_id,
+                &entry.authority,
                 entry.expected_record.clone(),
                 entry.reconciliation_context.clone(),
                 policy.max_transaction_bytes,
@@ -2287,28 +2290,11 @@ fn validate_checkpoint(
 }
 
 fn validate_runtime_handle(value: &str) -> Result<(), AppealFinanceTransactionForwarderError> {
-    if value.is_empty()
-        || value.len() > APPEAL_FINANCE_CHECKPOINT_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !value.is_ascii()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy);
-    }
-    let lowercase = value.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
-        return Err(AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy);
-    }
-    Ok(())
+    validate_production_runtime_handle(value).map_err(|error| match error {
+        ProductionRuntimeHandleError::InvalidSyntax | ProductionRuntimeHandleError::TestMarked => {
+            AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy
+        }
+    })
 }
 
 fn checked_checkpoint_verifying_key(bytes: [u8; 32]) -> Result<VerifyingKey, ()> {
@@ -3190,13 +3176,14 @@ mod tests {
                 .unwrap(),
             AppealFinanceTransactionEnqueueResultV1::Existing { .. }
         ));
-        let substituted = AppealFinanceOperationV1::Drawdown(DrawdownAssetLock::new(
-            escrow_id(),
-            Quantity::from(40_u32),
-            Quantity::from(100_u32),
-        ));
+        let mut substituted_context = context;
+        substituted_context.reconciliation_context = vec![0xA1, 0x02];
         assert!(matches!(
-            forwarder.enqueue_unsigned_operation(authority, substituted, &context),
+            forwarder.enqueue_unsigned_operation(
+                authority,
+                drawdown_operation(),
+                &substituted_context
+            ),
             Err(AppealFinanceTransactionForwarderError::IdentityConflict)
         ));
         assert_ne!(inserted.operation_id(), [0; 32]);
@@ -3732,6 +3719,31 @@ mod tests {
             Err(AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy)
         ));
         assert!(!checkpoint_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn checkpoint_provider_handles_use_central_production_grammar() {
+        let runtime = TestCheckpointRuntime::new(49);
+        let mut authentication_policy = runtime.authentication_policy();
+        authentication_policy.provider_handle =
+            "hsm://appeal-finance/checkpoint.primary-v1_slot-a".to_owned();
+        authentication_policy
+            .validate()
+            .expect("canonical production provider handle");
+
+        for handle in [
+            "https://operator:secret@checkpoint",
+            "https://checkpoint/path?credential=secret",
+            "https://checkpoint/path#fragment",
+            "hsm://appeal-finance/%63heckpoint",
+            "hsm:\\appeal-finance\\checkpoint",
+        ] {
+            authentication_policy.provider_handle = handle.to_owned();
+            assert!(matches!(
+                authentication_policy.validate(),
+                Err(AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy)
+            ));
+        }
     }
 
     #[test]

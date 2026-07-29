@@ -2199,7 +2199,7 @@ mod tests {
         let error = validate_completed_manifest(&manifest)
             .expect_err("manifest mutation must invalidate the generated signature");
         assert!(
-            error.contains("signature verification failed"),
+            error.contains("failed verification"),
             "unexpected mutation error: {error}"
         );
     }

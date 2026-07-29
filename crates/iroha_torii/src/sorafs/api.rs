@@ -136,7 +136,10 @@ use iroha_data_model::{
             ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
-    transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+    transaction::{
+        Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
+        TransactionPayload,
+    },
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanRecordSorafsProofOutcome,
@@ -174,7 +177,7 @@ use sorafs_manifest::{
     chunker_registry,
     deal::XorQuantity,
     decode_manifest_v1_canonical, decode_order_cancel_v1, decode_order_request_v1,
-    decode_settlement_receipt_v1,
+    decode_provider_advert_v1, decode_settlement_receipt_v1,
     pdp::{
         PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
         PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpCommitmentV1,
@@ -11013,6 +11016,20 @@ fn validate_orderbook_signed_transaction(
     transaction: &SignedTransaction,
     route: OrderbookCommandRouteV1,
 ) -> Result<(), Response> {
+    let canonical_transaction = norito::to_bytes(transaction).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "failed to encode canonical SoraFS orderbook transaction",
+        )
+    })?;
+    if canonical_transaction.len()
+        > sorafs_node::orderbook_transaction_forwarder::ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1
+    {
+        return Err(json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "SoraFS orderbook transaction exceeds the canonical V1 byte bound",
+        ));
+    }
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
@@ -14198,9 +14215,10 @@ async fn sign_sorafs_proof_outcome_delivery(
     signer: Arc<dyn crate::SoraFsProofOutcomeTransactionSigner>,
     delivery: &sorafs_node::ProofOutcomePendingDeliveryV1,
 ) -> Option<SignedTransaction> {
+    let expected_authority = signer.authority();
     let mut builder = TransactionBuilder::new(
         (*state.chain_id).clone(),
-        signer.authority(),
+        expected_authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([InstructionBox::from(SubmitSorafsProofOutcome::new(
@@ -14214,7 +14232,79 @@ async fn sign_sorafs_proof_outcome_delivery(
         .await
         .ok()?
         .ok()?;
-    (transaction.payload() == &expected_payload).then_some(transaction)
+    native_signer_returned_exact_transaction(&transaction, &expected_payload, &expected_authority)
+        .then_some(transaction)
+}
+
+fn native_signer_returned_exact_transaction(
+    transaction: &SignedTransaction,
+    expected_payload: &TransactionPayload,
+    expected_authority: &AccountId,
+) -> bool {
+    transaction.payload() == expected_payload
+        && transaction.authority() == expected_authority
+        && transaction.verify_signature().is_ok()
+}
+
+#[cfg(test)]
+mod native_signer_returned_transaction_tests {
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+
+    use super::*;
+
+    fn fixture_payload(authority: AccountId) -> TransactionPayload {
+        TransactionBuilder::new(
+            ChainId::from("native-signer-return-validation"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .into_payload()
+        .expect("build native signer validation payload")
+    }
+
+    #[test]
+    fn exact_native_signer_output_requires_payload_authority_and_valid_signature() {
+        let signer = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+            .expect("derive native signer validation key");
+        let authority = AccountId::new(signer.public_key().clone());
+        let payload = fixture_payload(authority.clone());
+        let valid = TransactionBuilder::from_payload(payload.clone())
+            .and_then(|builder| builder.try_sign(signer.private_key()))
+            .expect("sign exact native transaction");
+        assert!(native_signer_returned_exact_transaction(
+            &valid, &payload, &authority
+        ));
+
+        let other = KeyPair::try_from_seed(vec![0x92; 32], Algorithm::Ed25519)
+            .expect("derive substituted native signer key");
+        let forged_builder =
+            TransactionBuilder::from_payload(payload.clone()).expect("rebuild payload");
+        let forged_signature =
+            Signature::try_new(other.private_key(), &forged_builder.payload_hash_bytes())
+                .expect("sign payload hash with substituted key");
+        let forged = forged_builder.build_with_signature(forged_signature);
+        assert!(forged.verify_signature().is_err());
+        assert!(!native_signer_returned_exact_transaction(
+            &forged, &payload, &authority
+        ));
+
+        assert!(!native_signer_returned_exact_transaction(
+            &valid,
+            &payload,
+            &AccountId::new(other.public_key().clone())
+        ));
+
+        let mut substituted_payload = payload.clone();
+        substituted_payload.creation_time_ms = substituted_payload
+            .creation_time_ms
+            .checked_add(1)
+            .expect("fixture timestamp has headroom");
+        assert!(!native_signer_returned_exact_transaction(
+            &valid,
+            &substituted_payload,
+            &authority
+        ));
+    }
 }
 
 async fn submit_sorafs_proof_outcome_delivery(
@@ -16017,7 +16107,11 @@ async fn sign_sorafs_repair_transaction(
         .await
         .ok()?
         .ok()?;
-    if transaction.payload() != &expected_payload {
+    if !native_signer_returned_exact_transaction(
+        &transaction,
+        &expected_payload,
+        &request.authority,
+    ) {
         return None;
     }
     let bytes = norito::to_bytes(&transaction).ok()?;
@@ -19950,9 +20044,11 @@ async fn moderation_quarantine_provider_error_detail_is_redacted_from_http() {
         StatusCode::SERVICE_UNAVAILABLE
     );
 
-    let error = ModerationQuarantineObjectError::redacted_key_operation_failure(
+    let failure = sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected
+        .after_scrubbing_provider_diagnostic(SECRET_SENTINEL.to_owned());
+    let error = ModerationQuarantineObjectError::key_operation_failure(
         "kms:test/redacted-http".to_owned(),
-        SECRET_SENTINEL.to_owned(),
+        failure,
     );
     assert!(!error.to_string().contains(SECRET_SENTINEL));
     assert!(!format!("{error:?}").contains(SECRET_SENTINEL));
@@ -21828,7 +21924,7 @@ pub(crate) async fn handle_post_sorafs_provider_advert(
 
     let telemetry = state.telemetry.clone();
 
-    let advert = match norito::decode_from_bytes::<ProviderAdvertV1>(body.as_ref()) {
+    let advert = match decode_provider_advert_v1(body.as_ref()) {
         Ok(value) => value,
         Err(err) => {
             warn!(?err, "failed to decode provider advert payload");
@@ -31717,8 +31813,12 @@ mod advert_tests {
         proof_stream::ProofStreamTier,
     };
     use sorafs_node::{
+        FencedPrivacyPublicationReceiptV1, FencedPrivacyPublicationRequestV1,
+        FencedTransparencyAuthoritativeHeadReaderV1, FencedTransparencyHeadAncestryProofV1,
+        FencedTransparencyPublicationInclusionV1, FencedTransparencyPublishErrorV1,
+        FencedTransparencyPublisherV1, FencedTransparencyTargetHeadV1,
         GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner,
-        ModerationQuarantineKeyProviderQualificationV1,
+        ModerationQuarantineKeyOperationErrorV1, ModerationQuarantineKeyProviderQualificationV1,
         ModerationQuarantineKeyProviderReadinessErrorV1, ModerationQuarantineKeyWrapper,
         NodeRuntimeDeps, PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1,
         PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1,
@@ -31839,6 +31939,10 @@ mod advert_tests {
             assert_eq!(algorithm, Algorithm::Ed25519);
             bytes.try_into().expect("Ed25519 public key width")
         }
+
+        fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x85; 32])
+        }
     }
 
     impl GovernanceDagRuntimeSigner for ApiTestGovernanceDagSigner {
@@ -31847,9 +31951,7 @@ mod advert_tests {
         }
 
         fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
-            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
-                1, [0x85; 32],
-            ))
+            Ok(Self::expected_qualification())
         }
 
         fn publisher_peer_id(&self) -> &[u8] {
@@ -31869,6 +31971,223 @@ mod advert_tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct ApiTestFencedPrivacyState {
+        head: Option<FencedTransparencyTargetHeadV1>,
+        publications:
+            BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>,
+        receipts: BTreeMap<
+            [u8; 32],
+            (
+                FencedPrivacyPublicationRequestV1,
+                FencedPrivacyPublicationReceiptV1,
+            ),
+        >,
+        history: Vec<FencedTransparencyTargetHeadV1>,
+    }
+
+    #[derive(Default)]
+    struct ApiTestFencedPrivacyProvider {
+        state: Mutex<ApiTestFencedPrivacyState>,
+    }
+
+    impl std::fmt::Debug for ApiTestFencedPrivacyProvider {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("ApiTestFencedPrivacyProvider")
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl ApiTestFencedPrivacyProvider {
+        const HANDLE: &'static str = "governance-cas:transparency:torii-api-primary";
+
+        fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x86; 32])
+        }
+    }
+
+    impl FencedTransparencyPublisherV1 for ApiTestFencedPrivacyProvider {
+        fn handle(&self) -> &str {
+            Self::HANDLE
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(Self::expected_qualification())
+        }
+
+        fn compare_and_append_privacy(
+            &self,
+            request: &FencedPrivacyPublicationRequestV1,
+        ) -> Result<FencedPrivacyPublicationReceiptV1, FencedTransparencyPublishErrorV1> {
+            request.validate()?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| FencedTransparencyPublishErrorV1::Ambiguous)?;
+            if let Some((retained_request, receipt)) = state.receipts.get(&request.request_digest())
+            {
+                return if retained_request == request {
+                    Ok(receipt.clone())
+                } else {
+                    Err(FencedTransparencyPublishErrorV1::InvalidRequest)
+                };
+            }
+            if let Some((idempotency_digest, payload_digest, included_head)) = state
+                .publications
+                .get(&request.publication_scope())
+                .copied()
+            {
+                if idempotency_digest != request.publication_idempotency_digest()
+                    || payload_digest != request.payload_digest()
+                {
+                    return Err(FencedTransparencyPublishErrorV1::PublicationConflict);
+                }
+                let readback_head = state
+                    .head
+                    .ok_or(FencedTransparencyPublishErrorV1::InvalidReceipt)?;
+                let receipt = FencedPrivacyPublicationReceiptV1::from_verified_existing(
+                    request,
+                    Self::HANDLE,
+                    Self::expected_qualification(),
+                    included_head,
+                    readback_head,
+                )?;
+                state
+                    .receipts
+                    .insert(request.request_digest(), (request.clone(), receipt.clone()));
+                return Ok(receipt);
+            }
+            if state.head != request.expected_authoritative_head() {
+                return Err(FencedTransparencyPublishErrorV1::CompareConflict);
+            }
+            if request.fencing_token()
+                <= state
+                    .head
+                    .map_or(0, FencedTransparencyTargetHeadV1::fencing_floor)
+            {
+                return Err(FencedTransparencyPublishErrorV1::StaleFencingToken);
+            }
+            let receipt = FencedPrivacyPublicationReceiptV1::from_verified_append(
+                request,
+                Self::HANDLE,
+                Self::expected_qualification(),
+            )?;
+            state.head = Some(receipt.included_head());
+            state.history.push(receipt.included_head());
+            state.publications.insert(
+                request.publication_scope(),
+                (
+                    request.publication_idempotency_digest(),
+                    request.payload_digest(),
+                    receipt.included_head(),
+                ),
+            );
+            state
+                .receipts
+                .insert(request.request_digest(), (request.clone(), receipt.clone()));
+            Ok(receipt)
+        }
+    }
+
+    fn api_test_fenced_privacy_digest_head(
+        hasher: &mut blake3::Hasher,
+        head: Option<FencedTransparencyTargetHeadV1>,
+    ) {
+        match head {
+            Some(head) => {
+                hasher.update(&[1]);
+                hasher.update(&head.generation().to_le_bytes());
+                hasher.update(&head.head_digest());
+                hasher.update(&head.fencing_floor().to_le_bytes());
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+    }
+
+    impl FencedTransparencyAuthoritativeHeadReaderV1 for ApiTestFencedPrivacyProvider {
+        fn handle(&self) -> &str {
+            Self::HANDLE
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(Self::expected_qualification())
+        }
+
+        fn read_authoritative_head_with_ancestry(
+            &self,
+            required_ancestors: &[FencedTransparencyTargetHeadV1],
+            required_publications: &[FencedTransparencyPublicationInclusionV1],
+        ) -> Result<FencedTransparencyHeadAncestryProofV1, String> {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "fused privacy target state is unavailable".to_owned())?;
+            let current_index = state
+                .head
+                .map(|head| {
+                    state
+                        .history
+                        .iter()
+                        .position(|candidate| *candidate == head)
+                        .ok_or_else(|| "fused privacy target ancestry is unavailable".to_owned())
+                })
+                .transpose()?;
+            for ancestor in required_ancestors {
+                let ancestor_index = state
+                    .history
+                    .iter()
+                    .position(|candidate| candidate == ancestor)
+                    .ok_or_else(|| "fused privacy target ancestry is unavailable".to_owned())?;
+                if current_index.is_none_or(|current| ancestor_index > current) {
+                    return Err("fused privacy target ancestry is unavailable".to_owned());
+                }
+            }
+            for publication in required_publications {
+                if !state.publications.values().any(
+                    |(publication_idempotency_digest, payload_digest, included_head)| {
+                        *publication_idempotency_digest
+                            == publication.publication_idempotency_digest()
+                            && *payload_digest == publication.payload_digest()
+                            && *included_head == publication.included_head()
+                    },
+                ) {
+                    return Err("fused privacy publication inclusion is unavailable".to_owned());
+                }
+            }
+
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"sorafs.torii.api.fenced-head-ancestry-proof.v1");
+            api_test_fenced_privacy_digest_head(&mut hasher, state.head);
+            for ancestor in required_ancestors {
+                api_test_fenced_privacy_digest_head(&mut hasher, Some(*ancestor));
+            }
+            for publication in required_publications {
+                hasher.update(&publication.publication_idempotency_digest());
+                hasher.update(&publication.payload_digest());
+                api_test_fenced_privacy_digest_head(&mut hasher, Some(publication.included_head()));
+            }
+            FencedTransparencyHeadAncestryProofV1::try_new(
+                state.head,
+                required_ancestors.to_vec(),
+                required_publications.to_vec(),
+                *hasher.finalize().as_bytes(),
+            )
+            .map_err(|_| "fused privacy target ancestry proof is malformed".to_owned())
+        }
+    }
+
+    fn with_test_fenced_privacy_runtime(runtime_deps: NodeRuntimeDeps) -> NodeRuntimeDeps {
+        let provider = Arc::new(ApiTestFencedPrivacyProvider::default());
+        let publisher: Arc<dyn FencedTransparencyPublisherV1> = provider.clone();
+        let head_reader: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = provider;
+        runtime_deps
+            .with_fenced_transparency_publisher(publisher)
+            .with_fenced_transparency_head_reader(head_reader)
+    }
+
     fn node_with_test_governance_publisher(
         builder: StorageConfigBuilder,
         runtime_deps: NodeRuntimeDeps,
@@ -31880,6 +32199,9 @@ mod advert_tests {
                     .expect("test peer id is UTF-8"),
             ))
             .governance_dag_signer_handle(Some(ApiTestGovernanceDagSigner::HANDLE.to_owned()))
+            .governance_dag_signer_qualification(Some(
+                ApiTestGovernanceDagSigner::expected_qualification(),
+            ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
         sorafs_node::NodeHandle::try_new_with_runtime_deps(
@@ -35787,6 +36109,7 @@ mod advert_tests {
                 &self,
                 expected: PrivacyReleaseAnchorHeadV1,
                 next: PrivacyReleaseAnchorHeadV1,
+                _lease: &sorafs_node::TransparencyLeaderLeaseGrantV1,
             ) -> Result<(), PrivacyReleaseAnchorErrorV1> {
                 if expected.query_id() != next.query_id()
                     || next.sequence() != expected.sequence().saturating_add(1)
@@ -35821,6 +36144,112 @@ mod advert_tests {
             }
         }
 
+        #[derive(Default)]
+        struct TestTransparencyLeaderLeaseProvider {
+            active: Mutex<Option<sorafs_node::TransparencyLeaderLeaseGrantV1>>,
+            fencing_token: AtomicU64,
+        }
+
+        impl ProductionTransparencyRuntimeProviderV1 for TestTransparencyLeaderLeaseProvider {
+            fn handle(&self) -> &str {
+                "sealed-cas:transparency:leader-primary"
+            }
+
+            fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
+                Ok(TransparencyRuntimeProviderQualificationV1::new(
+                    1, [0xE7; 32],
+                ))
+            }
+        }
+
+        impl sorafs_node::TransparencyLeaderLeaseProviderV1 for TestTransparencyLeaderLeaseProvider {
+            fn acquire(
+                &self,
+                request: &sorafs_node::TransparencyLeaderLeaseAcquireRequestV1,
+            ) -> Result<
+                sorafs_node::TransparencyLeaderLeaseGrantV1,
+                sorafs_node::TransparencyLeaderLeaseProviderErrorV1,
+            > {
+                let mut active = self
+                    .active
+                    .lock()
+                    .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+                if active
+                    .as_ref()
+                    .is_some_and(|grant| request.acquire_at_unix() < grant.expires_at_unix())
+                {
+                    return Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Conflict);
+                }
+                let fencing_token = self
+                    .fencing_token
+                    .load(Ordering::SeqCst)
+                    .max(request.fencing_floor())
+                    .checked_add(1)
+                    .ok_or(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+                self.fencing_token.store(fencing_token, Ordering::SeqCst);
+                let mut lease_id = [0xA7; 32];
+                lease_id[..8].copy_from_slice(&fencing_token.to_le_bytes());
+                let grant = sorafs_node::TransparencyLeaderLeaseGrantV1::try_new(
+                    lease_id,
+                    request.scope(),
+                    fencing_token,
+                    request.acquire_at_unix(),
+                    request.expires_at_unix(),
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        "sealed-cas:transparency:leader-primary",
+                        1,
+                        [0xE7; 32],
+                    )
+                    .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?,
+                )
+                .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+                *active = Some(grant.clone());
+                Ok(grant)
+            }
+
+            fn renew(
+                &self,
+                _request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1,
+            ) -> Result<
+                sorafs_node::TransparencyLeaderLeaseGrantV1,
+                sorafs_node::TransparencyLeaderLeaseProviderErrorV1,
+            > {
+                Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
+            }
+
+            fn release(
+                &self,
+                request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1,
+            ) -> Result<
+                sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1,
+                sorafs_node::TransparencyLeaderLeaseProviderErrorV1,
+            > {
+                let mut active = self
+                    .active
+                    .lock()
+                    .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+                if active.as_ref() != Some(request.current_grant()) {
+                    return Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Conflict);
+                }
+                let grant = active
+                    .take()
+                    .ok_or(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Conflict)?;
+                sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1::try_new(
+                    grant.lease_id(),
+                    grant.scope(),
+                    grant.fencing_token(),
+                    request.release_at_unix(),
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        "sealed-cas:transparency:leader-primary",
+                        1,
+                        [0xE7; 32],
+                    )
+                    .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?,
+                )
+                .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
+            }
+        }
+
         let auth = orderbook_auth_fixture();
         let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -35829,6 +36258,9 @@ mod advert_tests {
         let node = node_with_test_governance_publisher(
             StorageConfig::builder()
                 .enabled(true)
+                .provider_id(Some(iroha_data_model::sorafs::capacity::ProviderId::new(
+                    [0x91; 32],
+                )))
                 .data_dir(temp_dir.path().join("storage"))
                 .governance_dir(Some(governance_dir))
                 .privacy_aggregate_schedule(Some(sorafs_node::PrivacyAggregateScheduleConfig {
@@ -35852,10 +36284,31 @@ mod advert_tests {
                         [0xD7; 32],
                     )
                     .expect("valid test release-anchor provider binding"),
+                ))
+                .privacy_leader_lease_provider_binding(Some(
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        "sealed-cas:transparency:leader-primary",
+                        1,
+                        [0xE7; 32],
+                    )
+                    .expect("valid test leader-lease provider binding"),
+                ))
+                .privacy_fenced_publisher_binding(Some(
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        ApiTestFencedPrivacyProvider::HANDLE,
+                        1,
+                        [0x86; 32],
+                    )
+                    .expect("valid test fused privacy target binding"),
                 )),
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider))
-                .with_privacy_release_anchor(Arc::new(TestPrivacyReleaseAnchor::default())),
+            with_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider))
+                    .with_privacy_release_anchor(Arc::new(TestPrivacyReleaseAnchor::default()))
+                    .with_transparency_leader_lease_provider(Arc::new(
+                        TestTransparencyLeaderLeaseProvider::default(),
+                    )),
+            ),
         );
         assert!(node.has_governance_publisher());
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
@@ -36057,14 +36510,7 @@ mod advert_tests {
     fn privacy_aggregate_api_policy_config() -> sorafs_node::config::PrivacyAggregatePolicyConfig {
         let cycle = privacy_aggregate_api_cycle_config();
         sorafs_node::config::PrivacyAggregatePolicyConfig::new(
-            cycle.query_id,
-            cycle.first_cycle_start_unix,
-            cycle.cycle_seconds,
-            cycle.aggregate_id_prefix,
-            cycle.populations,
-            cycle.metrics,
-            cycle.privacy,
-            cycle.policy_digest,
+            cycle,
             sorafs_node::PrivacyCompositionBudgetPolicyV1 {
                 budget_id: [0xB0; 32],
                 epsilon_limit_numerator: 10,
@@ -40039,6 +40485,33 @@ mod advert_tests {
         .expect_err("multiple instructions must fail before ledger admission");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn orderbook_signed_transaction_transports_full_inner_payload_ceiling_in_json() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let payload =
+            vec![0xA5; sorafs_manifest::orderbook::ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1];
+        let transaction = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SubmitSorafsOrderbookOrder::new(payload, [0x33; 32])])
+        .sign(auth.provider.keypair.private_key());
+
+        let canonical = norito::to_bytes(&transaction).expect("encode canonical transaction");
+        let json = norito::json::to_vec(&transaction).expect("encode transaction JSON");
+        let wire_limit = sorafs_node::orderbook_transaction_forwarder::
+            ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1;
+        assert!(
+            canonical.len() <= wire_limit,
+            "canonical signed envelope must carry the full inner-payload ceiling"
+        );
+        assert!(
+            json.len() <= wire_limit,
+            "advertised JSON transport must carry the full inner-payload ceiling"
+        );
     }
 
     #[test]
@@ -44225,17 +44698,27 @@ mod advert_tests {
             &self.key_id
         }
 
-        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+        fn wrap_dek(
+            &self,
+            context_digest: [u8; 32],
+            dek: &[u8; 32],
+        ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
 
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .encrypt(
                     self.nonce(context_digest).as_slice(),
                     context_digest.as_slice(),
                     dek.as_slice(),
                 )
-                .map_err(|error| error.to_string())
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })
         }
 
         fn unwrap_dek(
@@ -44243,22 +44726,28 @@ mod advert_tests {
             key_id: &str,
             context_digest: [u8; 32],
             wrapped_dek: &[u8],
-        ) -> Result<[u8; 32], String> {
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
 
             if key_id != self.key_id {
-                return Err("unknown Torii test wrapping key handle".to_owned());
+                return Err(ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked);
             }
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .decrypt(
                     self.nonce(context_digest).as_slice(),
                     context_digest.as_slice(),
                     wrapped_dek,
                 )
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .try_into()
-                .map_err(|_| "unwrapped Torii test DEK is not 32 bytes".to_owned())
+                .map_err(|_| ModerationQuarantineKeyOperationErrorV1::Rejected)
         }
     }
 

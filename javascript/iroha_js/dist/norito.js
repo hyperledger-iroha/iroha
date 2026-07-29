@@ -110,6 +110,14 @@ const EVENT_FILTER_BOX_SCHEMA_HASH = schemaHashForTypeName(
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
+export const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1 =
+  "iroha.torii.v1.sorafs.billing.acknowledgement_proof";
+const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_V1 =
+  schemaHashForTypeName(
+    SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
+  );
+export const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 =
+  64 * 1024;
 const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
   "b4bb42540d44c468ed44d5f94c59b007",
   "hex",
@@ -560,6 +568,93 @@ export function noritoEncodeTransactionPayloadBatch(payloads) {
   return frameNoritoPayload(
     payload,
     TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
+}
+
+/**
+ * Encode the exact shared V1 SoraFS billing acknowledgement proof.
+ *
+ * The input surface is deliberately closed: nonce bytes, snake-case aliases,
+ * hexadecimal proof strings, and additional fields are not accepted.
+ *
+ * @param {{requestNonceHex: string, authenticationProof: ArrayBufferView | ArrayBuffer | Buffer}} proof
+ * @returns {Buffer}
+ */
+export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
+  if (!isPlainObject(proof)) {
+    throw new TypeError(
+      "SoraFS billing acknowledgement proof must be an object",
+    );
+  }
+  const keys = Object.keys(proof);
+  if (
+    keys.length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(proof, "requestNonceHex") ||
+    !Object.prototype.hasOwnProperty.call(proof, "authenticationProof")
+  ) {
+    throw new TypeError(
+      "SoraFS billing acknowledgement proof must contain exactly requestNonceHex and authenticationProof",
+    );
+  }
+  const requestNonceHex = proof.requestNonceHex;
+  if (
+    typeof requestNonceHex !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(requestNonceHex) ||
+    /^0{64}$/u.test(requestNonceHex)
+  ) {
+    throw new TypeError(
+      "SoraFS billing acknowledgement requestNonceHex must be one non-zero lowercase 32-byte hexadecimal digest",
+    );
+  }
+  const authenticationProof = proof.authenticationProof;
+  if (
+    !Buffer.isBuffer(authenticationProof) &&
+    !ArrayBuffer.isView(authenticationProof) &&
+    !(authenticationProof instanceof ArrayBuffer)
+  ) {
+    throw new TypeError(
+      "SoraFS billing acknowledgement authenticationProof must be binary bytes",
+    );
+  }
+  const proofBytes = Buffer.isBuffer(authenticationProof)
+    ? Buffer.from(authenticationProof)
+    : ArrayBuffer.isView(authenticationProof)
+      ? Buffer.from(
+          authenticationProof.buffer,
+          authenticationProof.byteOffset,
+          authenticationProof.byteLength,
+        )
+      : Buffer.from(authenticationProof);
+  if (
+    proofBytes.length === 0 ||
+    proofBytes.length >
+      SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
+  ) {
+    throw new RangeError(
+      `SoraFS billing acknowledgement authenticationProof must contain 1..=${SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes`,
+    );
+  }
+  const payload = withNoritoCompactLengths(() =>
+    encodeStructValue([
+      [
+        encodeFixedBytesValue(
+          Buffer.from(requestNonceHex, "hex"),
+          32,
+          "SoraFS billing acknowledgement requestNonceHex",
+        ),
+      ],
+      [
+        encodeByteVecValue(
+          proofBytes,
+          "SoraFS billing acknowledgement authenticationProof",
+        ),
+      ],
+    ]),
+  );
+  return frameNoritoPayload(
+    payload,
+    SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_V1,
     COMPACT_LEN_FLAG,
   );
 }

@@ -32,7 +32,7 @@ use iroha_data_model::{
     },
     isi::{
         SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        governance::{AtWindow, EnactReferendum},
+        governance::{AtWindow, EnactReferendum, FinalizeReferendum},
     },
     nexus::DataSpaceId,
     parameter::Parameter,
@@ -53,7 +53,8 @@ use iroha_data_model::{
         ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
         ValidationFeeGovernanceWindowV1, ValidationFeeParliamentAuthorizationV1,
         ValidationFeePayoutLifecycleReferenceV1, ValidationFeePlainElectorateEligibilityRuleV1,
-        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyRegistryEntryV1,
+        ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateRulesV1,
+        ValidationFeePlainElectorateSnapshotV1, ValidationFeePolicyRegistryEntryV1,
         ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
         ValidationFeeTreasuryPayoutRecipientV1,
     },
@@ -63,9 +64,14 @@ use mv::storage::StorageReadOnly;
 use sha2::Sha256;
 
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
-const TEST_LIFECYCLE_WINDOW_END_HEIGHT: u64 = 2;
+const TEST_REFERENDUM_DURATION_BLOCKS: u64 = 3_600;
+const TEST_LIFECYCLE_WINDOW_START_HEIGHT: u64 = 2;
+const TEST_LIFECYCLE_WINDOW_END_HEIGHT: u64 =
+    TEST_LIFECYCLE_WINDOW_START_HEIGHT + TEST_REFERENDUM_DURATION_BLOCKS - 1;
 const TEST_LIFECYCLE_ENACTMENT_HEIGHT: u64 = TEST_LIFECYCLE_WINDOW_END_HEIGHT + 1;
-const TEST_POLICY_WINDOW_END_HEIGHT: u64 = 4;
+const TEST_POLICY_WINDOW_START_HEIGHT: u64 = TEST_LIFECYCLE_ENACTMENT_HEIGHT + 1;
+const TEST_POLICY_WINDOW_END_HEIGHT: u64 =
+    TEST_POLICY_WINDOW_START_HEIGHT + TEST_REFERENDUM_DURATION_BLOCKS - 1;
 const TEST_POLICY_ENACTMENT_HEIGHT: u64 = TEST_POLICY_WINDOW_END_HEIGHT + 3_600;
 const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
     TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
@@ -82,7 +88,7 @@ fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
             .parse()
             .expect("voting asset id"),
         ballot_amount: 150_u64.into(),
-        ballot_duration_blocks: 3_600,
+        ballot_duration_blocks: TEST_REFERENDUM_DURATION_BLOCKS,
         citizenship_amount: 10_000_u64.into(),
         max_members: VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
         conviction_step_blocks: 100,
@@ -461,18 +467,62 @@ fn test_roster_root() -> [u8; 32] {
     root
 }
 
-fn test_parliament_authorization(proposal_id: [u8; 32]) -> ValidationFeeParliamentAuthorizationV1 {
+fn test_plain_electorate_snapshot(
+    proposal_id: [u8; 32],
+    proposal_operator: &AccountId,
+    captured_at_height: u64,
+    approval_gate_height: u64,
+    rules: &ValidationFeePlainElectorateRulesV1,
+) -> ValidationFeePlainElectorateSnapshotV1 {
+    ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+        proposal_id,
+        proposal_operator.clone(),
+        captured_at_height,
+        approval_gate_height,
+        vec![ValidationFeePlainElectorateMemberV1 {
+            account_id: proposal_operator.clone(),
+            bonded_height: approval_gate_height,
+            bonded_amount: rules.citizenship_amount.clone(),
+        }],
+    )
+    .expect("canonical validation-fee admission PLAIN electorate snapshot")
+}
+
+fn test_parliament_authorization(
+    proposal_id: [u8; 32],
+    policy_effective_height: u64,
+) -> ValidationFeeParliamentAuthorizationV1 {
+    let rules = plain_electorate_rules();
+    let enacted_at_height = policy_effective_height
+        .checked_sub(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
+        .expect("test policy leaves the full activation delay");
+    let upper = enacted_at_height
+        .checked_sub(1)
+        .expect("test referendum finalizes before enactment");
+    let lower = upper
+        .checked_sub(rules.ballot_duration_blocks - 1)
+        .expect("test policy leaves the full referendum window");
+    let approval_gate_height = lower.checked_sub(1).expect("test approval gate");
+    let proposal_operator = account(1).0;
+    let electorate = test_plain_electorate_snapshot(
+        proposal_id,
+        &proposal_operator,
+        lower,
+        approval_gate_height,
+        &rules,
+    );
     ValidationFeeParliamentAuthorizationV1 {
         proposal_id,
         proposal_fingerprint: proposal_id,
         proposal_time_roster_root: test_roster_root(),
-        referendum_window: ValidationFeeGovernanceWindowV1 {
-            lower: TEST_POLICY_WINDOW_END_HEIGHT,
-            upper: TEST_POLICY_WINDOW_END_HEIGHT,
-        },
+        plain_electorate_snapshot_root: electorate.roster_root,
+        plain_electorate_snapshot_member_count: electorate.member_count,
+        plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
+        plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
+        referendum_window: ValidationFeeGovernanceWindowV1 { lower, upper },
         finalization: ValidationFeeFinalizationEvidenceV1 {
             referendum_id: proposal_id,
-            finalized_at_height: TEST_POLICY_WINDOW_END_HEIGHT,
+            finalized_at_height: upper,
             mode: ValidationFeeGovernanceVotingModeV1::Plain,
             approve: 1,
             reject: 0,
@@ -482,7 +532,7 @@ fn test_parliament_authorization(proposal_id: [u8; 32]) -> ValidationFeeParliame
             approval_threshold_denominator: 2,
             approved: true,
         },
-        enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
+        enacted_at_height,
     }
 }
 
@@ -525,10 +575,13 @@ fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistr
     let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
         policy.clone(),
         plain_electorate_rules(),
-        test_parliament_authorization(proposal_id),
+        test_parliament_authorization(proposal_id, policy.effective_from_height),
         Some(ValidationFeePayoutLifecycleReferenceV1 {
             lifecycle_seal,
-            parliament_authorization: test_parliament_authorization(lifecycle_id),
+            parliament_authorization: test_parliament_authorization(
+                lifecycle_id,
+                policy.effective_from_height,
+            ),
             plain_electorate_rules: plain_electorate_rules(),
         }),
     )
@@ -547,6 +600,24 @@ fn seed_open_proposal(
     let proposal_id = kind.fingerprint();
     let referendum_id = hex::encode(proposal_id);
     let bodies = test_parliament_bodies();
+    let rules = match &kind {
+        ProposalKind::ValidationFeePolicy(payload) => payload.plain_electorate_rules.clone(),
+        ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+            payload.plain_electorate_rules.clone()
+        }
+        _ => panic!("validation-fee admission fixture requires a validation-fee proposal"),
+    };
+    let approval_gate_height = window
+        .lower
+        .checked_sub(1)
+        .expect("fixture referendum starts after its approval gate");
+    let electorate = test_plain_electorate_snapshot(
+        proposal_id,
+        proposer,
+        window.lower,
+        approval_gate_height,
+        &rules,
+    );
     state_transaction.world.governance_proposals_mut().insert(
         proposal_id,
         iroha_core::state::GovernanceProposalRecord {
@@ -588,6 +659,8 @@ fn seed_open_proposal(
             .ensure_stage(body, 1, 1, 10_000)
             .record(account(250).0);
     }
+    approvals.approval_gate_height = Some(approval_gate_height);
+    approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
     state_transaction
         .world
         .governance_stage_approvals_mut()
@@ -600,11 +673,11 @@ fn seed_open_proposal(
                 voter.clone(),
                 iroha_core::state::GovernanceLockRecord {
                     owner: voter,
-                    amount: Quantity::from(1_u64),
+                    amount: rules.ballot_amount,
                     slashed: Quantity::zero(),
                     expiry_height: window.upper,
                     direction: 0,
-                    duration_blocks: 0,
+                    duration_blocks: rules.ballot_duration_blocks,
                 },
             )]),
         },
@@ -619,21 +692,22 @@ fn install_validation_fee_policy(
     policy: ValidationFeePolicyV1,
 ) {
     let lifecycle_window = AtWindow {
-        lower: TEST_LIFECYCLE_WINDOW_END_HEIGHT,
+        lower: TEST_LIFECYCLE_WINDOW_START_HEIGHT,
         upper: TEST_LIFECYCLE_WINDOW_END_HEIGHT,
     };
     let lifecycle_id = payout_lifecycle_proposal_id(&policy);
     let policy_window = AtWindow {
-        lower: TEST_POLICY_WINDOW_END_HEIGHT,
+        lower: TEST_POLICY_WINDOW_START_HEIGHT,
         upper: TEST_POLICY_WINDOW_END_HEIGHT,
     };
     let proposal_id = policy_proposal(&policy).fingerprint();
 
-    // H=2: install the immutable payout runtime and persist an open lifecycle
-    // referendum. An enactment attempt before auto-finalization must fail closed.
+    // At the exact referendum start, install the immutable payout runtime and
+    // persist an open 3,600-block lifecycle referendum. An enactment attempt
+    // before explicit finalization must fail closed.
     {
         let mut block = state.block(block_header(
-            TEST_LIFECYCLE_WINDOW_END_HEIGHT,
+            TEST_LIFECYCLE_WINDOW_START_HEIGHT,
             1_700_000_001_000,
         ));
         let mut stx = block.transaction();
@@ -768,20 +842,26 @@ fn install_validation_fee_policy(
         );
     }
 
-    // H=3: State::block performs the genuine Plain auto-close, retaining
-    // evidence anchored to inclusive H=2. Enact only after that evidence exists.
+    // Immediately after the inclusive referendum end, explicitly finalize the
+    // protected PLAIN referendum and enact only after that evidence exists.
     {
         let mut block = state.block(block_header(
             TEST_LIFECYCLE_ENACTMENT_HEIGHT,
             1_700_000_002_000,
         ));
         let mut stx = block.transaction();
+        FinalizeReferendum {
+            referendum_id: hex::encode(lifecycle_id),
+            proposal_id: lifecycle_id,
+        }
+        .execute(authority, &mut stx)
+        .expect("explicitly finalize validation-fee payout lifecycle");
         let proposal = stx
             .world
             .governance_proposals()
             .get(&lifecycle_id)
             .cloned()
-            .expect("auto-finalized lifecycle proposal");
+            .expect("explicitly finalized lifecycle proposal");
         assert_eq!(
             proposal.status,
             iroha_core::state::GovernanceProposalStatus::Approved
@@ -800,7 +880,7 @@ fn install_validation_fee_policy(
             at_window: lifecycle_window,
         }
         .execute(authority, &mut stx)
-        .expect("enact auto-finalized validation-fee payout lifecycle");
+        .expect("enact explicitly finalized validation-fee payout lifecycle");
         stx.apply();
         block.commit().expect("commit lifecycle enactment");
     }
@@ -883,11 +963,11 @@ fn install_validation_fee_policy(
         }
     }
 
-    // H=4: only after the lifecycle enactment is persisted, seed the policy
-    // referendum and prove that it cannot enact while still open.
+    // Only after the lifecycle enactment is persisted, seed the exact
+    // 3,600-block policy referendum and prove that it cannot enact while open.
     {
         let mut block = state.block(block_header(
-            TEST_POLICY_WINDOW_END_HEIGHT,
+            TEST_POLICY_WINDOW_START_HEIGHT,
             1_700_000_003_000,
         ));
         let mut stx = block.transaction();
@@ -910,21 +990,29 @@ fn install_validation_fee_policy(
         block.commit().expect("commit open policy referendum");
     }
 
-    // H=5: genuine auto-close persists an approval anchored to inclusive H=4.
-    state
-        .block(block_header(
+    // The first height after the window explicitly persists the finalized approval.
+    {
+        let mut block = state.block(block_header(
             TEST_POLICY_WINDOW_END_HEIGHT + 1,
             1_700_000_004_000,
-        ))
-        .commit()
-        .expect("commit policy auto-finalization");
+        ));
+        let mut stx = block.transaction();
+        FinalizeReferendum {
+            referendum_id: hex::encode(proposal_id),
+            proposal_id,
+        }
+        .execute(authority, &mut stx)
+        .expect("explicitly finalize validation-fee policy");
+        stx.apply();
+        block.commit().expect("commit explicit policy finalization");
+    }
     {
         let view = state.view();
         let proposal = view
             .world()
             .governance_proposals()
             .get(&proposal_id)
-            .expect("persisted auto-finalized policy");
+            .expect("persisted explicitly finalized policy");
         assert_eq!(
             proposal.status,
             iroha_core::state::GovernanceProposalStatus::Approved
@@ -937,8 +1025,8 @@ fn install_validation_fee_policy(
         assert!(evidence.approved);
     }
 
-    // The reviewed policy fixes effective=h_end+124,560. The exact activation
-    // equation therefore admits enactment only at h_end+3,600.
+    // The reviewed policy fixes effective=h_end+124,560. The exact 120,960-block
+    // activation equation therefore admits enactment only at h_end+3,600.
     {
         let mut early_block = state.block(block_header(
             TEST_POLICY_ENACTMENT_HEIGHT - 1,

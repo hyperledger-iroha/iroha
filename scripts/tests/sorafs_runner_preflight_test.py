@@ -15,6 +15,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from sorafs_runner_preflight import (  # noqa: E402
     PLAN_RENDERED_PATH_ERROR,
+    RUNNER_CANONICAL_ORIGIN_ERROR,
     RUNNER_PASSTHROUGH_ARG_ERROR,
     RUNNER_URL_ARG_ERROR,
     canonical_runner_plan_string,
@@ -33,6 +34,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_existing_dirs,
     require_existing_files,
     require_no_unrequired_evidence,
+    require_runner_canonical_service_origin_args,
     require_runner_passthrough_args,
     require_runner_non_negative_int,
     require_runner_positive_int,
@@ -42,6 +44,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     run_command_plan,
     runner_arg_label,
     runner_passthrough_arg_is_plan_safe,
+    runner_url_arg_is_canonical_service_origin,
     runner_url_arg_is_plan_safe,
     runner_path_size_open_flags,
     validate_command_plan_artifacts,
@@ -698,6 +701,74 @@ def test_require_runner_url_args_rejects_malformed_field_name() -> None:
             raise AssertionError(f"accepted malformed field {field!r}")
 
 
+def test_runner_canonical_service_origin_matches_reputation_cli_profile() -> None:
+    for value in (
+        "https://torii.example",
+        "https://torii.example/",
+        "https://torii.example:8443",
+        "https://127.0.0.1",
+        "https://[2001:db8::1]:8443/",
+    ):
+        assert runner_url_arg_is_canonical_service_origin(
+            value,
+            allow_loopback_http=True,
+        )
+
+    for value in (
+        "http://localhost",
+        "http://localhost:8080/",
+        "http://127.0.0.1:8080",
+        "http://[::1]:8080/",
+    ):
+        assert runner_url_arg_is_canonical_service_origin(
+            value,
+            allow_loopback_http=True,
+        )
+        assert not runner_url_arg_is_canonical_service_origin(
+            value,
+            allow_loopback_http=False,
+        )
+
+    for value in (
+        "http://torii.example",
+        "https://torii.example/path",
+        "https://torii.example/?query=1",
+        "https://torii.example/#fragment",
+        "https://user@torii.example",
+        "https://torii.example:0",
+        "https://torii.example:443",
+        "http://localhost:80",
+        "HTTPS://torii.example",
+        "https://TORII.example",
+        "https://%74orii.example",
+        "https://127.000.000.001",
+        "https://127.1",
+        "https://torii.1",
+        " https://torii.example",
+    ):
+        assert not runner_url_arg_is_canonical_service_origin(
+            value,
+            allow_loopback_http=True,
+        )
+
+
+def test_require_runner_canonical_service_origin_args_is_payload_free() -> None:
+    errors: list[str] = []
+    unsafe = "https://user:private_key@torii.example/path?token=secret"
+
+    require_runner_canonical_service_origin_args(
+        argparse.Namespace(torii_url=unsafe),
+        ("torii_url",),
+        errors,
+        allow_loopback_http=True,
+    )
+
+    assert errors == [RUNNER_CANONICAL_ORIGIN_ERROR]
+    assert unsafe not in "\n".join(errors)
+    assert "private_key" not in "\n".join(errors)
+    assert "token=secret" not in "\n".join(errors)
+
+
 def test_runner_passthrough_arg_safety_rejects_secret_like_arguments() -> None:
     for value in (
         "iroha",
@@ -841,33 +912,43 @@ def test_runner_path_inspectors_sanitize_noncanonical_failures(
     monkeypatch,
 ) -> None:
     target = tmp_path / "bad\npath"
-    original_stat = Path.stat
+    original_lstat = os.lstat
 
     def fail_bool(path: Path) -> bool:
         if path == target:
             raise OSError(f"inspection denied for {path}")
         return False
 
-    def fail_stat(path: Path, *args, **kwargs):
-        if path == target:
+    def fail_lstat(path: Path, *args, **kwargs):
+        if Path(path) == target:
             raise OSError(f"inspection denied for {path}")
-        return original_stat(path, *args, **kwargs)
+        return original_lstat(path, *args, **kwargs)
 
     for helper, attribute, replacement in (
         (inspect_runner_path_exists, "exists", fail_bool),
-        (inspect_runner_path_is_symlink, "is_symlink", fail_bool),
         (inspect_runner_path_is_file, "is_file", fail_bool),
         (inspect_runner_path_is_dir, "is_dir", fail_bool),
-        (inspect_runner_path_size, "stat", fail_stat),
     ):
-        monkeypatch.setattr(Path, attribute, replacement)
-        errors: list[str] = []
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, attribute, replacement)
+            errors: list[str] = []
 
-        assert helper(target, errors, label="--out-dir") is None
-        assert errors == [
-            "--out-dir `<non-canonical-path>` cannot be inspected: "
-            "<non-canonical-error>"
-        ]
+            assert helper(target, errors, label="--out-dir") is None
+            assert errors == [
+                "--out-dir `<non-canonical-path>` cannot be inspected: "
+                "<non-canonical-error>"
+            ]
+
+    for helper in (inspect_runner_path_is_symlink, inspect_runner_path_size):
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "lstat", fail_lstat)
+            errors = []
+
+            assert helper(target, errors, label="--out-dir") is None
+            assert errors == [
+                "--out-dir `<non-canonical-path>` cannot be inspected: "
+                "<non-canonical-error>"
+            ]
 
 
 def test_runner_path_size_rejects_symlink_before_stat(
@@ -1249,14 +1330,14 @@ def test_verifier_symlink_inspection_failure_fails_preflight(
 ) -> None:
     verifier = tmp_path / "verifier.py"
     verifier.write_text("", encoding="utf-8")
-    original_is_symlink = Path.is_symlink
+    original_lstat = os.lstat
 
-    def is_symlink(path: Path) -> bool:
-        if path == verifier:
+    def lstat(path: Path, *args, **kwargs):
+        if Path(path) == verifier:
             raise RuntimeError("verifier symlink stat denied")
-        return original_is_symlink(path)
+        return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+    monkeypatch.setattr(os, "lstat", lstat)
 
     errors = validate_runner_preflight(
         argparse.Namespace(
@@ -1885,14 +1966,14 @@ def test_input_directory_symlink_inspection_failure_is_reported(
 ) -> None:
     bundle = tmp_path / "bundle"
     bundle.mkdir()
-    original_is_symlink = Path.is_symlink
+    original_lstat = os.lstat
 
-    def is_symlink(path: Path) -> bool:
-        if path == bundle:
+    def lstat(path: Path, *args, **kwargs):
+        if Path(path) == bundle:
             raise OSError("directory symlink stat denied")
-        return original_is_symlink(path)
+        return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+    monkeypatch.setattr(os, "lstat", lstat)
 
     errors = require_existing_dirs([bundle], "--bundle")
 
@@ -2156,14 +2237,14 @@ def test_validate_command_plan_artifacts_reserved_output_symlink_inspection_fail
     monkeypatch,
 ) -> None:
     reserved = tmp_path / "out"
-    original_is_symlink = Path.is_symlink
+    original_lstat = os.lstat
 
-    def is_symlink(path: Path) -> bool:
-        if path == reserved:
+    def lstat(path: Path, *args, **kwargs):
+        if Path(path) == reserved:
             raise OSError("reserved output symlink stat denied")
-        return original_is_symlink(path)
+        return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+    monkeypatch.setattr(os, "lstat", lstat)
 
     errors = validate_command_plan_artifacts(
         [Step("gate", tmp_path / "artifact.json", ["true"])],
@@ -3439,6 +3520,47 @@ def test_run_command_plan_prepares_each_step_immediately_before_launch(
         == 0
     )
     assert events == ["prepare:gate", "run:command"]
+
+
+def test_run_command_plan_redacts_notice_without_changing_subprocess_command(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    private_path_argument = "--auth-private-key-file=/runtime/reputation-reader.key"
+    executable_command = ["command", private_path_argument]
+    launched: list[list[str]] = []
+
+    def run(command, *, check):
+        assert check is False
+        launched.append(command)
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("sorafs_runner_preflight.subprocess.run", run)
+
+    assert (
+        run_command_plan(
+            [Step("read", None, executable_command)],
+            tmp_path / "out",
+            notice_command=lambda _step: [
+                "command",
+                "--auth-private-key-file=<runtime-only-path>",
+            ],
+        )
+        == 0
+    )
+    assert launched == [executable_command]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert private_path_argument not in captured.err
+    assert (
+        captured.err
+        == "RUN read: command '--auth-private-key-file=<runtime-only-path>'\n"
+    )
 
 
 def test_run_command_plan_preparation_error_prevents_launch(

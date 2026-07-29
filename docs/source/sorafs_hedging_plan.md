@@ -157,11 +157,14 @@ authenticated runtime API, or native bridge release process.
 This is not yet a complete production hedging and billing stack. There is still no
 price-feed collector, concrete production finalized-query/journal-verifier
 adapter, externally administered HSM/KMS signer, immutable publication service,
-acknowledgement authority, sealed epoch-witness store, service-management CLI,
-released native bridge artifacts, deployed instance of the shipped API, or
-captured staged rollout evidence that passes the SFM-5 gate. The supervised
-projector/delivery worker and its authenticated Torii API are shipped as
-`irohad` source modules rather than a separate `hedgingd` or `billingd` binary.
+acknowledgement authority, sealed epoch-witness store, released native bridge
+artifacts, deployed instance of the shipped API, or captured staged rollout
+evidence that passes the SFM-5 gate. The supervised projector/delivery worker,
+its authenticated Torii API, the Rust client, and the standard `iroha_cli`
+commands are shipped as source modules. Lifecycle management remains the
+responsibility of the standard `irohad` supervisor and deployment service
+manager; there is deliberately no separate `hedgingd` or `billingd` binary and
+no process-local daemon-control API.
 The checked-in fixture generator,
 fixture manifest, README, and generated `.to`/`.json` byte suite define the
 canonical SFM-5 feed, reference-price, line-item, statement, and negative
@@ -317,11 +320,15 @@ wrong-owner cases to the same response. The family exposes no feed-ingestion,
 automatic-execution, or local-authority mutation route.
 
 Implemented local validator CLI: `sorafs-validate hedging` validates Norito
-feed, reference-price decision, billing-line, and statement payloads. Target
-runtime CLI helpers should still mirror the future service routes for
-price/status inspection, statement download, escrow inspection, and
-acknowledgement. They should reuse the existing SoraFS CLI conventions and
-signed client configuration.
+feed, reference-price decision, billing-line, and statement payloads. The
+standard signed-client CLI also mirrors every shipped runtime route:
+`sorafs billing status`, `statements`, `statement`, `acknowledge`, and
+`reconciliation`, plus `sorafs hedging exposure` and `intents`. Exact-checkpoint
+reads require canonical lowercase identifiers and bounded page sizes.
+Acknowledgement reads a bounded direct regular proof file, and statement
+download creates a new canonical Norito output without following a symlink or
+replacing an existing path. No CLI command can ingest a feed, publish a
+statement through local authority, control the daemon, or execute a hedge.
 
 Implemented source SDK/FFI bridge: Rust C FFI, Connect C/JNI, Kotlin/JVM, Java
 Android, and Swift callers can pass the same four hedging/billing payload
@@ -349,7 +356,8 @@ empty, lagging, or stale projection remains unready. The alert pack covers:
 
 Additional public-service metrics, including decision result counters,
 statement latency, venue inventory, and billing line items by category, still
-require the deployment-owned collector, publisher, and service/API adapters.
+require the deployment-owned collector and publisher plus deployed scrape and
+service integration.
 
 The alert pack covers feed divergence, primary feed staleness, exposure drift,
 statement generation failure, acknowledgement backlog, and escrow runway below

@@ -99,11 +99,11 @@ Dois helpers `cargo xtask` automatizam a geração do cronograma e a captura de 
 
 | Superfície | Canário (Fase A) | Rampa (Etapa B) | Padrão (Fase C) |
 |---------|------------------|----------------|------------------|
-| `sorafs_cli` buscar | `--anonymity-policy stage-a` ou confiar na fase | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` buscar | `--anonymity-policy anon-guard-pq` ou confiar na fase | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Configuração do orquestrador JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Configuração do cliente Rust (`iroha.toml`) | `rollout_phase = "canary"` (padrão) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| Comandos assinados `iroha_cli` | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, opcional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, opcional `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, opcional `.ANON_STRICT_PQ` |
+| Comandos assinados `iroha_cli` | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, opcional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, opcional `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, opcional `.ANON_STRICT_PQ` |
 | Ajudantes do orquestrador JavaScript | `rolloutPhase: "canary"` ou `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ Todos os toggles do SDK mapeiam para o mesmo analisador de estágio usado pelo o
 
 3. **Cliente/SDK canário (T mais 1 semana)**
 
-   - Trocar para `rollout_phase = "ramp"` em configurações de cliente ou passar substituições `stage-b` para coortes de SDK designados.
+   - Trocar para `rollout_phase = "ramp"` em configurações de cliente ou passar substituições `anon-majority-pq` para coortes de SDK designados.
    - Capturar diferenças de telemetria (`sorafs_orchestrator_policy_events_total` agrupadas por `client_id` e `region`) e anexar ao rollout incidente log.
 
 4. **Promoção padrão (T mais 3 semanas)**
@@ -157,7 +157,7 @@ Para alertar, garanta que as regras existentes usem o rótulo `stage` para que a
 ### Rampa -> Canário (Estágio B -> Estágio A)
 
 1. Importe o snapshot do diretório de proteção capturado antes da promoção com `sorafs_cli guard-directory import --guard-directory guards.json` e rode `sorafs_cli guard-directory verify` novamente para que o pacote de rebaixamento incluindo hashes.
-2. Ajuste `rollout_phase = "canary"` (ou override com `anonymity_policy stage-a`) nas configurações do orquestrador e do cliente, depois rode novamente o PQ ratchet drill do [PQ ratchet runbook](./pq-ratchet-runbook.md) para provar o pipeline de downgrade.
+2. Ajuste `rollout_phase = "canary"` (ou override com `anonymity_policy anon-guard-pq`) nas configurações do orquestrador e do cliente, depois rode novamente o PQ ratchet drill do [PQ ratchet runbook](./pq-ratchet-runbook.md) para provar o pipeline de downgrade.
 3. Anexo screenshots atualizados de PQ Ratchet e telemetria SN16 mais os resultados de alertas ao log de incidentes antes de notificar governança.
 
 ### Lembretes de proteção

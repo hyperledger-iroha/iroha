@@ -12,6 +12,7 @@ fi
 python3 - "$ROOT_DIR" "$MODE" "${BASH_SOURCE[0]}" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -49,6 +50,22 @@ paths = {
     "hardware_authorization_vector": Path(
         "crates/connect_norito_bridge/tests/fixtures/"
         "kagemusha_request_authorization_v2_hardware.hex"
+    ),
+    "recipient_request_vector": Path(
+        "crates/connect_norito_bridge/tests/fixtures/"
+        "offline_recipient_payment_request_v2.hex"
+    ),
+    "peer_payment_vector": Path(
+        "crates/connect_norito_bridge/tests/fixtures/offline_peer_payment_v4.hex"
+    ),
+    "peer_payment_generator": Path(
+        "tools/kotlin-fixture-gen/src/bin/swift_kagemusha_peer_payment_v4.rs"
+    ),
+    "swift_peer_fixtures": Path(
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaPeerTransportTestFixtures.swift"
+    ),
+    "swift_peer_tests": Path(
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaPeerTransportTests.swift"
     ),
     "kagami": Path("crates/iroha_kagami/src/kagemusha.rs"),
     "bundle": Path("crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"),
@@ -104,6 +121,65 @@ def require(label: str, needle: str) -> None:
 def require_regex(label: str, pattern: str, description: str) -> None:
     if re.search(pattern, texts[label], re.MULTILINE | re.DOTALL) is None:
         errors.append(f"{paths[label]}: missing {description}")
+
+
+def canonical_hex_vector(label: str) -> bytes:
+    lines = texts[label].splitlines()
+    if (
+        not lines
+        or any(not re.fullmatch(r"[0-9a-f]{2,64}", line) for line in lines)
+        or any(len(line) != 64 for line in lines[:-1])
+        or len(lines[-1]) % 2 != 0
+    ):
+        errors.append(f"{paths[label]}: fixture is not canonical lowercase 32-byte-line hex")
+        return b""
+    return bytes.fromhex("".join(lines))
+
+
+recipient_request_vector = canonical_hex_vector("recipient_request_vector")
+peer_payment_vector = canonical_hex_vector("peer_payment_vector")
+if len(recipient_request_vector) != 765:
+    errors.append(
+        f"{paths['recipient_request_vector']}: expected 765 bytes, "
+        f"found {len(recipient_request_vector)}"
+    )
+if hashlib.sha256(recipient_request_vector).hexdigest() != (
+    "899c9b4d44630e6c0c010d04ab4b0c570c2062fba5a54e678d6a0baf0e8b02b0"
+):
+    errors.append(f"{paths['recipient_request_vector']}: canonical SHA-256 mismatch")
+if len(peer_payment_vector) != 11_854:
+    errors.append(
+        f"{paths['peer_payment_vector']}: expected 11854 bytes, "
+        f"found {len(peer_payment_vector)}"
+    )
+if hashlib.sha256(peer_payment_vector).hexdigest() != (
+    "22e6ecf3fb9260004d6e6776e7ecdda5b5188bc87ac4b1a55836d48a26476aba"
+):
+    errors.append(f"{paths['peer_payment_vector']}: canonical SHA-256 mismatch")
+for needle in (
+    "--recipient-request-hex",
+    "request.digest()",
+    "norito::to_bytes(&payment)",
+):
+    require("peer_payment_generator", needle)
+require_regex(
+    "peer_payment_generator",
+    r"payment\s*\.validate_public_binding\(\)",
+    "public-binding validation of the emitted peer payment",
+)
+for needle in (
+    'rustFixtureData("offline_recipient_payment_request_v2.hex")',
+    'rustFixtureData("offline_peer_payment_v4.hex")',
+    "KagemushaReceiverAcknowledgement.prepare(",
+):
+    require("swift_peer_fixtures", needle)
+for needle in (
+    '"22e6ecf3fb9260004d6e6776e7ecdda5b5188bc87ac4b1a55836d48a26476aba"',
+    '"e9aa5e352f5e14687adac62b40dbcfba2050463624ce3d21377e83fc3f34de08"',
+    ".archiveTooLarge(",
+    "maximumTextArchiveBytes",
+):
+    require("swift_peer_tests", needle)
 
 
 v4_files = (
@@ -849,6 +925,7 @@ base_bridge_symbols = (
     "connect_norito_alias_instruction_round_trip_v1",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 )
 c_symbols = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
@@ -942,15 +1019,30 @@ if actual_kagemusha_symbols != c_symbols:
         f"(found {len(actual_kagemusha_symbols)})"
     )
 
+actual_appeal_finance_symbols = parse_shell_symbol_array(
+    "mobile_check", "SORAFS_APPEAL_FINANCE_C_SYMBOLS"
+)
+expected_appeal_finance_symbols = (
+    "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
+)
+if actual_appeal_finance_symbols != expected_appeal_finance_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered appeal-finance C inventory mismatch "
+        f"(found {len(actual_appeal_finance_symbols)})"
+    )
+
 actual_required_bridge_symbols: list[str] = []
 for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS"):
     if value == "${KAGEMUSHA_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_kagemusha_symbols)
+    elif value == "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}":
+        actual_required_bridge_symbols.extend(actual_appeal_finance_symbols)
     else:
         actual_required_bridge_symbols.append(value)
 if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 61-symbol required bridge inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered {len(required_bridge_symbols)}-symbol "
+        "required bridge inventory mismatch "
         f"(found {len(actual_required_bridge_symbols)})"
     )
 
@@ -958,7 +1050,8 @@ for label in ("xcframework_build", "mobile_check_test"):
     actual_manifest_symbols = parse_manifest_symbol_inventory(label)
     if actual_manifest_symbols != required_bridge_symbols:
         errors.append(
-            f"{paths[label]}: exact ordered 61-symbol required bridge inventory mismatch "
+            f"{paths[label]}: exact ordered {len(required_bridge_symbols)}-symbol "
+            "required bridge inventory mismatch "
             f"(found {len(actual_manifest_symbols)})"
         )
 
@@ -1156,6 +1249,26 @@ if mode == "--self-test":
         "kagemusha_request_authorization_v2_hardware.hex",
     )
     run_negative(
+        "Swift peer-payment parity cannot leave the shared fixture",
+        lambda fixture: replace_once(
+            fixture / paths["swift_peer_fixtures"],
+            'rustFixtureData("offline_peer_payment_v4.hex")',
+            'rustFixtureData("dummy_peer_payment_v4.hex")',
+        ),
+        "offline_peer_payment_v4.hex",
+    )
+
+    def corrupt_peer_payment_vector(fixture: Path) -> None:
+        vector = fixture / paths["peer_payment_vector"]
+        encoded = vector.read_text(encoding="utf-8")
+        vector.write_text("00" + encoded[2:], encoding="utf-8")
+
+    run_negative(
+        "shared peer-payment bytes are digest-bound",
+        corrupt_peer_payment_vector,
+        "canonical SHA-256 mismatch",
+    )
+    run_negative(
         "Swift hardware parity cannot substitute the canonical authority key",
         lambda fixture: replace_once(
             fixture / paths["swift_hardware_test"],
@@ -1182,7 +1295,7 @@ if mode == "--self-test":
             '    "connect_norito_chain_discriminant_scope_exit",\n'
             '    "connect_norito_chain_discriminant_scope_enter",',
         ),
-        "exact ordered 61-symbol required bridge inventory mismatch",
+        "exact ordered 62-symbol required bridge inventory mismatch",
     )
 
     def inject_lineage_v1_compatibility_export(fixture: Path) -> None:
@@ -1230,8 +1343,9 @@ if mode == "--self-test":
     )
 
 print(
-    "Kagemusha ABI21 SDK contract passed: exact8 DM/Kagami/bundle inventory and "
-    "promotion-record-bound direct C/JNI/Swift/Kotlin/Java lifecycle parity are complete"
+    "Kagemusha ABI21 SDK contract passed: exact8 DM/Kagami/bundle inventory, "
+    "digest-bound offline peer-payment fixture, and promotion-record-bound direct "
+    "C/JNI/Swift/Kotlin/Java lifecycle parity are complete"
     + ("; negative self-tests passed." if mode == "--self-test" else ".")
 )
 PY

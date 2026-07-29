@@ -21,12 +21,10 @@ function fixture(relativePath) {
   return fs.readFileSync(path.join(fixtureRoot, relativePath));
 }
 
-function expectedProfile(fileName) {
-  return JSON.parse(
-    fs.readFileSync(
-      path.join(fixtureRoot, "..", "reference_sdk", fileName),
-      "utf8",
-    ),
+function expectedProfileText(fileName) {
+  return fs.readFileSync(
+    path.join(fixtureRoot, "..", "reference_sdk", fileName),
+    "utf8",
   );
 }
 
@@ -80,13 +78,20 @@ test("appeal-finance positive and negative profiles match the signed inventory f
       "appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
     ],
   ]) {
+    const expectedText = expectedProfileText(expectedFile);
+    const outcome = validateAppealFinanceCancelAssetLock(fixture(payloadPath), {
+      label,
+      generatedAtUnix: 123,
+    });
     assert.deepEqual(
-      validateAppealFinanceCancelAssetLock(fixture(payloadPath), {
-        label,
-        generatedAtUnix: 123,
-      }),
-      expectedProfile(expectedFile),
+      outcome,
+      JSON.parse(expectedText),
       payloadPath,
+    );
+    assert.equal(
+      `${JSON.stringify(outcome, null, 2)}\n`,
+      expectedText,
+      `${payloadPath} deterministic JSON`,
     );
   }
 });

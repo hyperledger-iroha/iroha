@@ -24,6 +24,8 @@ pub mod limits;
 #[cfg(feature = "app_api")]
 pub mod moderation_runtime;
 #[cfg(feature = "app_api")]
+pub mod native_transaction_signer;
+#[cfg(feature = "app_api")]
 pub(crate) mod orderbook_runtime;
 pub(crate) mod orderbook_worker;
 #[cfg(feature = "app_api")]

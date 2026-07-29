@@ -1,7 +1,7 @@
 //! Regenerate the shared Sumeragi v2 wire and Native AMX fixtures.
 //!
-//! Run `cargo run -p iroha_data_model --bin sumeragi_v2_wire_fixtures` to
-//! refresh `fixtures/sumeragi_v2/wire_v2.tsv` and
+//! Run `cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures`
+//! to refresh `fixtures/sumeragi_v2/wire_v2.tsv` and
 //! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. Pass `--check` to verify
 //! that the checked-in fixtures are exactly the current canonical Rust
 //! encodings and JSON models.
@@ -1032,7 +1032,7 @@ fn write_fixture(rendered: &str, check_only: bool) -> Result<(), Box<dyn Error>>
         let existing = fs::read_to_string(FIXTURE_PATH)?;
         if existing != rendered {
             return Err(format!(
-                "fixture {FIXTURE_PATH} is stale; run cargo run -p iroha_data_model --bin sumeragi_v2_wire_fixtures"
+                "fixture {FIXTURE_PATH} is stale; run cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures"
             )
             .into());
         }

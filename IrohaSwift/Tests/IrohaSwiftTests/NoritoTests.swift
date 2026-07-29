@@ -156,21 +156,29 @@ final class NoritoTests: XCTestCase {
 
             let header = try XCTUnwrap(NoritoFixtureHeader(data: base64Bytes),
                                        "\(fileName): missing or malformed Norito header")
-            if header.payload != hexBytes {
-                throw XCTSkip("\(fileName): fixture payload mismatch; update encoded_hex or instruction")
-            }
+            XCTAssertEqual(
+                header.payload,
+                hexBytes,
+                "\(fileName): fixture payload mismatch; update encoded_hex or instruction"
+            )
             XCTAssertEqual(header.magic, NoritoHeader.magic, "\(fileName): Norito magic mismatch")
             XCTAssertEqual(header.versionMajor, NoritoHeader.versionMajor, "\(fileName): major version mismatch")
             XCTAssertEqual(header.versionMinor, NoritoHeader.versionMinor, "\(fileName): minor version mismatch")
-            if header.compression != NoritoCompression.none {
-                throw XCTSkip("\(fileName): unexpected compression flag; fixture drift")
-            }
-            if header.payloadLength != UInt64(header.payload.count) {
-                throw XCTSkip("\(fileName): payload length mismatch; fixture drift")
-            }
-            if header.checksum != crc64ECMA(header.payload) {
-                throw XCTSkip("\(fileName): CRC64 mismatch; fixture drift")
-            }
+            XCTAssertEqual(
+                header.compression,
+                NoritoCompression.none,
+                "\(fileName): unexpected compression flag; fixture drift"
+            )
+            XCTAssertEqual(
+                header.payloadLength,
+                UInt64(header.payload.count),
+                "\(fileName): payload length mismatch; fixture drift"
+            )
+            XCTAssertEqual(
+                header.checksum,
+                crc64ECMA(header.payload),
+                "\(fileName): CRC64 mismatch; fixture drift"
+            )
             XCTAssertEqual(header.flags, expectedFlags, "\(fileName): unexpected encode flags")
             XCTAssertEqual(header.schema.count, 16, "\(fileName): schema hash length mismatch")
         }

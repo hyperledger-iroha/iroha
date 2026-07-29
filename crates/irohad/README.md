@@ -40,6 +40,99 @@ cargo build --release --no-default-features
 
 This flag can be combined with the `--features` flag in order to precisely specify the feature set that you wish.
 
+### Deployment runtime-provider launcher
+
+`irohad` is also a library target. A deployment-owned binary can use the same
+CLI/config/bootstrap path as the stock binaries while supplying HSM, KMS,
+WebAuthn, authenticated transport, immutable-query, publication, and sealed
+checkpoint adapters:
+
+```rust
+use irohad::{BuildLine, IrohaRuntimeProviderRegistryV1};
+
+fn run(registry: &dyn IrohaRuntimeProviderRegistryV1) -> irohad::ReportResult<(), irohad::MainError> {
+    irohad::run_with_runtime_provider_registry(BuildLine::Iroha3, registry)
+}
+```
+
+The registry receives an `IrohaRuntimeProviderBindingsV1` containing only the
+chain ID and an ordered set of public slot/handle/revision/policy-digest
+bindings. It does not receive the full node configuration, validator key,
+provider credentials, API tokens, or private evidence. Registry selection is a
+compile-time/launcher decision; the standard launcher has no environment or
+config selector that dynamically loads executable provider code.
+
+The stock `iroha2d`, `iroha3d`, and `irohad` binaries intentionally provide no
+deployment registry. They are adapter-disabled binaries, not
+production-provider launchers. They continue to work with the default disabled
+services, but fail before subsystem startup when runtime-provider bindings are
+configured.
+
+A deployment-owned embedding binary is the only supported injection boundary.
+It statically links this crate and its reviewed registry implementation, keeps
+credentials inside the provider implementations, and calls
+`run_with_runtime_provider_registry` instead of `main_entry`. The borrowed
+registry remains available for the synchronous launcher call; there is no
+process-global registry, plugin loader, environment selector, or executable
+provider selector in configuration. The checked-in binaries all call
+`main_entry`, so building this library does not make those binaries
+provider-capable.
+
+Registry resolution itself validates the sanitized binding catalog and rejects
+missing or unrequested dependency objects. It cannot independently attest to a
+trait object. The following service-owned startup boundaries provide the actual
+qualification:
+
+- Moderation quarantine, transparency PRF/release anchors, the Governance DAG
+  signer and public-service adapters, appeal finance, moderation runtime,
+  the evidence viewer's WebAuthn/grant/signer/erasure providers and
+  authoritative checkpoint store, PoP, PoTR, gateway ACME/feed transport,
+  reputation publication/delivery, hedging/billing, and the provider-ingest
+  source pool, signer resolver, and checkpoint store compare configured or
+  deterministically derived public identities and recheck them around use.
+
+- The reputation finalized query is not an injectable registry object. The
+  daemon opens the configured bounded archive, performs exact zero-gap
+  reconciliation against Kura before Sumeragi starts, applies the configured
+  live-lag barrier, and installs that same archive in the v2 apply corridor.
+  Every fresh height is captured after Kura finality and the durable WSV
+  checkpoint but before live State publication; an archive failure makes the
+  committed transition restart-required.
+
+- The provider-ingest completion signer is checked against its configured
+  authority, key, revision, policy digest, and finalized owner/policy state.
+
+- The central launcher converts the four configured proof-outcome, repair,
+  reserve/rent, and orderbook identities into immutable Torii bindings, then
+  wraps each raw registry provider in a role-specific qualified facade before
+  any subsystem receives it. Missing, unexpected, role-confused, substituted,
+  stale, test-marked, or drifting providers fail resolution.
+
+- Stream-token signing checks the configured production handle and Ed25519
+  public key and verifies every returned signature. Its configuration and
+  provider trait do not yet expose an adapter revision or policy digest, so
+  independent stale/revoked-provider detection remains a V1 production blocker.
+
+- Provider-ingest source and resolver adapters check independently configured
+  production handles, non-zero revisions and public-policy digests, the fixed
+  source inventory, bounded readiness, and resolved signer identity. Startup,
+  every worker probe, each fetch, and each signer resolution recheck the exact
+  role-specific qualification before and after provider work.
+
+Governance DAG IPFS/IPNS authentication, signed-head authentication, and sealed
+monotonic checkpoint/publish-intent storage are separate registry slots. When
+the service is enabled, irohad qualifies their exact stable handles, revisions,
+and public-policy digests before Sumeragi startup, then prepares and supervises
+the service from the already resolved config view. The same service boundary
+rechecks identity around every authenticated request and sealed CAS operation.
+The stock Governance DAG binary likewise has no built-in credential loader;
+deployment launchers inject a
+`GovernanceDagServiceRuntimeProviderRegistryV1` through the library entrypoint.
+
+Moderation strict ingress and the stream-token identity gap above remain
+production blockers; this registry wiring alone is not a claim that the
+embedding launcher or a deployment is production-complete.
+
 ## Configuration
 
 To run the Iroha peer binary, you must [generate the keys](#generating-keys) and provide a [configuration file](#configuration-file).

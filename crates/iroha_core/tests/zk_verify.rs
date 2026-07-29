@@ -43,7 +43,7 @@ const UNSUPPORTED_PROTOCOL_ATTACHMENT_BACKENDS: &[&str] = &[
     "pq-masp-stark-fri",
 ];
 
-const READINESS_CLAIM_ATTACHMENT_BACKENDS: &[&str] = &[
+const PRODUCTION_CLAIM_ATTACHMENT_BACKENDS: &[&str] = &[
     "halo2/ipa:production-ready",
     "halo2/ipa:claimed-production",
     "halo2/ipa:mainnet-ready",
@@ -498,8 +498,8 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
 }
 
 #[test]
-fn preverify_rejects_readiness_claim_backend_labels_before_lookup() {
-    for (idx, backend) in READINESS_CLAIM_ATTACHMENT_BACKENDS
+fn preverify_rejects_production_claim_backend_labels_before_lookup() {
+    for (idx, backend) in PRODUCTION_CLAIM_ATTACHMENT_BACKENDS
         .iter()
         .copied()
         .enumerate()
@@ -520,7 +520,7 @@ fn preverify_rejects_readiness_claim_backend_labels_before_lookup() {
             iroha_data_model::proof::ProofBox::new(backend.into(), vec![idx as u8, 2, 3]),
             iroha_data_model::proof::VerifyingKeyId::new(
                 backend,
-                format!("vk_readiness_claim_attachment_{idx}"),
+                format!("vk_production_claim_attachment_{idx}"),
             ),
         );
         let tx = signed_empty_tx_with_attachments(
@@ -531,9 +531,9 @@ fn preverify_rejects_readiness_claim_backend_labels_before_lookup() {
         let mut stx = block.transaction();
         let err = exec
             .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-            .expect_err("readiness-claim attachment backend must fail before registry lookup");
+            .expect_err("production-claim attachment backend must fail before registry lookup");
         assert!(
-            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("readiness-claim proof backends")),
+            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("production-claim proof backends")),
             "unexpected preverify error for {backend}: {err:?}"
         );
     }

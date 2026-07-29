@@ -83,7 +83,7 @@ summary: Current SF-6 release automation and QA surfaces.
   to reviewed full action commit hashes, rejects floating actions,
   `pull_request_target`, network-bootstrap shell commands, cancellable evidence
   jobs, missing release commands, and globally scoped OIDC permission. The
-  fixture and SDK lanes pin Python 3.11, supported Go 1.26 where used, and Node 24 LTS runtimes, and the
+  fixture and SDK lanes pin Python 3.12, supported Go 1.26 where used, and Node 24 LTS runtimes, and the
   release gate installs only exact top-level versions from
   `scripts/requirements.txt` before its Python tests.
 - SDK companion guard lanes are already wired through

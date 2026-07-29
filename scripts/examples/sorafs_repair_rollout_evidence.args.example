@@ -20,3 +20,4 @@ auditor_roster,failure_capture,auditor_api,worker_lifecycle,event_streams,govern
 7200
 --min-auditors
 3
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

@@ -64,7 +64,7 @@ JSON-хелперы в `crates/sorafs_orchestrator::bindings` сериализу
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

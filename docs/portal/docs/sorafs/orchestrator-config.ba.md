@@ -57,7 +57,7 @@ I18NT000000001X JSON-ға конфигурациялау, уны SDK бәйлә�
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

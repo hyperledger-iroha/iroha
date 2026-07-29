@@ -9,6 +9,7 @@ import json
 import re
 import sys
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
@@ -82,11 +83,27 @@ from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     REQUIRED_METRICS as GATEWAY_COMPLIANCE_REQUIRED_METRICS,
 )
 from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
+    DEFAULT_MAX_ERROR_RATE_BPS as GATEWAY_LOAD_MAX_ERROR_RATE_BPS,
+    DEFAULT_MAX_P95_LATENCY_MS as GATEWAY_LOAD_MAX_P95_LATENCY_MS,
+    DEFAULT_MAX_P99_LATENCY_MS as GATEWAY_LOAD_MAX_P99_LATENCY_MS,
+    DEFAULT_MIN_PROVIDER_COUNT as GATEWAY_LOAD_MIN_PROVIDER_COUNT,
+    DEFAULT_MIN_STAGING_DURATION_SECS as GATEWAY_LOAD_MIN_STAGING_DURATION_SECS,
+    DEFAULT_MIN_STREAMS as GATEWAY_LOAD_MIN_STREAMS,
+    DEFAULT_MIN_SUCCESS_RATE_BPS as GATEWAY_LOAD_MIN_SUCCESS_RATE_BPS,
     DEFAULT_REQUIRED_KINDS as GATEWAY_LOAD_REQUIRED_KINDS,
+    FORBIDDEN_STAGING_METADATA_MARKERS as GATEWAY_LOAD_FORBIDDEN_METADATA_MARKERS,
+    GATEWAY_VERSION_PATTERN as GATEWAY_LOAD_VERSION_PATTERN,
+    HARDWARE_PROFILE_PATTERN as GATEWAY_LOAD_HARDWARE_PROFILE_PATTERN,
     KIND_BY_NAME as GATEWAY_LOAD_KIND_BY_NAME,
+    MAX_SUCCESS_RATE_BPS as GATEWAY_LOAD_MAX_SUCCESS_RATE_BPS,
     POLICY_BOUND_KINDS as GATEWAY_LOAD_POLICY_BOUND_KINDS,
+    PROVIDER_NAME_PATTERN as GATEWAY_LOAD_PROVIDER_NAME_PATTERN,
+    REQUIRED_CACHE_COVERAGE_FIELDS as GATEWAY_LOAD_REQUIRED_CACHE_COVERAGE_FIELDS,
+    REQUIRED_CORRUPTION_INJECTION_BPS as GATEWAY_LOAD_REQUIRED_CORRUPTION_BPS,
+    REQUIRED_LOAD_CONDITION_FIELDS as GATEWAY_LOAD_REQUIRED_LOAD_CONDITION_FIELDS,
     REQUIRED_METRICS as GATEWAY_LOAD_REQUIRED_METRICS,
     STAGING_REPORT_BOUND_KINDS as GATEWAY_LOAD_STAGING_REPORT_BOUND_KINDS,
+    STREAM_NAME_PATTERN as GATEWAY_LOAD_STREAM_NAME_PATTERN,
 )
 from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GOVERNANCE_DAG_REQUIRED_KINDS,
@@ -194,6 +211,11 @@ from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     SOURCE_BOUND_KINDS as TRANSPARENCY_SOURCE_BOUND_KINDS,
 )
 from sccp_release_common import verify_ed25519  # noqa: E402
+from sorafs_topology_qualification import (  # noqa: E402
+    add_topology_qualification_argument,
+    load_topology_qualification_binding,
+    validate_topology_binding_object,
+)
 
 
 SUMMARY_SCHEMA = "sorafs.production_readiness.aggregate_gate.v1"
@@ -227,6 +249,7 @@ FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
         "generated_at_unix",
         "release_sequence",
         "previous_envelope_sha256",
+        "topology_qualification",
         "prerequisites",
         "lane_summaries",
         "signature",
@@ -262,6 +285,7 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "release_sequence",
         "previous_envelope_sha256",
         "signer_public_key_fingerprint_sha256",
+        "topology_qualification",
         "evidence_anchor_sha256",
         "lane_summary_sha256",
         "path",
@@ -454,10 +478,13 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "valid_header_digests",
             "valid_package_index_digests",
             "valid_policy_digests",
+            "valid_provenance_bundle_digests",
             "valid_release_key_fingerprints",
             "valid_release_manifest_digests",
             "valid_release_manifest_reference_digests",
+            "valid_sbom_index_digests",
             "valid_smoke_output_digests",
+            "valid_vulnerability_report_digests",
         }
     ),
     "repair": frozenset(
@@ -512,6 +539,7 @@ PAYLOAD_FREE_SUMMARY_CORE_FIELDS = frozenset(
         "required",
         "errors",
         "load_errors",
+        "topology_qualification",
     }
 )
 PAYLOAD_FREE_SUMMARY_METADATA_FIELDS = frozenset().union(
@@ -562,10 +590,13 @@ PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
         "valid_ffi_contract_digests",
         "valid_header_digests",
         "valid_package_index_digests",
+        "valid_provenance_bundle_digests",
         "valid_release_key_fingerprints",
         "valid_release_manifest_digests",
         "valid_release_manifest_reference_digests",
+        "valid_sbom_index_digests",
         "valid_smoke_output_digests",
+        "valid_vulnerability_report_digests",
         "valid_revocation_list_digests",
         "valid_root_digests",
         "valid_roster_digests",
@@ -784,10 +815,13 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
     "valid_ffi_contract_digests": "ffi_contract_digest_hex",
     "valid_header_digests": "header_digest_hex",
     "valid_package_index_digests": "package_index_digest_hex",
+    "valid_provenance_bundle_digests": "provenance_bundle_digest_hex",
     "valid_release_key_fingerprints": "public_key_fingerprint_hex",
     "valid_release_manifest_digests": "manifest_digest_hex",
     "valid_release_manifest_reference_digests": "release_manifest_digest_hex",
+    "valid_sbom_index_digests": "sbom_index_digest_hex",
     "valid_smoke_output_digests": "smoke_output_digest_hex",
+    "valid_vulnerability_report_digests": "vulnerability_report_digest_hex",
     "valid_revocation_list_digests": "revocation_list_digest_hex",
     "valid_root_digests": "root_digest_hex",
     "valid_roster_digests": "roster_digest_hex",
@@ -847,6 +881,9 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
     ("reference_sdk_release", "valid_package_index_digests"): (
         "downstream_bindings",
     ),
+    ("reference_sdk_release", "valid_provenance_bundle_digests"): (
+        "supply_chain",
+    ),
     ("reference_sdk_release", "valid_release_key_fingerprints"): (
         "signed_manifest",
     ),
@@ -855,12 +892,17 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
     ),
     ("reference_sdk_release", "valid_release_manifest_reference_digests"): (
         "release_archive",
+        "supply_chain",
         "downstream_bindings",
         "cookbook_smoke",
         "ffi_header_contract",
         "governance_approval",
     ),
+    ("reference_sdk_release", "valid_sbom_index_digests"): ("supply_chain",),
     ("reference_sdk_release", "valid_smoke_output_digests"): ("cookbook_smoke",),
+    ("reference_sdk_release", "valid_vulnerability_report_digests"): (
+        "supply_chain",
+    ),
     ("repair", "valid_failure_bundle_digests"): ("failure_capture",),
     ("repair", "valid_handoff_digests"): ("governance_handoff",),
     ("repair", "valid_policy_digests"): ("governance_handoff",),
@@ -1069,6 +1111,7 @@ AGGREGATE_REQUIRED_GATE_ROW_FIELDS = frozenset(
         "deployment_id",
         "environment",
         "expected_required_kinds",
+        "topology_qualification",
         "errors",
         "path",
         "sha256",
@@ -1091,6 +1134,7 @@ AGGREGATE_SUMMARY_FIELDS = frozenset(
         "summary_file_count",
         "recognized_summary_count",
         "deployment",
+        "topology_qualification",
         "foundational_prerequisites",
         "required",
         "errors",
@@ -1190,6 +1234,23 @@ GATE_SUMMARY_KINDS: tuple[GateSummaryKind, ...] = (
 SCHEMA_TO_GATE = {kind.schema: kind for kind in GATE_SUMMARY_KINDS}
 GATE_BY_NAME = {kind.name: kind for kind in GATE_SUMMARY_KINDS}
 DEFAULT_REQUIRED_GATES = tuple(kind.name for kind in GATE_SUMMARY_KINDS)
+NON_PROMOTABLE_STATUS = "partial"
+
+
+def aggregate_summary_status(
+    errors: list[str],
+    required_gates: Sequence[str],
+) -> str:
+    """Return ready only for the exact canonical production gate inventory."""
+
+    diagnostic_status = evidence_gate_status(errors)
+    if diagnostic_status != "ready":
+        return diagnostic_status
+    if tuple(required_gates) != DEFAULT_REQUIRED_GATES:
+        return NON_PROMOTABLE_STATUS
+    return "ready"
+
+
 GATE_REQUIRED_KIND_SCHEMAS = {
     "ai_prescreen": evidence_schema_by_kind(AI_PRESCREEN_KIND_BY_NAME),
     "appeal_finance": evidence_schema_by_kind(APPEAL_FINANCE_KIND_BY_NAME),
@@ -1222,6 +1283,7 @@ class ValidationOptions:
     foundational_signer_public_key: bytes | None = None
     foundational_release_sequence: int | None = None
     foundational_previous_envelope_sha256: str | None = None
+    topology_qualification: Mapping[str, str] | None = None
 
 
 def canonical_string(value: Any) -> str | None:
@@ -2210,6 +2272,14 @@ def validate_foundational_prerequisite_summary(
         payload.get("lane_summaries"),
         errors,
     )
+    topology_qualification = payload.get("topology_qualification")
+    errors.extend(
+        validate_topology_binding_object(
+            topology_qualification,
+            expected=options.topology_qualification,
+            path="foundational prerequisite topology_qualification",
+        )
+    )
 
     signature = validate_foundational_exact_fields(
         payload.get("signature"),
@@ -2297,6 +2367,7 @@ def validate_foundational_prerequisite_summary(
         "release_sequence": release_sequence,
         "previous_envelope_sha256": previous_envelope_sha256,
         "signer_public_key_fingerprint_sha256": signer_fingerprint,
+        "topology_qualification": topology_qualification,
         "evidence_anchor_sha256": anchors,
         "lane_summary_sha256": lane_summary_rows,
         "errors": errors,
@@ -3927,6 +3998,7 @@ def validate_gateway_load_bound_artifact_metadata(
         ),
         errors=errors,
     )
+    validate_gateway_load_staging_fingerprint_contract(payload, errors)
     bound_artifact_fingerprints_match_hex_list_metadata(
         payload,
         kind_names=GATEWAY_LOAD_STAGING_REPORT_BOUND_KINDS,
@@ -3949,6 +4021,254 @@ def validate_gateway_load_bound_artifact_metadata(
         ),
         errors=errors,
     )
+
+
+def _validate_gateway_load_named_inventory(
+    fingerprint: dict[str, Any],
+    *,
+    field: str,
+    count_field: str,
+    minimum_count: int,
+    pattern: re.Pattern[str],
+    path: str,
+    errors: list[str],
+) -> int | None:
+    """Validate one schema-closed gateway-load fingerprint inventory."""
+
+    count = fingerprint.get(count_field)
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < minimum_count
+    ):
+        errors.append(f"{path}.{count_field} must be an integer >= {minimum_count}")
+        count = None
+    rows = fingerprint.get(field)
+    if not isinstance(rows, list):
+        errors.append(f"{path}.{field} must be an array")
+        return count
+    names: list[str] = []
+    for index, row in enumerate(rows):
+        row_path = f"{path}.{field}[{index}]"
+        if not isinstance(row, dict) or set(row) != {"name"}:
+            errors.append(f"{row_path} fields must match the schema-closed contract")
+            continue
+        name = canonical_string(row.get("name"))
+        if name is None or pattern.fullmatch(name) is None:
+            errors.append(f"{row_path}.name must match the production load contract")
+            continue
+        if forbidden_non_production_markers(
+            name,
+            GATEWAY_LOAD_FORBIDDEN_METADATA_MARKERS,
+        ):
+            errors.append(
+                f"{row_path}.name must not contain non-production markers"
+            )
+            continue
+        names.append(name)
+    if count is not None and len(rows) != count:
+        errors.append(f"{path}.{field} length must match {count_field}")
+    if len(names) == len(rows) and len(set(names)) != len(names):
+        errors.append(f"{path}.{field} names must be unique")
+    return count
+
+
+def _validate_gateway_load_bounded_integer(
+    fingerprint: dict[str, Any],
+    field: str,
+    *,
+    minimum: int,
+    maximum: int | None,
+    path: str,
+    errors: list[str],
+) -> int | None:
+    """Validate one integer threshold copied into a staging fingerprint."""
+
+    value = fingerprint.get(field)
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < minimum
+        or (maximum is not None and value > maximum)
+    ):
+        if maximum is None:
+            errors.append(f"{path}.{field} must be an integer >= {minimum}")
+        else:
+            errors.append(
+                f"{path}.{field} must be an integer in {minimum}..{maximum}"
+            )
+        return None
+    return value
+
+
+def validate_gateway_load_staging_fingerprint_contract(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Recheck the non-waivable 24-hour load contract at promotion time."""
+
+    fingerprints = payload_free_summary_artifact_fingerprints(
+        payload,
+        kind_name="staging_load",
+    )
+    if not fingerprints:
+        errors.append(
+            "gateway_load staging_load must expose its production load fingerprint"
+        )
+        return
+    for index, fingerprint in enumerate(fingerprints):
+        path = f"gateway_load staging_load fingerprint[{index}]"
+        if fingerprint.get("environment") != "production":
+            errors.append(f"{path}.environment must be exactly production")
+        fixture_digest = canonical_lower_hex(
+            fingerprint.get("fixture_bundle_digest_hex"),
+            64,
+        )
+        if fixture_digest is None or not any(bytes.fromhex(fixture_digest)):
+            errors.append(
+                f"{path}.fixture_bundle_digest_hex must be canonical non-zero SHA-256"
+            )
+        gateway_version = canonical_string(fingerprint.get("gateway_version"))
+        if (
+            gateway_version is None
+            or GATEWAY_LOAD_VERSION_PATTERN.fullmatch(gateway_version) is None
+        ):
+            errors.append(f"{path}.gateway_version must match the release contract")
+
+        hardware = fingerprint.get("hardware_profile")
+        if not isinstance(hardware, dict) or set(hardware) != {"name"}:
+            errors.append(
+                f"{path}.hardware_profile fields must match the schema-closed contract"
+            )
+        else:
+            hardware_name = canonical_string(hardware.get("name"))
+            if (
+                hardware_name is None
+                or GATEWAY_LOAD_HARDWARE_PROFILE_PATTERN.fullmatch(hardware_name)
+                is None
+                or forbidden_non_production_markers(
+                    hardware_name,
+                    GATEWAY_LOAD_FORBIDDEN_METADATA_MARKERS,
+                )
+            ):
+                errors.append(
+                    f"{path}.hardware_profile.name must match the production load contract"
+                )
+
+        cache_coverage = fingerprint.get("cache_coverage")
+        if (
+            not isinstance(cache_coverage, dict)
+            or set(cache_coverage) != GATEWAY_LOAD_REQUIRED_CACHE_COVERAGE_FIELDS
+        ):
+            errors.append(
+                f"{path}.cache_coverage fields must match the schema-closed contract"
+            )
+        elif any(value is not True for value in cache_coverage.values()):
+            errors.append(
+                f"{path}.cache_coverage must exercise cold, warm, and mixed caches"
+            )
+
+        load_conditions = fingerprint.get("load_conditions")
+        if (
+            not isinstance(load_conditions, dict)
+            or set(load_conditions) != GATEWAY_LOAD_REQUIRED_LOAD_CONDITION_FIELDS
+        ):
+            errors.append(
+                f"{path}.load_conditions fields must match the schema-closed contract"
+            )
+        else:
+            if (
+                load_conditions.get("corruption_injection_bps")
+                != GATEWAY_LOAD_REQUIRED_CORRUPTION_BPS
+            ):
+                errors.append(
+                    f"{path}.load_conditions.corruption_injection_bps must be "
+                    f"exactly {GATEWAY_LOAD_REQUIRED_CORRUPTION_BPS}"
+                )
+            boolean_fields = (
+                GATEWAY_LOAD_REQUIRED_LOAD_CONDITION_FIELDS
+                - {"corruption_injection_bps"}
+            )
+            if any(load_conditions.get(field) is not True for field in boolean_fields):
+                errors.append(
+                    f"{path}.load_conditions must exercise revocation, malformed "
+                    "flood, denylist, rate-limit, and failover pressure"
+                )
+
+        _validate_gateway_load_bounded_integer(
+            fingerprint,
+            "duration_seconds",
+            minimum=GATEWAY_LOAD_MIN_STAGING_DURATION_SECS,
+            maximum=None,
+            path=path,
+            errors=errors,
+        )
+        stream_count = _validate_gateway_load_named_inventory(
+            fingerprint,
+            field="streams",
+            count_field="stream_count",
+            minimum_count=GATEWAY_LOAD_MIN_STREAMS,
+            pattern=GATEWAY_LOAD_STREAM_NAME_PATTERN,
+            path=path,
+            errors=errors,
+        )
+        peak = _validate_gateway_load_bounded_integer(
+            fingerprint,
+            "peak_concurrent_range_streams",
+            minimum=GATEWAY_LOAD_MIN_STREAMS,
+            maximum=None,
+            path=path,
+            errors=errors,
+        )
+        if (
+            stream_count is not None
+            and peak is not None
+            and peak > stream_count
+        ):
+            errors.append(
+                f"{path}.peak_concurrent_range_streams must be <= stream_count"
+            )
+        _validate_gateway_load_named_inventory(
+            fingerprint,
+            field="providers",
+            count_field="provider_count",
+            minimum_count=GATEWAY_LOAD_MIN_PROVIDER_COUNT,
+            pattern=GATEWAY_LOAD_PROVIDER_NAME_PATTERN,
+            path=path,
+            errors=errors,
+        )
+        _validate_gateway_load_bounded_integer(
+            fingerprint,
+            "success_rate_bps",
+            minimum=GATEWAY_LOAD_MIN_SUCCESS_RATE_BPS,
+            maximum=GATEWAY_LOAD_MAX_SUCCESS_RATE_BPS,
+            path=path,
+            errors=errors,
+        )
+        _validate_gateway_load_bounded_integer(
+            fingerprint,
+            "error_rate_bps",
+            minimum=0,
+            maximum=GATEWAY_LOAD_MAX_ERROR_RATE_BPS,
+            path=path,
+            errors=errors,
+        )
+        _validate_gateway_load_bounded_integer(
+            fingerprint,
+            "p95_latency_ms",
+            minimum=0,
+            maximum=GATEWAY_LOAD_MAX_P95_LATENCY_MS,
+            path=path,
+            errors=errors,
+        )
+        _validate_gateway_load_bounded_integer(
+            fingerprint,
+            "p99_latency_ms",
+            minimum=0,
+            maximum=GATEWAY_LOAD_MAX_P99_LATENCY_MS,
+            path=path,
+            errors=errors,
+        )
 
 
 def validate_gateway_compliance_bound_artifact_metadata(
@@ -4863,6 +5183,12 @@ def validate_aggregate_gate_row_output(
             )
     if row.get("schema") != gate.schema:
         errors.append(f"{gate.name} aggregate row schema must match gate schema")
+    errors.extend(
+        validate_topology_binding_object(
+            row.get("topology_qualification"),
+            path=f"{gate.name} aggregate row topology_qualification",
+        )
+    )
     if row.get("present") is not True:
         errors.append(f"{gate.name} aggregate row present must be true")
     if row.get("valid") is not True:
@@ -5298,6 +5624,12 @@ def validate_aggregate_foundational_prerequisite_output(
             errors.append(
                 f"{path} signer fingerprint must be canonical lowercase SHA-256"
             )
+    errors.extend(
+        validate_topology_binding_object(
+            row.get("topology_qualification"),
+            path=f"{path} topology_qualification",
+        )
+    )
 
     anchors = row.get("evidence_anchor_sha256")
     if not isinstance(anchors, list):
@@ -5364,8 +5696,15 @@ def validate_aggregate_summary_output(
             errors.append(f"aggregate summary {key_diagnostic_label} is not allowed")
     if summary.get("schema") != SUMMARY_SCHEMA:
         errors.append("aggregate summary schema must match production readiness schema")
-    if summary.get("status") not in {"ready", "failed", "blocked"}:
-        errors.append("aggregate summary status must be ready, failed, or blocked")
+    if summary.get("status") not in {
+        "ready",
+        NON_PROMOTABLE_STATUS,
+        "failed",
+        "blocked",
+    }:
+        errors.append(
+            "aggregate summary status must be ready, partial, failed, or blocked"
+        )
     required_gates_value = summary.get("required_gates")
     if not isinstance(required_gates_value, list):
         errors.append("aggregate summary required_gates must be a list")
@@ -5466,6 +5805,13 @@ def validate_aggregate_summary_output(
                 errors.append("aggregate summary environment must be a canonical string")
             elif not is_production_ready_environment(aggregate_environment):
                 errors.append("aggregate summary environment must be production")
+    topology_qualification = summary.get("topology_qualification")
+    errors.extend(
+        validate_topology_binding_object(
+            topology_qualification,
+            path="aggregate summary topology_qualification",
+        )
+    )
     required = summary.get("required")
     if not isinstance(required, dict):
         errors.append("aggregate summary required must be an object")
@@ -5500,6 +5846,20 @@ def validate_aggregate_summary_output(
                     errors,
                 )
                 if row.get("present") is True:
+                    errors.extend(
+                        validate_topology_binding_object(
+                            row.get("topology_qualification"),
+                            expected=(
+                                topology_qualification
+                                if isinstance(topology_qualification, Mapping)
+                                else None
+                            ),
+                            path=(
+                                f"{gate_name_label} aggregate required row "
+                                "topology_qualification"
+                            ),
+                        )
+                    )
                     row_deployment_id = canonical_string(row.get("deployment_id"))
                     if (
                         aggregate_deployment_id is not None
@@ -5523,7 +5883,21 @@ def validate_aggregate_summary_output(
         foundational_prerequisites,
         errors,
     )
-    if isinstance(foundational_prerequisites, dict):
+    if (
+        isinstance(foundational_prerequisites, dict)
+        and foundational_prerequisites.get("present") is True
+    ):
+        errors.extend(
+            validate_topology_binding_object(
+                foundational_prerequisites.get("topology_qualification"),
+                expected=(
+                    topology_qualification
+                    if isinstance(topology_qualification, Mapping)
+                    else None
+                ),
+                path="aggregate foundational prerequisite topology_qualification",
+            )
+        )
         foundational_deployment_id = canonical_string(
             foundational_prerequisites.get("deployment_id")
         )
@@ -5547,6 +5921,11 @@ def validate_aggregate_summary_output(
                 "aggregate foundational prerequisite environment must match aggregate environment"
             )
     if summary.get("status") == "ready":
+        if tuple(required_gates) != DEFAULT_REQUIRED_GATES:
+            errors.append(
+                "aggregate summary ready required_gates must match the exact "
+                "canonical 17-gate inventory"
+            )
         if not isinstance(deployment, dict) or set(deployment) != allowed_deployment_fields:
             errors.append(
                 "aggregate summary ready deployment must include deployment_id and environment"
@@ -5598,7 +5977,10 @@ def validate_aggregate_summary_output(
                 )
                 break
             seen_errors.add(error_label)
-        if summary.get("status") != evidence_gate_status(error_values):
+        if summary.get("status") != aggregate_summary_status(
+            error_values,
+            required_gates,
+        ):
             errors.append("aggregate summary status must match aggregate diagnostics")
 
 
@@ -5618,6 +6000,12 @@ def validate_gate_summary(
         evidence_label="SoraFS production readiness summary",
     )
     require_payload_free_summary_fields(payload, errors)
+    errors.extend(
+        validate_topology_binding_object(
+            payload.get("topology_qualification"),
+            expected=options.topology_qualification,
+        )
+    )
     validate_payload_free_summary_metadata(
         gate,
         payload,
@@ -5792,6 +6180,7 @@ def validate_gate_summary(
         "deployment_id": deployment_id,
         "environment": environment,
         "expected_required_kinds": expected_required_kinds,
+        "topology_qualification": payload.get("topology_qualification"),
         "errors": errors,
     }
     return summary, errors
@@ -6113,7 +6502,7 @@ def build_summary(
 
     summary = {
         "schema": SUMMARY_SCHEMA,
-        "status": evidence_gate_status(errors),
+        "status": aggregate_summary_status(errors, required_gates),
         "required_gates": list(required_gates),
         "thresholds": {
             "max_summary_artifact_age_secs": options.max_summary_artifact_age_secs,
@@ -6121,12 +6510,13 @@ def build_summary(
         "summary_file_count": len(files) - foundational_file_count,
         "recognized_summary_count": recognized_summaries,
         "deployment": deployment,
+        "topology_qualification": options.topology_qualification,
         "foundational_prerequisites": foundational_prerequisites,
         "required": required,
         "errors": errors,
     }
     validate_aggregate_summary_output(summary, required_gates, errors)
-    summary["status"] = evidence_gate_status(errors)
+    summary["status"] = aggregate_summary_status(errors, required_gates)
     return summary, errors
 
 
@@ -6136,6 +6526,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = EvidenceArgumentParser(
         description="Validate aggregate SoraFS production-readiness summaries.",
     )
+    add_topology_qualification_argument(parser, required=False)
     parser.add_argument(
         "--evidence-dir",
         action="append",
@@ -6253,7 +6644,6 @@ def main(argv: list[str] | None = None) -> int:
     ):
         emit_checker_error_lines(["--environment must be production for this gate"])
         return 2
-
     foundational_signer_public_key: bytes | None = None
     if args.foundational_signer_public_key_hex is not None:
         foundational_key_errors: list[str] = []
@@ -6293,6 +6683,20 @@ def main(argv: list[str] | None = None) -> int:
     if preflight_errors:
         emit_checker_error_lines(preflight_errors)
         return 2
+    if args.topology_qualification_summary is None:
+        topology_qualification = None
+        topology_errors = ["--topology-qualification-summary is required"]
+    else:
+        topology_qualification, topology_errors = load_topology_qualification_binding(
+            args.topology_qualification_summary,
+            expected_deployment_id=args.deployment_id,
+            expected_environment=args.environment,
+        )
+    if args.topology_qualification_summary is not None and (
+        topology_errors or topology_qualification is None
+    ):
+        emit_checker_error_lines(topology_errors)
+        return 2
 
     options = ValidationOptions(
         now_unix=args.now_unix,
@@ -6304,6 +6708,7 @@ def main(argv: list[str] | None = None) -> int:
         foundational_previous_envelope_sha256=(
             foundational_previous_envelope_sha256
         ),
+        topology_qualification=topology_qualification,
     )
     summary, errors = build_summary(
         args.evidence_dir,
@@ -6312,6 +6717,8 @@ def main(argv: list[str] | None = None) -> int:
         options,
         args.summary_out,
     )
+    errors.extend(topology_errors)
+    summary["status"] = aggregate_summary_status(errors, required_gates)
     _, render_errors = render_and_write_checker_summary(args.summary_out, summary)
     if render_errors:
         emit_checker_error_lines(render_errors)
@@ -6319,6 +6726,12 @@ def main(argv: list[str] | None = None) -> int:
     if errors:
         emit_checker_error_block("SoraFS production readiness is blocked:", errors)
         return 1
+    if summary["status"] == NON_PROMOTABLE_STATUS:
+        emit_checker_notice(
+            "SoraFS production readiness inputs validated as a non-promotable "
+            f"partial inventory of {len(required_gates)} gate(s)."
+        )
+        return 0
     emit_checker_notice(
         "SoraFS production readiness validated for "
         f"{len(required_gates)} required gate(s) and "

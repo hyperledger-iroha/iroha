@@ -154,4 +154,6 @@ iroha compute invoke \
   `IrohaSwift/Tests/IrohaSwiftTests/ComputeSimulatorTests.swift`.
 - The CLI/JS/Swift helpers all share the same Norito fixtures so SDKs can
   validate request construction and hash handling offline without hitting a
-  running gateway.
+  running gateway. The fixture's canonical `quote_entry` entrypoint is the
+  payments profile's deterministic echo route in all three simulators; it is
+  not an unsupported or optional JavaScript capability.

@@ -219,9 +219,11 @@ pub use gateway::{
     HostPattern,
 };
 pub use governance::{
+    GOVERNANCE_DAG_BLOCK_ENVELOPE_MAX_BYTES_V1, GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
     GOVERNANCE_DAG_CID_BYTES_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
-    GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1, GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1,
+    GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1, GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1,
+    GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1, GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1,
     GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1, GOVERNANCE_EXTERNAL_KIND_RECONCILIATION_V1,
     GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1, GOVERNANCE_EXTERNAL_KIND_REPAIR_SLASH_V1,
     GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1, GOVERNANCE_LOG_VERSION_V1,
@@ -252,6 +254,7 @@ pub use governance::{
     SoraFsModerationVoteChoiceV1, SoraFsModerationVoteCountsV1, governance_dag_block_cid_v1,
     governance_log_node_cid_v1, validate_governance_dag_chain_v1,
     validate_governance_dag_head_against_chain_v1,
+    validate_governance_dag_head_against_rotatable_chain_v1,
 };
 pub use hedging::signed::{
     GOVERNED_BILLING_STATEMENT_VERSION_V1, GOVERNED_HEDGING_REFERENCE_PRICE_VERSION_V1,
@@ -395,12 +398,14 @@ pub use provider_admission::{
 pub use provider_advert::{
     AdvertEndpoint, AdvertSignature, AdvertSignatureError, AdvertValidationError, AvailabilityTier,
     CapabilityTlv, CapabilityType, EndpointKind, EndpointMetadata, EndpointMetadataKey,
-    MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1, PROVIDER_ADVERT_VERSION_V1,
-    PathDiversityPolicy, PotrMldsaCapabilityError, ProviderAdvertBodyV1, ProviderAdvertBuildError,
+    MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1,
+    PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1, PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy,
+    PotrMldsaCapabilityError, ProviderAdvertBodyV1, ProviderAdvertBuildError,
     ProviderAdvertBuilder, ProviderAdvertSignaturePayloadV1, ProviderAdvertV1,
     ProviderCapabilityRangeV1, QosHints, REFRESH_RECOMMENDATION_SECS, RangeCapabilityError,
     RendezvousTopic, SignatureAlgorithm, StakePointer, StreamBudgetError, StreamBudgetV1,
-    TransportHintError, TransportHintV1, TransportProtocol, validate_potr_mldsa_capability,
+    TransportHintError, TransportHintV1, TransportProtocol, decode_provider_advert_v1,
+    validate_potr_mldsa_capability,
 };
 pub use reconciliation::{
     AppealFinanceReconciliationSummaryV1, ReconciliationValidationError,

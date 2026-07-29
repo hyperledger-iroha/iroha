@@ -554,6 +554,7 @@ impl V2IoAdmission {
         }
     }
 
+    #[cfg(test)]
     fn has_capacity(&self, class: V2IoAdmissionClass) -> bool {
         self.queued.load(AtomicOrdering::Acquire) < self.limit(class)
     }
@@ -893,6 +894,7 @@ impl V2IoCommandQueue {
         Ok(Some(lifecycle_id.request_hash))
     }
 
+    #[cfg(test)]
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         let state = self.lock();
         state.receiver_open
@@ -1882,6 +1884,7 @@ enum V2IoCompletion {
         lifecycle_id: CertifiedServeLifecycleId,
         reason: String,
     },
+    #[cfg(test)]
     AuxiliaryNoop,
     CandidateLoaded(LockedCandidateLoad),
     CandidateLoadUnavailable {
@@ -1911,45 +1914,6 @@ impl V2IoCompletion {
         )
     }
 
-    fn work_id(&self) -> Option<EffectWorkId> {
-        match self {
-            Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => Some(*work_id),
-            Self::Stored(completion) => Some(completion.work_id()),
-            Self::Validated(completion) => Some(completion.work_id()),
-            Self::Applied(completion) => Some(completion.work_id()),
-            Self::CertifiedResponse { .. }
-            | Self::CertifiedRequestFailed { .. }
-            | Self::AuxiliaryNoop
-            | Self::CandidateLoaded(_)
-            | Self::CandidateLoadUnavailable { .. }
-            | Self::CandidateLoadFailed { .. }
-            | Self::Retired
-            | Self::RetirementFailed(_)
-            | Self::RecoveryRequired(_)
-            | Self::Failed(_) => None,
-        }
-    }
-
-    const fn serve_lifecycle_id(&self) -> Option<CertifiedServeLifecycleId> {
-        match self {
-            Self::CertifiedResponse { lifecycle_id, .. }
-            | Self::CertifiedRequestFailed { lifecycle_id, .. } => Some(*lifecycle_id),
-            Self::Signature { .. }
-            | Self::Stored(_)
-            | Self::Validated(_)
-            | Self::Applied(_)
-            | Self::ApplyDeferred { .. }
-            | Self::AuxiliaryNoop
-            | Self::CandidateLoaded(_)
-            | Self::CandidateLoadUnavailable { .. }
-            | Self::CandidateLoadFailed { .. }
-            | Self::Retired
-            | Self::RetirementFailed(_)
-            | Self::RecoveryRequired(_)
-            | Self::Failed(_) => None,
-        }
-    }
-
     fn acknowledgement(&self) -> V2IoCompletionAcknowledgement {
         match self {
             Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => {
@@ -1974,8 +1938,9 @@ impl V2IoCompletion {
             | Self::Retired
             | Self::RetirementFailed(_)
             | Self::RecoveryRequired(_)
-            | Self::Failed(_)
-            | Self::AuxiliaryNoop => V2IoCompletionAcknowledgement::Untracked,
+            | Self::Failed(_) => V2IoCompletionAcknowledgement::Untracked,
+            #[cfg(test)]
+            Self::AuxiliaryNoop => V2IoCompletionAcknowledgement::Untracked,
         }
     }
 }
@@ -2354,6 +2319,7 @@ impl V2IoHandle {
         self.command_tx.try_send_as(class, command)
     }
 
+    #[cfg(test)]
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         self.command_tx.queue.can_enqueue_as(class)
     }
@@ -8337,6 +8303,12 @@ impl ProductionV2Services {
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
         kura: Arc<crate::kura::Kura>,
+        provider_ingest_finalized_archive: Option<
+            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
+        >,
+        reputation_finalized_archive: Option<
+            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
+        >,
         block_cadence: Duration,
         genesis_account: iroha_data_model::account::AccountId,
         events_sender: EventsSender,
@@ -8410,6 +8382,8 @@ impl ProductionV2Services {
             state,
             queue,
             Arc::clone(&kura),
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
             context.chain_id.clone(),
             block_cadence,
             genesis_account,
@@ -9501,16 +9475,20 @@ impl ProductionV2Services {
                     PendingServiceCompletion::Io {
                         completion:
                             V2IoCompletion::CertifiedRequestFailed {
-                                lifecycle_id: _,
+                                lifecycle_id,
                                 reason,
                             },
                         ..
                     } => {
                         return Err(executor.external_service_failed(
-                            format!("certified-body retention contract failed: {reason}"),
+                            format!(
+                                "certified-body retention contract failed for lifecycle \
+                                 {lifecycle_id:?}: {reason}"
+                            ),
                             self,
                         ));
                     }
+                    #[cfg(test)]
                     PendingServiceCompletion::Io {
                         completion: V2IoCompletion::AuxiliaryNoop,
                         ..
@@ -10700,14 +10678,6 @@ impl ProductionV2Services {
             .filter(|entry| entry.validator != self.local_peer)
             .map(|entry| entry.validator.clone())
             .collect()
-    }
-
-    fn enqueue_io(&self, command: V2IoCommand) -> Result<(), String> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        self.io()?.enqueue(command)
     }
 
     fn enqueue_fail_stop_io(&self, command: V2IoCommand) -> Result<(), String> {
@@ -12138,7 +12108,7 @@ pub(super) mod tests {
             BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
             RetiredBodyPipelineCompletions, RuntimeStep,
         },
-        v2_transport::{authenticate_certified_body_request, authenticate_payload_chunk},
+        v2_transport::authenticate_payload_chunk,
     };
     #[cfg(feature = "bls")]
     use crate::sumeragi::{

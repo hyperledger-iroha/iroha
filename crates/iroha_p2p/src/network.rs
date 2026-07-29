@@ -9723,9 +9723,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         ticket: Option<NetworkActorAdmissionTicket>,
     ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<T>>> {
         self.post_reply_recoverable_with_flush_ack(msg, reply_route, ticket)
-            .map(|flush_ack| match flush_ack {
-                Some(_flush_ack) => NetworkReplyAdmissionOutcome::Admitted,
-                None => NetworkReplyAdmissionOutcome::ReplyWriterUnavailable,
+            .map(|flush_ack| {
+                flush_ack.map_or(
+                    NetworkReplyAdmissionOutcome::ReplyWriterUnavailable,
+                    |_flush_ack| NetworkReplyAdmissionOutcome::Admitted,
+                )
             })
     }
 
@@ -9766,6 +9768,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     ///
     /// The timeout generation is part of actor-ticket identity and therefore
     /// cannot be changed while retrying a backpressured admission ticket.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same recoverable admission errors as
+    /// [`Self::post_reply_recoverable`].
     #[allow(clippy::needless_pass_by_value)]
     pub fn post_reply_recoverable_with_flush_ack_at_attempt(
         &self,

@@ -54,12 +54,15 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, Quantity};
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
+pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
-    ValidationFeeCurrentPolicyProofV1, ValidationFeeProposalDetailV1,
-    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
-    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalListV1,
+    ValidationFeeCurrentPolicyProofV1, ValidationFeePlainBallotDirectionV1,
+    ValidationFeePlainBallotDraftRequestV1, ValidationFeePlainBallotDraftResponseV1,
+    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
+    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
+    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListV1,
     ValidationFeeProposalRecordV1, ValidationFeeVerifiedPolicyProjectionV1,
 };
 use iroha_torii_shared::{
@@ -1605,10 +1608,6 @@ pub struct MultisigSpecResponse {
 )]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the max_* field names are the canonical public SCCP V1 JSON and Norito schema"
-)]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
     pub max_governed_lanes: u32,
@@ -1635,10 +1634,6 @@ pub struct SccpRegistryLimits {
 )]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the max_* field names are the canonical public SCCP V1 JSON and Norito schema"
-)]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
     pub max_outbound_messages_per_block: u32,
@@ -2600,6 +2595,75 @@ fn validate_validation_fee_draft_response(
     {
         return Err(eyre!(
             "validation-fee draft returned a different native instruction"
+        ));
+    }
+    Ok(instruction)
+}
+
+fn validate_validation_fee_plain_ballot_draft_response(
+    response: &ValidationFeePlainBallotDraftResponseV1,
+    proposal_id: &str,
+    request: &ValidationFeePlainBallotDraftRequestV1,
+) -> Result<InstructionBox> {
+    if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1
+        || response.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1
+    {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot draft has an unsupported version"
+        ));
+    }
+    if response.proposal_id != proposal_id
+        || response.owner != request.owner
+        || response.direction != request.direction
+    {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot draft differs from the requested proposal, owner, or direction"
+        ));
+    }
+    let [draft] = response.tx_instructions.as_slice() else {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot draft must contain exactly one instruction"
+        ));
+    };
+    if draft.payload_hex.is_empty()
+        || draft.payload_hex.len() % 2 != 0
+        || !draft
+            .payload_hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot instruction payload must be lowercase canonical hex"
+        ));
+    }
+    let payload = hex::decode(&draft.payload_hex)
+        .wrap_err("failed to decode validation-fee PLAIN ballot draft")?;
+    let instruction = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
+        .wrap_err("failed to decode native validation-fee PLAIN ballot instruction")?;
+    let ballot = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::governance::CastPlainBallot>()
+        .ok_or_else(|| {
+            eyre!("validation-fee PLAIN ballot draft returned a different instruction type")
+        })?;
+    if ballot.referendum_id != proposal_id
+        || ballot.owner != request.owner
+        || ballot.amount.is_zero()
+        || ballot.duration_blocks == 0
+        || ballot.direction != request.direction.native_code()
+        || response.amount != ballot.amount.to_string()
+        || response.duration_blocks != ballot.duration_blocks.to_string()
+    {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot response differs from its exact native instruction"
+        ));
+    }
+    let (wire_id, canonical_payload) =
+        iroha_data_model::isi::framed_instruction_payload(&instruction)
+            .ok_or_else(|| eyre!("validation-fee PLAIN ballot instruction is not registered"))?;
+    if wire_id != draft.wire_id || hex::encode(canonical_payload) != draft.payload_hex {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot instruction is not canonically framed"
         ));
     }
     Ok(instruction)
@@ -4775,7 +4839,7 @@ impl SorafsReplicationListFilter<'_> {
     }
 }
 
-/// Optional finalized-block anchor shared by authoritative SoraFS repair reads.
+/// Optional finalized-block anchor shared by authoritative `SoraFS` repair reads.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsRepairFinalizedAnchor<'a> {
     /// Non-zero finalized block height.
@@ -5101,7 +5165,8 @@ impl SorafsReserveEventsReadbackFilter<'_> {
 }
 
 const SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1: u16 = 100;
-const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1: usize = 64 * 1024;
+const SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1: usize = 1024 * 1024;
+const SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1: usize = 22 * 1024 * 1024;
 
 fn require_nonzero_lower_hex32<'a>(value: &'a str, context: &str) -> Result<&'a str> {
     if value.len() != 64
@@ -5188,68 +5253,6 @@ impl SorafsHedgingProjectionFilter<'_> {
         }
         url.query_pairs_mut()
             .append_pair("limit", &limit.to_string());
-        Ok(())
-    }
-}
-
-/// Canonical owner proof submitted when acknowledging one published billing statement.
-#[derive(
-    Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
-)]
-pub struct SorafsBillingAcknowledgementProof {
-    request_nonce: [u8; 32],
-    authentication_proof: Vec<u8>,
-}
-
-impl fmt::Debug for SorafsBillingAcknowledgementProof {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SorafsBillingAcknowledgementProof")
-            .field("request_nonce", &hex::encode(self.request_nonce))
-            .field("authentication_proof", &"[REDACTED]")
-            .finish()
-    }
-}
-
-impl SorafsBillingAcknowledgementProof {
-    /// Construct a bounded proof from an exact non-zero lowercase request nonce.
-    ///
-    /// # Errors
-    /// Returns an error if the nonce is not canonical or the proof is empty or exceeds 64 KiB.
-    pub fn try_from_hex(request_nonce_hex: &str, authentication_proof: Vec<u8>) -> Result<Self> {
-        let request_nonce_hex = require_nonzero_lower_hex32(
-            request_nonce_hex,
-            "billing acknowledgement request nonce",
-        )?;
-        if authentication_proof.is_empty()
-            || authentication_proof.len() > SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
-        {
-            return Err(eyre!(
-                "billing acknowledgement authentication proof must contain 1..={SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes"
-            ));
-        }
-        let mut request_nonce = [0_u8; 32];
-        hex::decode_to_slice(request_nonce_hex, &mut request_nonce)
-            .wrap_err("failed to decode canonical billing acknowledgement request nonce")?;
-        Ok(Self {
-            request_nonce,
-            authentication_proof,
-        })
-    }
-
-    fn validate(&self) -> Result<()> {
-        if self.request_nonce == [0; 32] {
-            return Err(eyre!(
-                "billing acknowledgement request nonce must be non-zero"
-            ));
-        }
-        if self.authentication_proof.is_empty()
-            || self.authentication_proof.len() > SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
-        {
-            return Err(eyre!(
-                "billing acknowledgement authentication proof must contain 1..={SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes"
-            ));
-        }
         Ok(())
     }
 }
@@ -6457,7 +6460,7 @@ impl SorafsModerationCommandRoute {
     }
 }
 
-/// Canonical SoraFS repair command route for a caller-signed native transaction.
+/// Canonical `SoraFS` repair command route for a caller-signed native transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SorafsRepairCommandRoute {
     /// `SubmitSorafsRepairTask`.
@@ -13744,10 +13747,6 @@ impl Client {
     }
 
     /// Encode and hash a signed transaction once for later submission.
-    #[expect(
-        clippy::unused_self,
-        reason = "preparing a signed transaction is intentionally client-independent and must allow foreign-chain payloads for server-side rejection tests"
-    )]
     pub fn prepare_transaction_payload(
         &self,
         transaction: &SignedTransaction,
@@ -17597,7 +17596,7 @@ impl Client {
             .send()
     }
 
-    /// Fetch chain-authoritative SoraFS repair counters at an optional finalized anchor.
+    /// Fetch chain-authoritative `SoraFS` repair counters at an optional finalized anchor.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -17613,7 +17612,7 @@ impl Client {
             .send()
     }
 
-    /// Fetch a bounded finalized page of chain-authoritative SoraFS repair tasks.
+    /// Fetch a bounded finalized page of chain-authoritative `SoraFS` repair tasks.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -17629,7 +17628,7 @@ impl Client {
             .send()
     }
 
-    /// Fetch one chain-authoritative SoraFS repair task by canonical ticket ID.
+    /// Fetch one chain-authoritative `SoraFS` repair task by canonical ticket ID.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -17651,7 +17650,7 @@ impl Client {
             .send()
     }
 
-    /// Fetch a bounded finalized page of committed SoraFS repair events.
+    /// Fetch a bounded finalized page of committed `SoraFS` repair events.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -17667,7 +17666,7 @@ impl Client {
             .send()
     }
 
-    /// Submit a caller-signed transaction to one exact SoraFS repair command route.
+    /// Submit a caller-signed transaction to one exact `SoraFS` repair command route.
     ///
     /// Torii requires exactly one route-matching native repair instruction and uses the same
     /// strict durable admission contract as the canonical transaction endpoint.
@@ -17782,15 +17781,17 @@ impl Client {
         self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Appeal, transaction)
     }
 
-    /// Fetch the supervised SoraFS billing projector status.
+    /// Fetch the supervised `SoraFS` billing projector status.
     ///
     /// # Errors
-    /// Returns an error if canonical request signing, request construction, or the HTTP call fails.
+    /// Returns an error if canonical request signing, request construction, the HTTP call fails,
+    /// or the response exceeds the 1 MiB JSON bound.
     pub fn get_sorafs_billing_status(&self) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/billing/status");
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
         )
     }
 
@@ -17798,7 +17799,8 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
-    /// signing or request construction fails, or the HTTP call fails.
+    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
+    /// 1 MiB JSON bound.
     pub fn get_sorafs_billing_statements(
         &self,
         filter: SorafsBillingStatementListFilter<'_>,
@@ -17807,7 +17809,8 @@ impl Client {
         filter.apply_to_url(&mut url)?;
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
         )
     }
 
@@ -17815,7 +17818,8 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the statement identifier or checkpoint fingerprint is noncanonical,
-    /// canonical request signing or request construction fails, or the HTTP call fails.
+    /// canonical request signing or request construction fails, the HTTP call fails, or the
+    /// response exceeds the 22 MiB canonical statement bound.
     pub fn get_sorafs_billing_statement(
         &self,
         statement_id_hex: &str,
@@ -17836,7 +17840,8 @@ impl Client {
             .append_pair("expected_checkpoint_fingerprint", checkpoint);
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_NORITO),
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1),
         )
     }
 
@@ -17844,7 +17849,8 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if identifiers or proof fields are noncanonical, Norito serialization or
-    /// canonical request signing fails, request construction fails, or the HTTP call fails.
+    /// canonical request signing fails, request construction or the HTTP call fails, or the
+    /// response exceeds the 1 MiB JSON bound.
     pub fn post_sorafs_billing_statement_acknowledgement(
         &self,
         statement_id_hex: &str,
@@ -17870,29 +17876,33 @@ impl Client {
         self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_NORITO)
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
         )
     }
 
-    /// Fetch payload-free SoraFS billing delivery reconciliation status.
+    /// Fetch payload-free `SoraFS` billing delivery reconciliation status.
     ///
     /// # Errors
-    /// Returns an error if canonical request signing, request construction, or the HTTP call fails.
+    /// Returns an error if canonical request signing, request construction, the HTTP call fails,
+    /// or the response exceeds the 1 MiB JSON bound.
     pub fn get_sorafs_billing_reconciliation(&self) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/billing/reconciliation");
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
         )
     }
 
-    /// Fetch one exact-checkpoint page of finalized SoraFS hedging exposure.
+    /// Fetch one exact-checkpoint page of finalized `SoraFS` hedging exposure.
     ///
     /// Automatic hedge execution is not exposed by this read-only client method.
     ///
     /// # Errors
     /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
-    /// signing or request construction fails, or the HTTP call fails.
+    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
+    /// 1 MiB JSON bound.
     pub fn get_sorafs_hedging_exposure(
         &self,
         filter: SorafsHedgingProjectionFilter<'_>,
@@ -17900,13 +17910,14 @@ impl Client {
         self.get_sorafs_hedging_projection("v1/sorafs/hedging/exposure", filter)
     }
 
-    /// Fetch one exact-checkpoint page of governed SoraFS hedge intents.
+    /// Fetch one exact-checkpoint page of governed `SoraFS` hedge intents.
     ///
     /// This method returns intent projections only and cannot submit hedge execution.
     ///
     /// # Errors
     /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
-    /// signing or request construction fails, or the HTTP call fails.
+    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
+    /// 1 MiB JSON bound.
     pub fn get_sorafs_hedging_intents(
         &self,
         filter: SorafsHedgingProjectionFilter<'_>,
@@ -17923,7 +17934,8 @@ impl Client {
         filter.apply_to_url(&mut url)?;
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
         )
     }
 
@@ -18083,7 +18095,7 @@ impl Client {
             .send()
     }
 
-    /// Build an exact caller-signed native SoraFS moderation transaction.
+    /// Build an exact caller-signed native `SoraFS` moderation transaction.
     ///
     /// # Errors
     /// Returns an error if the configured signing key cannot sign the exact V1 envelope.
@@ -18106,7 +18118,7 @@ impl Client {
             .wrap_err("sign exact caller-owned native SoraFS moderation transaction")
     }
 
-    /// Submit a caller-signed transaction to one exact SoraFS moderation command route.
+    /// Submit a caller-signed transaction to one exact `SoraFS` moderation command route.
     ///
     /// Torii requires one route-matching native instruction, the V1 TTL, no
     /// nonce, empty metadata, and a signature whose authority matches the
@@ -19810,6 +19822,51 @@ impl Client {
         let response = self.post_validation_fee_proposal_draft(request)?;
         let instruction = validate_validation_fee_draft_response(&response, request)?;
         self.submit(instruction, fee_payment)
+    }
+
+    /// Draft one exact proposal-bound validation-fee PLAIN ballot for local signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed proposal id, unsupported request
+    /// version, transport/HTTP/JSON failure, or a response whose owner,
+    /// direction, amount, duration, or native instruction differs from the
+    /// exact requested ballot.
+    pub fn post_validation_fee_plain_ballot_draft(
+        &self,
+        proposal_id: &str,
+        request: &ValidationFeePlainBallotDraftRequestV1,
+    ) -> Result<ValidationFeePlainBallotDraftResponseV1> {
+        Self::require_lower_hex_32(proposal_id, "proposal_id")?;
+        if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
+            return Err(eyre!(
+                "validation-fee PLAIN ballot draft has an unsupported version"
+            ));
+        }
+        let path =
+            torii_uri::VALIDATION_FEE_PLAIN_BALLOT_DRAFT.replace("{proposal_id}", proposal_id);
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode validation-fee PLAIN ballot draft")?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES)
+                .body(body),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to draft validation-fee PLAIN ballot: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let result: ValidationFeePlainBallotDraftResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("failed to decode validation-fee PLAIN ballot draft response")?;
+        let _ = validate_validation_fee_plain_ballot_draft_response(&result, proposal_id, request)?;
+        Ok(result)
     }
 
     /// POST `/v1/gov/ballots/zk` with a JSON DTO body.
@@ -24794,6 +24851,108 @@ mod tests {
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    fn validation_fee_plain_ballot_draft_fixture() -> (
+        String,
+        ValidationFeePlainBallotDraftRequestV1,
+        ValidationFeePlainBallotDraftResponseV1,
+    ) {
+        let proposal_id = "11".repeat(32);
+        let request = ValidationFeePlainBallotDraftRequestV1 {
+            version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
+            owner: ALICE_ID.clone(),
+            direction: ValidationFeePlainBallotDirectionV1::Nay,
+        };
+        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
+            referendum_id: proposal_id.clone(),
+            owner: request.owner.clone(),
+            amount: 150_u64.into(),
+            duration_blocks: 3_600,
+            direction: request.direction.native_code(),
+        };
+        let instruction: InstructionBox = ballot.into();
+        let (wire_id, payload) = iroha_data_model::isi::framed_instruction_payload(&instruction)
+            .expect("registered CastPlainBallot instruction");
+        let response = ValidationFeePlainBallotDraftResponseV1 {
+            version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
+            proposal_id: proposal_id.clone(),
+            owner: request.owner.clone(),
+            amount: "150".to_owned(),
+            duration_blocks: "3600".to_owned(),
+            direction: request.direction,
+            tx_instructions: vec![ValidationFeeProposalInstructionDraftV1 {
+                wire_id: wire_id.to_owned(),
+                payload_hex: hex::encode(payload),
+            }],
+        };
+        (proposal_id, request, response)
+    }
+
+    #[test]
+    fn validation_fee_plain_ballot_draft_client_uses_typed_route_and_exact_body() {
+        let (proposal_id, request, expected) = validation_fee_plain_ballot_draft_fixture();
+        let response_json =
+            norito::json::to_json(&expected).expect("encode exact PLAIN ballot response");
+        let response = json_response(StatusCode::OK, &response_json);
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let actual = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url())
+                .post_validation_fee_plain_ballot_draft(&proposal_id, &request)
+        })
+        .expect("typed PLAIN ballot draft");
+        assert_eq!(actual, expected);
+
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft")
+        );
+        assert_eq!(snapshot.url.query(), None);
+        assert_eq!(
+            snapshot.max_response_bytes,
+            VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES
+        );
+        assert_single_accept_header(&snapshot, APPLICATION_JSON);
+        let submitted: ValidationFeePlainBallotDraftRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("decode exact draft request");
+        assert_eq!(submitted, request);
+    }
+
+    #[test]
+    fn validation_fee_plain_ballot_draft_rejects_response_substitution() {
+        let (proposal_id, request, response) = validation_fee_plain_ballot_draft_fixture();
+        validate_validation_fee_plain_ballot_draft_response(&response, &proposal_id, &request)
+            .expect("exact response");
+
+        let mut candidate = response.clone();
+        candidate.amount = "151".to_owned();
+        assert!(
+            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
+                .is_err()
+        );
+
+        candidate = response.clone();
+        candidate.duration_blocks = "03600".to_owned();
+        assert!(
+            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
+                .is_err()
+        );
+
+        candidate = response.clone();
+        candidate.direction = ValidationFeePlainBallotDirectionV1::Aye;
+        assert!(
+            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
+                .is_err()
+        );
+
+        candidate = response;
+        candidate.tx_instructions[0].payload_hex.push('0');
+        assert!(
+            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
+                .is_err()
+        );
+    }
 
     #[test]
     fn validation_fee_governance_integer_strings_are_canonical_and_full_width() {
@@ -31480,8 +31639,17 @@ mod tests {
 
         let snapshots = store.lock().expect("snapshot store");
         assert_eq!(snapshots.len(), 7);
-        for snapshot in snapshots.iter() {
+        for (index, snapshot) in snapshots.iter().enumerate() {
             assert_canonical_account_signed_request(&client, snapshot);
+            assert_eq!(
+                snapshot.max_response_bytes,
+                if index == 2 {
+                    SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1
+                } else {
+                    SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1
+                },
+                "route {index} must retain its endpoint-specific response bound",
+            );
         }
 
         assert_eq!(snapshots[0].method, HttpMethod::GET);

@@ -6,19 +6,29 @@ CHECK_SCRIPT="$SCRIPT_DIR/check_mobile_sdk_artifacts.sh"
 PACKAGE_SCRIPT="$SCRIPT_DIR/package_mobile_sdk_artifacts.sh"
 TMP_DIR="$(mktemp -d)"
 TEST_PYTHON_BINARY=""
-for trusted_python in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-  if [[ -x "$trusted_python" ]]; then
+for trusted_python in \
+  /opt/homebrew/bin/python3.12 \
+  /opt/homebrew/opt/python@3.12/bin/python3.12 \
+  /usr/local/bin/python3.12 \
+  /usr/local/opt/python@3.12/bin/python3.12 \
+  /opt/homebrew/bin/python3 \
+  /usr/local/bin/python3 \
+  /usr/bin/python3; do
+  if [[ -x "$trusted_python" ]] \
+    && [[ "$("$trusted_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)" == "3.12" ]]; then
     TEST_PYTHON_BINARY="$trusted_python"
     break
   fi
 done
 [[ -n "$TEST_PYTHON_BINARY" ]] || {
-  printf '[mobile-sdk-artifacts-test] ERROR: pinned Python 3 is required\n' >&2
+  printf '[mobile-sdk-artifacts-test] ERROR: pinned Python 3.12 is required\n' >&2
   exit 1
 }
-TEST_PYTHON_BINARY="$("$TEST_PYTHON_BINARY" -I -c \
+TEST_PYTHON_BINARY="$("$TEST_PYTHON_BINARY" -I -S -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$TEST_PYTHON_BINARY")"
+export MOBILE_SDK_PYTHON_BINARY="$TEST_PYTHON_BINARY"
+export MOBILE_SDK_TEST_PYTHON_BINARY="$TEST_PYTHON_BINARY"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -127,7 +137,7 @@ test_hermetic_command_environment() {
     RUSTC_WORKSPACE_WRAPPER="$TMP_DIR/forged-workspace-wrapper" \
     CC="$TMP_DIR/forged-cc" \
     SDKROOT="$TMP_DIR/forged-sdk" \
-    python3 -I "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
+    "$TEST_PYTHON_BINARY" -I -S "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
       --profile host-cargo \
       --set "CARGO=/reviewed/cargo" \
       --set "CARGO_HOME=/reviewed/cargo-home" \
@@ -143,7 +153,7 @@ test_hermetic_command_environment() {
       --set "RUSTUP_HOME=/reviewed/rustup-home" \
       --set "TMPDIR=/tmp" \
       -- "$probe" "$output"
-  python3 -I - "$output" <<'PY'
+  "$TEST_PYTHON_BINARY" -I -S - "$output" <<'PY'
 from pathlib import Path
 import sys
 
@@ -177,7 +187,7 @@ if environment["CARGO_NET_OFFLINE"] != "true":
     raise SystemExit("hermetic Cargo environment is not offline")
 PY
   if rejected_output="$(
-      python3 -I "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
+      "$TEST_PYTHON_BINARY" -I -S "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
         --profile host-cargo \
         --set "RUSTFLAGS=forged" \
         -- "$probe" "$output" 2>&1
@@ -230,7 +240,7 @@ SH
   chmod 0700 "$fake_objcopy"
   ln -s llvm-objcopy "$fake_strip"
   resolved_strip="$(
-    "$TEST_PYTHON_BINARY" -I -c \
+    "$TEST_PYTHON_BINARY" -I -S -c \
       'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
       "$fake_strip"
   )"
@@ -311,7 +321,7 @@ make_android_outputs() {
     "$root/kotlin/client-android/build/outputs/aar"
   make_jar "$root/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
   make_aar "$aar" "AndroidManifest.xml" "classes.jar"
-  python3 - "$root" "$aar" "$mode" "$omitted_aar_abi" <<'PY'
+  "$TEST_PYTHON_BINARY" -I -S - "$root" "$aar" "$mode" "$omitted_aar_abi" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -474,7 +484,7 @@ enum KagemushaRecursiveSpendV4Fixture {
     ]
 }
 SWIFT
-  python3 - "$CHECK_SCRIPT" "$root" <<'PY'
+  "$TEST_PYTHON_BINARY" -I -S - "$CHECK_SCRIPT" "$root" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -637,6 +647,15 @@ PLIST
   hash_c="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/macos-arm64/libNoritoBridge.a" | awk '{print $1}')"
   local header_hash
   header_hash="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/Headers/connect_norito_bridge.h" | awk '{print $1}')"
+  cat >"$root/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift" <<SWIFT
+enum NativeBridgeFixture {
+    static let manifestlessFallbackHashes = [
+        "ios-arm64": "$hash_a",
+        "ios-arm64_x86_64-simulator": "$hash_b",
+        "macos-arm64": "$hash_c",
+    ]
+}
+SWIFT
 
   cat >"$root/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <<JSON
 {
@@ -707,6 +726,7 @@ PLIST
     "connect_norito_alias_instruction_round_trip_v1",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
@@ -785,7 +805,7 @@ SETTINGS
 
 append_candidate_lab_source() {
   local root="$1"
-  python3 - "$CHECK_SCRIPT" "$root" <<'PY'
+  "$TEST_PYTHON_BINARY" -I -S - "$CHECK_SCRIPT" "$root" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -867,7 +887,7 @@ PY
 
 append_candidate_lab_header() {
   local root="$1"
-  python3 - "$CHECK_SCRIPT" "$root" <<'PY'
+  "$TEST_PYTHON_BINARY" -I -S - "$CHECK_SCRIPT" "$root" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -944,7 +964,8 @@ SH
 #!/usr/bin/env bash
 binary="${*: -1}"
 root="${binary%%/dist/*}"
-python3 - "$root/dist/NoritoBridge.artifacts.json" "$binary" <<'PY'
+"${MOBILE_SDK_TEST_PYTHON_BINARY:?}" -I -S - \
+  "$root/dist/NoritoBridge.artifacts.json" "$binary" <<'PY'
 import json
 import os
 import sys
@@ -970,7 +991,8 @@ make_android_inspection_tools() {
   cat >"$tools/llvm-nm" <<'SH'
 #!/usr/bin/env bash
 binary="${*: -1}"
-python3 - "${MOBILE_SDK_TEST_CHECK_SCRIPT:?}" "$binary" <<'PY'
+"${MOBILE_SDK_TEST_PYTHON_BINARY:?}" -I -S - \
+  "${MOBILE_SDK_TEST_CHECK_SCRIPT:?}" "$binary" <<'PY'
 import os
 import re
 import sys
@@ -987,17 +1009,29 @@ def shell_array(name):
         if line.strip() and not line.lstrip().startswith("#")
     ]
 
-print("connect_norito_bridge_abi_version")
+omitted = os.environ.get("MOBILE_SDK_TEST_OMIT_ANDROID_SYMBOL")
+
+def emit(symbol):
+    if symbol != omitted:
+        print(symbol)
+
+emit("connect_norito_bridge_abi_version")
 for symbol in shell_array("KAGEMUSHA_C_SYMBOLS"):
-    print(symbol)
+    emit(symbol)
+for symbol in shell_array("SORAFS_APPEAL_FINANCE_C_SYMBOLS"):
+    emit(symbol)
 for namespace in (
     "org_hyperledger_iroha_sdk_offline",
     "org_hyperledger_iroha_android_offline",
 ):
     for method in shell_array("KAGEMUSHA_JNI_METHODS"):
-        print(f"Java_{namespace}_KagemushaRecursiveSpendProver_{method}")
+        emit(f"Java_{namespace}_KagemushaRecursiveSpendProver_{method}")
 for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
-    print(symbol)
+    emit(symbol)
+for symbol in shell_array("SORAFS_APPEAL_FINANCE_JNI_SYMBOLS"):
+    emit(symbol)
+for symbol in shell_array("NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS"):
+    emit(symbol)
 if os.environ.get("MOBILE_SDK_TEST_EXTRA_ANDROID_KAGEMUSHA") == "1":
     print("connect_norito_kagemusha_recursive_spend_init_v3")
 forbidden = os.environ.get("MOBILE_SDK_TEST_FORBIDDEN_SYMBOL")
@@ -1092,6 +1126,29 @@ run_expect_android_binary_fail() {
     *)
       printf '%s\n' "$output" >&2
       fail "expected strict Android binary failure containing: $expected"
+      ;;
+  esac
+}
+
+run_expect_android_missing_symbol_fail() {
+  local root="$1"
+  local symbol="$2"
+  local tools="$3"
+  local output
+  if output="$(PATH="$tools:$PATH" \
+      MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
+      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      MOBILE_SDK_TEST_OMIT_ANDROID_SYMBOL="$symbol" \
+      bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected Android validation to reject missing symbol $symbol"
+  fi
+  case "$output" in
+    *"bridge is missing ABI21/V4 symbols:"*"$symbol"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "expected Android missing-symbol failure for $symbol"
       ;;
   esac
 }
@@ -1225,7 +1282,7 @@ run_expect_pass "$feature_gated_candidate_lab_source"
 candidate_lab_source_without_export="$TMP_DIR/candidate-lab-source-without-export"
 make_fixture "$candidate_lab_source_without_export"
 append_candidate_lab_source "$candidate_lab_source_without_export"
-python3 - "$candidate_lab_source_without_export" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$candidate_lab_source_without_export" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1252,7 +1309,7 @@ run_expect_fail \
 unguarded_candidate_lab_source="$TMP_DIR/unguarded-candidate-lab-source"
 make_fixture "$unguarded_candidate_lab_source"
 append_candidate_lab_source "$unguarded_candidate_lab_source"
-python3 - "$unguarded_candidate_lab_source" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$unguarded_candidate_lab_source" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1310,7 +1367,7 @@ run_expect_fail \
 
 extra_candidate_lab_header="$TMP_DIR/extra-candidate-lab-header"
 cp -R "$feature_gated_candidate_lab_header" "$extra_candidate_lab_header"
-python3 - "$extra_candidate_lab_header" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$extra_candidate_lab_header" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1368,7 +1425,7 @@ run_expect_fail \
 
 commented_candidate_lab_header="$TMP_DIR/commented-candidate-lab-header"
 cp -R "$feature_gated_candidate_lab_header" "$commented_candidate_lab_header"
-python3 - "$commented_candidate_lab_header" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$commented_candidate_lab_header" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1388,7 +1445,7 @@ run_expect_fail \
 
 commented_candidate_marker_header="$TMP_DIR/commented-candidate-marker-header"
 cp -R "$feature_gated_candidate_lab_header" "$commented_candidate_marker_header"
-python3 - "$commented_candidate_marker_header" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$commented_candidate_marker_header" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1441,7 +1498,7 @@ run_expect_fail \
 
 unguarded_candidate_lab_marker="$TMP_DIR/unguarded-candidate-lab-marker"
 cp -R "$feature_gated_candidate_lab_source" "$unguarded_candidate_lab_marker"
-python3 - "$unguarded_candidate_lab_marker" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$unguarded_candidate_lab_marker" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1458,7 +1515,7 @@ run_expect_fail \
 
 unguarded_candidate_lab_jni="$TMP_DIR/unguarded-candidate-lab-jni"
 cp -R "$feature_gated_candidate_lab_source" "$unguarded_candidate_lab_jni"
-python3 - "$unguarded_candidate_lab_jni" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$unguarded_candidate_lab_jni" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1542,7 +1599,7 @@ run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 21"
 
 tampered_apple_build_environment="$TMP_DIR/tampered-apple-build-environment"
 make_fixture "$tampered_apple_build_environment"
-"$TEST_PYTHON_BINARY" -I - "$tampered_apple_build_environment" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$tampered_apple_build_environment" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -1703,7 +1760,7 @@ candidate_marker_apple="$TMP_DIR/candidate-marker-apple"
 make_fixture "$candidate_marker_apple"
 printf '%s\n' 'KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2' \
   >>"$candidate_marker_apple/dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a"
-python3 - "$candidate_marker_apple" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$candidate_marker_apple" <<'PY'
 from pathlib import Path
 import hashlib
 import json
@@ -1823,7 +1880,7 @@ run_expect_pass "$with_android_outputs" --require-built-android
 
 tampered_android_build_environment="$TMP_DIR/tampered-android-build-environment"
 cp -R "$with_android_outputs" "$tampered_android_build_environment"
-"$TEST_PYTHON_BINARY" -I - "$tampered_android_build_environment" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$tampered_android_build_environment" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -1883,7 +1940,7 @@ MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \
   --root "$packaged_android_outputs" \
   --android \
   --version 1.0.0 >/dev/null
-python3 - "$packaged_android_outputs" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$packaged_android_outputs" <<'PY'
 import io
 from pathlib import Path
 import sys
@@ -1926,7 +1983,7 @@ run_expect_fail \
 
 tampered_android_raw="$TMP_DIR/tampered-android-raw"
 cp -R "$with_android_outputs" "$tampered_android_raw"
-python3 - "$tampered_android_raw" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$tampered_android_raw" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1985,7 +2042,7 @@ run_expect_pass "$production_android_outputs" --android-only --require-built-and
 
 tampered_android_provenance="$TMP_DIR/tampered-android-provenance"
 cp -R "$with_android_outputs" "$tampered_android_provenance"
-python3 - "$tampered_android_provenance" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$tampered_android_provenance" <<'PY'
 from pathlib import Path
 import sys
 
@@ -2002,7 +2059,7 @@ run_expect_fail \
 
 duplicate_android_provenance="$TMP_DIR/duplicate-android-provenance"
 cp -R "$with_android_outputs" "$duplicate_android_provenance"
-python3 - "$duplicate_android_provenance" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$duplicate_android_provenance" <<'PY'
 from pathlib import Path
 import sys
 import zipfile
@@ -2034,7 +2091,7 @@ run_expect_fail \
 
 missing_android_source_fingerprint="$TMP_DIR/missing-android-source-fingerprint"
 cp -R "$with_android_outputs" "$missing_android_source_fingerprint"
-python3 - "$missing_android_source_fingerprint" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$missing_android_source_fingerprint" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -2065,7 +2122,7 @@ run_expect_fail \
 
 invalid_android_source_fingerprint="$TMP_DIR/invalid-android-source-fingerprint"
 cp -R "$with_android_outputs" "$invalid_android_source_fingerprint"
-python3 - "$invalid_android_source_fingerprint" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$invalid_android_source_fingerprint" <<'PY'
 from pathlib import Path
 import sys
 import zipfile
@@ -2096,7 +2153,7 @@ run_expect_fail \
 
 dirty_android_provenance="$TMP_DIR/dirty-android-provenance"
 cp -R "$with_android_outputs" "$dirty_android_provenance"
-python3 - "$dirty_android_provenance" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$dirty_android_provenance" <<'PY'
 from pathlib import Path
 import sys
 import zipfile
@@ -2143,7 +2200,7 @@ run_expect_fail \
 
 invalid_android_production_features="$TMP_DIR/invalid-android-production-features"
 cp -R "$production_android_outputs" "$invalid_android_production_features"
-python3 - "$invalid_android_production_features" <<'PY'
+"$TEST_PYTHON_BINARY" -I -S - "$invalid_android_production_features" <<'PY'
 from pathlib import Path
 import sys
 import zipfile
@@ -2216,6 +2273,26 @@ run_expect_android_forbidden_binary_fail \
   "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2" \
   "x86_64" \
   "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignerContractRevision" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson" \
+  "$android_inspection_tools"
 run_expect_android_unstripped_fail "$with_android_outputs" "$android_inspection_tools"
 run_expect_android_binary_fail \
   "$with_android_outputs" \
@@ -2223,5 +2300,7 @@ run_expect_android_binary_fail \
   "$android_inspection_tools"
 rm -rf "$with_android_outputs/IrohaSwift" "$with_android_outputs/dist"
 run_expect_pass "$with_android_outputs" --android-only --require-built-android
+
+bash "$SCRIPT_DIR/tests/mobile_sdk_python312_contract.sh"
 
 echo "[mobile-sdk-artifacts-test] all checks passed"

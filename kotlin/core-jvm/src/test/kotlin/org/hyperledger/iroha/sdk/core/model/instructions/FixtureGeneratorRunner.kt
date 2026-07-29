@@ -50,7 +50,7 @@ internal object FixtureGeneratorRunner {
     }
 
     private fun buildFixtureGenerator(repoRoot: java.io.File, targetDir: java.io.File) {
-        val build = ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
+        val build = ProcessBuilder(cargoBuildCommand())
             .directory(repoRoot)
             .apply {
                 environment()["CARGO_TARGET_DIR"] = targetDir.absolutePath
@@ -63,6 +63,9 @@ internal object FixtureGeneratorRunner {
             "cargo build failed (exit $buildExit): $buildOutput"
         }
     }
+
+    internal fun cargoBuildCommand(): List<String> =
+        listOf("cargo", "build", "--locked", "--offline", "-p", "kotlin-fixture-gen")
 
     private fun locateRepoRoot(): java.io.File {
         var dir = java.io.File("").absoluteFile

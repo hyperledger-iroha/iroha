@@ -260,6 +260,36 @@ impl From<crate::isi::privacy::RevokePrivacyZkAcePolicyV1> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::SubmitPrivacyProofV1> for InstructionBox {
     fn from(i: crate::isi::privacy::SubmitPrivacyProofV1) -> Self {
         InstructionBox(Box::new(i))
@@ -310,6 +340,11 @@ impl From<crate::isi::asset_transfer_control::SetAssetTransferControl> for Instr
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::asset_transfer_control::SetAssetHoldingLimit> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetHoldingLimit) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 // Allow direct boxing of ZK asset and voting instructions
 impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
@@ -334,6 +369,26 @@ impl From<crate::isi::zk::CancelConfidentialPolicyTransition> for InstructionBox
 }
 impl From<crate::isi::zk::Shield> for InstructionBox {
     fn from(i: crate::isi::zk::Shield) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::zk::RegisterZkAceIdentityCommitment> for InstructionBox {
+    fn from(i: crate::isi::zk::RegisterZkAceIdentityCommitment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::zk::RotateZkAceIdentityCommitment> for InstructionBox {
+    fn from(i: crate::isi::zk::RotateZkAceIdentityCommitment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::zk::RevokeZkAceIdentityCommitment> for InstructionBox {
+    fn from(i: crate::isi::zk::RevokeZkAceIdentityCommitment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::zk::SubmitZkAceAuthorizedTransfer> for InstructionBox {
+    fn from(i: crate::isi::zk::SubmitZkAceAuthorizedTransfer) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1977,21 +2032,36 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
 }
 
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
-    let inner = peel_instruction_box(&**instr);
-    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-        return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
+    #[cfg(feature = "packed-struct")]
+    {
+        // `packed-struct` selects the derive's alternate exact-size formula at
+        // compile time, while `Instruction::dyn_encode_into` emits the canonical
+        // adaptive payload and records its actual layout flags. Measure that
+        // payload before exposing an exact length so the wrapper never promotes
+        // an alternate-layout capacity estimate into a byte-exact contract.
+        let payload = encoded_instruction_payload(instr)?;
+        encoded_instruction_tuple_len(payload.name, payload.framed_payload_len)
     }
-    let type_name = Instruction::id(inner);
-    let entry = {
-        let registry = instruction_registry();
-        registry.entry_for_type_name(type_name)?
-    };
-    let payload_len = {
-        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        Instruction::dyn_encoded_len(inner)?
-    };
-    let framed_payload_len = (entry.frame_len)(payload_len)?;
-    encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
+
+    #[cfg(not(feature = "packed-struct"))]
+    {
+        let inner = peel_instruction_box(&**instr);
+        if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+            return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
+        }
+        let type_name = Instruction::id(inner);
+        let entry = {
+            let registry = instruction_registry();
+            registry.entry_for_type_name(type_name)?
+        };
+        let payload_len = {
+            let _guard =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            Instruction::dyn_encoded_len(inner)?
+        };
+        let framed_payload_len = (entry.frame_len)(payload_len)?;
+        encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
+    }
 }
 
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
@@ -2227,6 +2297,7 @@ fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito
 #[cfg(feature = "json")]
 fn json_quantity_opt(
     value: Option<&norito::json::Value>,
+    field: &str,
 ) -> Result<Option<iroha_primitives::numeric::Quantity>, norito::json::Error> {
     use std::str::FromStr as _;
 
@@ -2241,9 +2312,9 @@ fn json_quantity_opt(
     }
     if let Some(value) = value.as_i64() {
         if value < 0 {
-            return Err(norito::json::Error::Message(
-                "asset transfer cap_amount must be non-negative".to_owned(),
-            ));
+            return Err(norito::json::Error::Message(format!(
+                "asset transfer {field} must be non-negative"
+            )));
         }
         return Ok(Some(iroha_primitives::numeric::Quantity::from(
             value.cast_unsigned(),
@@ -2254,9 +2325,27 @@ fn json_quantity_opt(
             .map_err(|err| norito::json::Error::Message(err.to_string()))?;
         return Ok(Some(parsed));
     }
-    Err(norito::json::Error::Message(
-        "asset transfer cap_amount must be a string, number, or null".to_owned(),
-    ))
+    Err(norito::json::Error::Message(format!(
+        "asset transfer {field} must be a string, number, or null"
+    )))
+}
+
+#[cfg(feature = "json")]
+fn json_asset_transfer_target(
+    params: &norito::json::Map,
+) -> Result<(crate::account::AccountId, crate::asset::AssetDefinitionId), norito::json::Error> {
+    use std::str::FromStr as _;
+
+    let account_id = crate::account::AccountId::parse_encoded(
+        json_required_string(params, "account_id")?.as_str(),
+    )
+    .map(crate::account::ParsedAccountId::into_account_id)
+    .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+        json_required_string(params, "asset_definition_id")?.as_str(),
+    )
+    .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    Ok((account_id, asset_definition_id))
 }
 
 #[cfg(feature = "json")]
@@ -2274,15 +2363,7 @@ fn instruction_box_from_object(
         })?;
     match name.as_str() {
         "SetAssetTransferFreeze" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
                 crate::isi::asset_transfer_control::SetAssetTransferFreeze::new(
                     account_id,
@@ -2293,16 +2374,19 @@ fn instruction_box_from_object(
                 .into(),
             )
         }
+        "SetAssetHoldingLimit" => {
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
+            Ok(
+                crate::isi::asset_transfer_control::SetAssetHoldingLimit::new(
+                    account_id,
+                    asset_definition_id,
+                    json_quantity_opt(params.get("holding_limit"), "holding_limit")?,
+                )
+                .into(),
+            )
+        }
         "SetAssetTransferBlacklist" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
                 crate::isi::asset_transfer_control::SetAssetTransferBlacklist::new(
                     account_id,
@@ -2313,15 +2397,7 @@ fn instruction_box_from_object(
             )
         }
         "SetAssetTransferControl" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             let limits = params
                 .get("limits")
                 .and_then(norito::json::Value::as_array)
@@ -2341,7 +2417,7 @@ fn instruction_box_from_object(
                     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
                     Ok(crate::asset::AssetTransferLimit {
                         window,
-                        cap_amount: json_quantity_opt(entry.get("cap_amount"))?,
+                        cap_amount: json_quantity_opt(entry.get("cap_amount"), "cap_amount")?,
                     })
                 })
                 .collect::<Result<Vec<_>, norito::json::Error>>()?;
@@ -4086,7 +4162,8 @@ pub mod prelude {
             RebindAccountAlias, RenewAliasLease,
         },
         asset_transfer_control::{
-            SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
+            SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
+            SetAssetTransferFreeze,
         },
         bridge::{
             ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
@@ -4116,9 +4193,13 @@ pub mod prelude {
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         privacy::{
             BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
-            RegisterPrivacyProtocolActivationV1, SchedulePrivacyConsensusPolicyTighteningV1,
-            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
+            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
+            RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyZkAcePolicyV1,
+            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509TrustAnchorV1,
+            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
+            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
         },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
@@ -4182,6 +4263,10 @@ pub mod prelude {
             SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
+        zk::{
+            RegisterZkAceIdentityCommitment, RevokeZkAceIdentityCommitment,
+            RotateZkAceIdentityCommitment, SubmitZkAceAuthorizedTransfer,
+        },
     };
 }
 

@@ -11,6 +11,3 @@ mod proof_from_path;
 mod proofs;
 #[path = "queries/mod.rs"]
 mod queries;
-#[cfg(feature = "zk-stark")]
-#[path = "zk_ace_localnet.rs"]
-mod zk_ace_localnet;

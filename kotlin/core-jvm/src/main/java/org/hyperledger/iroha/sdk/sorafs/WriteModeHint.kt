@@ -8,20 +8,19 @@ package org.hyperledger.iroha.sdk.sorafs
  */
 enum class WriteModeHint(val label: String) {
     /** Default behaviour for read/replication workloads. */
-    READ_ONLY("read_only"),
+    READ_ONLY("read-only"),
     /** Enforce PQ-only transport for upload workloads. */
-    UPLOAD_PQ_ONLY("upload_pq_only");
+    UPLOAD_PQ_ONLY("upload-pq-only");
 
     companion object {
         /**
-         * Parse an incoming label. Returns `null` when the value does not map to a known hint.
+         * Parse one exact canonical V1 label. Returns `null` for every alias or unknown value.
          */
         @JvmStatic
         fun fromLabel(raw: String?): WriteModeHint? {
-            if (raw == null) return null
-            return when (raw.trim().lowercase().replace('-', '_')) {
-                "read_only" -> READ_ONLY
-                "upload_pq_only" -> UPLOAD_PQ_ONLY
+            return when (raw) {
+                "read-only" -> READ_ONLY
+                "upload-pq-only" -> UPLOAD_PQ_ONLY
                 else -> null
             }
         }

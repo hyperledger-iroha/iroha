@@ -863,9 +863,9 @@ function assertRunnerRejectsPythonMajor(script, envName, label) {
       env: { ...process.env, [envName]: fakePython },
     });
 
-    assert.notEqual(result.status, 0, `${label} must reject non-Python-3.11 overrides`);
+    assert.notEqual(result.status, 0, `${label} must reject non-Python-3.12 overrides`);
     assert.match(result.stdout, /^Python 3\.9\.6$/m, `${label} must print the selected Python version`);
-    assert.match(result.stderr, /require Python 3\.11/u, `${label} must explain the Python 3.11 gate`);
+    assert.match(result.stderr, /require Python 3\.12/u, `${label} must explain the Python 3.12 gate`);
     assert.doesNotMatch(
       result.stderr,
       /unexpected fake python invocation/u,
@@ -5027,12 +5027,12 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
   );
   assert.match(
     guard,
-    /SDK_PYTHON_BIN="\$\(resolve_python_311_bin\)"[\s\S]*PRIVACY_PYTHON_SDK_ROOT="\$\{ROOT_DIR\}"\s*\\[\s\S]*PRIVACY_PYTHON_SDK_PYTHON_BIN="\$\{SDK_PYTHON_BIN\}"\s*\\[\s\S]*PRIVACY_PYTHON_SDK_VENV="\$\{VENV_DIR\}"\s*\\[\s\S]*bash "\$\{ROOT_DIR\}\/ci\/check_privacy_python_sdk\.sh"/,
+    /SDK_PYTHON_BIN="\$\(resolve_python_312_bin\)"[\s\S]*PRIVACY_PYTHON_SDK_ROOT="\$\{ROOT_DIR\}"\s*\\[\s\S]*PRIVACY_PYTHON_SDK_PYTHON_BIN="\$\{SDK_PYTHON_BIN\}"\s*\\[\s\S]*PRIVACY_PYTHON_SDK_VENV="\$\{VENV_DIR\}"\s*\\[\s\S]*bash "\$\{ROOT_DIR\}\/ci\/check_privacy_python_sdk\.sh"/,
     "Privacy SDK guard must delegate Python SDK regressions to the focused Python runner",
   );
   assert.match(
     pythonRunner,
-    /PYTHON_OVERRIDE="\$\{PRIVACY_PYTHON_SDK_PYTHON_BIN:-\}"[\s\S]*resolve_python_311_bin\(\)[\s\S]*python3\.11[\s\S]*PYTHON_BIN="\$\(resolve_python_311_bin\)"/,
+    /PYTHON_OVERRIDE="\$\{PRIVACY_PYTHON_SDK_PYTHON_BIN:-\}"[\s\S]*resolve_python_312_bin\(\)[\s\S]*python3\.12[\s\S]*PYTHON_BIN="\$\(resolve_python_312_bin\)"/,
     "Privacy Python SDK runner must keep the documented Python override variable",
   );
   assert.match(
@@ -5242,10 +5242,16 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
     /privacy_javascript_sdk_tests:[\s\S]*actions\/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020[\s\S]*node-version:\s+"20"[\s\S]*npm ci --prefix javascript\/iroha_js[\s\S]*run:\s+ci\/check_privacy_js_sdk\.sh/,
     "Privacy SDK workflow must run focused JavaScript privacy tests with Node 20",
   );
-  assert.match(
+  const pythonSdkWorkflowJob = sliceBetween(
     workflow,
-    /privacy_python_sdk_tests:[\s\S]*actions\/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065[\s\S]*python-version:\s+"3\.11"[\s\S]*run:\s+ci\/check_privacy_python_sdk\.sh/,
-    "Privacy SDK workflow must run focused Python privacy tests with Python 3.11",
+    "\n  privacy_python_sdk_tests:",
+    "\n  privacy-sdk-guard:",
+    "Privacy Python SDK workflow job",
+  );
+  assert.match(
+    pythonSdkWorkflowJob,
+    /actions\/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065[\s\S]*python-version:\s+"3\.12"[\s\S]*run:\s+ci\/check_privacy_python_sdk\.sh/,
+    "Privacy SDK workflow must run focused Python privacy tests with Python 3.12",
   );
   assertWorkflowIncludesPaths(
     workflow,
@@ -5374,7 +5380,7 @@ test("privacy JavaScript SDK runner rejects non-Node-20 overrides before tests",
   );
 });
 
-test("privacy Python SDK runner rejects non-3.11 overrides before native builds", () => {
+test("privacy Python SDK runner rejects non-3.12 overrides before native builds", () => {
   assertRunnerRejectsPythonMajor(
     "ci/check_privacy_python_sdk.sh",
     "PRIVACY_PYTHON_SDK_PYTHON_BIN",

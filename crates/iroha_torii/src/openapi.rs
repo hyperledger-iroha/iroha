@@ -11,6 +11,10 @@ use iroha_torii_shared::{
         ApiSurface, CATALOGED_ROUTES, CatalogProjection, HttpMethod as CatalogHttpMethod,
         RouteCatalog, sorafs as sorafs_routes,
     },
+    sorafs_hedging_billing_api::{
+        BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1,
+        BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
+    },
     uri,
 };
 use norito::json::{Map, Value};
@@ -3787,6 +3791,20 @@ fn governance_paths() -> Map {
         Value::Object(validation_fee_proposal_draft_operation()),
     );
     paths.insert(
+        iroha_torii_shared::uri::VALIDATION_FEE_PLAIN_BALLOT_DRAFT.to_owned(),
+        Value::Object(json_post_operation(
+            "Validation fee",
+            "Draft a proposal-bound PLAIN ballot.",
+            "Validate the authenticated citizen against the retained proposal electorate and return one exact CastPlainBallot instruction. Amount and duration are forced from the immutable proposal rules.",
+            "#/components/schemas/ValidationFeePlainBallotDraftRequestV1",
+            "#/components/schemas/ValidationFeePlainBallotDraftResponseV1",
+            vec![string_path_param(
+                "proposal_id",
+                "Exact lowercase 32-byte native proposal fingerprint.",
+            )],
+        )),
+    );
+    paths.insert(
         "/v1/gov/proposals/{id}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
@@ -5637,7 +5655,7 @@ fn hedging_billing_acknowledgement_operation() -> Map {
 
     let request_body = norito::json!({
         "required": true,
-        "description": "Exact canonical Norito `BillingAcknowledgementProofBodyV1`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
+        "description": "Exact canonical Norito `BillingAcknowledgementProofV1` under schema `iroha.torii.v1.sorafs.billing.acknowledgement_proof`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
         "content": {
             "application/x-norito": {
                 "schema": {
@@ -5645,7 +5663,8 @@ fn hedging_billing_acknowledgement_operation() -> Map {
                     "format": "binary",
                     "minLength": 1,
                     "maxLength": 69_632_u64,
-                    "x-iroha-norito-schema": "BillingAcknowledgementProofBodyV1"
+                    "x-iroha-norito-schema": BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
+                    "x-iroha-norito-schema-hash": BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1
                 }
             }
         }
@@ -14598,6 +14617,14 @@ fn validation_fee_schemas(schemas: &mut Map) {
         "maxLength": 64,
         "pattern": "^[0-9a-f]{64}$"
     });
+    let norito_hex32 = norito::json!({
+        "type": "string",
+        "minLength": 64,
+        "maxLength": 64,
+        "pattern": "^[0-9A-F]{64}$",
+        "not": { "pattern": "^0{64}$" },
+        "description": "Canonical non-zero 32-byte value in Norito JSON's uppercase hexadecimal representation."
+    });
     let policy_proof_request_schema_name =
         iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_REQUEST_SCHEMA_NAME;
     let policy_proof_response_schema_name =
@@ -14660,13 +14687,89 @@ fn validation_fee_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "ValidationFeePlainElectorateMemberV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "bonded_height", "bonded_amount"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless citizen account."
+                },
+                "bonded_height": {
+                    "type": "string",
+                    "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "description": "Canonical unsigned decimal height at which the uninterrupted citizenship bond began."
+                },
+                "bonded_amount": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "maxLength": 155,
+                    "description": "Positive exact-integer citizenship amount frozen at the referendum boundary."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeePlainElectorateSnapshotV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "proposal_id", "proposal_operator", "captured_at_height",
+                "approval_gate_height", "member_count", "members", "roster_root"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "proposal_id": {
+                    "allOf": [norito_hex32],
+                    "description": "Native proposal identifier in Norito JSON's canonical uppercase hexadecimal representation."
+                },
+                "proposal_operator": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless proposal-operator account."
+                },
+                "captured_at_height": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "description": "Exact referendum start height at whose boundary the electorate was frozen."
+                },
+                "approval_gate_height": {
+                    "type": "string",
+                    "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "description": "First height at which all seven proposal-local Parliament bodies held approval quorum."
+                },
+                "member_count": {
+                    "type": "string",
+                    "pattern": "^(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-6])$",
+                    "description": "Canonical unsigned decimal member count; it exactly matches the members array."
+                },
+                "members": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 256,
+                    "items": {
+                        "$ref": "#/components/schemas/ValidationFeePlainElectorateMemberV1"
+                    },
+                    "description": "Complete canonically ordered, duplicate-free frozen electorate."
+                },
+                "roster_root": {
+                    "allOf": [norito_hex32],
+                    "description": "Domain-separated commitment to the complete frozen snapshot payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "ValidationFeeProposalRecordV1".to_owned(),
         norito::json!({
             "type": "object",
             "required": [
                 "proposal_id", "proposer", "proposal_kind", "created_height", "status",
-                "pipeline", "referendum", "parliament_snapshot", "finalization_evidence",
-                "enacted_at_height"
+                "pipeline", "referendum", "parliament_snapshot", "plain_electorate_snapshot",
+                "finalization_evidence", "enacted_at_height"
             ],
             "additionalProperties": false,
             "properties": {
@@ -14687,6 +14790,15 @@ fn validation_fee_schemas(schemas: &mut Map) {
                 },
                 "referendum": { "$ref": "#/components/schemas/JsonValue" },
                 "parliament_snapshot": { "$ref": "#/components/schemas/JsonValue" },
+                "plain_electorate_snapshot": {
+                    "oneOf": [
+                        {
+                            "$ref": "#/components/schemas/ValidationFeePlainElectorateSnapshotV1"
+                        },
+                        { "type": "null" }
+                    ],
+                    "description": "Complete citizen electorate frozen at referendum start; null only before the referendum opens."
+                },
                 "finalization_evidence": {
                     "oneOf": [
                         { "$ref": "#/components/schemas/JsonValue" },
@@ -14746,10 +14858,65 @@ fn validation_fee_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "ValidationFeePlainElectorateRulesV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "voting_asset_id", "ballot_amount", "ballot_duration_blocks",
+                "citizenship_amount", "max_members", "conviction_step_blocks",
+                "max_conviction", "min_turnout", "approval_threshold_numerator",
+                "approval_threshold_denominator", "eligibility_rule"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "voting_asset_id": { "type": "string", "minLength": 1 },
+                "ballot_amount": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "ballot_duration_blocks": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "citizenship_amount": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "max_members": { "type": "string", "const": "256" },
+                "conviction_step_blocks": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "max_conviction": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "min_turnout": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "approval_threshold_numerator": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "approval_threshold_denominator": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "eligibility_rule": {
+                    "type": "object",
+                    "required": ["rule", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "rule": {
+                            "const": "proposal_operator_at_or_before_gate_others_after_gate"
+                        },
+                        "value": { "type": "null" }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "ValidationFeeProposalDraftRequestV1".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["version", "proposal", "referendum_window", "mode"],
+            "required": [
+                "version", "proposal", "referendum_window", "mode",
+                "plain_electorate_rules"
+            ],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint16", "const": 1 },
@@ -14778,6 +14945,9 @@ fn validation_fee_schemas(schemas: &mut Map) {
                     ],
                     "default": "Plain",
                     "description": "Zk is deliberately outside the first-release validation-fee contract."
+                },
+                "plain_electorate_rules": {
+                    "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1"
                 }
             }
         }),
@@ -14806,6 +14976,57 @@ fn validation_fee_schemas(schemas: &mut Map) {
                 "version": { "type": "integer", "format": "uint16", "const": 1 },
                 "proposal_id": hex32,
                 "proposal_kind": { "$ref": "#/components/schemas/JsonValue" },
+                "tx_instructions": {
+                    "type": "array", "minItems": 1, "maxItems": 1,
+                    "items": {
+                        "$ref": "#/components/schemas/ValidationFeeProposalInstructionDraftV1"
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeePlainBallotDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "owner", "direction"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "owner": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "Canonical account that must authenticate the signed ballot transaction."
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["AYE", "NAY", "ABSTAIN"]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeePlainBallotDraftResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "proposal_id", "owner", "amount", "duration_blocks",
+                "direction", "tx_instructions"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "proposal_id": hex32,
+                "owner": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "amount": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+                "duration_blocks": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["AYE", "NAY", "ABSTAIN"]
+                },
                 "tx_instructions": {
                     "type": "array", "minItems": 1, "maxItems": 1,
                     "items": {
@@ -29319,6 +29540,84 @@ mod tests {
     }
 
     #[test]
+    fn validation_fee_openapi_exposes_complete_frozen_plain_electorate() {
+        let schemas = openapi_schemas();
+        let record = schemas
+            .get("ValidationFeeProposalRecordV1")
+            .and_then(Value::as_object)
+            .expect("validation-fee proposal record schema");
+        assert!(
+            record
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|required| required
+                    .iter()
+                    .any(|field| field.as_str() == Some("plain_electorate_snapshot")))
+        );
+        let snapshot_property = record
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("plain_electorate_snapshot"))
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate property");
+        let snapshot_variants = snapshot_property
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("nullable validation-fee frozen electorate");
+        assert_eq!(
+            snapshot_variants
+                .first()
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ValidationFeePlainElectorateSnapshotV1")
+        );
+        assert!(
+            snapshot_variants
+                .iter()
+                .any(|schema| schema.get("type").and_then(Value::as_str) == Some("null"))
+        );
+
+        let snapshot = schemas
+            .get("ValidationFeePlainElectorateSnapshotV1")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate schema");
+        let properties = snapshot
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate properties");
+        let members = properties
+            .get("members")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate members");
+        assert_eq!(members.get("minItems"), Some(&Value::from(1_u64)));
+        assert_eq!(members.get("maxItems"), Some(&Value::from(256_u64)));
+        assert_eq!(
+            members
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ValidationFeePlainElectorateMemberV1")
+        );
+        for digest in ["proposal_id", "roster_root"] {
+            assert_eq!(
+                properties
+                    .get(digest)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("allOf"))
+                    .and_then(Value::as_array)
+                    .and_then(|schemas| schemas.first())
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9A-F]{64}$"),
+                "{digest} must match native Norito JSON fixed-byte encoding"
+            );
+        }
+    }
+
+    #[test]
     fn evidence_audit_openapi_requires_and_returns_exact_cursors() {
         let document = generate_spec();
         let operation = openapi_operation(&document, "/v1/evidence/audit", "get");
@@ -30296,7 +30595,13 @@ mod tests {
             acknowledgement_schema
                 .get("x-iroha-norito-schema")
                 .and_then(Value::as_str),
-            Some("BillingAcknowledgementProofBodyV1")
+            Some(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1)
+        );
+        assert_eq!(
+            acknowledgement_schema
+                .get("x-iroha-norito-schema-hash")
+                .and_then(Value::as_str),
+            Some(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1)
         );
         assert_eq!(
             acknowledgement_schema

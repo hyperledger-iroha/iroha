@@ -197,9 +197,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
     func testRecipientLineageQueryOverridesAmbient753WithExplicitTairaContext() throws {
         #if canImport(Darwin)
-        guard KagemushaRecursiveSpend.hasRequiredNativeSymbols else {
-            throw XCTSkip("ABI-21 bridge is not linked in this source-only test host")
-        }
+        try requireNativeTestCapability(
+            KagemushaRecursiveSpend.hasRequiredNativeSymbols,
+            "ABI-21 bridge is not linked in this test host"
+        )
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
 
         let query = try NoritoNativeBridge.shared.withChainDiscriminant(
@@ -222,9 +223,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
     func testRecipientLineageQueriesIsolateConcurrentTairaAndSoraContexts() throws {
         #if canImport(Darwin)
-        guard KagemushaRecursiveSpend.hasRequiredNativeSymbols else {
-            throw XCTSkip("ABI-21 bridge is not linked in this source-only test host")
-        }
+        try requireNativeTestCapability(
+            KagemushaRecursiveSpend.hasRequiredNativeSymbols,
+            "ABI-21 bridge is not linked in this test host"
+        )
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
         let address = try AccountAddress.parseEncodedSwiftOnly(
             request.payload.recipient,

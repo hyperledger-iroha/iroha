@@ -61,6 +61,83 @@ pub type ViewChangesGauge = GenericGauge<AtomicU64>;
 #[derive(Debug, Clone, Copy)]
 pub struct Uptime(pub Duration);
 
+/// Common payload-free health values exported by a supervised SoraFS runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsRuntimeHealthMetricSnapshot {
+    /// Whether the supervised runtime is live.
+    pub live: bool,
+    /// Whether the runtime is ready to serve committed projections.
+    pub ready: bool,
+    /// Whether every external dependency passed qualification and health checks.
+    pub external_dependencies_ready: bool,
+}
+
+/// Payload-free journal and publication state for the SoraFS reputation runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsReputationPublicationMetricSnapshot {
+    /// Whether the journal transaction submitter is qualified and ready.
+    pub journal_transaction_submitter_ready: bool,
+    /// Whether the current publication material is acknowledged.
+    pub material_acknowledged: bool,
+}
+
+/// Payload-free values exported for the committed SoraFS reputation runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsReputationRuntimeMetricSnapshot {
+    /// Common supervised-runtime health.
+    pub runtime: SorafsRuntimeHealthMetricSnapshot,
+    /// Journal submission and publication acknowledgement state.
+    pub publication: SorafsReputationPublicationMetricSnapshot,
+    /// Latest finalized height consumed by the runtime.
+    pub latest_finalized_height: u64,
+    /// Consecutive failed reconciliation attempts.
+    pub consecutive_failures: u64,
+    /// Number of providers represented by the committed projection.
+    pub provider_count: u32,
+}
+
+/// Payload-free execution and finalized-projection state for hedging/billing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsHedgingBillingProjectionMetricSnapshot {
+    /// Whether automatic hedge execution is enabled.
+    pub automatic_execution_enabled: bool,
+    /// Whether the most recent reconciliation tick is fresh.
+    pub last_tick_fresh: bool,
+    /// Whether a finalized projection is available.
+    pub finalized_projection_ready: bool,
+}
+
+/// Payload-free values exported for the committed SoraFS hedging/billing runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsHedgingBillingRuntimeMetricSnapshot {
+    /// Common supervised-runtime health.
+    pub runtime: SorafsRuntimeHealthMetricSnapshot,
+    /// Hedge execution and finalized-projection state.
+    pub projection: SorafsHedgingBillingProjectionMetricSnapshot,
+    /// Finalized height consumed by the service.
+    pub finalized_height: u64,
+    /// Current finalized ledger head height.
+    pub finalized_head_height: u64,
+    /// Difference between the finalized head and consumed projection.
+    pub finalized_lag_blocks: u64,
+    /// Next committed event sequence expected by the service.
+    pub next_event_sequence: u64,
+    /// Statements ready for external signing.
+    pub ready_for_signing: u32,
+    /// Signed statements ready for immutable publication.
+    pub ready_for_publication: u32,
+    /// Statements whose publication outcome requires reconciliation.
+    pub publication_ambiguous: u32,
+    /// Statements published immutably.
+    pub published: u32,
+    /// Published statements acknowledged by the authority.
+    pub acknowledged: u32,
+    /// Statements moved to the dead-letter queue.
+    pub dead_letter: u32,
+    /// Committed hedge intents retained by the projection.
+    pub hedge_intents: u32,
+}
+
 type MicropaymentSampleSink = Arc<
     dyn Fn(&str, MicropaymentCreditSnapshot, MicropaymentTicketCounters) + Send + Sync + 'static,
 >;
@@ -3431,6 +3508,7 @@ mod serde_tests {
                 halo2: Halo2Status::default(),
             },
             stack: StackStatus::default(),
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -18129,32 +18207,28 @@ impl Metrics {
     }
 
     /// Record payload-free committed reputation runtime status.
-    #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_reputation_runtime_status(
         &self,
-        live: bool,
-        ready: bool,
-        external_dependencies_ready: bool,
-        journal_transaction_submitter_ready: bool,
-        latest_finalized_height: u64,
-        consecutive_failures: u64,
-        material_acknowledged: bool,
-        provider_count: u32,
+        snapshot: SorafsReputationRuntimeMetricSnapshot,
     ) {
-        self.sorafs_reputation_runtime_live.set(u64::from(live));
-        self.sorafs_reputation_runtime_ready.set(u64::from(ready));
+        self.sorafs_reputation_runtime_live
+            .set(u64::from(snapshot.runtime.live));
+        self.sorafs_reputation_runtime_ready
+            .set(u64::from(snapshot.runtime.ready));
         self.sorafs_reputation_runtime_dependencies_ready
-            .set(u64::from(external_dependencies_ready));
+            .set(u64::from(snapshot.runtime.external_dependencies_ready));
         self.sorafs_reputation_journal_transaction_submitter_ready
-            .set(u64::from(journal_transaction_submitter_ready));
+            .set(u64::from(
+                snapshot.publication.journal_transaction_submitter_ready,
+            ));
         self.sorafs_reputation_runtime_finalized_height
-            .set(latest_finalized_height);
+            .set(snapshot.latest_finalized_height);
         self.sorafs_reputation_runtime_consecutive_failures
-            .set(consecutive_failures);
+            .set(snapshot.consecutive_failures);
         self.sorafs_reputation_runtime_material_acknowledged
-            .set(u64::from(material_acknowledged));
+            .set(u64::from(snapshot.publication.material_acknowledged));
         self.sorafs_reputation_runtime_provider_count
-            .set(u64::from(provider_count));
+            .set(u64::from(snapshot.provider_count));
     }
 
     /// Increment one bounded committed reputation runtime tick result.
@@ -18169,61 +18243,44 @@ impl Metrics {
     }
 
     /// Record payload-free committed hedging/billing runtime status.
-    #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_hedging_billing_runtime_status(
         &self,
-        live: bool,
-        ready: bool,
-        external_dependencies_ready: bool,
-        automatic_execution_enabled: bool,
-        last_tick_fresh: bool,
-        finalized_projection_ready: bool,
-        finalized_height: u64,
-        finalized_head_height: u64,
-        finalized_lag_blocks: u64,
-        next_event_sequence: u64,
-        ready_for_signing: u32,
-        ready_for_publication: u32,
-        publication_ambiguous: u32,
-        published: u32,
-        acknowledged: u32,
-        dead_letter: u32,
-        hedge_intents: u32,
+        snapshot: SorafsHedgingBillingRuntimeMetricSnapshot,
     ) {
         self.sorafs_hedging_billing_runtime_live
-            .set(u64::from(live));
+            .set(u64::from(snapshot.runtime.live));
         self.sorafs_hedging_billing_runtime_ready
-            .set(u64::from(ready));
+            .set(u64::from(snapshot.runtime.ready));
         self.sorafs_hedging_billing_runtime_dependencies_ready
-            .set(u64::from(external_dependencies_ready));
+            .set(u64::from(snapshot.runtime.external_dependencies_ready));
         self.sorafs_hedging_billing_automatic_execution_enabled
-            .set(u64::from(automatic_execution_enabled));
+            .set(u64::from(snapshot.projection.automatic_execution_enabled));
         self.sorafs_hedging_billing_last_tick_fresh
-            .set(u64::from(last_tick_fresh));
+            .set(u64::from(snapshot.projection.last_tick_fresh));
         self.sorafs_hedging_billing_finalized_projection_ready
-            .set(u64::from(finalized_projection_ready));
+            .set(u64::from(snapshot.projection.finalized_projection_ready));
         self.sorafs_hedging_billing_finalized_height
-            .set(finalized_height);
+            .set(snapshot.finalized_height);
         self.sorafs_hedging_billing_finalized_head_height
-            .set(finalized_head_height);
+            .set(snapshot.finalized_head_height);
         self.sorafs_hedging_billing_finalized_lag_blocks
-            .set(finalized_lag_blocks);
+            .set(snapshot.finalized_lag_blocks);
         self.sorafs_hedging_billing_next_event_sequence
-            .set(next_event_sequence);
+            .set(snapshot.next_event_sequence);
         self.sorafs_hedging_billing_ready_for_signing
-            .set(u64::from(ready_for_signing));
+            .set(u64::from(snapshot.ready_for_signing));
         self.sorafs_hedging_billing_ready_for_publication
-            .set(u64::from(ready_for_publication));
+            .set(u64::from(snapshot.ready_for_publication));
         self.sorafs_hedging_billing_publication_ambiguous
-            .set(u64::from(publication_ambiguous));
+            .set(u64::from(snapshot.publication_ambiguous));
         self.sorafs_hedging_billing_published
-            .set(u64::from(published));
+            .set(u64::from(snapshot.published));
         self.sorafs_hedging_billing_acknowledged
-            .set(u64::from(acknowledged));
+            .set(u64::from(snapshot.acknowledged));
         self.sorafs_hedging_billing_dead_letter
-            .set(u64::from(dead_letter));
+            .set(u64::from(snapshot.dead_letter));
         self.sorafs_hedging_billing_hedge_intents
-            .set(u64::from(hedge_intents));
+            .set(u64::from(snapshot.hedge_intents));
     }
 
     /// Increment one bounded committed hedging/billing runtime tick result.
@@ -20317,7 +20374,20 @@ mod test {
     #[test]
     fn records_committed_sorafs_reputation_runtime_metrics() {
         let metrics = Metrics::default();
-        metrics.record_sorafs_reputation_runtime_status(true, false, true, false, 42, 3, true, 17);
+        metrics.record_sorafs_reputation_runtime_status(SorafsReputationRuntimeMetricSnapshot {
+            runtime: SorafsRuntimeHealthMetricSnapshot {
+                live: true,
+                ready: false,
+                external_dependencies_ready: true,
+            },
+            publication: SorafsReputationPublicationMetricSnapshot {
+                journal_transaction_submitter_ready: false,
+                material_acknowledged: true,
+            },
+            latest_finalized_height: 42,
+            consecutive_failures: 3,
+            provider_count: 17,
+        });
         metrics.inc_sorafs_reputation_runtime_tick("success");
         metrics.inc_sorafs_reputation_runtime_tick("failure");
         metrics.inc_sorafs_reputation_runtime_tick("unbounded-input");
@@ -20361,7 +20431,29 @@ mod test {
     fn records_committed_sorafs_hedging_billing_runtime_metrics() {
         let metrics = Metrics::default();
         metrics.record_sorafs_hedging_billing_runtime_status(
-            true, false, true, false, true, false, 42, 45, 3, 88, 1, 2, 3, 4, 5, 6, 7,
+            SorafsHedgingBillingRuntimeMetricSnapshot {
+                runtime: SorafsRuntimeHealthMetricSnapshot {
+                    live: true,
+                    ready: false,
+                    external_dependencies_ready: true,
+                },
+                projection: SorafsHedgingBillingProjectionMetricSnapshot {
+                    automatic_execution_enabled: false,
+                    last_tick_fresh: true,
+                    finalized_projection_ready: false,
+                },
+                finalized_height: 42,
+                finalized_head_height: 45,
+                finalized_lag_blocks: 3,
+                next_event_sequence: 88,
+                ready_for_signing: 1,
+                ready_for_publication: 2,
+                publication_ambiguous: 3,
+                published: 4,
+                acknowledged: 5,
+                dead_letter: 6,
+                hedge_intents: 7,
+            },
         );
         metrics.inc_sorafs_hedging_billing_runtime_tick("success");
         metrics.inc_sorafs_hedging_billing_runtime_tick("failure");
@@ -21053,10 +21145,7 @@ mod test {
         }
     }
 
-    #[test]
-    fn records_sorafs_reserve_finalized_projection_metrics_with_bounded_labels() {
-        let metrics = Metrics::default();
-
+    fn record_sample_sorafs_reserve_finalized_projection(metrics: &Metrics) {
         metrics.record_sorafs_reserve_finalized_projection(&SorafsReserveFinalizedProjection {
             finalized_height: 42,
             lifecycle_stage_counts: [2, 0, 0, 0, 1],
@@ -21067,8 +21156,12 @@ mod test {
             custody_counts: [1, 2, 1],
             chain_reconciled_counts: [2, 1],
         });
-        metrics.record_sorafs_reserve_service_request("top_up", "accepted");
-        metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
+    }
+
+    #[test]
+    fn records_sorafs_reserve_finalized_projection_metrics() {
+        let metrics = Metrics::default();
+        record_sample_sorafs_reserve_finalized_projection(&metrics);
 
         assert_eq!(
             metrics
@@ -21093,12 +21186,14 @@ mod test {
                 .get(),
             2
         );
+        let active_credit_draw = metrics
+            .torii_sorafs_reserve_credit_draw_micro_xor
+            .with_label_values(&["active"])
+            .get();
         assert_eq!(
-            metrics
-                .torii_sorafs_reserve_credit_draw_micro_xor
-                .with_label_values(&["active"])
-                .get(),
-            120_000_000.0
+            active_credit_draw.to_bits(),
+            120_000_000_f64.to_bits(),
+            "the integer micro-XOR value must be represented exactly"
         );
         assert_eq!(
             metrics
@@ -21112,6 +21207,14 @@ mod test {
                 .get(),
             42
         );
+    }
+
+    #[test]
+    fn bounds_sorafs_reserve_service_labels_and_records_failures() {
+        let metrics = Metrics::default();
+        metrics.record_sorafs_reserve_service_request("top_up", "accepted");
+        metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
+
         assert_eq!(
             metrics
                 .torii_sorafs_reserve_service_requests_total
@@ -21126,6 +21229,7 @@ mod test {
                 .get(),
             1
         );
+
         metrics.record_sorafs_reserve_service_request("attacker-controlled", "also-controlled");
         assert_eq!(
             metrics
@@ -21134,6 +21238,8 @@ mod test {
                 .get(),
             1
         );
+
+        record_sample_sorafs_reserve_finalized_projection(&metrics);
         metrics.record_sorafs_reserve_finalized_projection_failure();
         assert_eq!(
             metrics
@@ -21147,6 +21253,14 @@ mod test {
                 .get(),
             1
         );
+    }
+
+    #[test]
+    fn exports_sorafs_reserve_metric_families() {
+        let metrics = Metrics::default();
+        record_sample_sorafs_reserve_finalized_projection(&metrics);
+        metrics.record_sorafs_reserve_service_request("top_up", "accepted");
+        metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
 
         let exported = metrics.try_to_string().expect("metrics text");
         for metric_name in [
@@ -21401,6 +21515,7 @@ mod test {
                 pool_fallback_total: 0,
                 budget_hit_total: 0,
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus {
                 mode_tag: PERMISSIONED_TAG.to_string(),
                 leader_index: 1,

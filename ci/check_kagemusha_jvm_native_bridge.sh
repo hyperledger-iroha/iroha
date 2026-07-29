@@ -17,6 +17,14 @@ fail() {
   exit 1
 }
 
+PYTHON_RESOLUTION_ONLY=0
+if (( $# > 1 )); then
+  fail "unexpected arguments"
+elif (( $# == 1 )); then
+  [[ "$1" == "--resolve-python312-for-test" ]] || fail "unknown argument: $1"
+  PYTHON_RESOLUTION_ONLY=1
+fi
+
 for required_file in \
   "$SOURCE_SEAL" \
   "$ABI21_ARTIFACT_CHECKER" \
@@ -35,17 +43,82 @@ actual_toolchain="$(
 [[ "$actual_toolchain" == "$PINNED_TOOLCHAIN" ]] \
   || fail "rust-toolchain.toml must pin exact Rust $PINNED_TOOLCHAIN"
 
-PYTHON_BINARY=""
-for trusted_python in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-  if [[ -x "$trusted_python" ]]; then
-    PYTHON_BINARY="$trusted_python"
-    break
+resolve_trusted_python312() {
+  local candidate canonical
+  local override="${MOBILE_SDK_PYTHON_BINARY:-}"
+  local candidates=()
+
+  if [[ -n "$override" ]]; then
+    if [[ "$override" != /* || ! -f "$override" || -L "$override" || ! -x "$override" ]]; then
+      printf '[kagemusha-jvm-native] ERROR: MOBILE_SDK_PYTHON_BINARY must be an absolute canonical regular executable\n' >&2
+      return 1
+    fi
+    candidates=("$override")
+  else
+    candidates=(
+      /opt/homebrew/opt/python@3.12/bin/python3.12
+      /opt/homebrew/bin/python3.12
+      /usr/local/opt/python@3.12/bin/python3.12
+      /usr/local/bin/python3.12
+      /usr/bin/python3.12
+      /usr/bin/python3
+    )
   fi
-done
-[[ -n "$PYTHON_BINARY" ]] || fail "a pinned absolute Python 3 executable is required"
-PYTHON_BINARY="$("$PYTHON_BINARY" -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$PYTHON_BINARY")"
-USER_HOME_DIR="$("$PYTHON_BINARY" -I -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
-USER_HOME_DIR="$("$PYTHON_BINARY" -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$USER_HOME_DIR")"
+
+  for candidate in "${candidates[@]}"; do
+    [[ -f "$candidate" && -x "$candidate" ]] || continue
+    if ! canonical="$(
+      /usr/bin/env -i \
+        HOME=/tmp \
+        PATH=/usr/bin:/bin \
+        TMPDIR=/tmp \
+        LANG=C.UTF-8 \
+        LC_ALL=C.UTF-8 \
+        "$candidate" -I -S -c '
+import os
+import pathlib
+import stat
+import sys
+
+if sys.version_info[:2] != (3, 12) or not sys.flags.isolated:
+    raise SystemExit(1)
+if "SDKROOT" in os.environ:
+    raise SystemExit(1)
+resolved = pathlib.Path(sys.executable).resolve(strict=True)
+metadata = resolved.stat()
+if not stat.S_ISREG(metadata.st_mode) or not os.access(resolved, os.X_OK):
+    raise SystemExit(1)
+print(resolved)
+'
+    )"; then
+      continue
+    fi
+    if [[ "$canonical" != /* || ! -f "$canonical" || -L "$canonical" || ! -x "$canonical" ]]; then
+      continue
+    fi
+    if [[ -n "$override" && "$canonical" != "$override" ]]; then
+      printf '[kagemusha-jvm-native] ERROR: MOBILE_SDK_PYTHON_BINARY must already name its canonical executable\n' >&2
+      return 1
+    fi
+    printf '%s\n' "$canonical"
+    return 0
+  done
+
+  if [[ -n "$override" ]]; then
+    printf '[kagemusha-jvm-native] ERROR: MOBILE_SDK_PYTHON_BINARY must be an isolated Python 3.12 executable\n' >&2
+  else
+    printf '[kagemusha-jvm-native] ERROR: a trusted absolute Python 3.12 executable is required\n' >&2
+  fi
+  return 1
+}
+
+PYTHON_BINARY="$(resolve_trusted_python312)" || exit 1
+if [[ "$PYTHON_RESOLUTION_ONLY" == "1" ]]; then
+  printf '%s\n' "$PYTHON_BINARY"
+  exit 0
+fi
+USER_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
+USER_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
 RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
 MOBILE_CARGO_HOME="$USER_HOME_DIR/.cargo"
@@ -81,8 +154,8 @@ else
   [[ -n "$JAVA_HOME_DIR" ]] \
     || fail "NORITO_MOBILE_JAVA_HOME must pin the setup-java JDK on non-macOS hosts"
 fi
-NM_BINARY="$("$PYTHON_BINARY" -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$NM_BINARY")"
-JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME_DIR")"
+NM_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$NM_BINARY")"
+JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME_DIR")"
 JAVA_BINARY="$JAVA_HOME_DIR/bin/java"
 for tool in "$NM_BINARY" "$JAVA_BINARY"; do
   [[ -f "$tool" && ! -L "$tool" && -x "$tool" ]] \
@@ -95,7 +168,7 @@ elif [[ "$HOST_OS" == "Darwin" ]]; then
 else
   fail "NORITO_MOBILE_ANDROID_HOME must pin the setup-android SDK on non-macOS hosts"
 fi
-MOBILE_ANDROID_HOME="$("$PYTHON_BINARY" -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$MOBILE_ANDROID_HOME")"
+MOBILE_ANDROID_HOME="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$MOBILE_ANDROID_HOME")"
 [[ -d "$MOBILE_ANDROID_HOME" && ! -L "$MOBILE_ANDROID_HOME" ]] \
   || fail "pinned Android SDK root is unavailable: $MOBILE_ANDROID_HOME"
 
@@ -116,8 +189,8 @@ RUSTC_BINARY="$(
   /usr/bin/env -i "${RUSTUP_ENV[@]}" \
     "$RUSTUP_BINARY" which --toolchain "$PINNED_TOOLCHAIN" rustc
 )"
-CARGO_BINARY="$("$PYTHON_BINARY" -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$CARGO_BINARY")"
-RUSTC_BINARY="$("$PYTHON_BINARY" -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$RUSTC_BINARY")"
+CARGO_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$CARGO_BINARY")"
+RUSTC_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$RUSTC_BINARY")"
 [[ -x "$CARGO_BINARY" && -x "$RUSTC_BINARY" ]] \
   || fail "pinned Cargo and rustc executables are unavailable"
 
@@ -142,7 +215,7 @@ java_version="$(
 tool_sha256() {
   /usr/bin/env -i HOME="$USER_HOME_DIR" PATH="${PYTHON_BINARY%/*}:/usr/bin:/bin" \
     TMPDIR=/tmp LANG=C.UTF-8 LC_ALL=C.UTF-8 \
-    "$PYTHON_BINARY" -I - "$1" <<'PY'
+    "$PYTHON_BINARY" -I -S - "$1" <<'PY'
 from pathlib import Path
 import hashlib
 import sys
@@ -188,7 +261,7 @@ run_adversarial_environment_self_test() {
   local gradle_probe_output="$BUILD_SESSION/gradle-environment.txt"
   mkdir -p "$fake_bin" "$fake_home"
   for tool_name in python3 git rustup cargo rustc nm java; do
-    printf '#!/bin/sh\nprintf "%%s\\n" "$0" >>"%s"\nexit 97\n' "$marker" \
+    printf '#!/bin/sh\nprintf "%%s\\n" "%s0" >>"%s"\nexit 97\n' '$' "$marker" \
       >"$fake_bin/$tool_name"
     chmod 0700 "$fake_bin/$tool_name"
   done
@@ -215,6 +288,7 @@ run_adversarial_environment_self_test() {
     RUSTC_WORKSPACE_WRAPPER="$fake_bin/workspace-wrapper" \
     NORITO_MOBILE_JAVA_HOME="$JAVA_HOME_DIR" \
     NORITO_MOBILE_ANDROID_HOME="$MOBILE_ANDROID_HOME" \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON_BINARY" \
     KAGEMUSHA_JVM_NATIVE_TOOL_RESOLUTION_ONLY=1 \
     /bin/bash "$ROOT_DIR/ci/check_kagemusha_jvm_native_bridge.sh" \
     >"$BUILD_SESSION/tool-resolution.txt"
@@ -227,7 +301,7 @@ run_adversarial_environment_self_test() {
     RUSTC_WORKSPACE_WRAPPER="$fake_bin/workspace-wrapper" \
     CC="$fake_bin/cc" \
     SDKROOT="$fake_home/forged-sdk" \
-    "$PYTHON_BINARY" -I "$HERMETIC_RUNNER" \
+    "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
       --profile host-cargo \
       --set "CARGO=$CARGO_BINARY" \
       --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
@@ -251,7 +325,7 @@ run_adversarial_environment_self_test() {
     JAVA_TOOL_OPTIONS="-Djava.library.path=$fake_home/forged" \
     _JAVA_OPTIONS="-Djava.io.tmpdir=$fake_home/forged" \
     JDK_JAVA_OPTIONS="-Duser.language=forged" \
-    "$PYTHON_BINARY" -I "$HERMETIC_RUNNER" \
+    "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
       --profile gradle-jvm \
       --set "ANDROID_HOME=$MOBILE_ANDROID_HOME" \
       --set "ANDROID_SDK_ROOT=$MOBILE_ANDROID_HOME" \
@@ -260,6 +334,7 @@ run_adversarial_environment_self_test() {
       --set "HOME=$USER_HOME_DIR" \
       --set "IROHA_NATIVE_LIBRARY_PATH=$EMPTY_NATIVE_DIR" \
       --set "IROHA_REQUIRE_KAGEMUSHA_NATIVE=1" \
+      --set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1" \
       --set "JAVA_HOME=$JAVA_HOME_DIR" \
       --set "LANG=C.UTF-8" \
       --set "LC_ALL=C.UTF-8" \
@@ -268,7 +343,7 @@ run_adversarial_environment_self_test() {
       --set "TMPDIR=$MOBILE_TMPDIR" \
       -- "$probe" "$gradle_probe_output"
 
-  "$PYTHON_BINARY" -I - "$cargo_probe_output" "$gradle_probe_output" <<'PY'
+  "$PYTHON_BINARY" -I -S - "$cargo_probe_output" "$gradle_probe_output" <<'PY'
 from pathlib import Path
 import sys
 
@@ -312,6 +387,7 @@ expected_gradle = {
     "HOME",
     "IROHA_NATIVE_LIBRARY_PATH",
     "IROHA_REQUIRE_KAGEMUSHA_NATIVE",
+    "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION",
     "JAVA_HOME",
     "LANG",
     "LC_ALL",
@@ -324,7 +400,11 @@ if set(cargo) != expected_cargo or set(gradle) != expected_gradle:
         "hermetic environment probe inventory mismatch "
         f"(cargo={sorted(cargo)}, gradle={sorted(gradle)})"
     )
-if cargo["CARGO_NET_OFFLINE"] != "true" or gradle["IROHA_REQUIRE_KAGEMUSHA_NATIVE"] != "1":
+if (
+    cargo["CARGO_NET_OFFLINE"] != "true"
+    or gradle["IROHA_REQUIRE_KAGEMUSHA_NATIVE"] != "1"
+    or gradle["IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"] != "1"
+):
     raise SystemExit("hermetic environment probe lost a mandatory fail-closed value")
 PY
   printf '[kagemusha-jvm-native] hostile PATH, Cargo flags, wrappers, and JVM flags were scrubbed\n' >&2
@@ -345,7 +425,7 @@ source_seal() {
     NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
     NORITO_BRIDGE_SEAL_CARGO="$CARGO_BINARY" \
     NORITO_BRIDGE_SEAL_RUSTC="$RUSTC_BINARY" \
-    "$PYTHON_BINARY" -I "$SOURCE_SEAL" "$@"
+    "$PYTHON_BINARY" -I -S "$SOURCE_SEAL" "$@"
 }
 
 SOURCE_SNAPSHOT="$BUILD_SESSION/source-seal-v1.json"
@@ -357,7 +437,7 @@ run_exact_gradle() {
   shift 2
   (
     cd "$working_directory"
-    "$PYTHON_BINARY" -I "$HERMETIC_RUNNER" \
+    "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
       --profile gradle-jvm \
       --set "ANDROID_HOME=$MOBILE_ANDROID_HOME" \
       --set "ANDROID_SDK_ROOT=$MOBILE_ANDROID_HOME" \
@@ -414,7 +494,7 @@ HOST_TRIPLE="$("$RUSTC_BINARY" --version --verbose | sed -n 's/^host: //p')"
 [[ "$HOST_TRIPLE" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "rustc returned a non-canonical host triple"
 CARGO_PATH="${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin"
 printf '[kagemusha-jvm-native] building fresh host ABI-21 bridge for %s\n' "$HOST_TRIPLE" >&2
-"$PYTHON_BINARY" -I "$HERMETIC_RUNNER" \
+"$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
   --set "CARGO=$CARGO_BINARY" \
   --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
@@ -442,19 +522,19 @@ esac
   || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
 NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
 NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi21.json"
-"$PYTHON_BINARY" -I "$ABI21_ARTIFACT_CHECKER" record \
+"$PYTHON_BINARY" -I -S "$ABI21_ARTIFACT_CHECKER" record \
   --artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR" \
   --sdk c-jni \
   --target "$HOST_TRIPLE"
-"$PYTHON_BINARY" -I "$ABI21_ARTIFACT_CHECKER" verify \
+"$PYTHON_BINARY" -I -S "$ABI21_ARTIFACT_CHECKER" verify \
   --artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR"
 SYMBOLS_FILE="$BUILD_SESSION/native-symbols.txt"
 "$NM_BINARY" -g "$NATIVE_LIBRARY" >"$SYMBOLS_FILE"
-"$PYTHON_BINARY" -I - "$SYMBOLS_FILE" <<'PY'
+"$PYTHON_BINARY" -I -S - "$SYMBOLS_FILE" <<'PY'
 from pathlib import Path
 import re
 import sys

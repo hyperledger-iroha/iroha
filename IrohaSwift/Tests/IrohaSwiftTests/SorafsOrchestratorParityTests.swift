@@ -18,15 +18,20 @@ final class SorafsOrchestratorParityTests: XCTestCase {
 
     func testLocalFetchParityIsDeterministic() async throws {
         guard SorafsBridgeBootstrap.ensureLoaded() else {
-            throw XCTSkip("SoraFS Norito bridge artifacts unavailable")
+            XCTFail("ABI-21 SoraFS Norito bridge artifacts are required")
+            return
         }
         guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge unavailable on this platform")
+            XCTFail("ABI-21 NoritoBridge is required on this platform")
+            return
         }
 
         let orchestratorFixture = try OrchestratorFixture.load()
-        let planSpecs = orchestratorFixture.plan
-        let planJSON = try encodeJSONString(planSpecs)
+        let planEnvelope = orchestratorFixture.plan
+        XCTAssertEqual(planEnvelope.schema, "sorafs.chunk_fetch_plan.v1")
+        XCTAssertEqual(planEnvelope.payloadDigestBlake3Hex.count, 64)
+        let planSpecs = planEnvelope.chunkFetchSpecs
+        let planJSON = try encodeJSONString(planEnvelope)
         let payloadBytes = try Data(contentsOf: orchestratorFixture.payloadURL())
         let maxChunkLength = planSpecs.map(\.length).max() ?? 0
         XCTAssertGreaterThan(maxChunkLength, 0)
@@ -480,6 +485,18 @@ private struct PlanChunkSpec: Codable {
     }
 }
 
+private struct ChunkFetchPlanFixture: Codable {
+    let schema: String
+    let payloadDigestBlake3Hex: String
+    let chunkFetchSpecs: [PlanChunkSpec]
+
+    enum CodingKeys: String, CodingKey {
+        case schema
+        case payloadDigestBlake3Hex = "payload_digest_blake3_hex"
+        case chunkFetchSpecs = "chunk_fetch_specs"
+    }
+}
+
 private struct OrchestratorFixture {
     struct OptionsFixture: Decodable {
         let verifyDigests: Bool
@@ -531,7 +548,7 @@ private struct OrchestratorFixture {
         }
     }
 
-    let plan: [PlanChunkSpec]
+    let plan: ChunkFetchPlanFixture
     let providers: [ProviderMetadata]
     let telemetry: [TelemetryEntry]
     let options: OptionsFixture
@@ -542,7 +559,7 @@ private struct OrchestratorFixture {
         decoder.keyDecodingStrategy = .useDefaultKeys
 
         let planData = try Data(contentsOf: SorafsFixturePaths.orchestratorPlanURL)
-        let plan = try decoder.decode([PlanChunkSpec].self, from: planData)
+        let plan = try decoder.decode(ChunkFetchPlanFixture.self, from: planData)
 
         let providersData = try Data(contentsOf: SorafsFixturePaths.orchestratorProvidersURL)
         let providers = try decoder.decode([ProviderMetadata].self, from: providersData)

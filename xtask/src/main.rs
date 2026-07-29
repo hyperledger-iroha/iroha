@@ -1,5 +1,4 @@
 //! Developer automation entrypoint for repository maintenance tasks.
-#![allow(unexpected_cfgs)]
 
 use std::{
     cmp::Ordering,
@@ -9955,10 +9954,10 @@ fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
         .and_then(Value::as_object)
         .ok_or("release OpenAPI document is missing the info object")?;
     for field in ["title", "version"] {
-        if !info
+        if info
             .get(field)
             .and_then(Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty())
+            .is_none_or(|value| value.trim().is_empty())
         {
             return Err(format!(
                 "release OpenAPI document info.{field} must be a non-empty string"
@@ -10007,6 +10006,50 @@ const OPENAPI_MANIFEST_MAX_BYTES: u64 = 64 * 1024;
 const OPENAPI_SIGNATURE_ENVELOPE_MAX_BYTES: u64 = 4_096;
 const OPENAPI_SIGNER_ALLOWLIST_MAX_BYTES: u64 = 64 * 1024;
 const OPENAPI_SIGNER_ALLOWLIST_MAX_ENTRIES: usize = 256;
+const OPENAPI_GENERATOR_INPUT_INVENTORY: &[u8] =
+    include_bytes!("../../release/openapi-generator-inputs-v1.txt");
+const OPENAPI_GENERATOR_INPUT_INVENTORY_HEADER: &str = "iroha.openapi.generator-inputs.v1";
+const OPENAPI_GENERATOR_INPUT_TREE_DOMAIN: &[u8] = b"iroha-openapi-generator-input-tree-v1";
+const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
+    ".github/workflows/openapi.yml",
+    "Cargo.lock",
+    "Cargo.toml",
+    "IrohaSwift",
+    "Makefile",
+    "ci",
+    "ci/check_android_codegen.sh",
+    "ci/check_openapi_spec.sh",
+    "crates",
+    "csharp",
+    "data_model",
+    "docs/i18n",
+    "docs/portal/package-lock.json",
+    "docs/portal/package.json",
+    "docs/portal/scripts",
+    "docs/portal/static/openapi/allowed_signers.json",
+    "docs/source/sdk/android/generated",
+    "docs/source/sdk/android/generated/codegen_hash_tree.json",
+    "docs/source/sdk/android/generated/codegen_manifest_metadata.json",
+    "fixtures",
+    "integration_tests",
+    "java/iroha_android",
+    "java/norito_java",
+    "javascript/iroha_js",
+    "kotlin",
+    "mochi",
+    "python/iroha_python",
+    "release/openapi-generator-inputs-v1.txt",
+    "release/version-map.toml",
+    "rust-toolchain.toml",
+    "scripts",
+    "scripts/android_codegen_docs.py",
+    "scripts/android_codegen_replay_sorafs_fixture.py",
+    "scripts/check_android_codegen_parity.py",
+    "scripts/check_sorafs_release_version_map.py",
+    "tools",
+    "vendor",
+    "xtask",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -10046,14 +10089,14 @@ struct SignatureEnvelope {
     signature_hex: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SignerAllowlist {
     version: u32,
     allow: Vec<AllowedSigner>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AllowedSigner {
     algorithm: String,
@@ -10946,13 +10989,14 @@ fn load_signature_envelope(path: &Path) -> Result<SignatureEnvelope, Box<dyn Err
             path.display()
         )
     })?;
-    let envelope: SignatureEnvelope = serde_json::from_str(&text).map_err(|err| {
-        format!(
-            "failed to parse signature envelope {}: {err}",
-            path.display()
-        )
-        .into()
-    })?;
+    let envelope: SignatureEnvelope =
+        serde_json::from_str(&text).map_err(|err| -> Box<dyn Error> {
+            format!(
+                "failed to parse signature envelope {}: {err}",
+                path.display()
+            )
+            .into()
+        })?;
     validate_signature_envelope_fields(&envelope)?;
     Ok(envelope)
 }
@@ -11128,21 +11172,19 @@ fn validate_openapi_generator_provenance(
             "OpenAPI generator provenance timestamp must be a positive safe integer".into(),
         );
     }
+    let Some(source_digest) = provenance.source_sha256_hex.as_deref() else {
+        return Err("OpenAPI generator provenance is missing generator_source_sha256_hex".into());
+    };
+    if !is_lower_hex_digest(source_digest, 32) || source_digest.bytes().all(|byte| byte == b'0') {
+        return Err(
+            "generator_source_sha256_hex must be exactly 64 lowercase hexadecimal characters and must be nonzero"
+                .into(),
+        );
+    }
     if provenance.dirty {
         if provenance.commit.is_some() {
             return Err(
                 "dirty OpenAPI generator provenance must set generator_commit to null".into(),
-            );
-        }
-        let Some(source_digest) = provenance.source_sha256_hex.as_deref() else {
-            return Err(
-                "dirty OpenAPI generator provenance is missing generator_source_sha256_hex".into(),
-            );
-        };
-        if !is_lower_hex_digest(source_digest, 32) {
-            return Err(
-                "generator_source_sha256_hex must be exactly 64 lowercase hexadecimal characters"
-                    .into(),
             );
         }
         if !allow_dirty_unsigned {
@@ -11160,10 +11202,8 @@ fn validate_openapi_generator_provenance(
                 "generator_commit must be exactly 40 lowercase hexadecimal characters".into(),
             );
         }
-        if provenance.source_sha256_hex.is_some() {
-            return Err(
-                "clean OpenAPI generator provenance must omit generator_source_sha256_hex".into(),
-            );
+        if commit.bytes().all(|byte| byte == b'0') {
+            return Err("generator_commit must identify a nonzero Git commit".into());
         }
     }
     Ok(())
@@ -11214,6 +11254,7 @@ fn git_source_provenance(
         return Err("git rev-parse returned an empty HEAD".into());
     }
     let generated_unix_ms = git_head_timestamp_ms(repo_root)?;
+    let committed_source_sha256_hex = git_openapi_generator_input_tree_sha256(repo_root, head)?;
 
     let pathspecs = git_source_pathspecs(repo_root, excluded_paths)?;
     let mut status_args = vec![
@@ -11229,7 +11270,7 @@ fn git_source_provenance(
             generated_unix_ms,
             commit: Some(head.to_owned()),
             dirty: false,
-            source_sha256_hex: None,
+            source_sha256_hex: Some(committed_source_sha256_hex),
         });
     }
 
@@ -11256,9 +11297,14 @@ fn git_source_provenance(
     update_sha256_component(
         &mut source_digest,
         b"domain",
-        b"iroha-openapi-generator-source-v2",
+        b"iroha-openapi-generator-working-source-v3",
     );
     update_sha256_component(&mut source_digest, b"head", head.as_bytes());
+    update_sha256_component(
+        &mut source_digest,
+        b"committed-input-tree-sha256",
+        committed_source_sha256_hex.as_bytes(),
+    );
     update_sha256_component(&mut source_digest, b"status", &status);
     update_sha256_component(&mut source_digest, b"tracked-diff", &tracked_diff);
     for path_bytes in untracked
@@ -11276,6 +11322,127 @@ fn git_source_provenance(
         dirty: true,
         source_sha256_hex: Some(hex::encode(source_digest.finalize())),
     })
+}
+
+fn git_openapi_generator_input_tree_sha256(
+    repo_root: &Path,
+    commit: &str,
+) -> Result<String, Box<dyn Error>> {
+    let inventory_paths = validate_openapi_generator_input_inventory()?;
+    let mut args = vec![
+        OsString::from("ls-tree"),
+        OsString::from("-r"),
+        OsString::from("-z"),
+        OsString::from("--full-tree"),
+        OsString::from(commit),
+        OsString::from("--"),
+    ];
+    args.extend(inventory_paths.iter().map(|path| OsString::from(*path)));
+    let tree = git_stdout(repo_root, &args)?;
+    if tree.is_empty() {
+        return Err("OpenAPI generator input inventory resolved to an empty Git tree".into());
+    }
+    if !tree.ends_with(&[0]) {
+        return Err("git ls-tree output for OpenAPI generator inputs must end in NUL".into());
+    }
+
+    let mut resolved_paths = Vec::new();
+    let mut unique_paths = BTreeSet::new();
+    for entry in tree
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let tab = entry
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .ok_or("git ls-tree returned an OpenAPI generator input without a path separator")?;
+        let metadata = std::str::from_utf8(&entry[..tab]).map_err(|err| {
+            format!("git ls-tree returned non-UTF-8 OpenAPI generator metadata: {err}")
+        })?;
+        let fields = metadata.split(' ').collect::<Vec<_>>();
+        if fields.len() != 3
+            || !matches!(fields[0], "100644" | "100755" | "120000")
+            || fields[1] != "blob"
+            || !is_lower_hex_digest(fields[2], 20)
+        {
+            return Err("OpenAPI generator inputs must resolve only to canonical Git blobs".into());
+        }
+        let path = std::str::from_utf8(&entry[tab + 1..]).map_err(|err| {
+            format!("git ls-tree returned a non-UTF-8 OpenAPI generator input path: {err}")
+        })?;
+        if !unique_paths.insert(path) {
+            return Err(format!("git ls-tree duplicated OpenAPI generator input `{path}`").into());
+        }
+        resolved_paths.push(path);
+    }
+    for required in &inventory_paths {
+        let prefix = format!("{required}/");
+        if !resolved_paths
+            .iter()
+            .any(|path| *path == *required || path.starts_with(&prefix))
+        {
+            return Err(format!(
+                "OpenAPI generator input inventory path `{required}` is missing at commit {commit}"
+            )
+            .into());
+        }
+    }
+
+    let mut source_digest = Sha256::new();
+    update_sha256_component(
+        &mut source_digest,
+        b"domain",
+        OPENAPI_GENERATOR_INPUT_TREE_DOMAIN,
+    );
+    update_sha256_component(
+        &mut source_digest,
+        b"inventory",
+        OPENAPI_GENERATOR_INPUT_INVENTORY,
+    );
+    update_sha256_component(&mut source_digest, b"tree", &tree);
+    Ok(hex::encode(source_digest.finalize()))
+}
+
+fn validate_openapi_generator_input_inventory() -> Result<Vec<&'static str>, Box<dyn Error>> {
+    let inventory = std::str::from_utf8(OPENAPI_GENERATOR_INPUT_INVENTORY)
+        .map_err(|err| format!("OpenAPI generator input inventory is not UTF-8: {err}"))?;
+    if inventory.contains('\r') || !inventory.ends_with('\n') {
+        return Err(
+            "OpenAPI generator input inventory must use LF endings and one final newline".into(),
+        );
+    }
+    let mut lines = inventory.lines();
+    if lines.next() != Some(OPENAPI_GENERATOR_INPUT_INVENTORY_HEADER) {
+        return Err("OpenAPI generator input inventory has an invalid schema header".into());
+    }
+    let paths = lines.collect::<Vec<_>>();
+    if paths.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(
+            "OpenAPI generator input inventory paths must be strictly sorted and unique".into(),
+        );
+    }
+    if paths != OPENAPI_GENERATOR_INPUT_PATHS {
+        return Err(
+            "OpenAPI generator input inventory does not match the exact V1 release-input contract"
+                .into(),
+        );
+    }
+    for path in &paths {
+        if path.is_empty()
+            || path.starts_with('/')
+            || path.ends_with('/')
+            || path.contains('\\')
+            || path
+                .split('/')
+                .any(|component| component.is_empty() || component == "." || component == "..")
+        {
+            return Err(format!(
+                "OpenAPI generator input inventory contains a noncanonical path `{path}`"
+            )
+            .into());
+        }
+    }
+    Ok(paths)
 }
 
 fn git_head_timestamp_ms(repo_root: &Path) -> Result<u64, Box<dyn Error>> {
@@ -11638,7 +11805,7 @@ mod openapi_tests {
             generated_unix_ms: 1_700_000_000_000,
             commit: Some("11".repeat(20)),
             dirty: false,
-            source_sha256_hex: None,
+            source_sha256_hex: Some("22".repeat(32)),
         }
     }
 
@@ -11650,7 +11817,7 @@ mod openapi_tests {
             generated_unix_ms: 1_700_000_000_000,
             generator_commit: Some("11".repeat(20)),
             generator_dirty: false,
-            generator_source_sha256_hex: None,
+            generator_source_sha256_hex: Some("22".repeat(32)),
             artifact: OpenApiArtifact {
                 path: "torii.json".to_owned(),
                 bytes: u64::try_from(ARTIFACT.len()).expect("fixture length"),
@@ -11668,13 +11835,52 @@ mod openapi_tests {
             .expect("encode deterministic V2 signing payload");
         assert_eq!(
             hex::encode(Sha256::digest(payload)),
-            "83148de11a5187d7f000770c29f4f18419163d654ed6aa5ffade0558ce47b5e5"
+            "775b7af4c2c8a98dc49cf117745f0032f5064485b82a807f946a71b27539b9cd"
         );
     }
 
     fn initialize_git_fixture(root: &Path) {
         git_stdout(root, &["init", "--quiet"]).expect("initialize git fixture");
-        fs::write(root.join("source.txt"), b"source-v1\n").expect("write fixture source");
+        const DIRECTORY_INPUTS: &[&str] = &[
+            "IrohaSwift",
+            "ci",
+            "crates",
+            "csharp",
+            "data_model",
+            "docs/i18n",
+            "docs/portal/scripts",
+            "docs/source/sdk/android/generated",
+            "fixtures",
+            "integration_tests",
+            "java/iroha_android",
+            "java/norito_java",
+            "javascript/iroha_js",
+            "kotlin",
+            "mochi",
+            "python/iroha_python",
+            "scripts",
+            "tools",
+            "vendor",
+            "xtask",
+        ];
+        for relative in OPENAPI_GENERATOR_INPUT_PATHS {
+            let target = root.join(relative);
+            if DIRECTORY_INPUTS.contains(relative) {
+                fs::create_dir_all(&target).expect("create generator input directory");
+                fs::write(target.join(".fixture"), b"fixture\n")
+                    .expect("write generator input directory fixture");
+            } else {
+                fs::create_dir_all(target.parent().expect("generator input has a parent"))
+                    .expect("create generator input parent");
+                let bytes = if *relative == "release/openapi-generator-inputs-v1.txt" {
+                    OPENAPI_GENERATOR_INPUT_INVENTORY
+                } else {
+                    b"fixture\n"
+                };
+                fs::write(target, bytes).expect("write generator input fixture");
+            }
+        }
+        fs::write(root.join("xtask/source.txt"), b"source-v1\n").expect("write fixture source");
         fs::create_dir_all(root.join("docs/portal/static/openapi/versions/current"))
             .expect("create generated fixture directory");
         fs::write(
@@ -11811,7 +12017,7 @@ mod openapi_tests {
             generated_unix_ms: 1,
             generator_commit: Some("11".repeat(20)),
             generator_dirty: false,
-            generator_source_sha256_hex: None,
+            generator_source_sha256_hex: Some("22".repeat(32)),
             artifact: OpenApiArtifact {
                 path: "torii.json".to_owned(),
                 bytes: stub_bytes.len() as u64,
@@ -11855,7 +12061,7 @@ mod openapi_tests {
             generated_unix_ms: 1_700_000_000_000,
             generator_commit: Some("11".repeat(20)),
             generator_dirty: false,
-            generator_source_sha256_hex: None,
+            generator_source_sha256_hex: Some("22".repeat(32)),
             artifact: OpenApiArtifact {
                 path: "torii.json".to_owned(),
                 bytes: artifact.len() as u64,
@@ -11868,7 +12074,7 @@ mod openapi_tests {
             .expect("encode deterministic signing payload");
         assert_eq!(
             hex::encode(Sha256::digest(payload)),
-            "83148de11a5187d7f000770c29f4f18419163d654ed6aa5ffade0558ce47b5e5"
+            "775b7af4c2c8a98dc49cf117745f0032f5064485b82a807f946a71b27539b9cd"
         );
     }
 
@@ -12287,14 +12493,24 @@ mod openapi_tests {
                 "64 lowercase hexadecimal",
             ),
             (
-                "clean-with-dirty-digest",
+                "clean-without-source-digest",
                 OpenApiGeneratorProvenance {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some("11".repeat(20)),
                     dirty: false,
-                    source_sha256_hex: Some("ab".repeat(32)),
+                    source_sha256_hex: None,
                 },
-                "clean OpenAPI generator provenance must omit",
+                "missing generator_source_sha256_hex",
+            ),
+            (
+                "clean-zero-source-digest",
+                OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
+                    commit: Some("11".repeat(20)),
+                    dirty: false,
+                    source_sha256_hex: Some("00".repeat(32)),
+                },
+                "64 lowercase hexadecimal",
             ),
             (
                 "clean-short-commit",
@@ -12302,7 +12518,7 @@ mod openapi_tests {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some("ab".repeat(19)),
                     dirty: false,
-                    source_sha256_hex: None,
+                    source_sha256_hex: Some("ab".repeat(32)),
                 },
                 "exactly 40 lowercase hexadecimal",
             ),
@@ -12312,7 +12528,7 @@ mod openapi_tests {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some("AB".repeat(20)),
                     dirty: false,
-                    source_sha256_hex: None,
+                    source_sha256_hex: Some("ab".repeat(32)),
                 },
                 "exactly 40 lowercase hexadecimal",
             ),
@@ -12322,7 +12538,7 @@ mod openapi_tests {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some("gg".repeat(20)),
                     dirty: false,
-                    source_sha256_hex: None,
+                    source_sha256_hex: Some("ab".repeat(32)),
                 },
                 "exactly 40 lowercase hexadecimal",
             ),
@@ -12332,9 +12548,19 @@ mod openapi_tests {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some(format!(" {} ", "ab".repeat(20))),
                     dirty: false,
-                    source_sha256_hex: None,
+                    source_sha256_hex: Some("ab".repeat(32)),
                 },
                 "exactly 40 lowercase hexadecimal",
+            ),
+            (
+                "clean-zero-commit",
+                OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
+                    commit: Some("00".repeat(20)),
+                    dirty: false,
+                    source_sha256_hex: Some("ab".repeat(32)),
+                },
+                "nonzero Git commit",
             ),
         ] {
             let err = validate_openapi_generator_provenance(&provenance, true)
@@ -12386,6 +12612,16 @@ mod openapi_tests {
         let clean = git_source_provenance(tmp.path(), &generated).expect("clean provenance");
         assert!(!clean.dirty);
         assert!(clean.commit.is_some());
+        let expected_source_digest = git_openapi_generator_input_tree_sha256(
+            tmp.path(),
+            clean.commit.as_deref().expect("clean commit"),
+        )
+        .expect("generator input tree digest");
+        assert_eq!(
+            clean.source_sha256_hex.as_deref(),
+            Some(expected_source_digest.as_str()),
+            "clean provenance must bind the canonical generator input inventory"
+        );
         assert_eq!(
             clean.generated_unix_ms,
             git_head_timestamp_ms(tmp.path()).expect("HEAD timestamp"),
@@ -12408,7 +12644,8 @@ mod openapi_tests {
             "generated files are not source inputs"
         );
 
-        fs::write(tmp.path().join("source.txt"), b"source-v2\n").expect("modify tracked source");
+        fs::write(tmp.path().join("xtask/source.txt"), b"source-v2\n")
+            .expect("modify tracked source");
         let first = git_source_provenance(tmp.path(), &generated).expect("first dirty provenance");
         assert!(first.dirty);
         assert_eq!(first.commit, None);
@@ -12434,7 +12671,7 @@ mod openapi_tests {
             "identical source must retain its digest across generated timestamps"
         );
 
-        fs::write(tmp.path().join("source.txt"), b"source-v3\n")
+        fs::write(tmp.path().join("xtask/source.txt"), b"source-v3\n")
             .expect("change tracked source content");
         let changed =
             git_source_provenance(tmp.path(), &generated).expect("changed dirty provenance");
@@ -14996,19 +15233,19 @@ mod tests {
 
         let mut parsed: Value =
             norito::json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        if let Some(object) = parsed.as_object_mut() {
-            if let Some(Value::Array(artifacts)) = object.get_mut("artifacts") {
-                for entry in artifacts {
-                    if let Some(map) = entry.as_object_mut() {
-                        if map.get("file") == Some(&norito::json!("vote_tally_proof.zk1")) {
-                            map.insert(
-                                "blake2b_256".into(),
-                                norito::json!(
-                                    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-                                ),
-                            );
-                        }
-                    }
+        if let Some(object) = parsed.as_object_mut()
+            && let Some(Value::Array(artifacts)) = object.get_mut("artifacts")
+        {
+            for entry in artifacts {
+                if let Some(map) = entry.as_object_mut()
+                    && map.get("file") == Some(&norito::json!("vote_tally_proof.zk1"))
+                {
+                    map.insert(
+                        "blake2b_256".into(),
+                        norito::json!(
+                            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                        ),
+                    );
                 }
             }
         }
@@ -15043,19 +15280,19 @@ mod tests {
         // Mutate the meta file digest (deterministic artefact) and ensure verification fails.
         let mut parsed: Value =
             norito::json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        if let Some(object) = parsed.as_object_mut() {
-            if let Some(Value::Array(artifacts)) = object.get_mut("artifacts") {
-                for entry in artifacts {
-                    if let Some(map) = entry.as_object_mut() {
-                        if map.get("file") == Some(&norito::json!("vote_tally_meta.json")) {
-                            map.insert(
-                                "blake2b_256".into(),
-                                norito::json!(
-                                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                                ),
-                            );
-                        }
-                    }
+        if let Some(object) = parsed.as_object_mut()
+            && let Some(Value::Array(artifacts)) = object.get_mut("artifacts")
+        {
+            for entry in artifacts {
+                if let Some(map) = entry.as_object_mut()
+                    && map.get("file") == Some(&norito::json!("vote_tally_meta.json"))
+                {
+                    map.insert(
+                        "blake2b_256".into(),
+                        norito::json!(
+                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        ),
+                    );
                 }
             }
         }

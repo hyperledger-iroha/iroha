@@ -15,6 +15,7 @@ on:
       - "ci/check_privacy_swift_sdk.sh"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "crates/connect_norito_bridge/Cargo.toml"
       - "crates/connect_norito_bridge/include/connect_norito_bridge.h"
       - "crates/connect_norito_bridge/include/NoritoBridge.h"
@@ -175,7 +176,7 @@ jobs:
           cache-on-failure: "true"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Privacy Python SDK tests
         run: ci/check_privacy_python_sdk.sh
 
@@ -195,7 +196,12 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        run: |
+          mobile_python="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - name: Install JavaScript SDK dependencies
         run: npm ci --prefix javascript/iroha_js
       - name: NoritoBridge privacy header parity

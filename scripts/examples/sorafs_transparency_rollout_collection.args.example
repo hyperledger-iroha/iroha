@@ -53,3 +53,4 @@ evidence-access-summary=/runtime/sft/evidence-access.json
 /runtime/sft/proof-token-issuance.json
 --cycle-id
 4f1d2c3b5a69788796a5b4c3d2e1f0aa
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

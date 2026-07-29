@@ -53,10 +53,6 @@ ids_projection = []
 # Authenticate governed registries against complete Parliament proposal preimages.
 governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
-zk-ballot = []
-# Recognize `packed-struct` used by derive macros in dependencies.
-# Not enabled by default; declared to silence unexpected-cfg warnings.
-packed-struct = []
 
 ## The lightweight query DSL is now the default and unconditional.
 

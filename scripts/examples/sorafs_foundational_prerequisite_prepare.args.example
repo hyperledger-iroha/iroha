@@ -1,6 +1,7 @@
 # Copy to a runtime evidence directory and replace every angle-bracket value.
 # This checked-in example is intentionally non-runnable and contains no key.
 prepare
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json
 --deployment-id <REVIEWED-PRODUCTION-DEPLOYMENT-ID>
 --environment production
 --generated-at-unix <REVIEWED-ENVELOPE-UNIX>

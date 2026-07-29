@@ -18,6 +18,10 @@
     <RootNamespace>Hyperledger.Iroha</RootNamespace>
     <TargetFramework>net8.0</TargetFramework>
     <Version>0.1.0</Version>
+    <IrohaRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</IrohaRepositoryRoot>
+    <IrohaNativePackageRoot Condition="'$(IrohaNativePackageRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../artifacts/native-package'))</IrohaNativePackageRoot>
+    <IrohaNativePackagePython Condition="'$(IrohaNativePackagePython)' == ''">python3</IrohaNativePackagePython>
+    <IrohaNativePackageScript>$(IrohaRepositoryRoot)/scripts/package_csharp_native_artifacts.py</IrohaNativePackageScript>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +30,15 @@
 
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(IrohaNativePackageRoot)/runtimes/linux-x64/native/libconnect_norito_bridge.so" Pack="true" PackagePath="runtimes/linux-x64/native/libconnect_norito_bridge.so" Visible="false" />
+    <None Include="$(IrohaNativePackageRoot)/runtimes/linux-arm64/native/libconnect_norito_bridge.so" Pack="true" PackagePath="runtimes/linux-arm64/native/libconnect_norito_bridge.so" Visible="false" />
+    <None Include="$(IrohaNativePackageRoot)/runtimes/osx-x64/native/libconnect_norito_bridge.dylib" Pack="true" PackagePath="runtimes/osx-x64/native/libconnect_norito_bridge.dylib" Visible="false" />
+    <None Include="$(IrohaNativePackageRoot)/runtimes/osx-arm64/native/libconnect_norito_bridge.dylib" Pack="true" PackagePath="runtimes/osx-arm64/native/libconnect_norito_bridge.dylib" Visible="false" />
+    <None Include="$(IrohaNativePackageRoot)/runtimes/win-x64/native/connect_norito_bridge.dll" Pack="true" PackagePath="runtimes/win-x64/native/connect_norito_bridge.dll" Visible="false" />
   </ItemGroup>
+
+  <Target Name="ValidateIrohaNativePackageAssets" BeforeTargets="GenerateNuspec">
+    <Exec Command="&quot;$(IrohaNativePackagePython)&quot; -I &quot;$(IrohaNativePackageScript)&quot; verify-stage --stage-root &quot;$(IrohaNativePackageRoot)&quot; --source-root &quot;$(IrohaRepositoryRoot)&quot;" />
+  </Target>
 
 </Project>

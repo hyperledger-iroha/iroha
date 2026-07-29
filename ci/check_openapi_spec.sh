@@ -51,16 +51,12 @@ require_clean_checkout() {
   fi
 }
 
-EXPECTED_GENERATOR_COMMIT="$(
-  git -C "${REPO_ROOT}" rev-parse --verify 'HEAD^{commit}'
-)"
-if [[ ! "${EXPECTED_GENERATOR_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "error: Torii OpenAPI release generation requires a lowercase 40-hex Git commit." >&2
-  exit 1
-fi
-
 GENERATED_SPEC_FIRST="${TMP_DIR}/torii-first.json"
 GENERATED_SPEC_SECOND="${TMP_DIR}/torii-second.json"
+RELEASE_INPUT_SUMMARY_FIRST="${TMP_DIR}/release-inputs-first.json"
+RELEASE_INPUT_SUMMARY_SECOND="${TMP_DIR}/release-inputs-second.json"
+VERSION_MAP_SUMMARY_FIRST="${TMP_DIR}/version-map-first.json"
+VERSION_MAP_SUMMARY_SECOND="${TMP_DIR}/version-map-second.json"
 
 print_refresh_help() {
   cat >&2 <<'EOF'
@@ -81,8 +77,10 @@ The checked-in allowlist is intentionally empty. The immutable 2025-q2
 development snapshot remains explicitly unsigned in either mode; signed mode
 requires the mutable root/latest/current release artifacts to be signed.
 This gate always requires a clean checkout and clean mutable generator
-provenance bound to the exact checked-out commit. --allow-unsigned relaxes only
-the detached-signature requirement; it never permits generator_dirty.
+provenance. generator_commit must resolve to a real ancestor of HEAD, and
+generator_source_sha256_hex must match the canonical release-input inventory at
+both that pinned commit and the output-bearing HEAD. --allow-unsigned relaxes
+only the detached-signature requirement; it never permits generator_dirty.
 EOF
 }
 
@@ -97,8 +95,11 @@ fi
 
 (
   cd "${REPO_ROOT}"
-  node docs/portal/scripts/verify-openapi-versions.mjs \
-    --expected-generator-commit="${EXPECTED_GENERATOR_COMMIT}"
+  node docs/portal/scripts/verify-openapi-release-inputs.mjs \
+    >"${RELEASE_INPUT_SUMMARY_FIRST}"
+  python3 scripts/check_sorafs_release_version_map.py \
+    >"${VERSION_MAP_SUMMARY_FIRST}"
+  node docs/portal/scripts/verify-openapi-versions.mjs
 )
 
 (
@@ -149,11 +150,26 @@ require_clean_checkout
 
 (
   cd "${REPO_ROOT}"
-  node docs/portal/scripts/verify-openapi-versions.mjs \
-    --expected-generator-commit="${EXPECTED_GENERATOR_COMMIT}"
+  node docs/portal/scripts/verify-openapi-versions.mjs
   node docs/portal/scripts/check-openapi-signatures.mjs \
     --allowed-signers="${ALLOWED_SIGNERS_PATH}" \
     "${SIGNATURE_VERIFY_POLICY_ARGS[@]}"
+  node docs/portal/scripts/verify-openapi-release-inputs.mjs \
+    >"${RELEASE_INPUT_SUMMARY_SECOND}"
+  python3 scripts/check_sorafs_release_version_map.py \
+    >"${VERSION_MAP_SUMMARY_SECOND}"
 )
+
+if ! diff -u "${RELEASE_INPUT_SUMMARY_FIRST}" "${RELEASE_INPUT_SUMMARY_SECOND}" >/dev/null; then
+  diff -u "${RELEASE_INPUT_SUMMARY_FIRST}" "${RELEASE_INPUT_SUMMARY_SECOND}" || true
+  echo "error: two clean Torii OpenAPI release-input verification passes disagreed." >&2
+  exit 1
+fi
+
+if ! diff -u "${VERSION_MAP_SUMMARY_FIRST}" "${VERSION_MAP_SUMMARY_SECOND}" >/dev/null; then
+  diff -u "${VERSION_MAP_SUMMARY_FIRST}" "${VERSION_MAP_SUMMARY_SECOND}" || true
+  echo "error: two SoraFS release version-map verification passes disagreed." >&2
+  exit 1
+fi
 
 require_clean_checkout

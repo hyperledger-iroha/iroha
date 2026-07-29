@@ -1,9 +1,10 @@
 //! Supervised production wiring for finalized-ledger SoraFS provider ingest.
 //!
-//! Authoritative assignments are copied from one coherent committed
-//! [`State::query_view`] into a bounded owned snapshot. Runtime-only source
+//! Authoritative assignments come only from the daemon-owned immutable archive
+//! captured inside the Sumeragi commit corridor. Runtime-only source
 //! authentication and governed HSM/KMS signing remain deployment-injected
-//! boundaries: config contains only identity-pinned opaque handles.
+//! boundaries: config contains only identity-pinned opaque handles and public
+//! revision/policy-digest qualifications.
 
 use std::{
     fmt,
@@ -16,7 +17,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, bail};
-use iroha_config::parameters::actual::SorafsProviderIngestRuntime;
+use iroha_config::parameters::{actual::SorafsProviderIngestRuntime, is_production_runtime_handle};
 use iroha_core::{
     queue::{Error as QueueError, Queue},
     state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
@@ -31,9 +32,8 @@ use iroha_data_model::{
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1, PinStatus,
-            ProviderIngestFinalizedAnchorV1, ReplicationOrderId, ReplicationOrderRecord,
-            ReplicationOrderStatus,
+            PinManifestRecord, PinStatus, ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+            ReplicationOrderRecord, ReplicationOrderStatus,
         },
     },
     transaction::{
@@ -48,7 +48,13 @@ use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use sorafs_car::{CarBuildPlan, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{
     ManifestV1,
-    capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1},
+    capacity::{
+        MAX_CAPACITY_METADATA_VALUE_BYTES, MAX_REPLICATION_ORDER_ASSIGNMENTS, ReplicationOrderV1,
+    },
+};
+use sorafs_node::provider_ingest_runtime::{
+    ProviderIngestAuthenticatedSourcePoolV1, ProviderIngestCompletionSignerBindingV1,
+    ProviderIngestCompletionSignerQualificationV1, ProviderIngestRuntimeProviderQualificationV1,
 };
 use sorafs_node::{
     FinalizedProviderIngestAuthorizationV1, NodeHandle, NodeStorageError,
@@ -57,20 +63,20 @@ use sorafs_node::{
     ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
     ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolverErrorV1,
     ProviderIngestCompletionSignerResolverV1, ProviderIngestCompletionSignerV1,
-    ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedAssignmentV1,
-    ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
-    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
-    ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
-    ProviderIngestLocalStorageV1, ProviderIngestRuntimePolicyV1, ProviderIngestSourceFetchErrorV1,
-    ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1,
-    ProviderIngestTransactionIngressV1, ProviderIngestTransactionObservationV1,
-    store::StorageError,
+    ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedCursorV1,
+    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
+    ProviderIngestIngressDispositionV1, ProviderIngestIngressPrepareErrorV1,
+    ProviderIngestLocalStorageErrorV1, ProviderIngestLocalStorageV1, ProviderIngestRuntimePolicyV1,
+    ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
+    ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
+    ProviderIngestTransactionObservationV1, store::StorageError,
 };
+
+use crate::sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinalizedLedgerV1;
 
 const SHUTDOWN_WAIT_FLOOR: Duration = Duration::from_secs(2);
 const READINESS_STALE_TICK_MULTIPLIER_V1: u32 = 3;
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
-const SNAPSHOT_ROW_STRUCTURAL_OVERHEAD_BYTES_V1: usize = 512;
 const SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1: u64 = 4 * 1024;
 const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     MAX_CAPACITY_METADATA_VALUE_BYTES,
@@ -80,20 +86,23 @@ const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     32,
 );
 
-/// Exact verified source material passed directly into local SoraFS storage.
+/// Exact verified source material passed directly into local `SoraFS` storage.
 ///
 /// The reader may stream from a bounded authenticated transport or a
-/// deployment-owned temporary object. It must already have passed the source
-/// boundary's manifest, plan, length, digest, PoR-root, and governed-advert
-/// checks, and every underlying read must carry a hard transport deadline no
-/// longer than the configured source-operation deadline. URLs, grants, bearer
-/// tokens, and credentials are intentionally absent.
+/// deployment-owned temporary object. Its manifest, plan, declared length,
+/// PoR root, and governed advert have already been authenticated. Payload
+/// digest, exact length, zero trailing bytes, and any post-stream provider
+/// qualification are finalized only when the reader reaches authenticated
+/// EOF; dropping or failing the reader before EOF invalidates the stream.
+/// Every underlying read must carry a hard transport deadline no longer than
+/// the configured source-operation deadline. URLs, grants, bearer tokens, and
+/// credentials are intentionally absent.
 pub struct VerifiedProviderIngestPayloadV1 {
     /// Canonical manifest returned by the authenticated source.
     pub manifest: ManifestV1,
     /// Exact CAR build plan bound to `manifest`.
     pub plan: CarBuildPlan,
-    /// Verified payload stream consumed once by local storage.
+    /// Authenticated payload stream whose verification completes at exact EOF.
     pub reader: Box<dyn Read + Send>,
 }
 
@@ -133,8 +142,57 @@ pub trait ProviderIngestAuthenticatedSourceRuntimeV1:
     /// Stable production identity compared with `iroha_config`.
     fn runtime_handle(&self) -> &str;
 
+    /// Exact public source-pool revision and policy digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free failure when the public qualification cannot be
+    /// authenticated.
+    fn qualification(
+        &self,
+    ) -> std::result::Result<
+        ProviderIngestRuntimeProviderQualificationV1,
+        ProviderIngestSourceFetchErrorV1,
+    >;
+
+    /// Canonical, identity-pinned governed provider inventory.
+    ///
+    /// Production startup requires at least two non-local providers and reads
+    /// this exact slice again after readiness probing and on every worker tick.
+    fn source_provider_ids(&self) -> &[[u8; 32]];
+
     /// Non-mutating authenticated readiness probe.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free failure when the authenticated source cannot be
+    /// qualified without mutation.
     fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1>;
+}
+
+impl ProviderIngestAuthenticatedSourceRuntimeV1
+    for ProviderIngestAuthenticatedSourcePoolV1<VerifiedProviderIngestPayloadV1>
+{
+    fn runtime_handle(&self) -> &str {
+        ProviderIngestAuthenticatedSourcePoolV1::runtime_handle(self)
+    }
+
+    fn qualification(
+        &self,
+    ) -> std::result::Result<
+        ProviderIngestRuntimeProviderQualificationV1,
+        ProviderIngestSourceFetchErrorV1,
+    > {
+        Ok(ProviderIngestAuthenticatedSourcePoolV1::qualification(self))
+    }
+
+    fn source_provider_ids(&self) -> &[[u8; 32]] {
+        ProviderIngestAuthenticatedSourcePoolV1::source_provider_ids(self)
+    }
+
+    fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
+        ProviderIngestAuthenticatedSourcePoolV1::check_readiness(self)
+    }
 }
 
 /// Runtime-only governed signer resolver.
@@ -148,18 +206,49 @@ pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
     /// Stable production identity compared with `iroha_config`.
     fn runtime_handle(&self) -> &str;
 
+    /// Exact public resolver revision and policy digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free failure when the public qualification cannot be
+    /// authenticated.
+    fn qualification(
+        &self,
+    ) -> std::result::Result<
+        ProviderIngestRuntimeProviderQualificationV1,
+        ProviderIngestCompletionSignerResolverErrorV1,
+    >;
+
+    /// Exact public signer/key binding exposed by this resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed payload-free resolver failure when the binding cannot
+    /// be authenticated.
+    fn signer_binding(
+        &self,
+    ) -> std::result::Result<
+        ProviderIngestCompletionSignerBindingV1,
+        ProviderIngestCompletionSignerResolverErrorV1,
+    >;
+
     /// Non-mutating HSM/KMS and governance-readiness probe.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free failure when the configured signer binding
+    /// cannot be qualified without mutation.
     fn check_readiness(
         &self,
     ) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>;
 
     /// Resolve one governed signer for the exact owner and finalized cursor.
-    fn resolve<'a>(
-        &'a self,
+    fn resolve(
+        &self,
         provider_owner: AccountId,
         finalized_cursor: ProviderIngestFinalizedCursorV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<
             Option<Arc<dyn ProviderIngestCompletionSignerV1>>,
             ProviderIngestCompletionSignerResolverErrorV1,
@@ -167,20 +256,77 @@ pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
     >;
 }
 
+fn validate_authenticated_source_qualification(
+    source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
+    expected: ProviderIngestRuntimeProviderQualificationV1,
+) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
+    if !expected.is_valid() {
+        return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+    }
+    let actual = match source.qualification() {
+        Ok(qualification) => qualification,
+        Err(ProviderIngestSourceFetchErrorV1::Unavailable) => {
+            return Err(ProviderIngestSourceFetchErrorV1::Unavailable);
+        }
+        Err(
+            ProviderIngestSourceFetchErrorV1::ContentRejected
+            | ProviderIngestSourceFetchErrorV1::Rejected,
+        ) => return Err(ProviderIngestSourceFetchErrorV1::Rejected),
+    };
+    if !actual.is_valid() || actual != expected {
+        return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
-struct AuthenticatedSourceAdapterV1(Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>);
+struct AuthenticatedSourceAdapterV1 {
+    source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
+    expected_qualification: ProviderIngestRuntimeProviderQualificationV1,
+}
 
 impl ProviderIngestAuthenticatedSourceFetchV1 for AuthenticatedSourceAdapterV1 {
     type Fetched = VerifiedProviderIngestPayloadV1;
 
-    fn fetch<'a>(
-        &'a self,
+    fn fetch(
+        &self,
         request: ProviderIngestSourceRequestV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>,
     > {
-        self.0.fetch(request)
+        Box::pin(async move {
+            validate_authenticated_source_qualification(
+                self.source.as_ref(),
+                self.expected_qualification,
+            )?;
+            let result = self.source.fetch(request).await;
+            let post_fetch_qualification = validate_authenticated_source_qualification(
+                self.source.as_ref(),
+                self.expected_qualification,
+            );
+            match (result, post_fetch_qualification) {
+                (
+                    Err(ProviderIngestSourceFetchErrorV1::Rejected),
+                    Ok(()) | Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+                )
+                | (
+                    _,
+                    Err(
+                        ProviderIngestSourceFetchErrorV1::ContentRejected
+                        | ProviderIngestSourceFetchErrorV1::Rejected,
+                    ),
+                ) => Err(ProviderIngestSourceFetchErrorV1::Rejected),
+                (
+                    Err(ProviderIngestSourceFetchErrorV1::ContentRejected),
+                    Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+                ) => Err(ProviderIngestSourceFetchErrorV1::ContentRejected),
+                (_, Err(ProviderIngestSourceFetchErrorV1::Unavailable)) => {
+                    Err(ProviderIngestSourceFetchErrorV1::Unavailable)
+                }
+                (result, Ok(())) => result,
+            }
+        })
     }
 }
 
@@ -190,12 +336,34 @@ struct GovernedCompletionSignerV1 {
     owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
     provider_id: ProviderId,
     expected_owner: AccountId,
-    expected_policy: ProviderIngestCompletionSignerPolicyV1,
+    expected_binding: ProviderIngestCompletionSignerBindingV1,
 }
 
 impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
+    fn runtime_handle(&self) -> &str {
+        self.signer.runtime_handle()
+    }
+
     fn authority(&self) -> &AccountId {
         self.signer.authority()
+    }
+
+    fn qualification(
+        &self,
+    ) -> std::result::Result<
+        ProviderIngestCompletionSignerQualificationV1,
+        ProviderIngestCompletionSignerErrorV1,
+    > {
+        let qualification = self.signer.qualification()?;
+        if self.expected_binding.validate().is_err()
+            || self.signer.runtime_handle() != self.expected_binding.runtime_handle.as_str()
+            || qualification != self.expected_binding.qualification
+            || qualification.validate().is_err()
+            || !qualification.matches_authority(&self.expected_owner)
+        {
+            return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
+        }
+        Ok(qualification)
     }
 
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
@@ -208,13 +376,14 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         ProviderIngestCompletionSignerPolicyV1,
         ProviderIngestCompletionSignerErrorV1,
     > {
+        let qualification = self.qualification()?;
         let current_policy = self.signer.current_eligibility()?;
         if !self
             .owner_authority
             .owner_matches(self.provider_id, &self.expected_owner)
             || self.signer.authority() != &self.expected_owner
             || self.signer.signer_policy() != current_policy
-            || current_policy != self.expected_policy
+            || current_policy != qualification.signer_policy
             || !current_policy.is_valid()
         {
             return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
@@ -222,11 +391,11 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         Ok(current_policy)
     }
 
-    fn sign<'a>(
-        &'a self,
+    fn sign(
+        &self,
         payload: TransactionPayload,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>,
     > {
         Box::pin(async move {
@@ -243,20 +412,58 @@ struct GovernedSignerResolverAdapterV1 {
     resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
     owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
     provider_id: ProviderId,
+    expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1,
+    expected_signer_binding: ProviderIngestCompletionSignerBindingV1,
+}
+
+fn validate_resolver_qualification(
+    resolver: &dyn ProviderIngestGovernedSignerResolverRuntimeV1,
+    expected: ProviderIngestRuntimeProviderQualificationV1,
+) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1> {
+    if !expected.is_valid() {
+        return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
+    }
+    let actual = resolver.qualification()?;
+    if !actual.is_valid() || actual != expected {
+        return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
+    }
+    Ok(())
+}
+
+fn validate_resolver_signer_binding(
+    resolver: &dyn ProviderIngestGovernedSignerResolverRuntimeV1,
+    expected: &ProviderIngestCompletionSignerBindingV1,
+) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1> {
+    if expected.validate().is_err() {
+        return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
+    }
+    let actual = resolver.signer_binding()?;
+    if actual.validate().is_err() || &actual != expected {
+        return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
+    }
+    Ok(())
 }
 
 impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV1 {
     type Signer = GovernedCompletionSignerV1;
 
-    fn resolve<'a>(
-        &'a self,
+    fn resolve(
+        &self,
         provider_owner: AccountId,
         finalized_cursor: ProviderIngestFinalizedCursorV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,
     > {
         Box::pin(async move {
+            validate_resolver_qualification(
+                self.resolver.as_ref(),
+                self.expected_resolver_qualification,
+            )?;
+            validate_resolver_signer_binding(
+                self.resolver.as_ref(),
+                &self.expected_signer_binding,
+            )?;
             if !self
                 .owner_authority
                 .owner_matches(self.provider_id, &provider_owner)
@@ -267,9 +474,27 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
             let signer = self
                 .resolver
                 .resolve(provider_owner, finalized_cursor)
-                .await?;
+                .await;
+            validate_resolver_qualification(
+                self.resolver.as_ref(),
+                self.expected_resolver_qualification,
+            )?;
+            validate_resolver_signer_binding(
+                self.resolver.as_ref(),
+                &self.expected_signer_binding,
+            )?;
+            let signer = signer?;
             let Some(signer) = signer else {
                 return Ok(None);
+            };
+            let signer_qualification = match signer.qualification() {
+                Ok(qualification) => qualification,
+                Err(ProviderIngestCompletionSignerErrorV1::Unavailable) => {
+                    return Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable);
+                }
+                Err(ProviderIngestCompletionSignerErrorV1::Rejected) => {
+                    return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
+                }
             };
             let expected_policy = match signer.current_eligibility() {
                 Ok(policy) => policy,
@@ -289,6 +514,11 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
             if signer.authority() != &expected_owner
                 || signer.signer_policy() != expected_policy
                 || !expected_policy.is_valid()
+                || signer.runtime_handle() != self.expected_signer_binding.runtime_handle.as_str()
+                || signer_qualification != self.expected_signer_binding.qualification
+                || signer_qualification.validate().is_err()
+                || !signer_qualification.matches_authority(&expected_owner)
+                || expected_policy != signer_qualification.signer_policy
             {
                 return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
             }
@@ -297,7 +527,7 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
                 owner_authority: Arc::clone(&self.owner_authority),
                 provider_id: self.provider_id,
                 expected_owner,
-                expected_policy,
+                expected_binding: self.expected_signer_binding.clone(),
             }))
         })
     }
@@ -322,363 +552,49 @@ struct FinalizedSnapshotProbeV1 {
     completed_cursor: Option<ProviderIngestFinalizedCursorV1>,
 }
 
-#[derive(Debug)]
-struct OwnedFinalizedAssignmentSnapshotV1 {
-    cursor: ProviderIngestFinalizedCursorV1,
-    finalized_block_time_ms: u64,
-    rows: Vec<ProviderIngestFinalizedAssignmentV1>,
-    expected_after_order_id: Option<[u8; 32]>,
-}
-
-/// Native immutable finalized assignment reader.
-///
-/// A scan copies every relevant row from one `State::query_view`; it never
-/// tries to reconstruct an historical view from a newer head. Continuations
-/// are served only from that owned snapshot and must provide the exact cursor
-/// and previous page boundary. Until the ledger exposes a provider-indexed
-/// committed query, the row and byte budget is charged against every order
-/// inspected, including orders assigned only to other providers.
+/// Archive-only finalized assignment reader with a payload-free terminal-page
+/// observation used by daemon readiness.
 #[derive(Clone)]
-struct NativeFinalizedAssignmentLedgerV1 {
-    state: Arc<State>,
-    provider_id: ProviderId,
-    max_snapshot_rows: usize,
-    max_snapshot_bytes: u64,
-    active: Arc<Mutex<Option<OwnedFinalizedAssignmentSnapshotV1>>>,
+struct ObservedArchivedFinalizedAssignmentLedgerV1 {
+    archived: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     probe: Arc<Mutex<FinalizedSnapshotProbeV1>>,
 }
 
-fn validated_replication_order_from_record(
-    order_id: &ReplicationOrderId,
-    order_record: &ReplicationOrderRecord,
-) -> std::result::Result<ReplicationOrderV1, ProviderIngestFinalizedLedgerErrorV1> {
-    if order_record.canonical_order.is_empty()
-        || order_record.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
-    {
-        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-    }
-    let order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-        &order_record.canonical_order,
-        REPLICATION_ORDER_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    order
-        .validate()
-        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    let canonical =
-        norito::to_bytes(&order).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    if canonical != order_record.canonical_order
-        || order_id != &order_record.order_id
-        || order.order_id != *order_record.order_id.as_bytes()
-        || order.manifest_digest != *order_record.manifest_digest.as_bytes()
-        || order.manifest_cid.as_slice() != order_record.manifest_root_cid.as_bytes()
-    {
-        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-    }
-    Ok(order)
-}
-
-fn finalized_assignment_snapshot_row_bytes(
-    row: &ProviderIngestFinalizedAssignmentV1,
-) -> std::result::Result<u64, ProviderIngestFinalizedLedgerErrorV1> {
-    let pin_bytes =
-        norito::to_bytes(&row.pin).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    let order_bytes =
-        norito::to_bytes(&row.order).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    let owner_bytes = row
-        .provider_owner
-        .as_ref()
-        .map(norito::to_bytes)
-        .transpose()
-        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?
-        .map_or(0, |bytes| bytes.len());
-    let authority_bytes = row
-        .completion_authority
-        .as_ref()
-        .map(norito::to_bytes)
-        .transpose()
-        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?
-        .map_or(0, |bytes| bytes.len());
-    let bytes = pin_bytes
-        .len()
-        .checked_add(order_bytes.len())
-        .and_then(|bytes| bytes.checked_add(owner_bytes))
-        .and_then(|bytes| bytes.checked_add(authority_bytes))
-        .and_then(|bytes| bytes.checked_add(SNAPSHOT_ROW_STRUCTURAL_OVERHEAD_BYTES_V1))
-        .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    u64::try_from(bytes).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)
-}
-
-impl NativeFinalizedAssignmentLedgerV1 {
+impl ObservedArchivedFinalizedAssignmentLedgerV1 {
     fn new(
-        state: Arc<State>,
-        provider_id: ProviderId,
-        max_snapshot_rows: usize,
-        max_snapshot_bytes: u64,
+        archived: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
         probe: Arc<Mutex<FinalizedSnapshotProbeV1>>,
     ) -> Self {
-        Self {
-            state,
-            provider_id,
-            max_snapshot_rows,
-            max_snapshot_bytes,
-            active: Arc::new(Mutex::new(None)),
-            probe,
-        }
-    }
-
-    fn charge_order_scan_budget(
-        &self,
-        order_record: &ReplicationOrderRecord,
-        inspected_rows: &mut usize,
-        inspected_bytes: &mut u64,
-    ) -> std::result::Result<(), ProviderIngestFinalizedLedgerErrorV1> {
-        let estimated_row_bytes = charge_snapshot_scan_budget(
-            inspected_rows,
-            inspected_bytes,
-            order_record.canonical_order.len(),
-            order_record.manifest_root_cid.as_bytes().len(),
-            order_record.provider_completions.len(),
-            self.max_snapshot_rows,
-            self.max_snapshot_bytes,
-        )?;
-        let exact_row_bytes = u64::try_from(
-            norito::to_bytes(order_record)
-                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?
-                .len(),
-        )
-        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-        if let Some(additional_bytes) = exact_row_bytes.checked_sub(estimated_row_bytes) {
-            *inspected_bytes = inspected_bytes
-                .checked_add(additional_bytes)
-                .filter(|bytes| *bytes <= self.max_snapshot_bytes)
-                .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-        }
-        Ok(())
-    }
-
-    fn build_snapshot(
-        &self,
-    ) -> std::result::Result<OwnedFinalizedAssignmentSnapshotV1, ProviderIngestFinalizedLedgerErrorV1>
-    {
-        let view = self.state.query_view();
-        let height = u64::try_from(view.height())
-            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-        let block_hash = view
-            .latest_block_hash()
-            .map(|hash| *hash.as_ref())
-            .filter(|hash| *hash != [0; 32])
-            .ok_or(ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
-        if height == 0
-            || !committed_head_matches_hash_journal(height, block_hash, view.block_hashes())
-        {
-            return Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
-        }
-        let finalized_block_time_ms = view
-            .latest_block()
-            .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
-            .filter(|timestamp| *timestamp != 0)
-            .ok_or(ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
-        let cursor = ProviderIngestFinalizedCursorV1 { height, block_hash };
-        let pin_cursor = PinManifestFinalizedCursorV1 { height, block_hash };
-        let provider_owner = view
-            .world()
-            .provider_owners()
-            .get(&self.provider_id)
-            .cloned();
-        let completion_authority = view
-            .world()
-            .provider_ingest_completion_authorities()
-            .get(&self.provider_id)
-            .cloned();
-        let mut rows = Vec::new();
-        let mut inspected_rows = 0_usize;
-        let mut inspected_bytes = 0_u64;
-        let mut selected_snapshot_bytes = 0_u64;
-
-        for (order_id, order_record) in view.world().replication_orders().iter() {
-            self.charge_order_scan_budget(order_record, &mut inspected_rows, &mut inspected_bytes)?;
-            let order = validated_replication_order_from_record(order_id, order_record)?;
-            if !order
-                .assignments
-                .iter()
-                .any(|assignment| assignment.provider_id == *self.provider_id.as_bytes())
-            {
-                continue;
-            }
-            let pin = view
-                .world()
-                .pin_manifests()
-                .get(&order_record.manifest_digest)
-                .cloned()
-                .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-            if pin.digest != order_record.manifest_digest
-                || pin.root_cid != order_record.manifest_root_cid
-                || pin.chunker.to_handle() != order.chunking_profile
-            {
-                return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-            }
-            let completion_epoch = matches!(order_record.status, ReplicationOrderStatus::Pending)
-                .then_some(height)
-                .filter(|epoch| {
-                    *epoch >= order_record.issued_epoch && *epoch <= order_record.deadline_epoch
-                });
-            let row = ProviderIngestFinalizedAssignmentV1 {
-                pin: PinManifestFinalizedRecordV1 {
-                    finalized_cursor: pin_cursor,
-                    manifest: pin,
-                },
-                order: order_record.clone(),
-                provider_owner: provider_owner.clone(),
-                completion_authority: completion_authority.clone(),
-                completion_epoch,
-                committed_transaction_hash: None,
-            };
-            let row_bytes = finalized_assignment_snapshot_row_bytes(&row)?;
-            selected_snapshot_bytes = selected_snapshot_bytes
-                .checked_add(row_bytes)
-                .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-            if rows.len() >= self.max_snapshot_rows
-                || selected_snapshot_bytes > self.max_snapshot_bytes
-            {
-                return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-            }
-            rows.push(row);
-        }
-        rows.sort_by_key(|row| *row.order.order_id.as_bytes());
-        Ok(OwnedFinalizedAssignmentSnapshotV1 {
-            cursor,
-            finalized_block_time_ms,
-            rows,
-            expected_after_order_id: None,
-        })
-    }
-
-    fn read_page(
-        &self,
-        at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
-        after_order_id: Option<[u8; 32]>,
-        limit: usize,
-    ) -> std::result::Result<
-        ProviderIngestFinalizedAssignmentPageV1,
-        ProviderIngestFinalizedLedgerErrorV1,
-    > {
-        if limit == 0 || limit > self.max_snapshot_rows {
-            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-        }
-        let mut active = self
-            .active
-            .lock()
-            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
-        if at_finalized_cursor.is_none() {
-            if after_order_id.is_some() || active.is_some() {
-                return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-            }
-            *active = Some(self.build_snapshot()?);
-        }
-        let snapshot = active
-            .as_mut()
-            .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-        if at_finalized_cursor.is_some_and(|cursor| cursor != snapshot.cursor)
-            || after_order_id != snapshot.expected_after_order_id
-        {
-            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-        }
-        let start = after_order_id.map_or(0, |after| {
-            snapshot
-                .rows
-                .binary_search_by_key(&after, |row| *row.order.order_id.as_bytes())
-                .map_or(usize::MAX, |index| index.saturating_add(1))
-        });
-        if start == usize::MAX || start > snapshot.rows.len() {
-            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-        }
-        let end = start.saturating_add(limit).min(snapshot.rows.len());
-        let rows = snapshot.rows[start..end].to_vec();
-        let next_after_order_id = (end < snapshot.rows.len()).then(|| {
-            *rows
-                .last()
-                .expect("non-empty page")
-                .order
-                .order_id
-                .as_bytes()
-        });
-        let cursor = snapshot.cursor;
-        let finalized_block_time_ms = snapshot.finalized_block_time_ms;
-        if let Some(next) = next_after_order_id {
-            snapshot.expected_after_order_id = Some(next);
-        } else {
-            *active = None;
-            let mut probe = self
-                .probe
-                .lock()
-                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
-            probe.completed_cursor = Some(cursor);
-        }
-        Ok(ProviderIngestFinalizedAssignmentPageV1 {
-            finalized_cursor: cursor,
-            finalized_block_time_ms,
-            rows,
-            next_after_order_id,
-        })
+        Self { archived, probe }
     }
 }
 
-fn charge_snapshot_scan_budget(
-    inspected_rows: &mut usize,
-    inspected_bytes: &mut u64,
-    canonical_order_bytes: usize,
-    manifest_cid_bytes: usize,
-    completion_count: usize,
-    max_rows: usize,
-    max_bytes: u64,
-) -> std::result::Result<u64, ProviderIngestFinalizedLedgerErrorV1> {
-    if *inspected_rows >= max_rows {
-        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-    }
-    let completion_bytes = completion_count
-        .checked_mul(SNAPSHOT_ROW_STRUCTURAL_OVERHEAD_BYTES_V1)
-        .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    let row_bytes = canonical_order_bytes
-        .checked_add(manifest_cid_bytes)
-        .and_then(|bytes| bytes.checked_add(completion_bytes))
-        .and_then(|bytes| bytes.checked_add(SNAPSHOT_ROW_STRUCTURAL_OVERHEAD_BYTES_V1))
-        .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    let row_bytes =
-        u64::try_from(row_bytes).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    let next_bytes = inspected_bytes
-        .checked_add(row_bytes)
-        .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    if next_bytes > max_bytes {
-        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-    }
-    *inspected_rows = inspected_rows
-        .checked_add(1)
-        .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-    *inspected_bytes = next_bytes;
-    Ok(row_bytes)
-}
-
-impl ProviderIngestFinalizedLedgerV1 for NativeFinalizedAssignmentLedgerV1 {
-    fn read_assignment_page<'a>(
-        &'a self,
+impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedgerV1 {
+    fn read_assignment_page(
+        &self,
         at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
         after_order_id: Option<[u8; 32]>,
         limit: usize,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<
             ProviderIngestFinalizedAssignmentPageV1,
             ProviderIngestFinalizedLedgerErrorV1,
         >,
     > {
-        let ledger = self.clone();
+        let archived = Arc::clone(&self.archived);
+        let probe = Arc::clone(&self.probe);
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                ledger.read_page(at_finalized_cursor, after_order_id, limit)
-            })
-            .await
-            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?
+            let page = archived
+                .read_assignment_page(at_finalized_cursor, after_order_id, limit)
+                .await?;
+            if page.next_after_order_id.is_none() {
+                probe
+                    .lock()
+                    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?
+                    .completed_cursor = Some(page.finalized_cursor);
+            }
+            Ok(page)
         })
     }
 }
@@ -768,11 +684,11 @@ impl Drop for BlockingStoreJoinGuardV1 {
 impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
     for NativeProviderIngestLocalStorageV1
 {
-    fn verify_existing<'a>(
-        &'a self,
+    fn verify_existing(
+        &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<Option<String>, ProviderIngestLocalStorageErrorV1>,
     > {
         let node = self.node.clone();
@@ -783,11 +699,11 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
         })
     }
 
-    fn store<'a>(
-        &'a self,
+    fn store(
+        &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
         mut fetched: VerifiedProviderIngestPayloadV1,
-    ) -> ProviderIngestFutureV1<'a, std::result::Result<String, ProviderIngestLocalStorageErrorV1>>
+    ) -> ProviderIngestFutureV1<'_, std::result::Result<String, ProviderIngestLocalStorageErrorV1>>
     {
         let node = self.node.clone();
         let operation_timeout = self.operation_timeout;
@@ -915,6 +831,58 @@ fn classify_storage_error(error: &NodeStorageError) -> ProviderIngestLocalStorag
     }
 }
 
+fn validate_completion_order_binding(
+    request: &ProviderIngestCompletionPayloadRequestV1,
+    provider_id: ProviderId,
+    order_record: &ReplicationOrderRecord,
+    pin: &PinManifestRecord,
+    current_height: u64,
+) -> std::result::Result<(), ProviderIngestCompletionPayloadErrorV1> {
+    let order_id = ReplicationOrderId::new(request.authorization.order_id());
+    if !matches!(order_record.status, ReplicationOrderStatus::Pending)
+        || order_record.provider_completion(provider_id).is_some()
+        || order_record.assignment_revision != request.expected_assignment_revision
+        || request.completion_epoch < order_record.issued_epoch
+        || request.completion_epoch > order_record.deadline_epoch
+        || current_height > order_record.deadline_epoch
+        || order_record.order_id != order_id
+        || *order_record.manifest_digest.as_bytes() != request.authorization.manifest_digest()
+        || order_record.manifest_root_cid.as_bytes() != request.authorization.manifest_cid()
+        || order_record.canonical_order.is_empty()
+        || order_record.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
+    {
+        return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
+    }
+    let order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
+        &order_record.canonical_order,
+        REPLICATION_ORDER_DECODE_LIMITS_V1,
+    )
+    .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?;
+    order
+        .validate()
+        .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?;
+    if norito::to_bytes(&order).map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?
+        != order_record.canonical_order
+        || order.order_id != request.authorization.order_id()
+        || order.manifest_digest != request.authorization.manifest_digest()
+        || order.manifest_cid.as_slice() != request.authorization.manifest_cid()
+        || !order
+            .assignments
+            .iter()
+            .any(|assignment| assignment.provider_id == request.authorization.provider_id())
+        || !matches!(pin.status, PinStatus::Approved(_))
+        || pin.digest != order_record.manifest_digest
+        || pin.root_cid != order_record.manifest_root_cid
+        || pin.chunker.to_handle() != request.authorization.chunker_handle()
+        || pin.chunk_digest_sha3_256 != request.authorization.chunk_digest_sha3_256()
+        || pin.por_root != request.authorization.por_root()
+        || pin.content_length != request.authorization.content_length()
+    {
+        return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct NativeCompletionPayloadBuilderV1 {
     chain_id: ChainId,
@@ -925,6 +893,35 @@ struct NativeCompletionPayloadBuilderV1 {
 }
 
 impl NativeCompletionPayloadBuilderV1 {
+    fn unsigned_completion_payload(
+        &self,
+        request: ProviderIngestCompletionPayloadRequestV1,
+        order_id: ReplicationOrderId,
+        provider_id: ProviderId,
+    ) -> std::result::Result<TransactionPayload, ProviderIngestCompletionPayloadErrorV1> {
+        let instruction = CompleteReplicationOrder::new(
+            order_id,
+            provider_id,
+            request.completion_epoch,
+            request.expected_authority,
+            request.expected_assignment_revision,
+            ProviderIngestFinalizedAnchorV1 {
+                height: request.finalized_cursor.height,
+                block_hash: request.finalized_cursor.block_hash,
+            },
+        );
+        let mut builder = TransactionBuilder::new(
+            self.chain_id.clone(),
+            request.provider_owner,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction]);
+        builder.set_ttl(self.ttl);
+        builder
+            .into_payload()
+            .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)
+    }
+
     fn build_payload_sync(
         &self,
         request: ProviderIngestCompletionPayloadRequestV1,
@@ -946,10 +943,13 @@ impl NativeCompletionPayloadBuilderV1 {
             .map(|hash| *hash.as_ref())
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?;
         if view.chain_id != self.chain_id
-            || height != request.finalized_cursor.height
-            || !committed_head_matches_hash_journal(height, head_hash, view.block_hashes())
-            || !cursor_matches_committed_hashes(request.finalized_cursor, view.block_hashes())
-            || request.completion_epoch != request.finalized_cursor.height
+            || !completion_payload_anchor_matches_committed_chain(
+                request.finalized_cursor,
+                request.completion_epoch,
+                height,
+                head_hash,
+                view.block_hashes(),
+            )
         {
             return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
         }
@@ -970,75 +970,12 @@ impl NativeCompletionPayloadBuilderV1 {
             .replication_orders()
             .get(&order_id)
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Rejected)?;
-        if !matches!(order_record.status, ReplicationOrderStatus::Pending)
-            || order_record.provider_completion(provider_id).is_some()
-            || order_record.assignment_revision != request.expected_assignment_revision
-            || request.completion_epoch < order_record.issued_epoch
-            || request.completion_epoch > order_record.deadline_epoch
-            || height > order_record.deadline_epoch
-            || order_record.order_id != order_id
-            || *order_record.manifest_digest.as_bytes() != request.authorization.manifest_digest()
-            || order_record.manifest_root_cid.as_bytes() != request.authorization.manifest_cid()
-            || order_record.canonical_order.is_empty()
-            || order_record.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
-        {
-            return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
-        }
-        let order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-            &order_record.canonical_order,
-            REPLICATION_ORDER_DECODE_LIMITS_V1,
-        )
-        .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?;
-        order
-            .validate()
-            .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?;
-        if norito::to_bytes(&order).map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?
-            != order_record.canonical_order
-            || order.order_id != request.authorization.order_id()
-            || order.manifest_digest != request.authorization.manifest_digest()
-            || order.manifest_cid.as_slice() != request.authorization.manifest_cid()
-            || !order
-                .assignments
-                .iter()
-                .any(|assignment| assignment.provider_id == request.authorization.provider_id())
-        {
-            return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
-        }
         let pin = world
             .pin_manifests()
             .get(&order_record.manifest_digest)
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Rejected)?;
-        if !matches!(pin.status, PinStatus::Approved(_))
-            || pin.digest != order_record.manifest_digest
-            || pin.root_cid != order_record.manifest_root_cid
-            || pin.chunker.to_handle() != request.authorization.chunker_handle()
-            || pin.chunk_digest_sha3_256 != request.authorization.chunk_digest_sha3_256()
-            || pin.por_root != request.authorization.por_root()
-            || pin.content_length != request.authorization.content_length()
-        {
-            return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
-        }
-        let instruction = CompleteReplicationOrder::new(
-            order_id,
-            provider_id,
-            request.completion_epoch,
-            request.expected_authority,
-            request.expected_assignment_revision,
-            ProviderIngestFinalizedAnchorV1 {
-                height: request.finalized_cursor.height,
-                block_hash: request.finalized_cursor.block_hash,
-            },
-        );
-        let mut builder = TransactionBuilder::new(
-            self.chain_id.clone(),
-            request.provider_owner,
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction]);
-        builder.set_ttl(self.ttl);
-        let mut payload = builder
-            .into_payload()
-            .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?;
+        validate_completion_order_binding(&request, provider_id, order_record, pin, height)?;
+        let mut payload = self.unsigned_completion_payload(request, order_id, provider_id)?;
         let route = self
             .queue
             .route_payload_with_state(&payload, self.state.as_ref())
@@ -1072,11 +1009,11 @@ impl NativeCompletionPayloadBuilderV1 {
 }
 
 impl ProviderIngestCompletionPayloadBuilderV1 for NativeCompletionPayloadBuilderV1 {
-    fn build_payload<'a>(
-        &'a self,
+    fn build_payload(
+        &self,
         request: ProviderIngestCompletionPayloadRequestV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<TransactionPayload, ProviderIngestCompletionPayloadErrorV1>,
     > {
         let builder = self.clone();
@@ -1115,7 +1052,7 @@ impl NativeTransactionIngressV1 {
     fn expose_sync(
         &self,
         prepared: AcceptedTransaction<'static>,
-        transaction: SignedTransaction,
+        transaction: &SignedTransaction,
     ) -> ProviderIngestIngressDispositionV1 {
         if prepared.hash() != transaction.hash() {
             return ProviderIngestIngressDispositionV1::Rejected;
@@ -1199,11 +1136,11 @@ impl NativeTransactionIngressV1 {
 impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
     type Prepared = AcceptedTransaction<'static>;
 
-    fn prepare<'a>(
-        &'a self,
+    fn prepare(
+        &self,
         transaction: SignedTransaction,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         std::result::Result<Self::Prepared, ProviderIngestIngressPrepareErrorV1>,
     > {
         let ingress = self.clone();
@@ -1214,33 +1151,28 @@ impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
         })
     }
 
-    fn expose<'a>(
-        &'a self,
+    fn expose(
+        &self,
         prepared: Self::Prepared,
         transaction: SignedTransaction,
-    ) -> ProviderIngestFutureV1<'a, ProviderIngestIngressDispositionV1> {
+    ) -> ProviderIngestFutureV1<'_, ProviderIngestIngressDispositionV1> {
         let ingress = self.clone();
         Box::pin(async move {
-            match tokio::task::spawn_blocking(move || ingress.expose_sync(prepared, transaction))
+            tokio::task::spawn_blocking(move || ingress.expose_sync(prepared, &transaction))
                 .await
-            {
-                Ok(disposition) => disposition,
-                Err(_) => ProviderIngestIngressDispositionV1::Ambiguous,
-            }
+                .unwrap_or(ProviderIngestIngressDispositionV1::Ambiguous)
         })
     }
 
-    fn observe<'a>(
-        &'a self,
+    fn observe(
+        &self,
         transaction_hash: [u8; 32],
-    ) -> ProviderIngestFutureV1<'a, ProviderIngestTransactionObservationV1> {
+    ) -> ProviderIngestFutureV1<'_, ProviderIngestTransactionObservationV1> {
         let ingress = self.clone();
         Box::pin(async move {
-            match tokio::task::spawn_blocking(move || ingress.observe_sync(transaction_hash)).await
-            {
-                Ok(observation) => observation,
-                Err(_) => ProviderIngestTransactionObservationV1::Unavailable,
-            }
+            tokio::task::spawn_blocking(move || ingress.observe_sync(transaction_hash))
+                .await
+                .unwrap_or(ProviderIngestTransactionObservationV1::Unavailable)
         })
     }
 }
@@ -1284,24 +1216,43 @@ pub struct ProviderIngestDaemonMetricsV1 {
     pub completion_submissions: u64,
 }
 
+/// Internal two-state status flag with an explicit boolean projection.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderIngestStatusFlagV1(bool);
+
+impl ProviderIngestStatusFlagV1 {
+    /// Return the externally emitted boolean value.
+    #[must_use]
+    pub const fn is_set(self) -> bool {
+        self.0
+    }
+}
+
+impl From<bool> for ProviderIngestStatusFlagV1 {
+    fn from(value: bool) -> Self {
+        Self(value)
+    }
+}
+
 /// Payload-free provider-ingest readiness projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestDaemonStatusV1 {
     /// Whether the supervised worker task is still alive.
-    pub worker_running: bool,
+    pub worker_running: ProviderIngestStatusFlagV1,
     /// Whether both runtime-only adapters passed the latest probe.
-    pub external_dependencies_healthy: bool,
+    pub external_dependencies_healthy: ProviderIngestStatusFlagV1,
     /// Whether one bounded tick is currently executing.
-    pub tick_in_flight: bool,
+    pub tick_in_flight: ProviderIngestStatusFlagV1,
     /// Whether a successful tick is within the configured freshness bound.
-    pub last_tick_fresh: bool,
+    pub last_tick_fresh: ProviderIngestStatusFlagV1,
     /// Latest fully scanned immutable finalized cursor.
     pub completed_scan_cursor: Option<ProviderIngestFinalizedCursorV1>,
     /// Current committed head height.
     pub finalized_head_height: u64,
     /// Whether the completed cursor can still be a prefix of the current
     /// finalized head.
-    pub finalized_cursor_consistent: bool,
+    pub finalized_cursor_consistent: ProviderIngestStatusFlagV1,
     /// Difference between current head and completed scan.
     pub finalized_lag_blocks: u64,
     /// Non-terminal durable outbox rows.
@@ -1317,6 +1268,38 @@ pub struct ProviderIngestDaemonStatusV1 {
     pub drained: bool,
     /// Release-gate readiness: operationally ready and fully drained.
     pub release_ready: bool,
+}
+
+impl ProviderIngestDaemonStatusV1 {
+    /// Return whether the supervised worker is alive.
+    #[must_use]
+    pub const fn worker_running(&self) -> bool {
+        self.worker_running.is_set()
+    }
+
+    /// Return whether the external runtime adapters are healthy.
+    #[must_use]
+    pub const fn external_dependencies_healthy(&self) -> bool {
+        self.external_dependencies_healthy.is_set()
+    }
+
+    /// Return whether one bounded tick is executing.
+    #[must_use]
+    pub const fn tick_in_flight(&self) -> bool {
+        self.tick_in_flight.is_set()
+    }
+
+    /// Return whether the latest successful tick is fresh.
+    #[must_use]
+    pub const fn last_tick_fresh(&self) -> bool {
+        self.last_tick_fresh.is_set()
+    }
+
+    /// Return whether the retained finalized cursor matches committed history.
+    #[must_use]
+    pub const fn finalized_cursor_consistent(&self) -> bool {
+        self.finalized_cursor_consistent.is_set()
+    }
 }
 
 /// Cloneable status/metrics handle retained by `irohad`.
@@ -1344,6 +1327,11 @@ impl fmt::Debug for ProviderIngestRuntimeHandleV1 {
 
 impl ProviderIngestRuntimeHandleV1 {
     /// Return payload-free status without performing runtime work.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the finalized view or one payload-free runtime
+    /// status projection cannot be read consistently.
     pub fn status(&self) -> Result<ProviderIngestDaemonStatusV1> {
         let completed_scan_cursor = self
             .probe
@@ -1387,18 +1375,18 @@ impl ProviderIngestRuntimeHandleV1 {
             && !tick_in_flight
             && last_tick_fresh
             && finalized_cursor_consistent
-            && finalized_lag_blocks <= self.config.max_finalized_lag_blocks
+            && finalized_lag_blocks <= self.config.finalized_archive.max_kura_tip_lag_blocks
             && dead_letters == 0;
         let drained = active_jobs == 0 && dead_letters == 0;
         let release_ready = ready && drained;
         Ok(ProviderIngestDaemonStatusV1 {
-            worker_running,
-            external_dependencies_healthy,
-            tick_in_flight,
-            last_tick_fresh,
+            worker_running: worker_running.into(),
+            external_dependencies_healthy: external_dependencies_healthy.into(),
+            tick_in_flight: tick_in_flight.into(),
+            last_tick_fresh: last_tick_fresh.into(),
             completed_scan_cursor,
             finalized_head_height,
-            finalized_cursor_consistent,
+            finalized_cursor_consistent: finalized_cursor_consistent.into(),
             finalized_lag_blocks,
             active_jobs,
             terminal_jobs,
@@ -1462,6 +1450,19 @@ fn cursor_matches_committed_hashes(
             .is_some_and(|hash| *hash.as_ref() == cursor.block_hash)
 }
 
+fn completion_payload_anchor_matches_committed_chain(
+    cursor: ProviderIngestFinalizedCursorV1,
+    completion_epoch: u64,
+    head_height: u64,
+    head_hash: [u8; 32],
+    committed_hashes: &[HashOf<BlockHeader>],
+) -> bool {
+    cursor.height <= head_height
+        && completion_epoch == cursor.height
+        && committed_head_matches_hash_journal(head_height, head_hash, committed_hashes)
+        && cursor_matches_committed_hashes(cursor, committed_hashes)
+}
+
 fn completed_cursor_matches_committed_chain(
     completed: Option<ProviderIngestFinalizedCursorV1>,
     head_height: u64,
@@ -1479,7 +1480,8 @@ fn completed_cursor_matches_committed_chain(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeDependencyProbeV1 {
     Ready,
-    NotReady,
+    Unavailable,
+    Rejected,
     TimedOutOrPanicked,
 }
 
@@ -1488,12 +1490,58 @@ async fn bounded_blocking_readiness_probe<F>(
     probe: F,
 ) -> RuntimeDependencyProbeV1
 where
-    F: FnOnce() -> bool + Send + 'static,
+    F: FnOnce() -> RuntimeDependencyProbeV1 + Send + 'static,
 {
     match tokio::time::timeout(deadline, tokio::task::spawn_blocking(probe)).await {
-        Ok(Ok(true)) => RuntimeDependencyProbeV1::Ready,
-        Ok(Ok(false)) => RuntimeDependencyProbeV1::NotReady,
+        Ok(Ok(result)) => result,
         Ok(Err(_)) | Err(_) => RuntimeDependencyProbeV1::TimedOutOrPanicked,
+    }
+}
+
+fn source_readiness_probe(
+    result: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
+) -> RuntimeDependencyProbeV1 {
+    match result {
+        Ok(()) => RuntimeDependencyProbeV1::Ready,
+        Err(ProviderIngestSourceFetchErrorV1::Unavailable) => RuntimeDependencyProbeV1::Unavailable,
+        Err(
+            ProviderIngestSourceFetchErrorV1::ContentRejected
+            | ProviderIngestSourceFetchErrorV1::Rejected,
+        ) => RuntimeDependencyProbeV1::Rejected,
+    }
+}
+
+fn signer_readiness_probe(
+    result: std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>,
+) -> RuntimeDependencyProbeV1 {
+    match result {
+        Ok(()) => RuntimeDependencyProbeV1::Ready,
+        Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable) => {
+            RuntimeDependencyProbeV1::Unavailable
+        }
+        Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected) => {
+            RuntimeDependencyProbeV1::Rejected
+        }
+    }
+}
+
+fn combine_runtime_dependency_probes(
+    source: RuntimeDependencyProbeV1,
+    signer: RuntimeDependencyProbeV1,
+) -> RuntimeDependencyProbeV1 {
+    if source == RuntimeDependencyProbeV1::Rejected || signer == RuntimeDependencyProbeV1::Rejected
+    {
+        RuntimeDependencyProbeV1::Rejected
+    } else if source == RuntimeDependencyProbeV1::TimedOutOrPanicked
+        || signer == RuntimeDependencyProbeV1::TimedOutOrPanicked
+    {
+        RuntimeDependencyProbeV1::TimedOutOrPanicked
+    } else if source == RuntimeDependencyProbeV1::Unavailable
+        || signer == RuntimeDependencyProbeV1::Unavailable
+    {
+        RuntimeDependencyProbeV1::Unavailable
+    } else {
+        RuntimeDependencyProbeV1::Ready
     }
 }
 
@@ -1504,22 +1552,13 @@ async fn probe_runtime_dependencies(
     signer_deadline: Duration,
 ) -> RuntimeDependencyProbeV1 {
     let source = bounded_blocking_readiness_probe(source_deadline, move || {
-        authenticated_source.check_readiness().is_ok()
+        source_readiness_probe(authenticated_source.check_readiness())
     });
     let signer = bounded_blocking_readiness_probe(signer_deadline, move || {
-        signer_resolver.check_readiness().is_ok()
+        signer_readiness_probe(signer_resolver.check_readiness())
     });
     let (source, signer) = tokio::join!(source, signer);
-    if source == RuntimeDependencyProbeV1::TimedOutOrPanicked
-        || signer == RuntimeDependencyProbeV1::TimedOutOrPanicked
-    {
-        RuntimeDependencyProbeV1::TimedOutOrPanicked
-    } else if source == RuntimeDependencyProbeV1::Ready && signer == RuntimeDependencyProbeV1::Ready
-    {
-        RuntimeDependencyProbeV1::Ready
-    } else {
-        RuntimeDependencyProbeV1::NotReady
-    }
+    combine_runtime_dependency_probes(source, signer)
 }
 
 fn provider_ingest_shutdown_wait(config: &SorafsProviderIngestRuntime) -> Duration {
@@ -1534,90 +1573,283 @@ fn provider_ingest_shutdown_wait(config: &SorafsProviderIngestRuntime) -> Durati
     .saturating_add(SHUTDOWN_WAIT_FLOOR)
 }
 
-/// Assemble and start supervised finalized-ledger provider ingest.
-///
-/// Missing, test-marked, unready, or identity-substituted runtime adapters
-/// fail startup before the worker is spawned.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn start(
-    config: SorafsProviderIngestRuntime,
+fn configured_authenticated_source_qualification(
+    config: &SorafsProviderIngestRuntime,
+) -> ProviderIngestRuntimeProviderQualificationV1 {
+    ProviderIngestRuntimeProviderQualificationV1::new(
+        config.authenticated_source_fetch_revision,
+        config.authenticated_source_fetch_policy_digest,
+    )
+}
+
+fn configured_completion_signer_resolver_qualification(
+    config: &SorafsProviderIngestRuntime,
+) -> ProviderIngestRuntimeProviderQualificationV1 {
+    ProviderIngestRuntimeProviderQualificationV1::new(
+        config.completion_signer_resolver_revision,
+        config.completion_signer_resolver_policy_digest,
+    )
+}
+
+fn configured_completion_signer_binding(
+    config: &SorafsProviderIngestRuntime,
+) -> ProviderIngestCompletionSignerBindingV1 {
+    ProviderIngestCompletionSignerBindingV1::new(
+        config.completion_signer_handle.clone(),
+        ProviderIngestCompletionSignerQualificationV1::new(
+            config.completion_signer_adapter_revision,
+            config.completion_signer_policy,
+            config.completion_signer_algorithm,
+            config.completion_signer_public_key.clone(),
+        ),
+    )
+}
+
+type NativeProviderIngestRuntimeV1 = ProviderIngestRuntimeV1<
+    ObservedArchivedFinalizedAssignmentLedgerV1,
+    AuthenticatedSourceAdapterV1,
+    NativeProviderIngestLocalStorageV1,
+    NativeCompletionPayloadBuilderV1,
+    GovernedSignerResolverAdapterV1,
+    NativeTransactionIngressV1,
+    ProviderIngestSystemClockV1,
+>;
+
+/// Deployment-owned provider-ingest runtime adapters.
+pub struct ProviderIngestRuntimeAdaptersV1 {
+    authenticated_source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
+    signer_resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
+}
+
+impl ProviderIngestRuntimeAdaptersV1 {
+    /// Bundle the authenticated source and governed signer resolver.
+    #[must_use]
+    pub fn new(
+        authenticated_source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
+        signer_resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
+    ) -> Self {
+        Self {
+            authenticated_source,
+            signer_resolver,
+        }
+    }
+}
+
+struct ProviderIngestStartContextV1 {
     chain_id: ChainId,
     state: Arc<State>,
     queue: Arc<Queue>,
     node: NodeHandle,
+    finalized_ledger: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     authenticated_source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
     signer_resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
-    shutdown_signal: ShutdownSignal,
-) -> Result<(ProviderIngestRuntimeHandleV1, Child)> {
-    validate_config(&config)?;
+}
+
+/// Daemon-owned inputs needed to launch the supervised provider-ingest worker.
+pub(crate) struct ProviderIngestRuntimeStartArgsV1 {
+    chain_id: ChainId,
+    state: Arc<State>,
+    queue: Arc<Queue>,
+    node: NodeHandle,
+    finalized_ledger: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
+}
+
+impl ProviderIngestRuntimeStartArgsV1 {
+    /// Bind one runtime launch to its configured chain, node, and archive-only
+    /// finalized reader.
+    pub(crate) fn new(
+        chain_id: ChainId,
+        state: Arc<State>,
+        queue: Arc<Queue>,
+        node: NodeHandle,
+        finalized_ledger: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
+    ) -> Self {
+        Self {
+            chain_id,
+            state,
+            queue,
+            node,
+            finalized_ledger,
+        }
+    }
+}
+
+struct ProviderIngestStartupQualificationV1 {
+    expected_authenticated_source_qualification: ProviderIngestRuntimeProviderQualificationV1,
+    expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1,
+    expected_signer_binding: ProviderIngestCompletionSignerBindingV1,
+    provider_id: ProviderId,
+    source_provider_ids: Vec<[u8; 32]>,
+}
+
+fn validate_startup_dependency_qualifications(
+    config: &SorafsProviderIngestRuntime,
+    context: &ProviderIngestStartContextV1,
+    expected_authenticated_source: ProviderIngestRuntimeProviderQualificationV1,
+    expected_resolver: ProviderIngestRuntimeProviderQualificationV1,
+    expected_signer: &ProviderIngestCompletionSignerBindingV1,
+) -> Result<()> {
     validate_dependency_identity(
         "authenticated source-fetch",
         &config.authenticated_source_fetch_handle,
-        authenticated_source.runtime_handle(),
+        context.authenticated_source.runtime_handle(),
     )?;
     validate_dependency_identity(
         "completion signer-resolver",
         &config.completion_signer_resolver_handle,
-        signer_resolver.runtime_handle(),
+        context.signer_resolver.runtime_handle(),
     )?;
-    match probe_runtime_dependencies(
-        Arc::clone(&authenticated_source),
-        Arc::clone(&signer_resolver),
+    validate_authenticated_source_qualification(
+        context.authenticated_source.as_ref(),
+        expected_authenticated_source,
+    )
+    .map_err(|_| {
+        eyre::eyre!(
+            "authenticated source-fetch qualification does not match SoraFS provider-ingest configuration"
+        )
+    })?;
+    validate_resolver_qualification(context.signer_resolver.as_ref(), expected_resolver).map_err(
+        |_| {
+            eyre::eyre!(
+                "completion signer-resolver qualification does not match SoraFS provider-ingest configuration"
+            )
+        },
+    )?;
+    validate_resolver_signer_binding(context.signer_resolver.as_ref(), expected_signer).map_err(
+        |_| {
+            eyre::eyre!(
+                "completion signer binding does not match SoraFS provider-ingest configuration"
+            )
+        },
+    )
+}
+
+fn revalidate_startup_dependencies_after_probe(
+    config: &SorafsProviderIngestRuntime,
+    context: &ProviderIngestStartContextV1,
+    expected_authenticated_source: ProviderIngestRuntimeProviderQualificationV1,
+    expected_resolver: ProviderIngestRuntimeProviderQualificationV1,
+    expected_signer: &ProviderIngestCompletionSignerBindingV1,
+    provider_id: [u8; 32],
+    source_provider_ids: &[[u8; 32]],
+) -> Result<()> {
+    validate_dependency_identity(
+        "authenticated source-fetch",
+        &config.authenticated_source_fetch_handle,
+        context.authenticated_source.runtime_handle(),
+    )?;
+    validate_dependency_identity(
+        "completion signer-resolver",
+        &config.completion_signer_resolver_handle,
+        context.signer_resolver.runtime_handle(),
+    )?;
+    validate_authenticated_source_qualification(
+        context.authenticated_source.as_ref(),
+        expected_authenticated_source,
+    )
+    .map_err(|_| {
+        eyre::eyre!(
+            "authenticated source-fetch qualification changed during provider-ingest startup readiness"
+        )
+    })?;
+    validate_resolver_qualification(context.signer_resolver.as_ref(), expected_resolver).map_err(
+        |_| {
+            eyre::eyre!(
+                "completion signer-resolver qualification changed during provider-ingest startup readiness"
+            )
+        },
+    )?;
+    validate_resolver_signer_binding(context.signer_resolver.as_ref(), expected_signer).map_err(
+        |_| {
+            eyre::eyre!(
+                "completion signer binding changed during provider-ingest startup readiness"
+            )
+        },
+    )?;
+    validate_authenticated_source_inventory(
+        context.authenticated_source.as_ref(),
+        provider_id,
+        Some(source_provider_ids),
+    )
+}
+
+async fn qualify_provider_ingest_startup(
+    config: &SorafsProviderIngestRuntime,
+    context: &ProviderIngestStartContextV1,
+) -> Result<ProviderIngestStartupQualificationV1> {
+    validate_config(config)?;
+    if context.finalized_ledger.chain_id() != &context.chain_id {
+        bail!("daemon-owned finalized provider-ingest query has a substituted chain identity");
+    }
+    context.finalized_ledger.activation_ready().wrap_err(
+        "qualify daemon-owned finalized provider-ingest archive activation gate at runtime startup",
+    )?;
+    let expected_authenticated_source_qualification =
+        configured_authenticated_source_qualification(config);
+    let expected_resolver_qualification =
+        configured_completion_signer_resolver_qualification(config);
+    let expected_signer_binding = configured_completion_signer_binding(config);
+    validate_startup_dependency_qualifications(
+        config,
+        context,
+        expected_authenticated_source_qualification,
+        expected_resolver_qualification,
+        &expected_signer_binding,
+    )?;
+    let provider_id =
+        context.node.config().provider_id().ok_or_else(|| {
+            eyre::eyre!("provider-ingest runtime requires a configured provider id")
+        })?;
+    if context.finalized_ledger.provider_id() != provider_id {
+        bail!("daemon-owned finalized provider-ingest query has a substituted provider identity");
+    }
+    validate_authenticated_source_inventory(
+        context.authenticated_source.as_ref(),
+        *provider_id.as_bytes(),
+        None,
+    )?;
+    let source_provider_ids = context.authenticated_source.source_provider_ids().to_vec();
+    let dependency_probe = probe_runtime_dependencies(
+        Arc::clone(&context.authenticated_source),
+        Arc::clone(&context.signer_resolver),
         Duration::from_millis(config.source_operation_timeout_ms),
         Duration::from_millis(config.signer_timeout_ms),
     )
-    .await
-    {
+    .await;
+    revalidate_startup_dependencies_after_probe(
+        config,
+        context,
+        expected_authenticated_source_qualification,
+        expected_resolver_qualification,
+        &expected_signer_binding,
+        *provider_id.as_bytes(),
+        &source_provider_ids,
+    )?;
+    match dependency_probe {
         RuntimeDependencyProbeV1::Ready => {}
-        RuntimeDependencyProbeV1::NotReady => {
-            bail!("SoraFS provider-ingest runtime dependencies are not ready");
+        RuntimeDependencyProbeV1::Unavailable => {
+            bail!("SoraFS provider-ingest runtime dependencies are temporarily unavailable");
+        }
+        RuntimeDependencyProbeV1::Rejected => {
+            bail!("SoraFS provider-ingest runtime dependency qualification was rejected");
         }
         RuntimeDependencyProbeV1::TimedOutOrPanicked => {
             bail!("SoraFS provider-ingest runtime dependency readiness probe failed its deadline");
         }
     }
-    let provider_id = node
-        .config()
-        .provider_id()
-        .ok_or_else(|| eyre::eyre!("provider-ingest runtime requires a configured provider id"))?;
-    let claim_owner = random_claim_owner()?;
-    let probe = Arc::new(Mutex::new(FinalizedSnapshotProbeV1 {
-        completed_cursor: None,
-    }));
-    let ledger = Arc::new(NativeFinalizedAssignmentLedgerV1::new(
-        Arc::clone(&state),
+    Ok(ProviderIngestStartupQualificationV1 {
+        expected_authenticated_source_qualification,
+        expected_resolver_qualification,
+        expected_signer_binding,
         provider_id,
-        config.max_snapshot_rows,
-        config.max_snapshot_bytes.0,
-        Arc::clone(&probe),
-    ));
-    let fetch = Arc::new(AuthenticatedSourceAdapterV1(Arc::clone(
-        &authenticated_source,
-    )));
-    let storage = Arc::new(NativeProviderIngestLocalStorageV1::new(
-        node.clone(),
-        Duration::from_millis(config.source_operation_timeout_ms),
-    ));
-    let payload_builder = Arc::new(NativeCompletionPayloadBuilderV1 {
-        chain_id: chain_id.clone(),
-        state: Arc::clone(&state),
-        queue: Arc::clone(&queue),
-        ttl: Duration::from_millis(config.completion_transaction_ttl_ms),
-        max_signed_transaction_bytes: config.outbox.max_signed_transaction_bytes.0,
-    });
-    let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> = state.clone();
-    let resolver = Arc::new(GovernedSignerResolverAdapterV1 {
-        resolver: Arc::clone(&signer_resolver),
-        owner_authority,
-        provider_id,
-    });
-    let ingress = Arc::new(NativeTransactionIngressV1 {
-        chain_id: chain_id.clone(),
-        state: Arc::clone(&state),
-        queue,
-    });
-    let clock = Arc::new(ProviderIngestSystemClockV1);
-    let policy = ProviderIngestRuntimePolicyV1 {
+        source_provider_ids,
+    })
+}
+
+fn provider_ingest_runtime_policy(
+    config: &SorafsProviderIngestRuntime,
+) -> ProviderIngestRuntimePolicyV1 {
+    ProviderIngestRuntimePolicyV1 {
         max_page_rows: config.max_page_rows,
         max_pages_per_tick: config.max_pages_per_tick,
         max_source_jobs_per_tick: config.max_source_jobs_per_tick,
@@ -1627,24 +1859,68 @@ pub(crate) async fn start(
         source_lease_renew_interval_ms: config.source_lease_renew_interval_ms,
         signer_timeout_ms: config.signer_timeout_ms,
         ingress_timeout_ms: config.ingress_timeout_ms,
-    };
-    let mut runtime = node
+    }
+}
+
+fn assemble_native_provider_ingest_runtime(
+    config: &SorafsProviderIngestRuntime,
+    context: &ProviderIngestStartContextV1,
+    qualification: &ProviderIngestStartupQualificationV1,
+) -> Result<(NativeProviderIngestRuntimeV1, ProviderIngestRuntimeHandleV1)> {
+    let claim_owner = random_claim_owner()?;
+    let probe = Arc::new(Mutex::new(FinalizedSnapshotProbeV1 {
+        completed_cursor: None,
+    }));
+    let ledger = Arc::new(ObservedArchivedFinalizedAssignmentLedgerV1::new(
+        Arc::clone(&context.finalized_ledger),
+        Arc::clone(&probe),
+    ));
+    let fetch = Arc::new(AuthenticatedSourceAdapterV1 {
+        source: Arc::clone(&context.authenticated_source),
+        expected_qualification: qualification.expected_authenticated_source_qualification,
+    });
+    let storage = Arc::new(NativeProviderIngestLocalStorageV1::new(
+        context.node.clone(),
+        Duration::from_millis(config.source_operation_timeout_ms),
+    ));
+    let payload_builder = Arc::new(NativeCompletionPayloadBuilderV1 {
+        chain_id: context.chain_id.clone(),
+        state: Arc::clone(&context.state),
+        queue: Arc::clone(&context.queue),
+        ttl: Duration::from_millis(config.completion_transaction_ttl_ms),
+        max_signed_transaction_bytes: config.outbox.max_signed_transaction_bytes.0,
+    });
+    let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> = context.state.clone();
+    let resolver = Arc::new(GovernedSignerResolverAdapterV1 {
+        resolver: Arc::clone(&context.signer_resolver),
+        owner_authority,
+        provider_id: qualification.provider_id,
+        expected_resolver_qualification: qualification.expected_resolver_qualification,
+        expected_signer_binding: qualification.expected_signer_binding.clone(),
+    });
+    let ingress = Arc::new(NativeTransactionIngressV1 {
+        chain_id: context.chain_id.clone(),
+        state: Arc::clone(&context.state),
+        queue: Arc::clone(&context.queue),
+    });
+    let runtime = context
+        .node
         .build_provider_ingest_runtime(
-            chain_id,
+            context.chain_id.clone(),
             claim_owner,
-            policy,
+            provider_ingest_runtime_policy(config),
             ledger,
             fetch,
             storage,
             payload_builder,
             resolver,
             ingress,
-            clock,
+            Arc::new(ProviderIngestSystemClockV1),
         )
         .wrap_err("assemble finalized-ledger provider-ingest runtime")?;
     let handle = ProviderIngestRuntimeHandleV1 {
-        node,
-        state,
+        node: context.node.clone(),
+        state: Arc::clone(&context.state),
         config: config.clone(),
         probe,
         counters: Arc::new(ProviderIngestDaemonCountersV1::default()),
@@ -1653,147 +1929,279 @@ pub(crate) async fn start(
         tick_in_flight: Arc::new(AtomicBool::new(false)),
         last_successful_tick: Arc::new(Mutex::new(None)),
     };
-    let worker = handle.clone();
-    let shutdown_wait = provider_ingest_shutdown_wait(&config);
-    let task = tokio::spawn(async move {
-        let _liveness = ProviderIngestWorkerLivenessGuardV1::new(
-            Arc::clone(&worker.worker_running),
-            Arc::clone(&worker.tick_in_flight),
+    Ok((runtime, handle))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderIngestWorkerControlV1 {
+    Continue,
+    Stop,
+}
+
+struct ProviderIngestWorkerV1 {
+    config: SorafsProviderIngestRuntime,
+    runtime: NativeProviderIngestRuntimeV1,
+    handle: ProviderIngestRuntimeHandleV1,
+    finalized_ledger: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
+    authenticated_source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
+    signer_resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
+    expected_authenticated_source_qualification: ProviderIngestRuntimeProviderQualificationV1,
+    expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1,
+    expected_signer_binding: ProviderIngestCompletionSignerBindingV1,
+    provider_id: ProviderId,
+    source_provider_ids: Vec<[u8; 32]>,
+}
+
+impl ProviderIngestWorkerV1 {
+    fn adapter_identity_probe(&self) -> RuntimeDependencyProbeV1 {
+        if validate_dependency_identity(
+            "authenticated source-fetch",
+            &self.config.authenticated_source_fetch_handle,
+            self.authenticated_source.runtime_handle(),
+        )
+        .is_err()
+            || validate_dependency_identity(
+                "completion signer-resolver",
+                &self.config.completion_signer_resolver_handle,
+                self.signer_resolver.runtime_handle(),
+            )
+            .is_err()
+            || validate_authenticated_source_inventory(
+                self.authenticated_source.as_ref(),
+                *self.provider_id.as_bytes(),
+                Some(&self.source_provider_ids),
+            )
+            .is_err()
+        {
+            return RuntimeDependencyProbeV1::Rejected;
+        }
+        let source = source_readiness_probe(validate_authenticated_source_qualification(
+            self.authenticated_source.as_ref(),
+            self.expected_authenticated_source_qualification,
+        ));
+        let resolver = signer_readiness_probe(validate_resolver_qualification(
+            self.signer_resolver.as_ref(),
+            self.expected_resolver_qualification,
+        ));
+        let signer = signer_readiness_probe(validate_resolver_signer_binding(
+            self.signer_resolver.as_ref(),
+            &self.expected_signer_binding,
+        ));
+        combine_runtime_dependency_probes(
+            source,
+            combine_runtime_dependency_probes(resolver, signer),
+        )
+    }
+
+    async fn probe_dependencies_or_shutdown(
+        &self,
+        shutdown_signal: &ShutdownSignal,
+    ) -> Option<RuntimeDependencyProbeV1> {
+        let dependency_probe = probe_runtime_dependencies(
+            Arc::clone(&self.authenticated_source),
+            Arc::clone(&self.signer_resolver),
+            Duration::from_millis(self.config.source_operation_timeout_ms),
+            Duration::from_millis(self.config.signer_timeout_ms),
         );
-        let mut interval = tokio::time::interval(Duration::from_millis(config.scan_interval_ms));
+        tokio::pin!(dependency_probe);
+        tokio::select! {
+            probe = &mut dependency_probe => Some(probe),
+            () = shutdown_signal.receive() => {
+                iroha_logger::debug!(
+                    "SoraFS provider-ingest runtime is being shut down during dependency probing"
+                );
+                None
+            }
+        }
+    }
+
+    fn record_successful_tick(&self, outcome: ProviderIngestTickOutcomeV1) -> bool {
+        record_tick_outcome(&self.handle.counters, outcome);
+        self.handle
+            .counters
+            .successful_ticks
+            .fetch_add(1, Ordering::Relaxed);
+        self.handle.last_successful_tick.lock().map_or_else(
+            |_| {
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::error!(
+                    "SoraFS provider-ingest freshness state is poisoned; stopping supervised worker"
+                );
+                false
+            },
+            |mut last_tick| {
+                *last_tick = Some(Instant::now());
+                true
+            },
+        )
+    }
+
+    async fn reconcile_or_shutdown(
+        &mut self,
+        shutdown_signal: &ShutdownSignal,
+    ) -> ProviderIngestWorkerControlV1 {
+        self.handle
+            .external_dependencies_healthy
+            .store(true, Ordering::Release);
+        let shutdown_requested = AtomicBool::new(false);
+        let mut stop_after_tick = false;
+        let tick_result = {
+            let tick = self.runtime.tick_with_shutdown(&shutdown_requested);
+            tokio::pin!(tick);
+            loop {
+                tokio::select! {
+                    result = &mut tick => break result,
+                    () = shutdown_signal.receive(), if !stop_after_tick => {
+                        shutdown_requested.store(true, Ordering::Release);
+                        self.handle
+                            .external_dependencies_healthy
+                            .store(false, Ordering::Release);
+                        stop_after_tick = true;
+                    }
+                }
+            }
+        };
+        match tick_result {
+            Ok(outcome) if stop_after_tick => {
+                record_tick_outcome(&self.handle.counters, outcome);
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::debug!(
+                    "SoraFS provider-ingest runtime drained its active row for shutdown"
+                );
+                ProviderIngestWorkerControlV1::Stop
+            }
+            Ok(outcome) => {
+                if self.record_successful_tick(outcome) {
+                    self.handle.tick_in_flight.store(false, Ordering::Release);
+                    ProviderIngestWorkerControlV1::Continue
+                } else {
+                    ProviderIngestWorkerControlV1::Stop
+                }
+            }
+            Err(error) => {
+                self.handle
+                    .counters
+                    .failed_ticks
+                    .fetch_add(1, Ordering::Relaxed);
+                self.handle
+                    .external_dependencies_healthy
+                    .store(false, Ordering::Release);
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::error!(
+                    error = %error,
+                    "SoraFS provider-ingest reconciliation failed; stopping supervised worker"
+                );
+                ProviderIngestWorkerControlV1::Stop
+            }
+        }
+    }
+
+    async fn tick(&mut self, shutdown_signal: &ShutdownSignal) -> ProviderIngestWorkerControlV1 {
+        self.handle.tick_in_flight.store(true, Ordering::Release);
+        self.handle
+            .external_dependencies_healthy
+            .store(false, Ordering::Release);
+        match self.finalized_ledger.activation_ready() {
+            Ok(true) => {}
+            Ok(false) => {
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::debug!(
+                    "SoraFS provider-ingest runtime is awaiting finalized archive activation"
+                );
+                return ProviderIngestWorkerControlV1::Continue;
+            }
+            Err(error) => {
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::error!(
+                    %error,
+                    "SoraFS provider-ingest finalized archive activation gate failed closed"
+                );
+                return ProviderIngestWorkerControlV1::Stop;
+            }
+        }
+        match self.adapter_identity_probe() {
+            RuntimeDependencyProbeV1::Ready => {}
+            RuntimeDependencyProbeV1::Unavailable => {
+                self.handle
+                    .counters
+                    .failed_ticks
+                    .fetch_add(1, Ordering::Relaxed);
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::warn!(
+                    "SoraFS provider-ingest runtime adapter qualification is temporarily unavailable"
+                );
+                return ProviderIngestWorkerControlV1::Continue;
+            }
+            RuntimeDependencyProbeV1::Rejected | RuntimeDependencyProbeV1::TimedOutOrPanicked => {
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::error!(
+                    "SoraFS provider-ingest runtime adapter identity or qualification was rejected; stopping supervised worker"
+                );
+                return ProviderIngestWorkerControlV1::Stop;
+            }
+        }
+        let Some(dependency_probe) = self.probe_dependencies_or_shutdown(shutdown_signal).await
+        else {
+            return ProviderIngestWorkerControlV1::Stop;
+        };
+        let dependency_probe =
+            combine_runtime_dependency_probes(dependency_probe, self.adapter_identity_probe());
+        match dependency_probe {
+            RuntimeDependencyProbeV1::Ready => {}
+            RuntimeDependencyProbeV1::Unavailable => {
+                self.handle
+                    .counters
+                    .failed_ticks
+                    .fetch_add(1, Ordering::Relaxed);
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::warn!(
+                    "SoraFS provider-ingest runtime dependency is temporarily unavailable"
+                );
+                return ProviderIngestWorkerControlV1::Continue;
+            }
+            RuntimeDependencyProbeV1::Rejected => {
+                self.handle
+                    .counters
+                    .failed_ticks
+                    .fetch_add(1, Ordering::Relaxed);
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::error!(
+                    "SoraFS provider-ingest runtime dependency identity or qualification was rejected; stopping supervised worker"
+                );
+                return ProviderIngestWorkerControlV1::Stop;
+            }
+            RuntimeDependencyProbeV1::TimedOutOrPanicked => {
+                self.handle
+                    .counters
+                    .failed_ticks
+                    .fetch_add(1, Ordering::Relaxed);
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::error!(
+                    "SoraFS provider-ingest runtime dependency probe exceeded its deadline or panicked; stopping supervised worker"
+                );
+                return ProviderIngestWorkerControlV1::Stop;
+            }
+        }
+        self.reconcile_or_shutdown(shutdown_signal).await
+    }
+
+    async fn run(mut self, shutdown_signal: ShutdownSignal) {
+        let _liveness = ProviderIngestWorkerLivenessGuardV1::new(
+            Arc::clone(&self.handle.worker_running),
+            Arc::clone(&self.handle.tick_in_flight),
+        );
+        let mut interval =
+            tokio::time::interval(Duration::from_millis(self.config.scan_interval_ms));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    worker.tick_in_flight.store(true, Ordering::Release);
-                    worker
-                        .external_dependencies_healthy
-                        .store(false, Ordering::Release);
-                    if validate_dependency_identity(
-                        "authenticated source-fetch",
-                        &config.authenticated_source_fetch_handle,
-                        authenticated_source.runtime_handle(),
-                    )
-                    .is_err()
-                    || validate_dependency_identity(
-                        "completion signer-resolver",
-                        &config.completion_signer_resolver_handle,
-                        signer_resolver.runtime_handle(),
-                    )
-                    .is_err()
-                    {
-                        worker
-                            .external_dependencies_healthy
-                            .store(false, Ordering::Release);
-                        iroha_logger::error!(
-                            "SoraFS provider-ingest runtime adapter identity changed; stopping supervised worker"
-                        );
+                    if self.tick(&shutdown_signal).await == ProviderIngestWorkerControlV1::Stop {
                         break;
                     }
-                    let dependency_probe = probe_runtime_dependencies(
-                        Arc::clone(&authenticated_source),
-                        Arc::clone(&signer_resolver),
-                        Duration::from_millis(config.source_operation_timeout_ms),
-                        Duration::from_millis(config.signer_timeout_ms),
-                    );
-                    tokio::pin!(dependency_probe);
-                    let dependency_probe = tokio::select! {
-                        probe = &mut dependency_probe => probe,
-                        () = shutdown_signal.receive() => {
-                            iroha_logger::debug!(
-                                "SoraFS provider-ingest runtime is being shut down during dependency probing"
-                            );
-                            break;
-                        }
-                    };
-                    match dependency_probe {
-                        RuntimeDependencyProbeV1::Ready => {}
-                        RuntimeDependencyProbeV1::NotReady => {
-                            worker
-                                .counters
-                                .failed_ticks
-                                .fetch_add(1, Ordering::Relaxed);
-                            worker.tick_in_flight.store(false, Ordering::Release);
-                            iroha_logger::warn!(
-                                "SoraFS provider-ingest runtime dependency probe failed closed"
-                            );
-                            continue;
-                        }
-                        RuntimeDependencyProbeV1::TimedOutOrPanicked => {
-                            worker
-                                .counters
-                                .failed_ticks
-                                .fetch_add(1, Ordering::Relaxed);
-                            worker.tick_in_flight.store(false, Ordering::Release);
-                            iroha_logger::error!(
-                                "SoraFS provider-ingest runtime dependency probe exceeded its deadline or panicked; stopping supervised worker"
-                            );
-                            break;
-                        }
-                    }
-                    worker
-                        .external_dependencies_healthy
-                        .store(true, Ordering::Release);
-                    let shutdown_requested = AtomicBool::new(false);
-                    let tick = runtime.tick_with_shutdown(&shutdown_requested);
-                    tokio::pin!(tick);
-                    let mut stop_after_tick = false;
-                    let tick_result = loop {
-                        tokio::select! {
-                            result = &mut tick => break result,
-                            () = shutdown_signal.receive(), if !stop_after_tick => {
-                                shutdown_requested.store(true, Ordering::Release);
-                                worker
-                                    .external_dependencies_healthy
-                                    .store(false, Ordering::Release);
-                                stop_after_tick = true;
-                            }
-                        }
-                    };
-                    match tick_result {
-                        Ok(outcome) => {
-                            record_tick_outcome(&worker.counters, outcome);
-                            if stop_after_tick {
-                                worker.tick_in_flight.store(false, Ordering::Release);
-                                iroha_logger::debug!(
-                                    "SoraFS provider-ingest runtime drained its active row for shutdown"
-                                );
-                                break;
-                            }
-                            worker
-                                .counters
-                                .successful_ticks
-                                .fetch_add(1, Ordering::Relaxed);
-                            if let Ok(mut last_tick) = worker.last_successful_tick.lock() {
-                                *last_tick = Some(Instant::now());
-                            } else {
-                                worker.tick_in_flight.store(false, Ordering::Release);
-                                iroha_logger::error!(
-                                    "SoraFS provider-ingest freshness state is poisoned; stopping supervised worker"
-                                );
-                                break;
-                            }
-                        }
-                        Err(error) => {
-                            worker
-                                .counters
-                                .failed_ticks
-                                .fetch_add(1, Ordering::Relaxed);
-                            worker
-                                .external_dependencies_healthy
-                                .store(false, Ordering::Release);
-                            worker.tick_in_flight.store(false, Ordering::Release);
-                            iroha_logger::error!(
-                                error = %error,
-                                "SoraFS provider-ingest reconciliation failed; stopping supervised worker"
-                            );
-                            break;
-                        }
-                    }
-                    worker.tick_in_flight.store(false, Ordering::Release);
                 }
                 () = shutdown_signal.receive() => {
-                    worker.tick_in_flight.store(false, Ordering::Release);
+                    self.handle.tick_in_flight.store(false, Ordering::Release);
                     iroha_logger::debug!(
                         "SoraFS provider-ingest runtime is being shut down"
                     );
@@ -1802,10 +2210,60 @@ pub(crate) async fn start(
                 else => break,
             }
         }
-    });
-    Ok((handle, Child::new(task, OnShutdown::Wait(shutdown_wait))))
+    }
 }
 
+/// Assemble and start supervised finalized-ledger provider ingest.
+///
+/// Missing, test-marked, unready, or identity-substituted runtime adapters
+/// fail startup before the worker is spawned.
+pub(crate) async fn start(
+    config: SorafsProviderIngestRuntime,
+    args: ProviderIngestRuntimeStartArgsV1,
+    adapters: ProviderIngestRuntimeAdaptersV1,
+    shutdown_signal: ShutdownSignal,
+) -> Result<(ProviderIngestRuntimeHandleV1, Child)> {
+    let ProviderIngestRuntimeStartArgsV1 {
+        chain_id,
+        state,
+        queue,
+        node,
+        finalized_ledger,
+    } = args;
+    let ProviderIngestRuntimeAdaptersV1 {
+        authenticated_source,
+        signer_resolver,
+    } = adapters;
+    let context = ProviderIngestStartContextV1 {
+        chain_id,
+        state,
+        queue,
+        node,
+        finalized_ledger,
+        authenticated_source,
+        signer_resolver,
+    };
+    let qualification = qualify_provider_ingest_startup(&config, &context).await?;
+    let (runtime, handle) =
+        assemble_native_provider_ingest_runtime(&config, &context, &qualification)?;
+    let shutdown_wait = provider_ingest_shutdown_wait(&config);
+    let worker = ProviderIngestWorkerV1 {
+        config,
+        runtime,
+        handle: handle.clone(),
+        finalized_ledger: Arc::clone(&context.finalized_ledger),
+        authenticated_source: context.authenticated_source,
+        signer_resolver: context.signer_resolver,
+        expected_authenticated_source_qualification: qualification
+            .expected_authenticated_source_qualification,
+        expected_resolver_qualification: qualification.expected_resolver_qualification,
+        expected_signer_binding: qualification.expected_signer_binding,
+        provider_id: qualification.provider_id,
+        source_provider_ids: qualification.source_provider_ids,
+    };
+    let task = tokio::spawn(worker.run(shutdown_signal));
+    Ok((handle, Child::new(task, OnShutdown::Wait(shutdown_wait))))
+}
 struct ProviderIngestWorkerLivenessGuardV1 {
     worker_running: Arc<AtomicBool>,
     tick_in_flight: Arc<AtomicBool>,
@@ -1880,8 +2338,15 @@ fn random_claim_owner() -> Result<ProviderIngestClaimOwnerV1> {
 }
 
 fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
-    if !is_production_handle(&config.authenticated_source_fetch_handle)
-        || !is_production_handle(&config.completion_signer_resolver_handle)
+    let authenticated_source_qualification = configured_authenticated_source_qualification(config);
+    let completion_signer_resolver_qualification =
+        configured_completion_signer_resolver_qualification(config);
+    let completion_signer_binding = configured_completion_signer_binding(config);
+    if !is_production_runtime_handle(&config.authenticated_source_fetch_handle)
+        || !is_production_runtime_handle(&config.completion_signer_resolver_handle)
+        || !authenticated_source_qualification.is_valid()
+        || !completion_signer_resolver_qualification.is_valid()
+        || completion_signer_binding.validate().is_err()
         || config.scan_interval_ms == 0
         || config.max_page_rows == 0
         || config.max_pages_per_tick == 0
@@ -1892,10 +2357,15 @@ fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
         || config.signer_timeout_ms == 0
         || config.ingress_timeout_ms == 0
         || config.completion_transaction_ttl_ms == 0
-        || config.max_snapshot_rows == 0
-        || config.max_snapshot_bytes.0 == 0
-        || config.max_finalized_lag_blocks == 0
-        || config.max_page_rows > config.max_snapshot_rows
+        || config.finalized_archive.max_record_bytes == 0
+        || config.finalized_archive.max_archive_entries == 0
+        || config.finalized_archive.max_total_bytes < config.finalized_archive.max_record_bytes
+        || config.finalized_archive.max_providers_per_anchor == 0
+        || config.finalized_archive.max_orders_per_provider == 0
+        || config.finalized_archive.max_total_orders_per_anchor == 0
+        || config.finalized_archive.max_page_rows == 0
+        || config.max_page_rows > config.finalized_archive.max_page_rows
+        || config.max_page_rows > config.finalized_archive.max_orders_per_provider
         || config.source_lease_renew_interval_ms >= config.outbox.source_lease_ttl_ms
         || config.outbox.max_signed_transaction_bytes.0
             <= SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1
@@ -1911,6 +2381,7 @@ fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
         max_terminal_entries: config.outbox.max_terminal_entries,
         max_attempts: config.outbox.max_attempts,
         checkpoint_max_bytes: config.outbox.checkpoint_max_bytes.0,
+        checkpoint_operation_timeout_ms: config.outbox.checkpoint_operation_timeout_ms,
         source_lease_ttl_ms: config.outbox.source_lease_ttl_ms,
         retry_base_delay_ms: config.outbox.retry_base_delay_ms,
         retry_max_delay_ms: config.outbox.retry_max_delay_ms,
@@ -1925,37 +2396,41 @@ fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
 }
 
 fn validate_dependency_identity(label: &str, expected: &str, actual: &str) -> Result<()> {
-    if !is_production_handle(actual) || actual != expected {
+    if !is_production_runtime_handle(actual) || actual != expected {
         bail!("{label} adapter identity does not match SoraFS provider-ingest configuration");
     }
     Ok(())
 }
 
-fn is_production_handle(handle: &str) -> bool {
-    if handle.is_empty()
-        || handle.len() > 256
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+fn validate_authenticated_source_inventory(
+    source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
+    local_provider_id: [u8; 32],
+    expected: Option<&[[u8; 32]]>,
+) -> Result<()> {
+    let provider_ids = source.source_provider_ids();
+    if provider_ids.len() < 2
+        || provider_ids.len() > MAX_REPLICATION_ORDER_ASSIGNMENTS
+        || provider_ids
+            .iter()
+            .any(|provider_id| *provider_id == [0; 32] || *provider_id == local_provider_id)
+        || provider_ids.windows(2).any(|pair| pair[0] >= pair[1])
+        || expected.is_some_and(|expected| expected != provider_ids)
     {
-        return false;
+        bail!(
+            "authenticated provider-ingest source inventory is missing, substituted, noncanonical, or out of bounds"
+        );
     }
-    let lowercase = handle.to_ascii_lowercase();
-    !lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
-            )
-        })
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::isi::InstructionBox;
+    use sorafs_node::provider_ingest_runtime::{
+        ProviderIngestAuthenticatedProviderSourceV1, ProviderIngestAuthenticatedSourceBindingV1,
+        ProviderIngestAuthenticatedSourceRegistrationV1, ProviderIngestSourceQualificationV1,
+    };
 
     use super::*;
 
@@ -1985,19 +2460,39 @@ mod tests {
     enum TestSignerMutationV1 {
         Owner(AccountId),
         Policy(ProviderIngestCompletionSignerPolicyV1),
+        QualificationRevision(u64),
     }
 
     struct TestGovernedCompletionSignerV1 {
         key: KeyPair,
         authority: AccountId,
         policy: Mutex<ProviderIngestCompletionSignerPolicyV1>,
+        qualification_revision: AtomicU64,
         owner_authority: TestOwnerAuthorityV1,
         mutation: Mutex<Option<TestSignerMutationV1>>,
     }
 
     impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
+        fn runtime_handle(&self) -> &'static str {
+            "pkcs11:sorafs-provider-ingest-primary"
+        }
+
         fn authority(&self) -> &AccountId {
             &self.authority
+        }
+
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ProviderIngestCompletionSignerQualificationV1,
+            ProviderIngestCompletionSignerErrorV1,
+        > {
+            Ok(ProviderIngestCompletionSignerQualificationV1::new(
+                self.qualification_revision.load(Ordering::SeqCst),
+                self.signer_policy(),
+                self.key.public_key().algorithm(),
+                self.key.public_key().clone(),
+            ))
         }
 
         fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
@@ -2018,11 +2513,11 @@ mod tests {
             }
         }
 
-        fn sign<'a>(
-            &'a self,
+        fn sign(
+            &self,
             payload: TransactionPayload,
         ) -> ProviderIngestFutureV1<
-            'a,
+            '_,
             std::result::Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>,
         > {
             Box::pin(async move {
@@ -2036,6 +2531,10 @@ mod tests {
                     Some(TestSignerMutationV1::Policy(policy)) => {
                         *self.policy.lock().expect("signer policy lock") = policy;
                     }
+                    Some(TestSignerMutationV1::QualificationRevision(revision)) => {
+                        self.qualification_revision
+                            .store(revision, Ordering::SeqCst);
+                    }
                     None => {}
                 }
                 Ok(transaction)
@@ -2045,31 +2544,103 @@ mod tests {
 
     struct TestGovernedSignerResolverV1 {
         signer: Arc<dyn ProviderIngestCompletionSignerV1>,
+        qualification: Mutex<ProviderIngestRuntimeProviderQualificationV1>,
+        qualification_after_readiness: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
+        qualification_after_resolve: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
+        readiness: Mutex<std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>>,
+    }
+
+    impl TestGovernedSignerResolverV1 {
+        fn new(signer: Arc<dyn ProviderIngestCompletionSignerV1>) -> Self {
+            Self {
+                signer,
+                qualification: Mutex::new(ProviderIngestRuntimeProviderQualificationV1::new(
+                    6, [0xB2; 32],
+                )),
+                qualification_after_readiness: Mutex::new(None),
+                qualification_after_resolve: Mutex::new(None),
+                readiness: Mutex::new(Ok(())),
+            }
+        }
     }
 
     impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolverV1 {
-        fn runtime_handle(&self) -> &str {
-            "pkcs11:sorafs-provider-ingest-test"
+        fn runtime_handle(&self) -> &'static str {
+            "hsm:sorafs-provider-ingest-resolver"
+        }
+
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ProviderIngestRuntimeProviderQualificationV1,
+            ProviderIngestCompletionSignerResolverErrorV1,
+        > {
+            Ok(*self
+                .qualification
+                .lock()
+                .expect("resolver qualification lock"))
+        }
+
+        fn signer_binding(
+            &self,
+        ) -> std::result::Result<
+            ProviderIngestCompletionSignerBindingV1,
+            ProviderIngestCompletionSignerResolverErrorV1,
+        > {
+            let qualification = self.signer.qualification().map_err(|error| match error {
+                ProviderIngestCompletionSignerErrorV1::Unavailable => {
+                    ProviderIngestCompletionSignerResolverErrorV1::Unavailable
+                }
+                ProviderIngestCompletionSignerErrorV1::Rejected => {
+                    ProviderIngestCompletionSignerResolverErrorV1::Rejected
+                }
+            })?;
+            Ok(ProviderIngestCompletionSignerBindingV1::new(
+                self.signer.runtime_handle(),
+                qualification,
+            ))
         }
 
         fn check_readiness(
             &self,
         ) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1> {
-            Ok(())
+            if let Some(qualification) = self
+                .qualification_after_readiness
+                .lock()
+                .expect("resolver readiness mutation lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("resolver qualification lock") = qualification;
+            }
+            *self.readiness.lock().expect("resolver readiness lock")
         }
 
-        fn resolve<'a>(
-            &'a self,
+        fn resolve(
+            &self,
             _provider_owner: AccountId,
             _finalized_cursor: ProviderIngestFinalizedCursorV1,
         ) -> ProviderIngestFutureV1<
-            'a,
+            '_,
             std::result::Result<
                 Option<Arc<dyn ProviderIngestCompletionSignerV1>>,
                 ProviderIngestCompletionSignerResolverErrorV1,
             >,
         > {
             let signer = Arc::clone(&self.signer);
+            if let Some(qualification) = self
+                .qualification_after_resolve
+                .lock()
+                .expect("resolver resolution mutation lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("resolver qualification lock") = qualification;
+            }
             Box::pin(async move { Ok(Some(signer)) })
         }
     }
@@ -2139,10 +2710,21 @@ mod tests {
             key,
             authority,
             policy: Mutex::new(policy),
+            qualification_revision: AtomicU64::new(1),
             owner_authority: owner_authority.clone(),
             mutation: Mutex::new(mutation),
         });
         (signer, owner_authority, provider_id, payload)
+    }
+
+    fn test_readiness_resolver(
+        readiness: std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>,
+    ) -> Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> {
+        let (signer, _, _, _) = test_governed_signer(test_signer_policy(1), None);
+        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
+        let resolver = Arc::new(TestGovernedSignerResolverV1::new(signer));
+        *resolver.readiness.lock().expect("resolver readiness lock") = readiness;
+        resolver
     }
 
     fn governed_signer_adapter(
@@ -2150,15 +2732,23 @@ mod tests {
         owner_authority: TestOwnerAuthorityV1,
         provider_id: ProviderId,
     ) -> GovernedSignerResolverAdapterV1 {
+        let expected_signer_binding = ProviderIngestCompletionSignerBindingV1::new(
+            signer.runtime_handle(),
+            signer.qualification().expect("test signer qualification"),
+        );
         let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
         let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> =
-            Arc::new(TestGovernedSignerResolverV1 { signer });
+            Arc::new(TestGovernedSignerResolverV1::new(signer));
         let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> =
             Arc::new(owner_authority);
         GovernedSignerResolverAdapterV1 {
             resolver,
             owner_authority,
             provider_id,
+            expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1::new(
+                6, [0xB2; 32],
+            ),
+            expected_signer_binding,
         }
     }
 
@@ -2167,6 +2757,78 @@ mod tests {
             height: 8,
             block_hash: [0x48; 32],
         }
+    }
+
+    #[test]
+    fn governed_signer_resolver_rejects_stale_advertised_binding() {
+        let (signer, _owner_authority, _provider_id, _payload) =
+            test_governed_signer(test_signer_policy(1), None);
+        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
+        let resolver = TestGovernedSignerResolverV1::new(Arc::clone(&signer));
+        let mut expected = resolver.signer_binding().expect("signer binding");
+        expected.qualification.adapter_revision = 2;
+
+        assert_eq!(
+            validate_resolver_signer_binding(&resolver, &expected),
+            Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
+        );
+    }
+
+    #[test]
+    fn governed_signer_resolver_rejects_qualification_drift_across_readiness() {
+        let (signer, _owner_authority, _provider_id, _payload) =
+            test_governed_signer(test_signer_policy(1), None);
+        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
+        let resolver = TestGovernedSignerResolverV1::new(signer);
+        let expected = ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB2; 32]);
+        assert!(validate_resolver_qualification(&resolver, expected).is_ok());
+        *resolver
+            .qualification_after_readiness
+            .lock()
+            .expect("resolver readiness mutation lock") = Some(
+            ProviderIngestRuntimeProviderQualificationV1::new(7, [0xB3; 32]),
+        );
+
+        resolver.check_readiness().expect("readiness probe");
+
+        assert_eq!(
+            validate_resolver_qualification(&resolver, expected),
+            Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_signer_resolver_rechecks_qualification_after_resolution() {
+        let (signer, owner_authority, provider_id, _payload) =
+            test_governed_signer(test_signer_policy(1), None);
+        let provider_owner = signer.authority().clone();
+        let expected_signer_binding = ProviderIngestCompletionSignerBindingV1::new(
+            signer.runtime_handle(),
+            signer.qualification().expect("test signer qualification"),
+        );
+        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
+        let resolver = Arc::new(TestGovernedSignerResolverV1::new(signer));
+        *resolver
+            .qualification_after_resolve
+            .lock()
+            .expect("resolver resolution mutation lock") = Some(
+            ProviderIngestRuntimeProviderQualificationV1::new(7, [0xB3; 32]),
+        );
+        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
+        let adapter = GovernedSignerResolverAdapterV1 {
+            resolver,
+            owner_authority: Arc::new(owner_authority),
+            provider_id,
+            expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1::new(
+                6, [0xB2; 32],
+            ),
+            expected_signer_binding,
+        };
+
+        assert!(matches!(
+            adapter.resolve(provider_owner, signer_test_cursor()).await,
+            Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
+        ));
     }
 
     #[tokio::test]
@@ -2194,6 +2856,26 @@ mod tests {
         let (signer, owner_authority, provider_id, payload) = test_governed_signer(
             test_signer_policy(1),
             Some(TestSignerMutationV1::Policy(test_signer_policy(2))),
+        );
+        let provider_owner = signer.authority().clone();
+        let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
+        let governed = adapter
+            .resolve(provider_owner, signer_test_cursor())
+            .await
+            .expect("resolve governed signer")
+            .expect("governed signer");
+
+        assert_eq!(
+            governed.sign(payload).await,
+            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_signer_rechecks_qualification_after_signing() {
+        let (signer, owner_authority, provider_id, payload) = test_governed_signer(
+            test_signer_policy(1),
+            Some(TestSignerMutationV1::QualificationRevision(2)),
         );
         let provider_owner = signer.authority().clone();
         let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
@@ -2284,21 +2966,285 @@ mod tests {
             "pkcs11 test",
             "source-mock-primary",
             "fake",
+            "dummy",
             "kms-placeholder",
             "source\nprimary",
+            "https://operator:secret@host",
+            "https://host/source?token=secret",
+            "https://host/source#fragment",
         ] {
-            assert!(!is_production_handle(handle), "{handle:?}");
+            assert!(!is_production_runtime_handle(handle), "{handle:?}");
         }
-        assert!(is_production_handle(
-            "pkcs11:sorafs-provider-ingest-primary"
+        assert!(is_production_runtime_handle(
+            "hsm://sorafs/provider-ingest/primary"
         ));
-        assert!(is_production_handle("https-pinned-source-pool:eu-1"));
+        assert!(is_production_runtime_handle(
+            "https-pinned-source-pool:eu-1"
+        ));
     }
 
     #[test]
     fn dependency_identity_rejects_runtime_substitution() {
         assert!(validate_dependency_identity("source", "source:eu-1", "source:eu-2").is_err());
         assert!(validate_dependency_identity("source", "source:eu-1", "source:eu-1").is_ok());
+    }
+
+    struct TestPoolProviderSourceV1 {
+        provider_id: [u8; 32],
+        runtime_handle: &'static str,
+        readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
+    }
+
+    impl ProviderIngestAuthenticatedProviderSourceV1 for TestPoolProviderSourceV1 {
+        type Fetched = VerifiedProviderIngestPayloadV1;
+
+        fn provider_id(&self) -> [u8; 32] {
+            self.provider_id
+        }
+
+        fn runtime_handle(&self) -> &str {
+            self.runtime_handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ProviderIngestSourceQualificationV1,
+            ProviderIngestSourceFetchErrorV1,
+        > {
+            Ok(ProviderIngestSourceQualificationV1::new(
+                1,
+                self.provider_id,
+            ))
+        }
+
+        fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
+            self.readiness
+        }
+
+        fn fetch_provider(
+            &self,
+            _authorization: FinalizedProviderIngestAuthorizationV1,
+        ) -> ProviderIngestFutureV1<
+            '_,
+            std::result::Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>,
+        > {
+            Box::pin(async { Err(ProviderIngestSourceFetchErrorV1::Unavailable) })
+        }
+    }
+
+    fn test_runtime_source_pool(
+        first_readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
+        second_readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
+    ) -> ProviderIngestAuthenticatedSourcePoolV1<VerifiedProviderIngestPayloadV1> {
+        let registrations = [
+            ([0x22; 32], "https-pinned:provider-a", first_readiness),
+            ([0x33; 32], "https-pinned:provider-b", second_readiness),
+        ]
+        .into_iter()
+        .map(|(provider_id, runtime_handle, readiness)| {
+            let source: Arc<
+                dyn ProviderIngestAuthenticatedProviderSourceV1<
+                    Fetched = VerifiedProviderIngestPayloadV1,
+                >,
+            > = Arc::new(TestPoolProviderSourceV1 {
+                provider_id,
+                runtime_handle,
+                readiness,
+            });
+            ProviderIngestAuthenticatedSourceRegistrationV1::new(
+                ProviderIngestAuthenticatedSourceBindingV1 {
+                    provider_id,
+                    runtime_handle: runtime_handle.to_owned(),
+                    revision: 1,
+                    policy_digest: provider_id,
+                },
+                source,
+            )
+        })
+        .collect();
+        ProviderIngestAuthenticatedSourcePoolV1::new(
+            "https-pinned-source-pool:region-a",
+            ProviderIngestRuntimeProviderQualificationV1::new(5, [0xB1; 32]),
+            4,
+            registrations,
+        )
+        .expect("test source pool")
+    }
+
+    struct TestAuthenticatedSourceInventoryV1 {
+        provider_ids: Vec<[u8; 32]>,
+        qualification: Mutex<ProviderIngestRuntimeProviderQualificationV1>,
+        qualification_after_readiness: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
+        qualification_after_fetch: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
+        readiness: Mutex<std::result::Result<(), ProviderIngestSourceFetchErrorV1>>,
+    }
+
+    impl TestAuthenticatedSourceInventoryV1 {
+        fn new(provider_ids: Vec<[u8; 32]>) -> Self {
+            Self {
+                provider_ids,
+                qualification: Mutex::new(ProviderIngestRuntimeProviderQualificationV1::new(
+                    5, [0xB1; 32],
+                )),
+                qualification_after_readiness: Mutex::new(None),
+                qualification_after_fetch: Mutex::new(None),
+                readiness: Mutex::new(Ok(())),
+            }
+        }
+    }
+
+    fn test_readiness_source(
+        readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
+    ) -> Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> {
+        let source = Arc::new(TestAuthenticatedSourceInventoryV1::new(vec![
+            [0x22; 32], [0x33; 32],
+        ]));
+        *source.readiness.lock().expect("source readiness lock") = readiness;
+        source
+    }
+
+    impl ProviderIngestAuthenticatedSourceFetchV1 for TestAuthenticatedSourceInventoryV1 {
+        type Fetched = VerifiedProviderIngestPayloadV1;
+
+        fn fetch(
+            &self,
+            _request: ProviderIngestSourceRequestV1,
+        ) -> ProviderIngestFutureV1<
+            '_,
+            std::result::Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>,
+        > {
+            if let Some(qualification) = self
+                .qualification_after_fetch
+                .lock()
+                .expect("source fetch mutation lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("source qualification lock") = qualification;
+            }
+            Box::pin(async { Err(ProviderIngestSourceFetchErrorV1::Unavailable) })
+        }
+    }
+
+    impl ProviderIngestAuthenticatedSourceRuntimeV1 for TestAuthenticatedSourceInventoryV1 {
+        fn runtime_handle(&self) -> &'static str {
+            "https-pinned-source-pool:region-a"
+        }
+
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ProviderIngestRuntimeProviderQualificationV1,
+            ProviderIngestSourceFetchErrorV1,
+        > {
+            Ok(*self
+                .qualification
+                .lock()
+                .expect("source qualification lock"))
+        }
+
+        fn source_provider_ids(&self) -> &[[u8; 32]] {
+            &self.provider_ids
+        }
+
+        fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
+            if let Some(qualification) = self
+                .qualification_after_readiness
+                .lock()
+                .expect("source readiness mutation lock")
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .expect("source qualification lock") = qualification;
+            }
+            *self.readiness.lock().expect("source readiness lock")
+        }
+    }
+
+    #[test]
+    fn authenticated_source_inventory_is_multi_provider_canonical_and_identity_stable() {
+        let local_provider_id = [0x11; 32];
+        let valid = TestAuthenticatedSourceInventoryV1::new(vec![[0x22; 32], [0x33; 32]]);
+        assert!(
+            validate_authenticated_source_inventory(
+                &valid,
+                local_provider_id,
+                Some(&[[0x22; 32], [0x33; 32]])
+            )
+            .is_ok()
+        );
+
+        for invalid in [
+            vec![[0x22; 32]],
+            vec![[0; 32], [0x22; 32]],
+            vec![local_provider_id, [0x22; 32]],
+            vec![[0x22; 32], [0x22; 32]],
+            vec![[0x33; 32], [0x22; 32]],
+        ] {
+            let source = TestAuthenticatedSourceInventoryV1::new(invalid);
+            assert!(
+                validate_authenticated_source_inventory(&source, local_provider_id, None).is_err()
+            );
+        }
+
+        assert!(
+            validate_authenticated_source_inventory(
+                &valid,
+                local_provider_id,
+                Some(&[[0x22; 32], [0x44; 32]])
+            )
+            .is_err()
+        );
+        let oversized = TestAuthenticatedSourceInventoryV1::new(
+            (0..=MAX_REPLICATION_ORDER_ASSIGNMENTS)
+                .map(|index| {
+                    let mut provider_id = [0x55; 32];
+                    provider_id[..8].copy_from_slice(
+                        &u64::try_from(index)
+                            .expect("provider index fits u64")
+                            .to_be_bytes(),
+                    );
+                    provider_id
+                })
+                .collect(),
+        );
+        assert!(
+            validate_authenticated_source_inventory(&oversized, local_provider_id, None).is_err()
+        );
+    }
+
+    #[test]
+    fn authenticated_source_rejects_qualification_drift_across_readiness() {
+        let source = TestAuthenticatedSourceInventoryV1::new(vec![[0x22; 32], [0x33; 32]]);
+        let expected = ProviderIngestRuntimeProviderQualificationV1::new(5, [0xB1; 32]);
+        assert!(validate_authenticated_source_qualification(&source, expected).is_ok());
+        *source
+            .qualification_after_readiness
+            .lock()
+            .expect("source readiness mutation lock") = Some(
+            ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB4; 32]),
+        );
+
+        source.check_readiness().expect("readiness probe");
+
+        assert_eq!(
+            validate_authenticated_source_qualification(&source, expected),
+            Err(ProviderIngestSourceFetchErrorV1::Rejected)
+        );
+    }
+
+    #[test]
+    fn source_and_resolver_qualifications_remain_independent() {
+        let source = ProviderIngestRuntimeProviderQualificationV1::new(5, [0xB1; 32]);
+        let resolver = ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB2; 32]);
+        assert!(source.is_valid());
+        assert!(resolver.is_valid());
+        assert_ne!(source, resolver);
     }
 
     #[test]
@@ -2362,14 +3308,47 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_orders_exhaust_scan_budget_before_provider_filtering() {
-        let mut rows = 0;
-        let mut bytes = 0;
-        assert!(charge_snapshot_scan_budget(&mut rows, &mut bytes, 16, 8, 0, 2, 4_096).is_ok());
-        assert!(charge_snapshot_scan_budget(&mut rows, &mut bytes, 16, 8, 0, 2, 4_096).is_ok());
-        assert_eq!(rows, 2);
-        assert!(charge_snapshot_scan_budget(&mut rows, &mut bytes, 1, 1, 0, 2, 4_096).is_err());
-        assert_eq!(rows, 2);
+    fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
+        let committed_hashes = (1_u8..=10)
+            .map(|byte| HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; 32])))
+            .collect::<Vec<_>>();
+        let cursor = ProviderIngestFinalizedCursorV1 {
+            height: 9,
+            block_hash: *committed_hashes[8].as_ref(),
+        };
+        let head_hash = *committed_hashes[9].as_ref();
+
+        assert!(completion_payload_anchor_matches_committed_chain(
+            cursor,
+            9,
+            10,
+            head_hash,
+            &committed_hashes,
+        ));
+        assert!(!completion_payload_anchor_matches_committed_chain(
+            ProviderIngestFinalizedCursorV1 {
+                block_hash: [0xA9; 32],
+                ..cursor
+            },
+            9,
+            10,
+            head_hash,
+            &committed_hashes,
+        ));
+        assert!(!completion_payload_anchor_matches_committed_chain(
+            cursor,
+            10,
+            10,
+            head_hash,
+            &committed_hashes,
+        ));
+        assert!(!completion_payload_anchor_matches_committed_chain(
+            cursor,
+            9,
+            10,
+            [0xAA; 32],
+            &committed_hashes,
+        ));
     }
 
     #[test]
@@ -2385,10 +3364,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn daemon_dependency_probe_allows_one_ready_source_for_request_failover() {
+        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = Arc::new(
+            test_runtime_source_pool(Err(ProviderIngestSourceFetchErrorV1::Unavailable), Ok(())),
+        );
+        let result = probe_runtime_dependencies(
+            source,
+            test_readiness_resolver(Ok(())),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .await;
+
+        assert_eq!(result, RuntimeDependencyProbeV1::Ready);
+    }
+
+    #[tokio::test]
+    async fn daemon_dependency_probe_preserves_rejected_and_unavailable_outcomes() {
+        let unavailable = probe_runtime_dependencies(
+            test_readiness_source(Err(ProviderIngestSourceFetchErrorV1::Unavailable)),
+            test_readiness_resolver(Ok(())),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(unavailable, RuntimeDependencyProbeV1::Unavailable);
+
+        let source_rejected = probe_runtime_dependencies(
+            test_readiness_source(Err(ProviderIngestSourceFetchErrorV1::Rejected)),
+            test_readiness_resolver(Ok(())),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(source_rejected, RuntimeDependencyProbeV1::Rejected);
+
+        let signer_unavailable = probe_runtime_dependencies(
+            test_readiness_source(Ok(())),
+            test_readiness_resolver(Err(
+                ProviderIngestCompletionSignerResolverErrorV1::Unavailable,
+            )),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(signer_unavailable, RuntimeDependencyProbeV1::Unavailable);
+
+        let signer_rejected = probe_runtime_dependencies(
+            test_readiness_source(Ok(())),
+            test_readiness_resolver(Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(signer_rejected, RuntimeDependencyProbeV1::Rejected);
+    }
+
+    #[tokio::test]
     async fn hung_readiness_probe_fails_at_explicit_deadline() {
         let result = bounded_blocking_readiness_probe(Duration::from_millis(1), || {
             std::thread::sleep(Duration::from_millis(25));
-            true
+            RuntimeDependencyProbeV1::Ready
         })
         .await;
         assert_eq!(result, RuntimeDependencyProbeV1::TimedOutOrPanicked);

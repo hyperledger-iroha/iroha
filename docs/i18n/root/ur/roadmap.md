@@ -6,8 +6,8 @@ direction: rtl
 source: roadmap.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 75c4e3899c46ff3d8fe0841d36dc784fe7a6a1024cefd5dfbb520310f39c6756
-source_last_modified: "2026-07-27T05:20:37.803034+00:00"
+source_hash: d80757a17009d6ad05406be45eae5a41baad8cb96aebfb59187bf7431941e181
+source_last_modified: "2026-07-28T08:13:49.390737+00:00"
 translation_last_reviewed: null
 ---
 

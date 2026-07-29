@@ -7,7 +7,9 @@ Status: draft/sketch to accompany the governance implementation tasks. Shapes ma
 Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the bonded citizen registry. A citizen is an account that posted the configured minimum bond; the bond is an anti-Sybil/collateral floor and does not increase Parliament draw odds or vote weight above the minimum. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
 
 Overview
-- All endpoints return JSON. For transaction-producing flows, responses include `tx_instructions` — an array of one or more instruction skeletons:
+- Endpoints return JSON except where an endpoint explicitly documents a typed
+  Norito proof response. For transaction-producing flows, responses include
+  `tx_instructions` — an array of one or more instruction skeletons:
   - `wire_id`: registry identifier for the instruction type
   - `payload_hex`: Norito payload bytes (hex)
 - Governance endpoints do not server-sign. Supplying `private_key` to a `/v1/gov/*` transaction-producing endpoint is rejected; clients assemble a `SignedTransaction` using their authority and chain id, then sign locally and POST to `/v1/pipeline/transactions`.
@@ -15,6 +17,12 @@ Overview
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
 - JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`). `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers.
+- Rust (`iroha::client::Client`):
+  `post_validation_fee_plain_ballot_draft` accepts the typed
+  `ValidationFeePlainBallotDraftRequestV1`, calls the proposal-bound route, and
+  rejects a response unless its canonical framed `CastPlainBallot` exactly
+  matches the requested proposal id, owner, and direction together with the
+  returned immutable amount and duration.
 
 Endpoints
 
@@ -40,19 +48,60 @@ Endpoints
     `RegisterCitizen` instruction skeleton. Unknown fields and unsupported
     versions are rejected; the node never signs the draft.
 
+- POST `/v1/validation-fee/policy/current/proof`
+  - Accepts the strict Norito V1 request containing `version` and a non-zero
+    `trusted_checkpoint_height`. It returns the complete protected registry
+    when configured, its synthetic ordinary-write witness, and a consecutive
+    Sumeragi-v2 finality page beginning at that checkpoint.
+  - A page contains at most 64 finality proofs and advances at most 63 blocks.
+    While `more_available` is true, clients promote `evaluated_context_id` and
+    request the next page; an incomplete, skipped, reordered, rollback, or
+    equivocal chain is not deployable evidence.
+  - Clients verify locally with the immutable chain id, genesis hash,
+    policy-chain genesis hash, checkpoint height, and checkpoint context id.
+    The resulting verified projection includes, for both the policy and payout
+    lifecycle proposals, `plainElectorateRules` and
+    `plainElectorateSnapshot.{rosterRoot,memberCount,capturedAtHeight,approvalGateHeight}`.
+    Verification also requires PLAIN finalization, matching rules and snapshot
+    anchors, and the exact
+    `effective_from_height = enacted_at_height + 120,960` relation.
 - GET `/v1/validation-fee/proposals`
   - Lists only typed native validation-fee policy and payout-lifecycle
-    proposals.
+    proposals. Each record carries `plain_electorate_snapshot`: it is `null`
+    before referendum opening and the complete frozen citizen roster
+    thereafter.
 - GET `/v1/validation-fee/proposals/{proposal_id}?account_id=<i105-account-id>`
-  - Returns the exact proposal/referendum/snapshot, current height, per-body
-    members, alternates, quorum and decision counts for all seven bodies,
-    optional current-account decisions, the live or finalized citizen tally,
-    the ordered proposal pipeline, and current retained voter locks. All
+  - Returns the exact proposal/referendum, proposal-time Parliament snapshot,
+    frozen PLAIN electorate snapshot, current height, per-body members,
+    alternates, quorum and decision counts for all seven bodies, optional
+    current-account decisions, the live or finalized citizen tally, the
+    ordered proposal pipeline, and current retained voter locks. The electorate
+    snapshot contains the proposal/operator binding, capture and approval-gate
+    heights, exact member count, canonical member records, and roster root. All
     integer fields in this projection are canonical unsigned decimal strings.
 - POST `/v1/validation-fee/proposals/draft`
   - Builds exactly one native PLAIN validation-fee proposal instruction for
-    local signing. Legacy signed-policy, governance-keyset, detached-signature,
-    and ZK compatibility shapes are not accepted.
+    local signing. The strict request requires `plain_electorate_rules`; those
+    exact rules are included in the native proposal fingerprint and retained
+    for ballot eligibility, amount, duration, conviction, turnout, and approval
+    checks. Legacy signed-policy, governance-keyset, detached-signature, and ZK
+    compatibility shapes are not accepted.
+  - The supplied rules and inclusive referendum span must exactly match active
+    governance configuration. Taira fixes the span at 3,600 blocks
+    (`h_end = h_start + 3,599`); the draft route rejects any other span or
+    rule set.
+- POST `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft`
+  - Strict request:
+    `{ "version": 1, "owner": "<i105-account-id>", "direction": "AYE" | "NAY" | "ABSTAIN" }`.
+  - Returns exactly one canonical framed `CastPlainBallot` instruction for
+    local signing. The response repeats the exact proposal id, owner,
+    direction, proposal-bound amount, and proposal-bound duration.
+  - The route fails closed unless the referendum is PLAIN and open at the next
+    possible inclusion height, all seven retained Parliament bodies still
+    satisfy the proposal snapshot, the owner belongs to the electorate frozen
+    at `h_start`, and the account has not already cast an effective ballot.
+    Membership is never recomputed from the live citizen registry. Callers
+    cannot override amount or duration.
 
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):
@@ -324,7 +373,7 @@ Unlock Sweep (Operator/Audit)
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
 
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
+- POST `/v1/gov/ballots/zk-v1/ballot-proof`
   - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
   - Request:
     {
@@ -355,7 +404,7 @@ Unlock Sweep (Operator/Audit)
     - Supplying `private_key` is rejected; Torii returns only an unsigned instruction skeleton for local signing.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
-    - This endpoint is only available when the `zk-ballot` feature is enabled.
+    - This endpoint is part of every V1 app API build.
 
 CastZkBallot Verification Path
 - `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).

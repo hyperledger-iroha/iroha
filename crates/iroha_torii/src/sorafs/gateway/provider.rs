@@ -1,8 +1,7 @@
 //! Payload-free runtime-provider bindings shared by gateway security adapters.
 
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use thiserror::Error;
-
-const GATEWAY_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 
 /// Exact public identity configured for one runtime-owned gateway provider.
 ///
@@ -63,8 +62,8 @@ impl GatewayProviderBindingV1 {
 /// Payload-free validation failures for gateway runtime-provider bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum GatewayProviderBindingErrorV1 {
-    /// The provider handle is empty, oversized, non-ASCII, or contains spacing
-    /// or control bytes.
+    /// The provider handle is empty, oversized, non-ASCII, or contains a
+    /// forbidden byte.
     #[error("gateway runtime provider handle is invalid")]
     InvalidHandle,
     /// The provider handle is explicitly marked for test or development use.
@@ -79,28 +78,15 @@ pub enum GatewayProviderBindingErrorV1 {
 }
 
 fn validate_gateway_provider_handle(handle: &str) -> Result<(), GatewayProviderBindingErrorV1> {
-    if handle.is_empty()
-        || handle.len() > GATEWAY_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(GatewayProviderBindingErrorV1::InvalidHandle);
+    match validate_production_runtime_handle(handle) {
+        Ok(()) => Ok(()),
+        Err(ProductionRuntimeHandleError::InvalidSyntax) => {
+            Err(GatewayProviderBindingErrorV1::InvalidHandle)
+        }
+        Err(ProductionRuntimeHandleError::TestMarked) => {
+            Err(GatewayProviderBindingErrorV1::TestMarkedHandle)
+        }
     }
-    let lowercase = handle.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
-        return Err(GatewayProviderBindingErrorV1::TestMarkedHandle);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -108,7 +94,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_binding_rejects_test_markers_and_zero_qualification() {
+    fn provider_binding_uses_central_handle_grammar_and_rejects_zero_qualification() {
+        let binding = GatewayProviderBindingV1::try_new(
+            "kms://gateway/acme/primary.v1_slot-a".to_owned(),
+            1,
+            [0x51; 32],
+        )
+        .expect("canonical production provider handle");
+        assert_eq!(
+            binding.provider_handle(),
+            "kms://gateway/acme/primary.v1_slot-a"
+        );
+        for handle in [
+            "https://operator:secret@gateway",
+            "https://gateway/acme?credential=secret",
+            "https://gateway/acme#fragment",
+            "kms://gateway/acme/%70rimary",
+            "kms:\\gateway\\acme\\primary",
+        ] {
+            assert_eq!(
+                GatewayProviderBindingV1::try_new(handle.to_owned(), 1, [0x51; 32]),
+                Err(GatewayProviderBindingErrorV1::InvalidHandle)
+            );
+        }
         assert_eq!(
             GatewayProviderBindingV1::try_new("kms://gateway/acme/dummy".to_owned(), 1, [0x51; 32],),
             Err(GatewayProviderBindingErrorV1::TestMarkedHandle)

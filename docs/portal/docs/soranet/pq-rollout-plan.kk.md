@@ -99,11 +99,11 @@ rollout_phase = "default"
 
 | Беттік | Канария (А кезеңі) | Рамп (В кезеңі) | Әдепкі (С кезеңі) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` алу | `--anonymity-policy stage-a` немесе фазаға сүйеніңіз | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` алу | `--anonymity-policy anon-guard-pq` немесе фазаға сүйеніңіз | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Оркестр конфигурациясы JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust клиент конфигурациясы (`iroha.toml`) | `rollout_phase = "canary"` (әдепкі) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` қол қойылған командалар | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, таңдау бойынша `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, міндетті түрде `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, міндетті түрде `.ANON_STRICT_PQ` |
+| `iroha_cli` қол қойылған командалар | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, таңдау бойынша `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, міндетті түрде `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, міндетті түрде `.ANON_STRICT_PQ` |
 | JavaScript оркестрінің көмекшілері | `rolloutPhase: "canary"` немесе `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ rollout_phase = "default"
 
 3. **Клиент/SDK канариясы (Т плюс 1 апта)**
 
-   - `rollout_phase = "ramp"` параметрін клиент конфигурацияларында аударыңыз немесе тағайындалған SDK когорттары үшін `stage-b` қайта анықтауларын өткізіңіз.
+   - `rollout_phase = "ramp"` параметрін клиент конфигурацияларында аударыңыз немесе тағайындалған SDK когорттары үшін `anon-majority-pq` қайта анықтауларын өткізіңіз.
    - Телеметриялық айырмашылықтарды түсіріңіз (`sorafs_orchestrator_policy_events_total` `client_id` және `region` арқылы топтастырылған) және оларды шығару оқиғалары журналына тіркеңіз.
 
 4. **Әдепкі жарнама (T плюс 3 апта)**
@@ -162,7 +162,7 @@ rollout_phase = "default"
 ### Рампа → Канария (В кезеңі → A кезеңі)
 
 1. `sorafs_cli guard-directory import --guard-directory guards.json` көмегімен жылжыту алдында түсірілген қорғаушы каталогының суретін импорттаңыз және төмендету пакеті хэштерді қамтитындай `sorafs_cli guard-directory verify` қайта іске қосыңыз.
-2. Оркестр және клиент конфигурацияларында `rollout_phase = "canary"` (немесе `anonymity_policy stage-a` арқылы қайта анықтау) орнатыңыз, содан кейін төмендетілген құбырды дәлелдеу үшін [PQ ratchet runbook](./pq-ratchet-runbook.md) ішінен PQ бұрғылау бұрғысын қайта ойнатыңыз.
+2. Оркестр және клиент конфигурацияларында `rollout_phase = "canary"` (немесе `anonymity_policy anon-guard-pq` арқылы қайта анықтау) орнатыңыз, содан кейін төмендетілген құбырды дәлелдеу үшін [PQ ratchet runbook](./pq-ratchet-runbook.md) ішінен PQ бұрғылау бұрғысын қайта ойнатыңыз.
 3. Жаңартылған PQ Ratchet және SN16 телеметрия скриншоттарын және ескерту нәтижелерін басқаруды хабардар етпес бұрын оқиға журналына тіркеңіз.
 
 ### Қорғау туралы еске салғыштар- Төмендету орын алған сайын `docs/source/ops/soranet_transport_rollback.md` сілтемесі және кез келген уақытша жұмсартуды кейінгі жұмыс үшін шығару трекерінде `TODO:` элементі ретінде тіркеңіз.

@@ -49,6 +49,8 @@ from sorafs_runner_preflight import (  # noqa: E402
 )
 
 
+from sorafs_topology_qualification import add_topology_qualification_argument  # noqa: E402
+
 PLAN_SCHEMA = "sorafs.pop_credentials.rollout_evidence_collection_plan.v1"
 PLAN_FIELDS = frozenset(
     {
@@ -163,6 +165,8 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         [
             "--summary-out",
             str(summary_out),
+            "--topology-qualification-summary",
+            str(args.topology_qualification_summary),
             "--max-root-age-secs",
             str(args.max_root_age_secs),
             "--max-revocation-age-secs",
@@ -400,6 +404,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the command plan JSON without running the verifier.",
     )
+    add_topology_qualification_argument(parser)
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

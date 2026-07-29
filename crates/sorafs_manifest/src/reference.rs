@@ -47,8 +47,8 @@ use crate::{
     SignedReplicationOrderValidationError, TradeEventV1, XorQuantity, decode_billing_line_item_v1,
     decode_billing_statement_v1, decode_hedging_price_feed_v1,
     decode_hedging_reference_price_decision_v1, decode_order_cancel_v1, decode_order_request_v1,
-    decode_settlement_channel_v1, decode_settlement_receipt_v1, decode_trade_event_v1,
-    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    decode_provider_advert_v1, decode_settlement_channel_v1, decode_settlement_receipt_v1,
+    decode_trade_event_v1, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
     sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
     verify_envelope_untrusted_signers, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_pdp_bundle_v1, verify_pdp_witnesses_v1,
@@ -898,7 +898,15 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::PorChallenge => {
-            let challenge = decode_bundle_payload::<PorChallengeV1>(payload, generated_at)?;
+            let challenge =
+                crate::por::decode_por_challenge_v1(payload.bytes).map_err(|error| {
+                    bundle_decode_error(
+                        payload.kind,
+                        &payload.label,
+                        error.to_string(),
+                        generated_at,
+                    )
+                })?;
             let mut context = vec![
                 ValidationContextFieldV1::new(
                     "challenge_id_hex",
@@ -950,7 +958,14 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::PorProof => {
-            let proof = decode_bundle_payload::<PorProofV1>(payload, generated_at)?;
+            let proof = crate::por::decode_por_proof_v1(payload.bytes).map_err(|error| {
+                bundle_decode_error(
+                    payload.kind,
+                    &payload.label,
+                    error.to_string(),
+                    generated_at,
+                )
+            })?;
             let mut context = vec![
                 ValidationContextFieldV1::new("challenge_id_hex", hex::encode(proof.challenge_id)),
                 ValidationContextFieldV1::new(
@@ -2405,7 +2420,9 @@ fn governance_signature_algorithm_label(algorithm: GovernanceSignatureAlgorithm)
 fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'static str {
     match error {
         GovernanceLogValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
-        GovernanceLogValidationError::InvalidSignature => "SFS-SIG-005",
+        GovernanceLogValidationError::InvalidSignature
+        | GovernanceLogValidationError::InvalidSignaturePublicKeyLength { .. }
+        | GovernanceLogValidationError::InvalidSignatureLength { .. } => "SFS-SIG-005",
         GovernanceLogValidationError::CidEncoding { .. } => "SFS-INT-001",
         GovernanceLogValidationError::InvalidNodeCid => "SFS-GOV-003",
         GovernanceLogValidationError::Advert(error) => advert_validation_code(error),
@@ -2426,6 +2443,10 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         | GovernanceLogValidationError::ExternalPayload(_)
         | GovernanceLogValidationError::PorChallengePublication(_)
         | GovernanceLogValidationError::PorWeeklyReport(_)
+        | GovernanceLogValidationError::CanonicalPayloadLengthUnavailable
+        | GovernanceLogValidationError::PayloadTooLarge { .. }
+        | GovernanceLogValidationError::CanonicalNodeLengthUnavailable
+        | GovernanceLogValidationError::NodeTooLarge { .. }
         | GovernanceLogValidationError::InvalidNodeCidLength { .. }
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
@@ -2436,7 +2457,9 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
 fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &'static str {
     match error {
         GovernanceLogValidationError::UnsupportedVersion { .. } => CATEGORY_VALIDATION,
-        GovernanceLogValidationError::InvalidSignature => CATEGORY_SIGNATURE,
+        GovernanceLogValidationError::InvalidSignature
+        | GovernanceLogValidationError::InvalidSignaturePublicKeyLength { .. }
+        | GovernanceLogValidationError::InvalidSignatureLength { .. } => CATEGORY_SIGNATURE,
         GovernanceLogValidationError::CidEncoding { .. } => CATEGORY_INTERNAL,
         GovernanceLogValidationError::Advert(error) => advert_validation_category(error),
         GovernanceLogValidationError::ReplicationOrder(error) => {
@@ -2456,6 +2479,10 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         | GovernanceLogValidationError::ExternalPayload(_)
         | GovernanceLogValidationError::PorChallengePublication(_)
         | GovernanceLogValidationError::PorWeeklyReport(_)
+        | GovernanceLogValidationError::CanonicalPayloadLengthUnavailable
+        | GovernanceLogValidationError::PayloadTooLarge { .. }
+        | GovernanceLogValidationError::CanonicalNodeLengthUnavailable
+        | GovernanceLogValidationError::NodeTooLarge { .. }
         | GovernanceLogValidationError::InvalidNodeCidLength { .. }
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
@@ -2488,7 +2515,9 @@ fn governance_signature_verification_category(
 
 fn governance_dag_block_validation_code(error: &GovernanceDagBlockValidationError) -> &'static str {
     match error {
-        GovernanceDagBlockValidationError::UnsupportedVersion { .. }
+        GovernanceDagBlockValidationError::CanonicalLengthUnavailable
+        | GovernanceDagBlockValidationError::BlockTooLarge { .. }
+        | GovernanceDagBlockValidationError::UnsupportedVersion { .. }
         | GovernanceDagBlockValidationError::InvalidBlockCidLength { .. }
         | GovernanceDagBlockValidationError::InvalidPrevBlockCidLength { .. }
         | GovernanceDagBlockValidationError::RootHasParent
@@ -3629,7 +3658,7 @@ pub fn validate_provider_advert_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("provider_advert", input_label);
     let inputs = vec![input];
-    let advert = match norito::decode_from_bytes::<ProviderAdvertV1>(bytes) {
+    let advert = match decode_provider_advert_v1(bytes) {
         Ok(advert) => advert,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -5121,7 +5150,7 @@ pub fn validate_por_challenge_proof_bytes(
         ValidationInputV1::new("por_challenge", challenge_label),
         ValidationInputV1::new("por_proof", proof_label),
     ];
-    let challenge = match norito::decode_from_bytes::<PorChallengeV1>(challenge_bytes) {
+    let challenge = match crate::por::decode_por_challenge_v1(challenge_bytes) {
         Ok(challenge) => challenge,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -5136,7 +5165,7 @@ pub fn validate_por_challenge_proof_bytes(
             );
         }
     };
-    let proof = match norito::decode_from_bytes::<PorProofV1>(proof_bytes) {
+    let proof = match crate::por::decode_por_proof_v1(proof_bytes) {
         Ok(proof) => proof,
         Err(error) => {
             return ValidationOutcomeV1::error(

@@ -49,6 +49,8 @@ from sorafs_runner_preflight import (  # noqa: E402
 )
 
 
+from sorafs_topology_qualification import add_topology_qualification_argument  # noqa: E402
+
 PLAN_SCHEMA = "sorafs.reference_sdk.release_evidence_collection_plan.v1"
 PLAN_FIELDS = frozenset(
     {
@@ -94,6 +96,7 @@ class CommandPlan:
 EVIDENCE_OPTIONS_BY_KIND = {
     "release_archive": "release_archive_evidence",
     "signed_manifest": "signed_manifest_evidence",
+    "supply_chain": "supply_chain_evidence",
     "downstream_bindings": "downstream_bindings_evidence",
     "cookbook_smoke": "cookbook_smoke_evidence",
     "ffi_header_contract": "ffi_header_contract_evidence",
@@ -103,6 +106,7 @@ EVIDENCE_OPTIONS_BY_KIND = {
 EVIDENCE_FLAGS_BY_KIND = {
     "release_archive": "--release-archive-evidence",
     "signed_manifest": "--signed-manifest-evidence",
+    "supply_chain": "--supply-chain-evidence",
     "downstream_bindings": "--downstream-bindings-evidence",
     "cookbook_smoke": "--cookbook-smoke-evidence",
     "ffi_header_contract": "--ffi-header-contract-evidence",
@@ -162,6 +166,8 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         [
             "--summary-out",
             str(summary_out),
+            "--topology-qualification-summary",
+            str(args.topology_qualification_summary),
             "--max-evidence-age-secs",
             str(args.max_evidence_age_secs),
             "--min-release-targets",
@@ -324,6 +330,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the verifier command plan without executing it.",
     )
+    add_topology_qualification_argument(parser)
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

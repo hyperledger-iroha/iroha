@@ -48,14 +48,17 @@ missing, substituted, stale, unavailable, or test-marked.
 
 Remaining production blockers under
 `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are deployment construction of the real
-messaging, settlement/publication, HSM/KMS/WebAuthn, and signed
-receipt-to-transparency providers; a monotonic public-head adapter; semantic
-operation-ID fencing; predecessor-bound multi-instance checkpoint
-CAS/single-writer ownership; and signed replay-safe terminal and receipt
-compaction/archive. The repository still lacks reviewed reference-deployment
-evidence for the complete moderation service, evidence viewer, juror
-notification/portal workflow, downstream settlement/publication, and
-four-validator recovery scenarios.
+messaging, settlement/publication, HSM/KMS/WebAuthn, linearizable sealed-CAS
+checkpoint-store, and signed receipt-to-transparency providers; a monotonic
+public-head adapter; semantic operation-ID fencing; equivalent
+predecessor-bound CAS/single-writer ownership for the moderation orchestrator;
+and signed replay-safe terminal and receipt compaction/archive. The evidence
+viewer core and standard launcher now require the qualified external
+checkpoint authority and treat its local file as a verified cache, but the
+repository still lacks a real store adapter and reviewed reference-deployment
+evidence for multi-replica CAS, the complete moderation service, evidence
+viewer, juror notification/portal workflow, downstream
+settlement/publication, and four-validator recovery scenarios.
 
 ## Shipped Foundations
 

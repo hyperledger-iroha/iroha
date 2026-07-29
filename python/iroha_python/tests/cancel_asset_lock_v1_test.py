@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+import iroha_python.sorafs as sorafs_module
 from iroha_python import (
     CANCEL_ASSET_LOCK_WIRE_ID_V1,
     CancelAssetLockV1,
@@ -296,15 +297,15 @@ def test_appeal_finance_profiles_match_the_signed_inventory_fixtures() -> None:
         ),
     )
     for fixture_name, label, expected_name in profiles:
-        expected = json.loads((_PROFILE_ROOT / expected_name).read_text(encoding="utf-8"))
-        assert (
-            validate_appeal_finance_cancel_asset_lock(
-                _FIXTURES[fixture_name],
-                label=label,
-                generated_at_unix=123,
-            )
-            == expected
+        expected_text = (_PROFILE_ROOT / expected_name).read_text(encoding="utf-8")
+        expected = json.loads(expected_text)
+        outcome = validate_appeal_finance_cancel_asset_lock(
+            _FIXTURES[fixture_name],
+            label=label,
+            generated_at_unix=123,
         )
+        assert outcome == expected
+        assert json.dumps(outcome, indent=2) + "\n" == expected_text
 
 
 def test_appeal_finance_validation_rejects_text_archive_aliases() -> None:
@@ -312,3 +313,22 @@ def test_appeal_finance_validation_rejects_text_archive_aliases() -> None:
     for alias in (canonical.hex(), list(canonical)):
         with pytest.raises(TypeError):
             validate_appeal_finance_cancel_asset_lock(cast(Any, alias))
+
+
+def test_appeal_finance_validation_fails_closed_without_native_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sorafs_module, "_crypto", object())
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"requires native function "
+            r"`sorafs_validate_appeal_finance_cancel_asset_lock_json`"
+        ),
+    ):
+        sorafs_module.validate_appeal_finance_cancel_asset_lock(
+            _FIXTURES["cancel_asset_lock_v1.to"],
+            label="cancel_asset_lock_v1.to",
+            generated_at_unix=123,
+        )

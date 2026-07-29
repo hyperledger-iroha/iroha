@@ -10,6 +10,11 @@ OPENAPI_GATE = REPO_ROOT / "ci" / "check_openapi_spec.sh"
 PORTAL_SCRIPTS = (
     REPO_ROOT / "docs" / "portal" / "scripts" / "sync-openapi.mjs",
     REPO_ROOT / "docs" / "portal" / "scripts" / "verify-openapi-versions.mjs",
+    REPO_ROOT
+    / "docs"
+    / "portal"
+    / "scripts"
+    / "verify-openapi-release-inputs.mjs",
     REPO_ROOT / "docs" / "portal" / "scripts" / "check-openapi-signatures.mjs",
 )
 
@@ -55,14 +60,27 @@ def test_release_gate_is_clean_pinned_and_two_pass() -> None:
     gate = OPENAPI_GATE.read_text(encoding="utf-8")
 
     assert "require_clean_checkout" in gate
-    assert "git -C \"${REPO_ROOT}\" rev-parse --verify 'HEAD^{commit}'" in gate
-    assert (
-        '--expected-generator-commit="${EXPECTED_GENERATOR_COMMIT}"' in gate
-    )
+    assert "EXPECTED_GENERATOR_COMMIT" not in gate
+    assert gate.count(
+        "node docs/portal/scripts/verify-openapi-release-inputs.mjs"
+    ) == 2
+    assert gate.count(
+        "python3 scripts/check_sorafs_release_version_map.py"
+    ) == 2
     assert gate.count("run_xtask openapi --output") == 2
     assert (
         'diff -u "${GENERATED_SPEC_FIRST}" "${GENERATED_SPEC_SECOND}"'
         in gate
     )
     assert 'diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}"' in gate
+    assert (
+        'diff -u "${RELEASE_INPUT_SUMMARY_FIRST}" '
+        '"${RELEASE_INPUT_SUMMARY_SECOND}"'
+        in gate
+    )
+    assert (
+        'diff -u "${VERSION_MAP_SUMMARY_FIRST}" '
+        '"${VERSION_MAP_SUMMARY_SECOND}"'
+        in gate
+    )
     assert "VERSION_VERIFY_POLICY_ARGS" not in gate

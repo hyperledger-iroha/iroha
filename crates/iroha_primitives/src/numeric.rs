@@ -3520,13 +3520,12 @@ mod tests {
         let one = Numeric::one();
         assert_eq!(
             Quantity::one()
-                .try_product_decimals(core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS)),
+                .try_product_decimals(core::iter::repeat_n(&one, MAX_DECIMAL_PRODUCT_FACTORS)),
             Ok(Quantity::one())
         );
         assert_eq!(
-            Quantity::one().try_product_decimals(
-                core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS + 1)
-            ),
+            Quantity::one()
+                .try_product_decimals(core::iter::repeat_n(&one, MAX_DECIMAL_PRODUCT_FACTORS + 1)),
             Err(DecimalProductError::TooManyFactors)
         );
     }
@@ -3594,7 +3593,7 @@ mod tests {
         let one = Numeric::one();
         assert_eq!(
             Quantity::one().try_product_decimals_round(
-                core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS),
+                core::iter::repeat_n(&one, MAX_DECIMAL_PRODUCT_FACTORS),
                 MAX_DECIMAL_SCALE,
                 RoundingMode::NearestEven,
             ),
@@ -3602,7 +3601,7 @@ mod tests {
         );
         assert_eq!(
             Quantity::one().try_product_decimals_round(
-                core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS + 1),
+                core::iter::repeat_n(&one, MAX_DECIMAL_PRODUCT_FACTORS + 1),
                 MAX_DECIMAL_SCALE,
                 RoundingMode::NearestEven,
             ),

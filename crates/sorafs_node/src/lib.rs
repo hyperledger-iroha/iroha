@@ -13,6 +13,7 @@ pub mod config;
 mod durable_transaction_forwarder;
 pub mod evidence_viewer;
 mod governance;
+mod governance_rooted_fs;
 pub mod governance_service;
 pub mod hedging_billing_service;
 pub mod metering;
@@ -38,19 +39,33 @@ pub mod store;
 pub mod telemetry;
 mod transparency;
 
-use governance::{FilesystemGovernancePublisher, qualify_governance_dag_runtime_signer_provider};
 pub use governance::{
-    GovernanceDagAuthenticationScope, GovernanceDagRequestAuthenticator,
+    FencedTransparencyAuthoritativeHeadReaderV1, GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_BYTES_V1,
+    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_VALUE_BYTES_V1,
+    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1, GOVERNANCE_DAG_REQUEST_AUTH_MAX_URL_BYTES_V1,
+    GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1, GovernanceDagAuthenticationScope,
+    GovernanceDagCanonicalRequestHeaderV1, GovernanceDagCanonicalRequestV1,
+    GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticator,
     GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner,
     GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
-    GovernanceDagSealedStateSlot, governance_dag_sealed_state_revision,
+    GovernanceDagSealedStateSlot, QualifiedFencedTransparencyHeadReaderV1,
+    QualifiedFencedTransparencyPublisherV1, governance_dag_sealed_state_payload_max_bytes_v1,
+    governance_dag_sealed_state_revision,
+};
+use governance::{
+    FilesystemGovernancePublisher, GovernanceFilesystemRootGuard,
+    GovernanceRuntimeDagCheckpointStore, GovernanceRuntimeDagSigner,
+    qualify_governance_dag_runtime_checkpoint_store,
+    qualify_governance_dag_runtime_signer_provider,
 };
 pub use governance_service::{
-    GovernanceDagServiceError, GovernanceDagServiceLauncherError,
+    GovernanceDagServiceError, GovernanceDagServiceLauncherError, GovernanceDagServiceRunner,
     GovernanceDagServiceRuntimeProviderBindingsV1,
     GovernanceDagServiceRuntimeProviderRegistryErrorV1,
     GovernanceDagServiceRuntimeProviderRegistryV1, GovernanceDagServiceRuntimeProviders,
-    run_governance_dag_service, run_governance_dag_service_with_runtime_registry,
+    prepare_governance_dag_service_from_view, run_governance_dag_service,
+    run_governance_dag_service_from_view, run_governance_dag_service_with_runtime_registry,
+    validate_governance_dag_service_runtime_providers,
 };
 pub use iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1;
 pub use moderation::{
@@ -64,8 +79,8 @@ pub use moderation::{
     ModerationEvidenceViewerAuditReportInput, ModerationEvidenceViewerError,
     ModerationEvidenceViewerSessionInput, ModerationEvidenceViewerSessionRecord,
     ModerationEvidenceViewerSnapshot, ModerationModelRegistryError,
-    ModerationModelRegistrySnapshot, ModerationQuarantineKeyProviderBindingV1,
-    ModerationQuarantineKeyProviderQualificationErrorV1,
+    ModerationModelRegistrySnapshot, ModerationQuarantineKeyOperationErrorV1,
+    ModerationQuarantineKeyProviderBindingV1, ModerationQuarantineKeyProviderQualificationErrorV1,
     ModerationQuarantineKeyProviderQualificationV1,
     ModerationQuarantineKeyProviderReadinessErrorV1, ModerationQuarantineKeyWrapper,
     ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
@@ -88,8 +103,13 @@ pub use pdp_provider::{
 };
 pub use por::{
     ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError,
-    PorFailedRepairIntentV1, PorProtocolMetricsSnapshot, PorRandomness, PorRepairHandoff,
-    PorRepairHandoffError, PorTracker, PorTrackerError, PorVerdictStats,
+    PorFailedRepairIntentV1, PorFinalizedReplayArchiveAbsenceProofV1,
+    PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1,
+    PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveProofBoundsV1,
+    PorFinalizedReplayArchiveReadbackV1, PorFinalizedReplayArchiveReceiptV1,
+    PorFinalizedReplayArchiveRecordV1, PorFinalizedReplayArchiveV1, PorProtocolMetricsSnapshot,
+    PorRandomness, PorRepairHandoff, PorRepairHandoffError, PorReputationTerminalAckOutcomeV1,
+    PorReputationTerminalWorkV1, PorTracker, PorTrackerError, PorVerdictStats,
     build_por_challenge_for_manifest, canonical_por_failure_repair_report_v1,
     por_repair_source_identity_v1,
 };
@@ -123,13 +143,15 @@ pub use provider_ingest_outbox::{
 pub use provider_ingest_runtime::{
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClockV1,
     ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
-    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
-    ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
-    ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
-    ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedLedgerErrorV1,
-    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
-    ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
-    ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1,
+    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerBindingErrorV1,
+    ProviderIngestCompletionSignerBindingV1, ProviderIngestCompletionSignerErrorV1,
+    ProviderIngestCompletionSignerQualificationV1, ProviderIngestCompletionSignerResolverErrorV1,
+    ProviderIngestCompletionSignerResolverV1, ProviderIngestCompletionSignerV1,
+    ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedAssignmentV1,
+    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
+    ProviderIngestIngressDispositionV1, ProviderIngestIngressPrepareErrorV1,
+    ProviderIngestLocalStorageErrorV1, ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1,
+    ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeProviderQualificationV1,
     ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
     ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
     ProviderIngestTransactionObservationV1,
@@ -144,6 +166,35 @@ pub struct PorVerdictOutcome {
     pub repair_task_id: Option<[u8; 32]>,
     /// Current consecutive failure streak for this provider/manifest.
     pub consecutive_failures: u64,
+    /// Replay-stable terminal work retained for durable reputation admission.
+    pub reputation_work: PorReputationTerminalWorkV1,
+}
+
+/// One step of durable PoR-to-reputation reconciliation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PorReputationReconcileOutcomeV1 {
+    /// No unacknowledged terminal remains.
+    Idle,
+    /// The exact terminal was durably admitted and its node cursor advanced.
+    Reconciled {
+        /// Retained work admitted by the reputation runtime.
+        work: PorReputationTerminalWorkV1,
+        /// Durable native-outbox admission result.
+        admission: reputation::runtime::ReputationJournalEnqueueOutcomeV1,
+        /// Durable node acknowledgement result.
+        acknowledgement: PorReputationTerminalAckOutcomeV1,
+    },
+}
+
+/// Failure from one PoR-to-reputation reconciliation step.
+#[derive(Debug, Error)]
+pub enum PorReputationReconcileErrorV1 {
+    /// Retained PoR work or its durable acknowledgement failed.
+    #[error(transparent)]
+    Tracker(#[from] PorTrackerError),
+    /// The native reputation outbox rejected or could not persist admission.
+    #[error(transparent)]
+    Admission(#[from] reputation::runtime::ReputationRuntimeError),
 }
 
 /// Aggregated PoR ingestion status for a manifest.
@@ -249,12 +300,17 @@ const MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH: usize = 4;
 const MODERATION_EVIDENCE_VIEWER_DIR: &str = "moderation-evidence-viewer";
 const MODERATION_EVIDENCE_VIEWER_SNAPSHOT_FILE: &str = "evidence-viewer-snapshot.to";
 const AUX_RUNTIME_STATE_DIR: &str = "runtime-state";
-const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot-v2.to";
+const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot-v3.to";
 const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V1: &str = "auxiliary-snapshot.to";
-const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v2";
+const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V2: &str = "auxiliary-snapshot-v2.to";
+const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v3";
 const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V1: &str = "initialized-v1";
-const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v2\n";
-const AUX_RUNTIME_STATE_VERSION_V2: u8 = 2;
+const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V2: &str = "initialized-v2";
+const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v3\n";
+// V3 is a first-release hard cut: it adds replay-stable PoR reputation work
+// and its acknowledgement cursor. V1/V2 artifacts are rejected and must be
+// explicitly reseeded; no field-default or heuristic migration is accepted.
+const AUX_RUNTIME_STATE_VERSION_V3: u8 = 3;
 const ADMITTED_REPUTATION_SNAPSHOT_VERSION_V1: u8 = 1;
 const GOVERNANCE_OUTBOX_VERSION_V2: u8 = 2;
 const GOVERNANCE_OUTBOX_BINDING_DOMAIN_V2: &[u8] = b"sorafs.node.governance_outbox.binding.v2";
@@ -367,7 +423,7 @@ use sorafs_manifest::{
     deal::{DealSettlementV1, XorQuantity},
     por::{
         AuditOutcomeV1, AuditVerdictV1, PorChallengePublicationV1, PorChallengeV1, PorProofV1,
-        PorWeeklyReportV1,
+        PorWeeklyReportV1, decode_por_challenge_publication_v1, decode_por_weekly_report_v1,
     },
     potr::PotrReceiptV1,
     proof_stream::ProofStreamTier,
@@ -384,18 +440,24 @@ use tokio::sync::broadcast;
 pub use transparency::moderation_ballot_governance_event_source_entry;
 pub use transparency::{
     PRIVACY_AGGREGATE_MAX_POPULATIONS_V1, PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1,
-    PrivacyAggregateCycleConfig, PrivacyAggregateCycleWindow, PrivacyAggregateMetricSchemaV1,
-    PrivacyAggregatePopulationV1, PrivacyAggregateScheduleConfig, PrivacyAggregateSourceEvent,
-    PrivacyAggregateSourceMetric, PrivacyCompositionBudgetChainV1,
+    PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1, PrivacyAggregateCycleConfig, PrivacyAggregateCycleWindow,
+    PrivacyAggregateMetricSchemaV1, PrivacyAggregatePopulationV1, PrivacyAggregateScheduleConfig,
+    PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric, PrivacyCompositionBudgetChainV1,
     PrivacyCompositionBudgetChargeV1, PrivacyCompositionBudgetError,
     PrivacyCompositionBudgetLedgerV1, PrivacyCompositionBudgetPolicyV1,
     PrivacyCyclePrfInputErrorV1, PrivacyCyclePrfInputV1, PrivacyCyclePrfOutputV1,
     PrivacyCyclePrfProviderErrorV1, PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestErrorV1,
     PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1, PrivacyReleaseAnchorHeadV1,
     PrivacyReleaseAnchorV1, PrivacySourceEventRecordOutcomeV1, ProductionPrivacyCyclePrfProviderV1,
-    ProductionPrivacyReleaseAnchorV1, ProductionTransparencyRuntimeProviderV1,
-    ProofTokenIssuanceIngestError, QualifiedPrivacyCyclePrfProviderV1,
-    QualifiedPrivacyReleaseAnchorV1, TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
+    ProductionPrivacyReleaseAnchorV1, ProductionTransparencyLeaderLeaseProviderV1,
+    ProductionTransparencyRuntimeProviderV1, ProofTokenIssuanceIngestError,
+    QualifiedPrivacyCyclePrfProviderV1, QualifiedPrivacyReleaseAnchorV1,
+    QualifiedTransparencyLeaderLeaseProviderV1, TRANSPARENCY_LEADER_LEASE_VERSION_V1,
+    TransparencyLeaderLeaseAcquireRequestV1, TransparencyLeaderLeaseErrorV1,
+    TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1,
+    TransparencyLeaderLeaseProviderV1, TransparencyLeaderLeaseReleaseReceiptV1,
+    TransparencyLeaderLeaseReleaseRequestV1, TransparencyLeaderLeaseRenewRequestV1,
+    TransparencyLeaderLeaseScopeV1, TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
     TransparencyRuntimeProviderBindingV1, TransparencyRuntimeProviderQualificationErrorV1,
     TransparencyRuntimeProviderQualificationV1, appeal_finance_report_source_entry,
     appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
@@ -571,10 +633,22 @@ fn retired_runtime_state_initialization_path_v1(data_dir: &Path) -> PathBuf {
         .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V1)
 }
 
+fn retired_runtime_state_initialization_path_v2(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V2)
+}
+
 fn retired_auxiliary_runtime_checkpoint_path_v1(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V1)
+}
+
+fn retired_auxiliary_runtime_checkpoint_path_v2(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V2)
 }
 
 fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 5] {
@@ -613,42 +687,54 @@ fn inspect_runtime_checkpoint_initialization(
     checkpoint_max_bytes: u64,
 ) -> Result<RuntimeCheckpointInitialization, NodeInitError> {
     let marker_path = runtime_state_initialization_path(data_dir);
-    let retired_marker_path = retired_runtime_state_initialization_path_v1(data_dir);
-    let retired_checkpoint_path = retired_auxiliary_runtime_checkpoint_path_v1(data_dir);
-    if read_local_checkpoint_bounded(
-        &retired_marker_path,
-        u64::try_from(b"sorafs.node.runtime-state.initialized.v1\n".len()).unwrap_or(u64::MAX),
-    )
-    .map_err(|err| {
-        NodeInitError::checkpoint(
-            "retired runtime initialization marker",
+    for (version, retired_marker_path) in [
+        (1, retired_runtime_state_initialization_path_v1(data_dir)),
+        (2, retired_runtime_state_initialization_path_v2(data_dir)),
+    ] {
+        if read_local_checkpoint_bounded(
             &retired_marker_path,
-            err,
+            u64::try_from(RUNTIME_STATE_INITIALIZATION_BYTES.len()).unwrap_or(u64::MAX),
         )
-    })?
-    .is_some()
-    {
-        return Err(NodeInitError::checkpoint(
-            "retired runtime initialization marker",
-            &retired_marker_path,
-            "SoraFS development runtime-state v1 is not supported; discard and reseed the local state directory",
-        ));
-    }
-    if read_local_checkpoint_bounded(&retired_checkpoint_path, checkpoint_max_bytes)
         .map_err(|err| {
             NodeInitError::checkpoint(
-                "retired auxiliary runtime checkpoint",
-                &retired_checkpoint_path,
+                "retired runtime initialization marker",
+                &retired_marker_path,
                 err,
             )
         })?
         .is_some()
-    {
-        return Err(NodeInitError::checkpoint(
-            "retired auxiliary runtime checkpoint",
-            &retired_checkpoint_path,
-            "SoraFS development runtime-state v1 is not supported; discard and reseed the local state directory",
-        ));
+        {
+            return Err(NodeInitError::checkpoint(
+                "retired runtime initialization marker",
+                &retired_marker_path,
+                format!(
+                    "SoraFS development runtime-state v{version} is not supported; discard and reseed the local state directory"
+                ),
+            ));
+        }
+    }
+    for (version, retired_checkpoint_path) in [
+        (1, retired_auxiliary_runtime_checkpoint_path_v1(data_dir)),
+        (2, retired_auxiliary_runtime_checkpoint_path_v2(data_dir)),
+    ] {
+        if read_local_checkpoint_bounded(&retired_checkpoint_path, checkpoint_max_bytes)
+            .map_err(|err| {
+                NodeInitError::checkpoint(
+                    "retired auxiliary runtime checkpoint",
+                    &retired_checkpoint_path,
+                    err,
+                )
+            })?
+            .is_some()
+        {
+            return Err(NodeInitError::checkpoint(
+                "retired auxiliary runtime checkpoint",
+                &retired_checkpoint_path,
+                format!(
+                    "SoraFS development runtime-state v{version} is not supported; discard and reseed the local state directory"
+                ),
+            ));
+        }
     }
     let marker = read_local_checkpoint_bounded(
         &marker_path,
@@ -661,7 +747,7 @@ fn inspect_runtime_checkpoint_initialization(
                 return Err(NodeInitError::checkpoint(
                     "runtime initialization marker",
                     &marker_path,
-                    "marker contents are not canonical for runtime-state v2",
+                    "marker contents are not canonical for runtime-state v3",
                 ));
             }
             for (component, path) in required_runtime_checkpoint_paths(data_dir) {
@@ -1485,6 +1571,1048 @@ fn required_json_xor_quantity(
         })
 }
 
+/// Anchor-backed authorization for one privacy transparency publication.
+///
+/// Values are constructed only after the qualified finalized release anchor
+/// exactly matches the validated local release-chain head. The anchor is
+/// monotonic, so later head advancement preserves this release as a canonical
+/// prefix. Publishers must reject privacy payloads without this authorization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivacyPublicationAuthorizationV1 {
+    leader_lease: TransparencyLeaderLeaseGrantV1,
+    finalized_anchor: PrivacyReleaseAnchorHeadV1,
+    release_sequence: u64,
+    release_record_digest: [u8; 32],
+    payload_digest: [u8; 32],
+}
+
+impl PrivacyPublicationAuthorizationV1 {
+    fn try_new(
+        leader_lease: &TransparencyLeaderLeaseGrantV1,
+        finalized_anchor: PrivacyReleaseAnchorHeadV1,
+        release: &transparency::PrivacyReleaseRecordV1,
+        payload_digest: [u8; 32],
+    ) -> Result<Self, GovernancePublishError> {
+        leader_lease.validate().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "invalid privacy publication leader lease: {error}"
+            ))
+        })?;
+        let scope = leader_lease.scope();
+        if !finalized_anchor.validate()
+            || release.status != transparency::PrivacyReleaseStatusV1::Published
+            || release.sequence == 0
+            || release.record_digest == [0; 32]
+            || payload_digest == [0; 32]
+            || release.publication_payload_digest != Some(payload_digest)
+            || finalized_anchor.query_id() != release.query_id
+            || finalized_anchor.sequence() < release.sequence
+            || scope.query_id() != release.query_id
+            || scope.cycle_id() != release.release_id
+            || scope.window().cycle_start_unix != release.cycle_start_unix
+            || scope.window().cycle_end_unix != release.cycle_end_unix
+            || scope.window().due_at_unix != release.due_at_unix
+        {
+            return Err(GovernancePublishError::other(
+                "privacy publication authorization does not match the finalized release",
+            ));
+        }
+        Ok(Self {
+            leader_lease: leader_lease.clone(),
+            finalized_anchor,
+            release_sequence: release.sequence,
+            release_record_digest: release.record_digest,
+            payload_digest,
+        })
+    }
+
+    /// Reconstruct a checked authorization from its exact public runtime fields.
+    ///
+    /// This constructor exists for canonical process-boundary transports. It
+    /// accepts no credential or private evidence and revalidates the lease,
+    /// finalized query lineage, release sequence, and payload digest before a
+    /// decoded publication request reaches a deployment-owned provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any field is malformed or the finalized anchor
+    /// and lease do not name the same governed query.
+    pub fn try_from_runtime_parts(
+        leader_lease: TransparencyLeaderLeaseGrantV1,
+        finalized_anchor: PrivacyReleaseAnchorHeadV1,
+        release_sequence: u64,
+        release_record_digest: [u8; 32],
+        payload_digest: [u8; 32],
+    ) -> Result<Self, GovernancePublishError> {
+        leader_lease.validate().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "invalid cached privacy publication leader lease: {error}"
+            ))
+        })?;
+        let scope = leader_lease.scope();
+        if !finalized_anchor.validate()
+            || release_sequence == 0
+            || release_record_digest == [0; 32]
+            || payload_digest == [0; 32]
+            || finalized_anchor.sequence() < release_sequence
+            || finalized_anchor.query_id() != scope.query_id()
+        {
+            return Err(GovernancePublishError::other(
+                "cached privacy publication authorization is malformed",
+            ));
+        }
+        Ok(Self {
+            leader_lease,
+            finalized_anchor,
+            release_sequence,
+            release_record_digest,
+            payload_digest,
+        })
+    }
+
+    pub(crate) fn try_from_cached_parts(
+        leader_lease: TransparencyLeaderLeaseGrantV1,
+        finalized_anchor: PrivacyReleaseAnchorHeadV1,
+        release_sequence: u64,
+        release_record_digest: [u8; 32],
+        payload_digest: [u8; 32],
+    ) -> Result<Self, GovernancePublishError> {
+        Self::try_from_runtime_parts(
+            leader_lease,
+            finalized_anchor,
+            release_sequence,
+            release_record_digest,
+            payload_digest,
+        )
+    }
+
+    fn validate_publication(
+        &self,
+        publication: &ModerationLedgerCyclePublicationV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        self.leader_lease.validate().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "invalid privacy publication leader lease: {error}"
+            ))
+        })?;
+        let scope = self.leader_lease.scope();
+        if publication.privacy_aggregates.is_empty()
+            || self.release_sequence == 0
+            || self.release_record_digest == [0; 32]
+            || self.payload_digest != *blake3::hash(encoded).as_bytes()
+            || !self.finalized_anchor.validate()
+            || self.finalized_anchor.sequence() < self.release_sequence
+            || self.finalized_anchor.query_id() != scope.query_id()
+            || scope.cycle_id() != publication.block.cycle_id
+            || scope.window().cycle_start_unix != publication.block.cycle_start_unix
+            || scope.window().cycle_end_unix != publication.block.cycle_end_unix
+        {
+            return Err(GovernancePublishError::other(
+                "privacy publication does not match its finalized authorization",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Return the exact live leader lease retained for publication metadata.
+    #[must_use]
+    pub const fn leader_lease(&self) -> &TransparencyLeaderLeaseGrantV1 {
+        &self.leader_lease
+    }
+
+    /// Return the finalized release-chain head that authorized this payload.
+    #[must_use]
+    pub const fn finalized_anchor(&self) -> PrivacyReleaseAnchorHeadV1 {
+        self.finalized_anchor
+    }
+
+    /// Return the canonical release sequence bound to the payload.
+    #[must_use]
+    pub const fn release_sequence(&self) -> u64 {
+        self.release_sequence
+    }
+
+    /// Return the canonical release-record digest bound to the payload.
+    #[must_use]
+    pub const fn release_record_digest(&self) -> [u8; 32] {
+        self.release_record_digest
+    }
+
+    /// Return the exact canonical publication payload digest.
+    #[must_use]
+    pub const fn payload_digest(&self) -> [u8; 32] {
+        self.payload_digest
+    }
+
+    pub(crate) fn binding_digest(&self) -> [u8; 32] {
+        let lease = self.leader_lease();
+        let scope = lease.scope();
+        let window = scope.window();
+        let provider = lease.provider_binding();
+        let qualification = provider.qualification();
+        let anchor = self.finalized_anchor();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(FENCED_PRIVACY_AUTHORIZATION_DIGEST_DOMAIN_V1);
+        hasher.update(&lease.version().to_le_bytes());
+        hasher.update(&lease.lease_id());
+        hasher.update(&lease.fencing_token().to_le_bytes());
+        hasher.update(&lease.issued_at_unix().to_le_bytes());
+        hasher.update(&lease.expires_at_unix().to_le_bytes());
+        hasher.update(&scope.query_id());
+        hasher.update(&scope.cycle_id());
+        hasher.update(&window.cycle_start_unix.to_le_bytes());
+        hasher.update(&window.cycle_end_unix.to_le_bytes());
+        hasher.update(&window.due_at_unix.to_le_bytes());
+        hasher.update(&scope.holder_identity());
+        fenced_privacy_digest_bytes(&mut hasher, provider.handle().as_bytes());
+        hasher.update(&qualification.revision().to_le_bytes());
+        hasher.update(&qualification.policy_digest());
+        hasher.update(&anchor.query_id());
+        hasher.update(&anchor.sequence().to_le_bytes());
+        hasher.update(&anchor.release_id());
+        hasher.update(&anchor.record_digest());
+        match anchor.latest_publication_block_hash() {
+            Some(digest) => {
+                hasher.update(&[1]);
+                hasher.update(&digest);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+        hasher.update(&self.release_sequence.to_le_bytes());
+        hasher.update(&self.release_record_digest);
+        hasher.update(&self.payload_digest);
+        *hasher.finalize().as_bytes()
+    }
+
+    fn publication_idempotency_digest(&self) -> [u8; 32] {
+        let scope = self.leader_lease().scope();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(FENCED_PRIVACY_PUBLICATION_IDEMPOTENCY_DIGEST_DOMAIN_V1);
+        hasher.update(&scope.query_id());
+        hasher.update(&scope.cycle_id());
+        hasher.update(&self.release_sequence.to_le_bytes());
+        hasher.update(&self.release_record_digest);
+        hasher.update(&self.payload_digest);
+        *hasher.finalize().as_bytes()
+    }
+}
+
+const FENCED_PRIVACY_AUTHORIZATION_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.fenced-privacy.authorization.v1\0";
+const FENCED_PRIVACY_PUBLICATION_IDEMPOTENCY_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.fenced-privacy.publication-idempotency.v1\0";
+const FENCED_PRIVACY_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.fenced-privacy.request.v1\0";
+const FENCED_PRIVACY_SUCCESSOR_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.fenced-privacy.successor.v1\0";
+const FENCED_PRIVACY_HEAD_INCLUSION_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.fenced-privacy.head-inclusion.v1\0";
+
+/// Wire version for the fused privacy Governance publication boundary.
+pub const FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1: u8 = 1;
+
+/// Stable, payload-free failures returned by a fused transparency publisher.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum FencedTransparencyPublishErrorV1 {
+    /// The request is malformed or internally inconsistent.
+    #[error("fenced transparency publication request is invalid")]
+    InvalidRequest,
+    /// The deployment-owned provider is missing, unavailable, stale, or substituted.
+    #[error("fenced transparency publication provider is unavailable or unqualified")]
+    UnqualifiedProvider,
+    /// The expected authoritative target head is no longer current.
+    #[error("fenced transparency publication compare-and-append conflict")]
+    CompareConflict,
+    /// The query/release identity was already bound to different release or payload evidence.
+    #[error("fenced transparency publication identity conflicts with an existing publication")]
+    PublicationConflict,
+    /// A newer fencing token has already been accepted.
+    #[error("fenced transparency publication fencing token is stale")]
+    StaleFencingToken,
+    /// The provider rejected the exact request without changing authoritative state.
+    #[error("fenced transparency publication request was rejected")]
+    Rejected,
+    /// The provider cannot prove whether the operation took effect.
+    #[error("fenced transparency publication outcome is ambiguous")]
+    Ambiguous,
+    /// The returned receipt is malformed or substituted.
+    #[error("fenced transparency publication receipt is invalid")]
+    InvalidReceipt,
+}
+
+/// Opaque authoritative Governance target head retained as a local cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct FencedTransparencyTargetHeadV1 {
+    version: u8,
+    generation: u64,
+    head_digest: [u8; 32],
+    fencing_floor: u64,
+}
+
+impl FencedTransparencyTargetHeadV1 {
+    /// Construct one checked non-genesis authoritative target head.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FencedTransparencyPublishErrorV1::InvalidRequest`] when the
+    /// generation, digest, or fencing floor is zero.
+    pub fn try_new(
+        generation: u64,
+        head_digest: [u8; 32],
+        fencing_floor: u64,
+    ) -> Result<Self, FencedTransparencyPublishErrorV1> {
+        let head = Self {
+            version: FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1,
+            generation,
+            head_digest,
+            fencing_floor,
+        };
+        if head.is_valid() {
+            Ok(head)
+        } else {
+            Err(FencedTransparencyPublishErrorV1::InvalidRequest)
+        }
+    }
+
+    /// Return the monotonic authoritative head generation.
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Return the content-addressed authoritative head digest.
+    #[must_use]
+    pub const fn head_digest(self) -> [u8; 32] {
+        self.head_digest
+    }
+
+    /// Return the greatest fencing token accepted at this head.
+    #[must_use]
+    pub const fn fencing_floor(self) -> u64 {
+        self.fencing_floor
+    }
+
+    pub(crate) fn is_valid(self) -> bool {
+        self.version == FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1
+            && self.generation != 0
+            && self.head_digest != [0; 32]
+            && self.fencing_floor != 0
+    }
+}
+
+/// Stable publication identity and payload claimed at one authoritative head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FencedTransparencyPublicationInclusionV1 {
+    publication_idempotency_digest: [u8; 32],
+    payload_digest: [u8; 32],
+    included_head: FencedTransparencyTargetHeadV1,
+}
+
+impl FencedTransparencyPublicationInclusionV1 {
+    /// Construct one exact publication-inclusion requirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FencedTransparencyPublishErrorV1::InvalidRequest`] when either
+    /// digest is zero or the claimed inclusion head is malformed.
+    pub fn try_new(
+        publication_idempotency_digest: [u8; 32],
+        payload_digest: [u8; 32],
+        included_head: FencedTransparencyTargetHeadV1,
+    ) -> Result<Self, FencedTransparencyPublishErrorV1> {
+        if publication_idempotency_digest == [0; 32]
+            || payload_digest == [0; 32]
+            || !included_head.is_valid()
+        {
+            return Err(FencedTransparencyPublishErrorV1::InvalidRequest);
+        }
+        Ok(Self {
+            publication_idempotency_digest,
+            payload_digest,
+            included_head,
+        })
+    }
+
+    /// Return the stable lease-independent publication identity.
+    #[must_use]
+    pub const fn publication_idempotency_digest(self) -> [u8; 32] {
+        self.publication_idempotency_digest
+    }
+
+    /// Return the exact canonical payload digest.
+    #[must_use]
+    pub const fn payload_digest(self) -> [u8; 32] {
+        self.payload_digest
+    }
+
+    /// Return the authoritative head claimed to include the identity and payload.
+    #[must_use]
+    pub const fn included_head(self) -> FencedTransparencyTargetHeadV1 {
+        self.included_head
+    }
+}
+
+/// Authenticated adapter proof that publications and retained heads reach one current head.
+///
+/// The proof digest is public, payload-free evidence emitted only after the
+/// deployment adapter has authenticated the target and verified every requested
+/// ancestor against the target's immutable history. It must never contain
+/// credentials, bearer material, private evidence, or provider diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FencedTransparencyHeadAncestryProofV1 {
+    version: u8,
+    authoritative_head: Option<FencedTransparencyTargetHeadV1>,
+    verified_ancestors: Vec<FencedTransparencyTargetHeadV1>,
+    verified_publications: Vec<FencedTransparencyPublicationInclusionV1>,
+    adapter_proof_digest: [u8; 32],
+}
+
+impl FencedTransparencyHeadAncestryProofV1 {
+    /// Construct one adapter-verified ancestry proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FencedTransparencyPublishErrorV1::InvalidReceipt`] when the
+    /// proof digest is zero, a head is malformed, an ancestor is newer than the
+    /// authoritative head, or two claimed heads substitute one generation.
+    pub fn try_new(
+        authoritative_head: Option<FencedTransparencyTargetHeadV1>,
+        verified_ancestors: Vec<FencedTransparencyTargetHeadV1>,
+        verified_publications: Vec<FencedTransparencyPublicationInclusionV1>,
+        adapter_proof_digest: [u8; 32],
+    ) -> Result<Self, FencedTransparencyPublishErrorV1> {
+        let proof = Self {
+            version: FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1,
+            authoritative_head,
+            verified_ancestors,
+            verified_publications,
+            adapter_proof_digest,
+        };
+        proof.validate_shape()?;
+        Ok(proof)
+    }
+
+    /// Return the exact authenticated current target head.
+    #[must_use]
+    pub const fn authoritative_head(&self) -> Option<FencedTransparencyTargetHeadV1> {
+        self.authoritative_head
+    }
+
+    /// Return the exact requested heads whose ancestry the adapter verified.
+    #[must_use]
+    pub fn verified_ancestors(&self) -> &[FencedTransparencyTargetHeadV1] {
+        &self.verified_ancestors
+    }
+
+    /// Return every stable identity and payload proven at its inclusion head.
+    #[must_use]
+    pub fn verified_publications(&self) -> &[FencedTransparencyPublicationInclusionV1] {
+        &self.verified_publications
+    }
+
+    /// Return the payload-free adapter evidence digest.
+    #[must_use]
+    pub const fn adapter_proof_digest(&self) -> [u8; 32] {
+        self.adapter_proof_digest
+    }
+
+    fn validate_for_required_evidence(
+        &self,
+        required_ancestors: &[FencedTransparencyTargetHeadV1],
+        required_publications: &[FencedTransparencyPublicationInclusionV1],
+    ) -> Result<(), FencedTransparencyPublishErrorV1> {
+        self.validate_shape()?;
+        if self.verified_ancestors != required_ancestors
+            || self.verified_publications != required_publications
+        {
+            return Err(FencedTransparencyPublishErrorV1::InvalidReceipt);
+        }
+        Ok(())
+    }
+
+    fn validate_shape(&self) -> Result<(), FencedTransparencyPublishErrorV1> {
+        if self.version != FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1
+            || self.adapter_proof_digest == [0; 32]
+            || self.authoritative_head.is_some_and(|head| !head.is_valid())
+            || self
+                .verified_ancestors
+                .iter()
+                .any(|ancestor| !ancestor.is_valid())
+            || self.verified_publications.iter().any(|publication| {
+                publication.publication_idempotency_digest == [0; 32]
+                    || publication.payload_digest == [0; 32]
+                    || !publication.included_head.is_valid()
+                    || !self.verified_ancestors.contains(&publication.included_head)
+            })
+        {
+            return Err(FencedTransparencyPublishErrorV1::InvalidReceipt);
+        }
+        let Some(authoritative_head) = self.authoritative_head else {
+            return if self.verified_ancestors.is_empty() && self.verified_publications.is_empty() {
+                Ok(())
+            } else {
+                Err(FencedTransparencyPublishErrorV1::InvalidReceipt)
+            };
+        };
+        for (index, ancestor) in self.verified_ancestors.iter().enumerate() {
+            if ancestor.generation() > authoritative_head.generation()
+                || ancestor.fencing_floor() > authoritative_head.fencing_floor()
+                || (ancestor.generation() == authoritative_head.generation()
+                    && *ancestor != authoritative_head)
+                || self.verified_ancestors[..index]
+                    .iter()
+                    .any(|prior| prior.generation() == ancestor.generation() && prior != ancestor)
+            {
+                return Err(FencedTransparencyPublishErrorV1::InvalidReceipt);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Exact input to one atomic privacy Governance compare-and-append.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FencedPrivacyPublicationRequestV1 {
+    version: u8,
+    authorization: PrivacyPublicationAuthorizationV1,
+    authorization_digest: [u8; 32],
+    publication_idempotency_digest: [u8; 32],
+    canonical_payload: Vec<u8>,
+    payload_digest: [u8; 32],
+    expected_authoritative_head: Option<FencedTransparencyTargetHeadV1>,
+    fencing_token: u64,
+    fencing_floor: u64,
+    request_digest: [u8; 32],
+}
+
+impl FencedPrivacyPublicationRequestV1 {
+    /// Construct an exact request from canonical privacy publication bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the authorization or payload is invalid, the
+    /// predecessor/fencing floor is inconsistent, or the lease token is zero.
+    /// Stale and equal tokens remain constructible so the target can perform its
+    /// stable publication-identity lookup before enforcing the fencing floor.
+    pub fn try_new(
+        authorization: PrivacyPublicationAuthorizationV1,
+        publication: &ModerationLedgerCyclePublicationV1,
+        canonical_payload: Vec<u8>,
+        expected_authoritative_head: Option<FencedTransparencyTargetHeadV1>,
+        fencing_floor: u64,
+    ) -> Result<Self, FencedTransparencyPublishErrorV1> {
+        authorization
+            .validate_publication(publication, &canonical_payload)
+            .map_err(|_| FencedTransparencyPublishErrorV1::InvalidRequest)?;
+        let expected_floor = expected_authoritative_head.map_or(0, |head| head.fencing_floor());
+        if expected_authoritative_head.is_some_and(|head| !head.is_valid())
+            || fencing_floor != expected_floor
+        {
+            return Err(FencedTransparencyPublishErrorV1::InvalidRequest);
+        }
+        let payload_len = u64::try_from(canonical_payload.len())
+            .map_err(|_| FencedTransparencyPublishErrorV1::InvalidRequest)?;
+        let fencing_token = authorization.leader_lease().fencing_token();
+        if fencing_token == 0 {
+            return Err(FencedTransparencyPublishErrorV1::InvalidRequest);
+        }
+        let authorization_digest = authorization.binding_digest();
+        let publication_idempotency_digest = authorization.publication_idempotency_digest();
+        let payload_digest = *blake3::hash(&canonical_payload).as_bytes();
+        let request_digest = fenced_privacy_request_digest(
+            authorization_digest,
+            publication_idempotency_digest,
+            payload_digest,
+            payload_len,
+            expected_authoritative_head,
+            fencing_token,
+            fencing_floor,
+        );
+        let request = Self {
+            version: FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1,
+            authorization,
+            authorization_digest,
+            publication_idempotency_digest,
+            canonical_payload,
+            payload_digest,
+            expected_authoritative_head,
+            fencing_token,
+            fencing_floor,
+            request_digest,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    /// Revalidate the canonical payload and every deterministic request binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FencedTransparencyPublishErrorV1::InvalidRequest`] when any
+    /// request field, digest, canonical payload, or authorization binding differs.
+    pub fn validate(&self) -> Result<(), FencedTransparencyPublishErrorV1> {
+        let payload_len = u64::try_from(self.canonical_payload.len())
+            .map_err(|_| FencedTransparencyPublishErrorV1::InvalidRequest)?;
+        if self.version != FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1
+            || self.canonical_payload.is_empty()
+            || self.payload_digest != *blake3::hash(&self.canonical_payload).as_bytes()
+            || self.authorization_digest != self.authorization.binding_digest()
+            || self.publication_idempotency_digest
+                != self.authorization.publication_idempotency_digest()
+            || self.fencing_token != self.authorization.leader_lease().fencing_token()
+            || self.fencing_token == 0
+            || self
+                .expected_authoritative_head
+                .is_some_and(|head| !head.is_valid())
+            || self.fencing_floor
+                != self
+                    .expected_authoritative_head
+                    .map_or(0, |head| head.fencing_floor())
+            || self.request_digest
+                != fenced_privacy_request_digest(
+                    self.authorization_digest,
+                    self.publication_idempotency_digest,
+                    self.payload_digest,
+                    payload_len,
+                    self.expected_authoritative_head,
+                    self.fencing_token,
+                    self.fencing_floor,
+                )
+        {
+            return Err(FencedTransparencyPublishErrorV1::InvalidRequest);
+        }
+        let publication = norito::decode_from_bytes::<ModerationLedgerCyclePublicationV1>(
+            &self.canonical_payload,
+        )
+        .map_err(|_| FencedTransparencyPublishErrorV1::InvalidRequest)?;
+        if norito::to_bytes(&publication)
+            .map_err(|_| FencedTransparencyPublishErrorV1::InvalidRequest)?
+            != self.canonical_payload
+        {
+            return Err(FencedTransparencyPublishErrorV1::InvalidRequest);
+        }
+        self.authorization
+            .validate_publication(&publication, &self.canonical_payload)
+            .map_err(|_| FencedTransparencyPublishErrorV1::InvalidRequest)
+    }
+
+    /// Return the anchor- and lease-bound publication authorization.
+    #[must_use]
+    pub const fn authorization(&self) -> &PrivacyPublicationAuthorizationV1 {
+        &self.authorization
+    }
+
+    /// Return the canonical digest of every authorization field.
+    #[must_use]
+    pub const fn authorization_digest(&self) -> [u8; 32] {
+        self.authorization_digest
+    }
+
+    /// Return the lease-independent identity used for atomic target deduplication.
+    #[must_use]
+    pub const fn publication_idempotency_digest(&self) -> [u8; 32] {
+        self.publication_idempotency_digest
+    }
+
+    /// Return the governed query and release identity used to detect conflicts.
+    #[must_use]
+    pub const fn publication_scope(&self) -> ([u8; 32], [u8; 16]) {
+        let scope = self.authorization.leader_lease.scope();
+        (scope.query_id(), scope.cycle_id())
+    }
+
+    /// Return the exact canonical privacy publication bytes.
+    #[must_use]
+    pub fn canonical_payload(&self) -> &[u8] {
+        &self.canonical_payload
+    }
+
+    /// Return the digest of the exact canonical payload.
+    #[must_use]
+    pub const fn payload_digest(&self) -> [u8; 32] {
+        self.payload_digest
+    }
+
+    /// Return the expected authoritative predecessor, or `None` for genesis.
+    #[must_use]
+    pub const fn expected_authoritative_head(&self) -> Option<FencedTransparencyTargetHeadV1> {
+        self.expected_authoritative_head
+    }
+
+    /// Return the leader-lease fencing token bound into the operation.
+    #[must_use]
+    pub const fn fencing_token(&self) -> u64 {
+        self.fencing_token
+    }
+
+    /// Return the authoritative fencing floor expected by the caller.
+    #[must_use]
+    pub const fn fencing_floor(&self) -> u64 {
+        self.fencing_floor
+    }
+
+    /// Return the stable idempotency digest of this exact request.
+    #[must_use]
+    pub const fn request_digest(&self) -> [u8; 32] {
+        self.request_digest
+    }
+
+    /// Derive the only valid content-addressed successor for this request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid or its generation cannot
+    /// advance without overflow.
+    pub fn expected_successor_head(
+        &self,
+    ) -> Result<FencedTransparencyTargetHeadV1, FencedTransparencyPublishErrorV1> {
+        self.validate()?;
+        if self.fencing_token <= self.fencing_floor {
+            return Err(FencedTransparencyPublishErrorV1::StaleFencingToken);
+        }
+        let generation = self
+            .expected_authoritative_head
+            .map_or(Some(1), |head| head.generation().checked_add(1))
+            .ok_or(FencedTransparencyPublishErrorV1::InvalidRequest)?;
+        let head_digest = fenced_privacy_successor_digest(self);
+        FencedTransparencyTargetHeadV1::try_new(generation, head_digest, self.fencing_token)
+    }
+}
+
+/// Target result for one stable privacy-publication identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum FencedPrivacyPublicationDispositionV1 {
+    /// This request atomically created the authoritative inclusion head.
+    Appended,
+    /// The stable identity was already included and no new append occurred.
+    AlreadyIncluded,
+}
+
+/// Exact success receipt returned after atomic append, readback, and inclusion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FencedPrivacyPublicationReceiptV1 {
+    version: u8,
+    provider_handle: String,
+    provider_qualification: GovernanceDagRuntimeProviderQualificationV1,
+    request_digest: [u8; 32],
+    authorization_digest: [u8; 32],
+    publication_idempotency_digest: [u8; 32],
+    payload_digest: [u8; 32],
+    expected_authoritative_head: Option<FencedTransparencyTargetHeadV1>,
+    fencing_token: u64,
+    fencing_floor: u64,
+    disposition: FencedPrivacyPublicationDispositionV1,
+    successor_head: FencedTransparencyTargetHeadV1,
+    readback_head: FencedTransparencyTargetHeadV1,
+    head_inclusion_digest: [u8; 32],
+}
+
+impl FencedPrivacyPublicationReceiptV1 {
+    /// Build a receipt after a provider has verified the exact append and readback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid or its deterministic
+    /// successor cannot be derived.
+    pub fn from_verified_append(
+        request: &FencedPrivacyPublicationRequestV1,
+        provider_handle: impl Into<String>,
+        provider_qualification: GovernanceDagRuntimeProviderQualificationV1,
+    ) -> Result<Self, FencedTransparencyPublishErrorV1> {
+        request.validate()?;
+        let successor_head = request.expected_successor_head()?;
+        let receipt = Self {
+            version: FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1,
+            provider_handle: provider_handle.into(),
+            provider_qualification,
+            request_digest: request.request_digest,
+            authorization_digest: request.authorization_digest,
+            publication_idempotency_digest: request.publication_idempotency_digest,
+            payload_digest: request.payload_digest,
+            expected_authoritative_head: request.expected_authoritative_head,
+            fencing_token: request.fencing_token,
+            fencing_floor: request.fencing_floor,
+            disposition: FencedPrivacyPublicationDispositionV1::Appended,
+            successor_head,
+            readback_head: successor_head,
+            head_inclusion_digest: fenced_privacy_head_inclusion_digest(
+                request,
+                FencedPrivacyPublicationDispositionV1::Appended,
+                successor_head,
+                successor_head,
+            ),
+        };
+        Ok(receipt)
+    }
+
+    /// Build a receipt for an identity already included by an earlier lease.
+    ///
+    /// The provider may call this constructor only after atomically finding the
+    /// exact stable identity, verifying that its release and payload evidence do
+    /// not conflict, and reading back an authoritative head containing the
+    /// original inclusion head without appending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request or either head is malformed, the
+    /// inclusion head is newer than readback, or one generation is substituted.
+    pub fn from_verified_existing(
+        request: &FencedPrivacyPublicationRequestV1,
+        provider_handle: impl Into<String>,
+        provider_qualification: GovernanceDagRuntimeProviderQualificationV1,
+        included_head: FencedTransparencyTargetHeadV1,
+        readback_head: FencedTransparencyTargetHeadV1,
+    ) -> Result<Self, FencedTransparencyPublishErrorV1> {
+        request.validate()?;
+        if !included_head.is_valid()
+            || !readback_head.is_valid()
+            || included_head.generation() > readback_head.generation()
+            || included_head.fencing_floor() > readback_head.fencing_floor()
+            || (included_head.generation() == readback_head.generation()
+                && included_head != readback_head)
+        {
+            return Err(FencedTransparencyPublishErrorV1::InvalidReceipt);
+        }
+        Ok(Self {
+            version: FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1,
+            provider_handle: provider_handle.into(),
+            provider_qualification,
+            request_digest: request.request_digest,
+            authorization_digest: request.authorization_digest,
+            publication_idempotency_digest: request.publication_idempotency_digest,
+            payload_digest: request.payload_digest,
+            expected_authoritative_head: request.expected_authoritative_head,
+            fencing_token: request.fencing_token,
+            fencing_floor: request.fencing_floor,
+            disposition: FencedPrivacyPublicationDispositionV1::AlreadyIncluded,
+            successor_head: included_head,
+            readback_head,
+            head_inclusion_digest: fenced_privacy_head_inclusion_digest(
+                request,
+                FencedPrivacyPublicationDispositionV1::AlreadyIncluded,
+                included_head,
+                readback_head,
+            ),
+        })
+    }
+
+    /// Validate the exact request echo, successor, readback, and provider identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid or any receipt field differs
+    /// from the expected provider identity and deterministic successor.
+    pub fn validate_for_request(
+        &self,
+        request: &FencedPrivacyPublicationRequestV1,
+        provider_handle: &str,
+        provider_qualification: GovernanceDagRuntimeProviderQualificationV1,
+    ) -> Result<(), FencedTransparencyPublishErrorV1> {
+        request.validate()?;
+        let disposition_is_valid = match self.disposition {
+            FencedPrivacyPublicationDispositionV1::Appended => {
+                let expected_successor = request.expected_successor_head()?;
+                self.successor_head == expected_successor
+                    && self.readback_head == expected_successor
+            }
+            FencedPrivacyPublicationDispositionV1::AlreadyIncluded => {
+                self.successor_head.is_valid()
+                    && self.readback_head.is_valid()
+                    && self.successor_head.generation() <= self.readback_head.generation()
+                    && self.successor_head.fencing_floor() <= self.readback_head.fencing_floor()
+                    && (self.successor_head.generation() != self.readback_head.generation()
+                        || self.successor_head == self.readback_head)
+            }
+        };
+        if !disposition_is_valid
+            || self.version != FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1
+            || self.provider_handle != provider_handle
+            || self.provider_qualification != provider_qualification
+            || self.request_digest != request.request_digest
+            || self.authorization_digest != request.authorization_digest
+            || self.publication_idempotency_digest != request.publication_idempotency_digest
+            || self.payload_digest != request.payload_digest
+            || self.expected_authoritative_head != request.expected_authoritative_head
+            || self.fencing_token != request.fencing_token
+            || self.fencing_floor != request.fencing_floor
+            || self.head_inclusion_digest
+                != fenced_privacy_head_inclusion_digest(
+                    request,
+                    self.disposition,
+                    self.successor_head,
+                    self.readback_head,
+                )
+        {
+            return Err(FencedTransparencyPublishErrorV1::InvalidReceipt);
+        }
+        Ok(())
+    }
+
+    /// Return the exact request idempotency digest acknowledged by the provider.
+    #[must_use]
+    pub const fn request_digest(&self) -> [u8; 32] {
+        self.request_digest
+    }
+
+    /// Return the stable lease-independent publication identity.
+    #[must_use]
+    pub const fn publication_idempotency_digest(&self) -> [u8; 32] {
+        self.publication_idempotency_digest
+    }
+
+    /// Return the exact canonical payload digest acknowledged by the target.
+    #[must_use]
+    pub const fn payload_digest(&self) -> [u8; 32] {
+        self.payload_digest
+    }
+
+    /// Return whether this request appended or found an existing inclusion.
+    #[must_use]
+    pub const fn disposition(&self) -> FencedPrivacyPublicationDispositionV1 {
+        self.disposition
+    }
+
+    /// Return the original authoritative head that includes this identity.
+    #[must_use]
+    pub const fn included_head(&self) -> FencedTransparencyTargetHeadV1 {
+        self.successor_head
+    }
+
+    /// Return the authoritative head read back by the atomic target operation.
+    #[must_use]
+    pub const fn readback_head(&self) -> FencedTransparencyTargetHeadV1 {
+        self.readback_head
+    }
+
+    /// Return the deterministic head-inclusion evidence digest.
+    #[must_use]
+    pub const fn head_inclusion_digest(&self) -> [u8; 32] {
+        self.head_inclusion_digest
+    }
+}
+
+/// Deployment-owned atomic boundary for privacy Governance publication.
+pub trait FencedTransparencyPublisherV1: Send + Sync + std::fmt::Debug {
+    /// Return the stable opaque production adapter handle.
+    fn handle(&self) -> &str;
+
+    /// Qualify the active adapter and its public policy revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted diagnostic when the adapter is unavailable, stale,
+    /// revoked, test-marked, or cannot prove its public qualification.
+    fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
+
+    /// Atomically compare the target head, fence, append, read back, and prove inclusion.
+    ///
+    /// The provider must retain and return the original receipt when the exact
+    /// same request digest and request are retried, even after later appends. A
+    /// request for an absent stable scope with an obsolete fencing token must return
+    /// [`FencedTransparencyPublishErrorV1::StaleFencingToken`], while a current
+    /// token paired with a substituted predecessor must return
+    /// [`FencedTransparencyPublishErrorV1::CompareConflict`]. Success is valid
+    /// only after the append, exact readback, and target-head inclusion happen
+    /// as one atomic target-owned operation.
+    ///
+    /// Before comparing the predecessor or fencing token, the target must
+    /// atomically look up [`FencedPrivacyPublicationRequestV1::publication_scope`].
+    /// An absent scope is appended together with a durable mapping from that
+    /// scope to the stable idempotency digest, payload/release evidence, and
+    /// inclusion head. An identical stable identity returns
+    /// [`FencedPrivacyPublicationDispositionV1::AlreadyIncluded`] without an
+    /// append, even under a different lease, replica, predecessor, or restored
+    /// local root. A scope mapped to different evidence returns
+    /// [`FencedTransparencyPublishErrorV1::PublicationConflict`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable, payload-free failure when qualification, validation,
+    /// conflict detection, fencing, compare-and-append, readback, or inclusion
+    /// proof cannot complete.
+    fn compare_and_append_privacy(
+        &self,
+        request: &FencedPrivacyPublicationRequestV1,
+    ) -> Result<FencedPrivacyPublicationReceiptV1, FencedTransparencyPublishErrorV1>;
+}
+
+fn fenced_privacy_digest_bytes(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn fenced_privacy_digest_head(
+    hasher: &mut blake3::Hasher,
+    head: Option<FencedTransparencyTargetHeadV1>,
+) {
+    match head {
+        Some(head) => {
+            hasher.update(&[1]);
+            hasher.update(&head.generation().to_le_bytes());
+            hasher.update(&head.head_digest());
+            hasher.update(&head.fencing_floor().to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+}
+
+fn fenced_privacy_request_digest(
+    authorization_digest: [u8; 32],
+    publication_idempotency_digest: [u8; 32],
+    payload_digest: [u8; 32],
+    payload_len: u64,
+    expected_authoritative_head: Option<FencedTransparencyTargetHeadV1>,
+    fencing_token: u64,
+    fencing_floor: u64,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(FENCED_PRIVACY_REQUEST_DIGEST_DOMAIN_V1);
+    hasher.update(&[FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1]);
+    hasher.update(&authorization_digest);
+    hasher.update(&publication_idempotency_digest);
+    hasher.update(&payload_digest);
+    hasher.update(&payload_len.to_le_bytes());
+    fenced_privacy_digest_head(&mut hasher, expected_authoritative_head);
+    hasher.update(&fencing_token.to_le_bytes());
+    hasher.update(&fencing_floor.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn fenced_privacy_successor_digest(request: &FencedPrivacyPublicationRequestV1) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(FENCED_PRIVACY_SUCCESSOR_DIGEST_DOMAIN_V1);
+    hasher.update(&request.request_digest);
+    fenced_privacy_digest_head(&mut hasher, request.expected_authoritative_head);
+    hasher.update(&request.payload_digest);
+    hasher.update(&request.fencing_token.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn fenced_privacy_head_inclusion_digest(
+    request: &FencedPrivacyPublicationRequestV1,
+    disposition: FencedPrivacyPublicationDispositionV1,
+    included_head: FencedTransparencyTargetHeadV1,
+    readback_head: FencedTransparencyTargetHeadV1,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(FENCED_PRIVACY_HEAD_INCLUSION_DIGEST_DOMAIN_V1);
+    hasher.update(&request.request_digest);
+    hasher.update(&request.publication_idempotency_digest);
+    hasher.update(&request.payload_digest);
+    hasher.update(&[match disposition {
+        FencedPrivacyPublicationDispositionV1::Appended => 0,
+        FencedPrivacyPublicationDispositionV1::AlreadyIncluded => 1,
+    }]);
+    fenced_privacy_digest_head(&mut hasher, Some(included_head));
+    fenced_privacy_digest_head(&mut hasher, Some(readback_head));
+    *hasher.finalize().as_bytes()
+}
+
 /// Interface for emitting settlement artefacts to the governance DAG.
 ///
 /// Implementations must be idempotent for identical canonical payload bytes.
@@ -1540,10 +2668,15 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
     /// Persist a moderation transparency ledger cycle publication to the governance pipeline.
+    ///
+    /// Privacy cycles require finalized authorization and must complete the
+    /// fused target-owned append before creating any local publication
+    /// artifact. Non-privacy cycles must reject an authorization.
     fn publish_transparency_ledger_publication(
         &self,
         publication: &ModerationLedgerCyclePublicationV1,
         encoded: &[u8],
+        authorization: Option<&PrivacyPublicationAuthorizationV1>,
     ) -> Result<(), GovernancePublishError>;
     /// Persist a proof-token issuance summary to the governance pipeline.
     fn publish_proof_token_issuance(
@@ -1642,6 +2775,25 @@ struct PrivacyAggregateSourceCycleInput {
     config: PrivacyAggregateCycleConfig,
     /// Optional request-bound threshold-PRF input for this cycle.
     cycle_prf_input: Option<PrivacyCyclePrfInputV1>,
+}
+
+struct PublishedPrivacyCycleCommitInput<'a> {
+    window: PrivacyAggregateCycleWindow,
+    publication: &'a ModerationLedgerCyclePublicationV1,
+    config: &'a PrivacyAggregateCycleConfig,
+    private_source_digest: [u8; 32],
+    prf_evidence: Option<([u8; 32], [u8; 32])>,
+    composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
+    request_receipt: PrivacyPublishRequestReceiptV1,
+}
+
+struct SuppressedPrivacyCycleCommitInput<'a> {
+    cycle_id: [u8; 16],
+    window: PrivacyAggregateCycleWindow,
+    config: &'a PrivacyAggregateCycleConfig,
+    private_source_digest: [u8; 32],
+    previous_publication_block_hash: Option<[u8; 32]>,
+    request_receipt: PrivacyPublishRequestReceiptV1,
 }
 
 const PRIVACY_PUBLISH_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
@@ -2062,8 +3214,14 @@ pub struct NodeRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn ProductionPrivacyCyclePrfProviderV1>>,
     privacy_release_anchor: Option<Arc<dyn ProductionPrivacyReleaseAnchorV1>>,
+    transparency_leader_lease_provider:
+        Option<Arc<dyn ProductionTransparencyLeaderLeaseProviderV1>>,
+    fenced_transparency_publisher: Option<Arc<dyn FencedTransparencyPublisherV1>>,
+    fenced_transparency_head_reader: Option<Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1>>,
     governance_dag_signer: Option<Arc<dyn GovernanceDagRuntimeSigner>>,
+    governance_dag_checkpoint_store: Option<Arc<dyn GovernanceDagSealedCheckpointStore>>,
     provider_ingest_checkpoint_runtime: Option<Arc<dyn ProviderIngestCheckpointRuntimeV1>>,
+    por_finalized_replay_archive: Option<Arc<dyn PorFinalizedReplayArchiveV1>>,
 }
 
 impl std::fmt::Debug for NodeRuntimeDeps {
@@ -2083,12 +3241,32 @@ impl std::fmt::Debug for NodeRuntimeDeps {
                 &self.privacy_release_anchor.is_some(),
             )
             .field(
+                "transparency_leader_lease_provider",
+                &self.transparency_leader_lease_provider.is_some(),
+            )
+            .field(
+                "fenced_transparency_publisher",
+                &self.fenced_transparency_publisher.is_some(),
+            )
+            .field(
+                "fenced_transparency_head_reader",
+                &self.fenced_transparency_head_reader.is_some(),
+            )
+            .field(
                 "governance_dag_signer",
                 &self.governance_dag_signer.is_some(),
             )
             .field(
+                "governance_dag_checkpoint_store",
+                &self.governance_dag_checkpoint_store.is_some(),
+            )
+            .field(
                 "provider_ingest_checkpoint_runtime",
                 &self.provider_ingest_checkpoint_runtime.is_some(),
+            )
+            .field(
+                "por_finalized_replay_archive",
+                &self.por_finalized_replay_archive.is_some(),
             )
             .finish()
     }
@@ -2128,6 +3306,42 @@ impl NodeRuntimeDeps {
         self
     }
 
+    /// Attach the external sealed-CAS leader-lease provider for privacy releases.
+    #[must_use]
+    pub fn with_transparency_leader_lease_provider(
+        mut self,
+        provider: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1>,
+    ) -> Self {
+        self.transparency_leader_lease_provider = Some(provider);
+        self
+    }
+
+    /// Attach the deployment-owned fused privacy Governance target writer.
+    ///
+    /// Startup also requires the exact public binding in [`StorageConfig`] and
+    /// a separately injected authenticated reader for the same target.
+    #[must_use]
+    pub fn with_fenced_transparency_publisher(
+        mut self,
+        publisher: Arc<dyn FencedTransparencyPublisherV1>,
+    ) -> Self {
+        self.fenced_transparency_publisher = Some(publisher);
+        self
+    }
+
+    /// Attach the authenticated authoritative-head reader for fused publication.
+    ///
+    /// The reader and writer are independently qualified against the same
+    /// configured handle, revision, and public-policy digest.
+    #[must_use]
+    pub fn with_fenced_transparency_head_reader(
+        mut self,
+        reader: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1>,
+    ) -> Self {
+        self.fenced_transparency_head_reader = Some(reader);
+        self
+    }
+
     /// Attach the production HSM/KMS signer for local Governance DAG blocks.
     #[must_use]
     pub fn with_governance_dag_signer(
@@ -2138,6 +3352,19 @@ impl NodeRuntimeDeps {
         self
     }
 
+    /// Attach the sealed monotonic checkpoint store for the local signed DAG producer.
+    ///
+    /// Its expected public handle and qualification come exclusively from
+    /// [`StorageConfig`]; the injected provider cannot self-pin a replacement.
+    #[must_use]
+    pub fn with_governance_dag_checkpoint_store(
+        mut self,
+        store: Arc<dyn GovernanceDagSealedCheckpointStore>,
+    ) -> Self {
+        self.governance_dag_checkpoint_store = Some(store);
+        self
+    }
+
     /// Attach the production sealed monotonic provider-ingest checkpoint store.
     #[must_use]
     pub fn with_provider_ingest_checkpoint_runtime(
@@ -2145,6 +3372,16 @@ impl NodeRuntimeDeps {
         runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
     ) -> Self {
         self.provider_ingest_checkpoint_runtime = Some(runtime);
+        self
+    }
+
+    /// Attach the deployment-owned authenticated finalized-PoR replay archive.
+    #[must_use]
+    pub fn with_por_finalized_replay_archive(
+        mut self,
+        archive: Arc<dyn PorFinalizedReplayArchiveV1>,
+    ) -> Self {
+        self.por_finalized_replay_archive = Some(archive);
         self
     }
 }
@@ -2164,6 +3401,44 @@ impl std::ops::Deref for OpaqueModerationQuarantineKeyWrapper {
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
+}
+
+#[derive(Clone)]
+struct OpaquePorFinalizedReplayArchive(Arc<dyn PorFinalizedReplayArchiveV1>);
+
+impl std::fmt::Debug for OpaquePorFinalizedReplayArchive {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PorFinalizedReplayArchiveV1(<runtime-only>)")
+    }
+}
+
+impl std::ops::Deref for OpaquePorFinalizedReplayArchive {
+    type Target = dyn PorFinalizedReplayArchiveV1;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+fn verify_por_replay_archive_provider(
+    policy: &config::PorReplayArchivePolicyV1,
+    archive: &dyn PorFinalizedReplayArchiveV1,
+) -> Result<(), PorTrackerError> {
+    let runtime_handle = archive.runtime_handle();
+    if !iroha_config::parameters::is_production_runtime_handle(runtime_handle)
+        || runtime_handle != policy.runtime_handle()
+    {
+        return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+    }
+    let first_binding = archive.binding()?;
+    if first_binding != policy.binding() {
+        return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+    }
+    archive.check_readiness()?;
+    if archive.binding()? != first_binding {
+        return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -2200,6 +3475,15 @@ impl std::ops::Deref for OpaquePrivacyReleaseAnchor {
     }
 }
 
+#[derive(Clone)]
+struct OpaqueTransparencyLeaderLeaseProvider(Arc<QualifiedTransparencyLeaderLeaseProviderV1>);
+
+impl std::fmt::Debug for OpaqueTransparencyLeaderLeaseProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TransparencyLeaderLeaseProviderV1(<runtime-only>)")
+    }
+}
+
 /// Lightweight handle representing the embedded SoraFS storage worker.
 #[derive(Debug, Clone)]
 pub struct NodeHandle {
@@ -2218,6 +3502,7 @@ pub struct NodeHandle {
     orderbook_transaction_forwarder: OrderbookTransactionForwarder,
     reserve_transaction_forwarder: ReserveTransactionForwarder,
     provider_ingest_outbox: Option<ProviderIngestOutbox>,
+    por_finalized_replay_archive: Option<OpaquePorFinalizedReplayArchive>,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
     pdp_provider: Option<PdpProviderProtocol>,
@@ -2226,6 +3511,12 @@ pub struct NodeHandle {
     gc_eviction_audit_links: Arc<RwLock<BTreeMap<u64, GcEvictionAuditLinkV1>>>,
     repair_orchestrator: Arc<RwLock<Option<Arc<dyn RepairOrchestrator>>>>,
     governance_publisher: Arc<RwLock<Option<Arc<dyn GovernancePublisher>>>>,
+    startup_governance_publisher: Option<Arc<dyn GovernancePublisher>>,
+    governance_publication_lock: Option<Arc<Mutex<()>>>,
+    governance_runtime_root: Option<PathBuf>,
+    governance_runtime_root_guard: Option<GovernanceFilesystemRootGuard>,
+    governance_dag_runtime_signer: Option<GovernanceRuntimeDagSigner>,
+    governance_dag_runtime_checkpoint_store: Option<GovernanceRuntimeDagCheckpointStore>,
     governance_outbox: Arc<RwLock<GovernanceOutboxRuntime>>,
     governance_outbox_drain_lock: Arc<Mutex<()>>,
     runtime_mutation_lock: Arc<Mutex<()>>,
@@ -2260,6 +3551,9 @@ pub struct NodeHandle {
     privacy_release_ledger: Arc<RwLock<transparency::PrivacyReleaseLedgerV1>>,
     privacy_cycle_prf_provider: Option<OpaquePrivacyCyclePrfProvider>,
     privacy_release_anchor: Option<OpaquePrivacyReleaseAnchor>,
+    transparency_leader_lease_provider: Option<OpaqueTransparencyLeaderLeaseProvider>,
+    fenced_transparency_publisher: Option<QualifiedFencedTransparencyPublisherV1>,
+    fenced_transparency_head_reader: Option<QualifiedFencedTransparencyHeadReaderV1>,
     published_evidence_viewer_audit_cycles: Arc<RwLock<BTreeSet<[u8; 16]>>>,
 }
 
@@ -2875,6 +4169,24 @@ fn decode_canonical_signed_reputation_payload(
     })
 }
 
+fn decode_canonical_por_challenge_publication_payload(
+    bytes: &[u8],
+) -> Result<PorChallengePublicationV1, GovernancePublishError> {
+    decode_por_challenge_publication_v1(bytes).map_err(|err| {
+        GovernancePublishError::other(format!(
+            "decode PoR challenge publication governance payload: {err}"
+        ))
+    })
+}
+
+fn decode_canonical_por_weekly_report_payload(
+    bytes: &[u8],
+) -> Result<PorWeeklyReportV1, GovernancePublishError> {
+    decode_por_weekly_report_v1(bytes).map_err(|err| {
+        GovernancePublishError::other(format!("decode weekly PoR governance payload: {err}"))
+    })
+}
+
 fn validate_gc_audit_event(
     entry_sequence: u64,
     event: &GcAuditEventV1,
@@ -2981,12 +4293,12 @@ fn validate_governance_outbox_entry(
                 .map_err(|err| GovernancePublishError::other(err.to_string()))?;
         }
         GovernanceOutboxKindV1::PorChallengePublication => {
-            decode_canonical_governance_payload::<PorChallengePublicationV1>(&entry.payload_bytes)?
+            decode_canonical_por_challenge_publication_payload(&entry.payload_bytes)?
                 .validate()
                 .map_err(|err| GovernancePublishError::other(err.to_string()))?;
         }
         GovernanceOutboxKindV1::PorWeeklyReport => {
-            decode_canonical_governance_payload::<PorWeeklyReportV1>(&entry.payload_bytes)?
+            decode_canonical_por_weekly_report_payload(&entry.payload_bytes)?
                 .validate()
                 .map_err(|err| GovernancePublishError::other(err.to_string()))?;
         }
@@ -3251,6 +4563,7 @@ fn privacy_published_aggregate_inventory_digest(
 fn publish_governance_outbox_entry(
     publisher: &dyn GovernancePublisher,
     entry: &GovernanceOutboxEntryV1,
+    authorization: Option<&PrivacyPublicationAuthorizationV1>,
 ) -> Result<(), GovernancePublishError> {
     validate_governance_outbox_entry(entry)?;
     match entry.kind {
@@ -3278,7 +4591,11 @@ fn publish_governance_outbox_entry(
             let payload = decode_canonical_governance_payload::<ModerationLedgerCyclePublicationV1>(
                 &entry.payload_bytes,
             )?;
-            publisher.publish_transparency_ledger_publication(&payload, &entry.payload_bytes)
+            publisher.publish_transparency_ledger_publication(
+                &payload,
+                &entry.payload_bytes,
+                authorization,
+            )
         }
         GovernanceOutboxKindV1::ProofTokenIssuance => {
             let payload =
@@ -3310,14 +4627,11 @@ fn publish_governance_outbox_entry(
             publisher.publish_pdp_archive(&payload, &entry.payload_bytes)
         }
         GovernanceOutboxKindV1::PorChallengePublication => {
-            let payload = decode_canonical_governance_payload::<PorChallengePublicationV1>(
-                &entry.payload_bytes,
-            )?;
+            let payload = decode_canonical_por_challenge_publication_payload(&entry.payload_bytes)?;
             publisher.publish_por_challenge_publication(&payload, &entry.payload_bytes)
         }
         GovernanceOutboxKindV1::PorWeeklyReport => {
-            let payload =
-                decode_canonical_governance_payload::<PorWeeklyReportV1>(&entry.payload_bytes)?;
+            let payload = decode_canonical_por_weekly_report_payload(&entry.payload_bytes)?;
             publisher.publish_por_weekly_report(&payload, &entry.payload_bytes)
         }
     }
@@ -3333,7 +4647,7 @@ struct AdmittedReputationSnapshotV1 {
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct AuxiliaryRuntimeCheckpointV2 {
+struct AuxiliaryRuntimeCheckpointV3 {
     version: u8,
     capacity_runtime: CapacityRuntimeCheckpointV1,
     por_tracker: por::PorTrackerCheckpointV1,
@@ -3351,6 +4665,7 @@ struct AuxiliaryRuntimeCheckpointV2 {
     published_privacy_aggregate_cycles: Vec<[u8; 16]>,
     privacy_composition_budget: PrivacyCompositionBudgetLedgerV1,
     privacy_release_ledger: transparency::PrivacyReleaseLedgerV1,
+    transparency_leader_lease_fencing_floor: u64,
     published_evidence_viewer_audit_cycles: Vec<[u8; 16]>,
     governance_outbox_next_sequence: u64,
     governance_outbox_entries: Vec<GovernanceOutboxEntryV1>,
@@ -3407,6 +4722,20 @@ pub enum FinalizedProviderIngestError {
     #[error(transparent)]
     Storage(#[from] NodeStorageError),
 }
+
+/// Result of constructing a supervised finalized-ledger provider-ingest runtime.
+pub type FinalizedProviderIngestRuntimeResultV1<
+    Ledger,
+    Fetch,
+    Storage,
+    Builder,
+    Resolver,
+    Ingress,
+    Clock,
+> = Result<
+    ProviderIngestRuntimeV1<Ledger, Fetch, Storage, Builder, Resolver, Ingress, Clock>,
+    FinalizedProviderIngestError,
+>;
 
 /// Errors returned by the embedded admission-bound PDP provider service.
 #[derive(Debug, Error)]
@@ -3485,6 +4814,13 @@ pub enum NodeInitError {
         /// Configured checkpoint path.
         path: PathBuf,
         /// Validation or I/O diagnostic.
+        message: String,
+    },
+    /// The finalized-PoR replay archive is absent, unexpected, or no longer
+    /// matches its exact public deployment binding.
+    #[error("failed to qualify finalized PoR replay archive: {message}")]
+    PorReplayArchive {
+        /// Payload-free qualification diagnostic.
         message: String,
     },
     /// The durable native repair-transaction forwarder could not be opened or validated.
@@ -3617,6 +4953,18 @@ pub enum NodeInitError {
     PrivacyReleaseAnchorQualification {
         /// Stable payload-free qualification failure.
         error: TransparencyRuntimeProviderQualificationErrorV1,
+    },
+    /// The external transparency leader-lease provider failed exact qualification.
+    #[error("failed to qualify the SoraFS transparency leader-lease provider: {error}")]
+    TransparencyLeaderLeaseProviderQualification {
+        /// Stable payload-free qualification failure.
+        error: TransparencyLeaderLeaseErrorV1,
+    },
+    /// Enabled privacy publication lacks a stable public holder identity.
+    #[error("invalid SoraFS transparency leader-lease configuration: {message}")]
+    TransparencyLeaderLeaseConfiguration {
+        /// Stable non-secret configuration diagnostic.
+        message: &'static str,
     },
 }
 
@@ -4104,22 +5452,96 @@ impl NodeHandle {
             moderation_quarantine_key_wrapper,
             privacy_cycle_prf_provider,
             privacy_release_anchor,
+            transparency_leader_lease_provider,
+            fenced_transparency_publisher,
+            fenced_transparency_head_reader,
             governance_dag_signer,
+            governance_dag_checkpoint_store,
             provider_ingest_checkpoint_runtime,
+            por_finalized_replay_archive,
         } = runtime_deps;
+        if config.por_replay_archive_policy().is_some() && !config.enabled() {
+            return Err(NodeInitError::PorReplayArchive {
+                message: "configured archive requires enabled durable SoraFS storage".to_owned(),
+            });
+        }
+        let por_finalized_replay_archive = match (
+            config.por_replay_archive_policy(),
+            por_finalized_replay_archive,
+        ) {
+            (Some(policy), Some(archive)) => {
+                verify_por_replay_archive_provider(policy, archive.as_ref()).map_err(|_| {
+                    NodeInitError::PorReplayArchive {
+                        message:
+                            "runtime provider is unavailable, stale, substituted, or unqualified"
+                                .to_owned(),
+                    }
+                })?;
+                Some(OpaquePorFinalizedReplayArchive(archive))
+            }
+            (Some(_), None) => {
+                return Err(NodeInitError::PorReplayArchive {
+                    message: "configured archive runtime provider is missing".to_owned(),
+                });
+            }
+            (None, Some(_)) => {
+                return Err(NodeInitError::PorReplayArchive {
+                    message: "unrequested archive runtime provider was injected".to_owned(),
+                });
+            }
+            (None, None) => None,
+        };
         let governance_dir = config.governance_dir().cloned();
+        let privacy_publication_required = config.privacy_aggregate_schedule().is_some()
+            && config.privacy_aggregate_policy().is_some();
+        if privacy_publication_required && governance_dir.is_none() {
+            return Err(NodeInitError::GovernancePublisher(
+                "enabled privacy publication requires an explicit signed Governance DAG directory and complete runtime signer binding"
+                    .to_owned(),
+            ));
+        }
         let governance_dag_publisher_peer_id = config.governance_dag_publisher_peer_id().cloned();
         let governance_dag_signer_handle = config.governance_dag_signer_handle().cloned();
+        let governance_dag_signer_qualification = config.governance_dag_signer_qualification();
+        let governance_dag_checkpoint_store_handle =
+            config.governance_dag_checkpoint_store_handle().cloned();
+        let governance_dag_checkpoint_store_qualification =
+            config.governance_dag_checkpoint_store_qualification();
         let governance_dag_publisher_public_key_hex =
             config.governance_dag_publisher_public_key_hex().cloned();
+        if governance_dir.is_some() && !config.enabled() {
+            return Err(NodeInitError::GovernancePublisher(
+                "configured Governance DAG publication requires storage.enabled".to_owned(),
+            ));
+        }
+        let any_governance_dag_signer_binding = governance_dag_publisher_peer_id.is_some()
+            || governance_dag_signer_handle.is_some()
+            || governance_dag_signer_qualification.is_some()
+            || governance_dag_checkpoint_store_handle.is_some()
+            || governance_dag_checkpoint_store_qualification.is_some()
+            || governance_dag_publisher_public_key_hex.is_some();
+        if governance_dir.is_none()
+            && (any_governance_dag_signer_binding
+                || governance_dag_signer.is_some()
+                || governance_dag_checkpoint_store.is_some())
+        {
+            return Err(NodeInitError::GovernancePublisher(
+                "Governance DAG runtime providers are forbidden without a configured Governance DAG directory"
+                    .to_owned(),
+            ));
+        }
         if governance_dir.is_some()
             && (governance_dag_publisher_peer_id.is_none()
                 || governance_dag_signer_handle.is_none()
+                || governance_dag_signer_qualification.is_none()
+                || governance_dag_checkpoint_store_handle.is_none()
+                || governance_dag_checkpoint_store_qualification.is_none()
                 || governance_dag_publisher_public_key_hex.is_none()
-                || governance_dag_signer.is_none())
+                || governance_dag_signer.is_none()
+                || governance_dag_checkpoint_store.is_none())
         {
             return Err(NodeInitError::GovernancePublisher(
-                "configured Governance DAG publication requires peer id, signer handle, public key, and an injected runtime signer"
+                "configured Governance DAG publication requires peer id, signer handle, signer revision, signer policy digest, public key, an injected runtime signer, and an exact sealed producer checkpoint-store binding"
                     .to_owned(),
             ));
         }
@@ -4128,6 +5550,8 @@ impl NodeHandle {
                 .expect("configured Governance DAG peer id checked above");
             let handle = governance_dag_signer_handle
                 .expect("configured Governance DAG signer handle checked above");
+            let qualification = governance_dag_signer_qualification
+                .expect("configured Governance DAG signer qualification checked above");
             let public_key_hex = governance_dag_publisher_public_key_hex
                 .expect("configured Governance DAG public key checked above");
             if public_key_hex.len() != 64
@@ -4149,6 +5573,7 @@ impl NodeHandle {
                 handle,
                 peer_id.into_bytes(),
                 public_key,
+                qualification,
                 signer,
             )
             .map_err(|error| NodeInitError::GovernancePublisher(error.to_string()))?;
@@ -4156,6 +5581,21 @@ impl NodeHandle {
         } else {
             None
         };
+        let governance_dag_checkpoint_store_binding = if governance_dir.is_some() {
+            let provider = governance_dag_checkpoint_store
+                .expect("injected Governance DAG checkpoint store checked above");
+            let handle = governance_dag_checkpoint_store_handle
+                .expect("configured Governance DAG checkpoint-store handle checked above");
+            let qualification = governance_dag_checkpoint_store_qualification
+                .expect("configured Governance DAG checkpoint-store qualification checked above");
+            Some(
+                qualify_governance_dag_runtime_checkpoint_store(handle, qualification, provider)
+                    .map_err(|error| NodeInitError::GovernancePublisher(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let governance_publication_lock = governance_dir.as_ref().map(|_| Arc::new(Mutex::new(())));
         let moderation_screening_authority = if config.moderation_screening_enabled() {
             if !config.enabled() {
                 return Err(NodeInitError::ModerationScreeningAuthorityBundle {
@@ -4234,8 +5674,7 @@ impl NodeHandle {
             && config
                 .privacy_aggregate_policy()
                 .is_some_and(config::PrivacyAggregatePolicyConfig::requires_cycle_prf);
-        let privacy_release_anchor_required = config.privacy_aggregate_schedule().is_some()
-            && config.privacy_aggregate_policy().is_some();
+        let privacy_release_anchor_required = privacy_publication_required;
         let privacy_cycle_prf_provider = match (
             privacy_cycle_prf_required,
             config.privacy_cycle_prf_provider_binding().cloned(),
@@ -4291,6 +5730,118 @@ impl NodeHandle {
                 return Err(NodeInitError::PrivacyReleaseAnchorQualification {
                     error: TransparencyRuntimeProviderQualificationErrorV1::UnexpectedProvider,
                 });
+            }
+        };
+        let transparency_leader_lease_required = privacy_release_anchor_required;
+        if transparency_leader_lease_required
+            && (!config.enabled()
+                || config
+                    .provider_id()
+                    .is_none_or(|provider_id| provider_id.0 == [0; 32]))
+        {
+            return Err(NodeInitError::TransparencyLeaderLeaseConfiguration {
+                message: "enabled privacy publication requires storage.enabled and a nonzero provider_id",
+            });
+        }
+        let transparency_leader_lease_provider = match (
+            transparency_leader_lease_required,
+            config.privacy_leader_lease_provider_binding().cloned(),
+            transparency_leader_lease_provider,
+        ) {
+            (true, Some(binding), provider) => Some(Arc::new(
+                QualifiedTransparencyLeaderLeaseProviderV1::try_new(binding, provider, 0).map_err(
+                    |error| NodeInitError::TransparencyLeaderLeaseProviderQualification { error },
+                )?,
+            )),
+            (true, None, _) => {
+                return Err(
+                    NodeInitError::TransparencyLeaderLeaseProviderQualification {
+                        error: TransparencyRuntimeProviderQualificationErrorV1::MissingConfiguredBinding
+                            .into(),
+                    },
+                );
+            }
+            (false, None, None) => None,
+            (false, Some(_), _) => {
+                return Err(
+                    NodeInitError::TransparencyLeaderLeaseProviderQualification {
+                        error: TransparencyRuntimeProviderQualificationErrorV1::UnexpectedConfiguredBinding
+                            .into(),
+                    },
+                );
+            }
+            (false, None, Some(_)) => {
+                return Err(
+                    NodeInitError::TransparencyLeaderLeaseProviderQualification {
+                        error: TransparencyRuntimeProviderQualificationErrorV1::UnexpectedProvider
+                            .into(),
+                    },
+                );
+            }
+        };
+        let qualified_fenced_privacy_runtime = match (
+            privacy_publication_required,
+            config.privacy_fenced_publisher_binding().cloned(),
+            fenced_transparency_publisher,
+            fenced_transparency_head_reader,
+        ) {
+            (true, Some(binding), Some(publisher), Some(head_reader)) => {
+                let qualification = binding.qualification();
+                let qualification = GovernanceDagRuntimeProviderQualificationV1::new(
+                    qualification.revision(),
+                    qualification.policy_digest(),
+                );
+                let handle = binding.handle().to_owned();
+                let publisher = QualifiedFencedTransparencyPublisherV1::try_new(
+                    handle.clone(),
+                    qualification,
+                    publisher,
+                )
+                .map_err(|error| NodeInitError::GovernancePublisher(error.to_string()))?;
+                let head_reader = QualifiedFencedTransparencyHeadReaderV1::try_new(
+                    handle,
+                    qualification,
+                    head_reader,
+                )
+                .map_err(|error| NodeInitError::GovernancePublisher(error.to_string()))?;
+                Some((publisher, head_reader))
+            }
+            (true, None, _, _) => {
+                return Err(NodeInitError::GovernancePublisher(
+                    "enabled privacy publication requires an exact configured fused target binding"
+                        .to_owned(),
+                ));
+            }
+            (true, Some(_), None, _) => {
+                return Err(NodeInitError::GovernancePublisher(
+                    "enabled privacy publication requires an injected fused target writer"
+                        .to_owned(),
+                ));
+            }
+            (true, Some(_), Some(_), None) => {
+                return Err(NodeInitError::GovernancePublisher(
+                    "enabled privacy publication requires an injected authenticated authoritative-head reader"
+                        .to_owned(),
+                ));
+            }
+            (false, None, None, None) => None,
+            (false, Some(_), _, _) => {
+                return Err(NodeInitError::GovernancePublisher(
+                    "fused privacy publisher binding is unexpected while privacy publication is disabled"
+                        .to_owned(),
+                ));
+            }
+            (false, None, Some(_), _) => {
+                return Err(NodeInitError::GovernancePublisher(
+                    "fused privacy target writer is unexpected while privacy publication is disabled"
+                        .to_owned(),
+                ));
+            }
+            (false, None, None, Some(_)) => {
+                return Err(NodeInitError::GovernancePublisher(
+                    "fused privacy authoritative-head reader is unexpected while privacy publication is disabled"
+                        .to_owned(),
+                ));
             }
         };
         let reputation_trust_policy = config
@@ -4530,7 +6081,7 @@ impl NodeHandle {
             native_repair_singleflight::NativeRepairSingleflightV1::new(
                 repair_config.worker_concurrency(),
             );
-        let node = Self {
+        let mut node = Self {
             config,
             repair_config,
             gc_config,
@@ -4546,6 +6097,7 @@ impl NodeHandle {
             orderbook_transaction_forwarder,
             reserve_transaction_forwarder,
             provider_ingest_outbox,
+            por_finalized_replay_archive,
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
             pdp_provider,
@@ -4554,6 +6106,13 @@ impl NodeHandle {
             gc_eviction_audit_links: Arc::new(RwLock::new(BTreeMap::new())),
             repair_orchestrator: Arc::new(RwLock::new(None)),
             governance_publisher: Arc::new(RwLock::new(None)),
+            startup_governance_publisher: None,
+            governance_publication_lock: governance_publication_lock.clone(),
+            governance_runtime_root: None,
+            governance_runtime_root_guard: None,
+            governance_dag_runtime_signer: governance_dag_runtime_binding.clone(),
+            governance_dag_runtime_checkpoint_store: governance_dag_checkpoint_store_binding
+                .clone(),
             governance_outbox: Arc::new(RwLock::new(GovernanceOutboxRuntime::default())),
             governance_outbox_drain_lock: Arc::new(Mutex::new(())),
             runtime_mutation_lock: Arc::new(Mutex::new(())),
@@ -4601,6 +6160,14 @@ impl NodeHandle {
             privacy_cycle_prf_provider: privacy_cycle_prf_provider
                 .map(OpaquePrivacyCyclePrfProvider),
             privacy_release_anchor: privacy_release_anchor.map(OpaquePrivacyReleaseAnchor),
+            transparency_leader_lease_provider: transparency_leader_lease_provider
+                .map(OpaqueTransparencyLeaderLeaseProvider),
+            fenced_transparency_publisher: qualified_fenced_privacy_runtime
+                .as_ref()
+                .map(|(publisher, _)| publisher.clone()),
+            fenced_transparency_head_reader: qualified_fenced_privacy_runtime
+                .as_ref()
+                .map(|(_, reader)| reader.clone()),
             published_evidence_viewer_audit_cycles: Arc::new(RwLock::new(BTreeSet::new())),
         };
 
@@ -4619,6 +6186,55 @@ impl NodeHandle {
                 }
                 None => unreachable!("storage-backed node must inspect runtime checkpoints"),
             }
+            if let Some(policy) = node.config.por_replay_archive_policy() {
+                let archive = node
+                    .por_finalized_replay_archive
+                    .as_ref()
+                    .expect("configured replay archive was qualified before state opened");
+                verify_por_replay_archive_provider(policy, archive.0.as_ref()).map_err(|_| {
+                    NodeInitError::PorReplayArchive {
+                        message:
+                            "restored replay-archive provider is unavailable or no longer exact"
+                                .to_owned(),
+                    }
+                })?;
+                let previous_por = node.por.checkpoint();
+                let reconciled = node
+                    .por
+                    .reconcile_restored_replay_archive_head(
+                        archive.0.as_ref(),
+                        policy.binding(),
+                        policy.proof_bounds(),
+                    )
+                    .map_err(|_| NodeInitError::PorReplayArchive {
+                        message:
+                            "restored replay-archive head is stale, forked, or unauthenticated"
+                                .to_owned(),
+                    })?;
+                if verify_por_replay_archive_provider(policy, archive.0.as_ref()).is_err() {
+                    node.por.restore_checkpoint(previous_por).map_err(|_| {
+                        NodeInitError::PorReplayArchive {
+                            message: "failed to restore local PoR state after replay-archive provider drift"
+                                .to_owned(),
+                        }
+                    })?;
+                    return Err(NodeInitError::PorReplayArchive {
+                        message:
+                            "restored replay-archive provider drifted during startup reconciliation"
+                                .to_owned(),
+                    });
+                }
+                if reconciled {
+                    let path = node
+                        .auxiliary_runtime_checkpoint_path
+                        .as_ref()
+                        .expect("storage-backed node has an auxiliary checkpoint path");
+                    node.persist_auxiliary_runtime_checkpoint_unlocked()
+                        .map_err(|error| {
+                            NodeInitError::checkpoint("reconciled auxiliary runtime", path, error)
+                        })?;
+                }
+            }
             node.reconcile_gc_eviction_intents_on_startup()
                 .map_err(|err| {
                     NodeInitError::checkpoint(
@@ -4629,42 +6245,73 @@ impl NodeHandle {
                         err,
                     )
                 })?;
+            node.reconcile_privacy_release_anchor()
+                .map_err(|error| NodeInitError::Checkpoint {
+                    component: "privacy release anchor",
+                    path: crate::auxiliary_runtime_checkpoint_path(node.config.data_dir()),
+                    message: error.to_string(),
+                })?;
             // PDP and PoTR handoffs intentionally remain durable here. Repair-required
             // records need Torii's chain-authoritative transaction adapter; NodeHandle
             // must not fabricate a local receipt or make restart depend on that adapter.
             // The supervised Torii repair forwarder resumes each protocol on its first
             // immediate scan and once per subsequent scan.
             if let Some(dir) = governance_dir.clone() {
+                let publication_lock = governance_publication_lock
+                    .as_ref()
+                    .expect("configured Governance DAG has a publication lock");
+                let mut publisher = FilesystemGovernancePublisher::try_new_with_publication_lock(
+                    dir.clone(),
+                    Arc::clone(publication_lock),
+                )
+                .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
                 let signer = governance_dag_runtime_binding
-                    .expect("configured Governance DAG dependencies qualified above");
+                    .expect("configured Governance DAG signer was qualified before state opened");
+                let checkpoint_store = governance_dag_checkpoint_store_binding.expect(
+                    "configured Governance DAG checkpoint store was qualified before state opened",
+                );
                 signer
                     .assert_qualification()
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
-                let publisher = FilesystemGovernancePublisher::try_new(dir.clone())
+                checkpoint_store
+                    .assert_qualification()
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
-                let publisher = publisher
-                    .with_qualified_runtime_dag_signer_provider(signer)
+                publisher = publisher
+                    .with_qualified_runtime_dag_providers(signer, checkpoint_store)
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
+                node.governance_runtime_root = Some(publisher.root().to_path_buf());
+                node.governance_runtime_root_guard = Some(publisher.root_guard().clone());
+                if let Some((fenced_publisher, fenced_head_reader)) =
+                    qualified_fenced_privacy_runtime
+                {
+                    publisher = publisher
+                        .with_qualified_fenced_privacy_publisher(fenced_publisher)
+                        .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?
+                        .with_qualified_fenced_privacy_head_reader(fenced_head_reader)
+                        .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
+                }
                 iroha_logger::info!(
                     path = ?dir,
-                    signed_runtime_dag = true,
+                    signed_runtime_dag = governance_dir.is_some(),
+                    fused_privacy_target = privacy_publication_required,
                     "SoraFS governance publisher initialised"
                 );
-                node.try_set_governance_publisher(Arc::new(publisher))
+                node.install_startup_governance_publisher(Arc::new(publisher))
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
             }
-        } else if governance_dir.is_some() {
-            iroha_logger::warn!(
-                "skipping governance publisher initialisation: storage backend disabled"
-            );
+        } else {
+            if governance_dir.is_some() {
+                iroha_logger::warn!(
+                    "skipping governance publisher initialisation: storage backend disabled"
+                );
+            }
+            node.reconcile_privacy_release_anchor()
+                .map_err(|error| NodeInitError::Checkpoint {
+                    component: "privacy release anchor",
+                    path: crate::auxiliary_runtime_checkpoint_path(node.config.data_dir()),
+                    message: error.to_string(),
+                })?;
         }
-
-        node.reconcile_privacy_release_anchor()
-            .map_err(|error| NodeInitError::Checkpoint {
-                component: "privacy release anchor",
-                path: crate::auxiliary_runtime_checkpoint_path(node.config.data_dir()),
-                message: error.to_string(),
-            })?;
         Ok(node)
     }
 
@@ -5461,10 +7108,38 @@ impl NodeHandle {
             .and_then(|guard| guard.clone())
     }
 
+    fn install_startup_governance_publisher(
+        &mut self,
+        publisher: Arc<dyn GovernancePublisher>,
+    ) -> Result<(), GovernancePublishError> {
+        if self.startup_governance_publisher.is_some() {
+            return Err(GovernancePublishError::other(
+                "startup Governance publisher is already installed",
+            ));
+        }
+        let mut active = self
+            .governance_publisher
+            .write()
+            .map_err(|_| GovernancePublishError::other("governance publisher lock poisoned"))?;
+        if active.is_some() {
+            return Err(GovernancePublishError::other(
+                "a Governance publisher was installed before startup pinning completed",
+            ));
+        }
+        *active = Some(Arc::clone(&publisher));
+        drop(active);
+        self.startup_governance_publisher = Some(publisher);
+        self.flush_governance_outbox()?;
+        Ok(())
+    }
+
     /// Register the governance publisher used to surface settlement artefacts.
+    ///
+    /// Nodes configured with a signed filesystem publisher pin that exact
+    /// instance during startup and reject later replacement.
     pub fn set_governance_publisher(&self, publisher: Arc<dyn GovernancePublisher>) {
         if let Err(err) = self.try_set_governance_publisher(publisher) {
-            iroha_logger::error!(%err, "failed to drain SoraFS governance outbox after publisher registration");
+            iroha_logger::error!(%err, "failed to register SoraFS governance publisher");
         }
     }
 
@@ -5472,12 +7147,31 @@ impl NodeHandle {
     ///
     /// # Errors
     ///
-    /// Returns an error if the publisher lock is poisoned or a pending artifact
-    /// cannot be published and durably acknowledged.
+    /// Returns an error if startup pinned a different publisher, the publisher
+    /// lock is poisoned, or a pending artifact cannot be published and durably
+    /// acknowledged.
     pub fn try_set_governance_publisher(
         &self,
         publisher: Arc<dyn GovernancePublisher>,
     ) -> Result<(), GovernancePublishError> {
+        if let Some(pinned) = self.startup_governance_publisher.as_ref() {
+            let active = self
+                .governance_publisher
+                .read()
+                .map_err(|_| GovernancePublishError::other("governance publisher lock poisoned"))?;
+            if !Arc::ptr_eq(pinned, &publisher)
+                || active
+                    .as_ref()
+                    .is_none_or(|candidate| !Arc::ptr_eq(candidate, pinned))
+            {
+                return Err(GovernancePublishError::other(
+                    "startup-installed signed Governance publisher cannot be replaced",
+                ));
+            }
+            drop(active);
+            self.flush_governance_outbox()?;
+            return Ok(());
+        }
         *self
             .governance_publisher
             .write()
@@ -5487,11 +7181,35 @@ impl NodeHandle {
         Ok(())
     }
 
-    /// Remove any configured governance publisher.
+    /// Remove any unpinned governance publisher.
+    ///
+    /// Startup-installed signed publishers cannot be cleared; use
+    /// [`Self::try_clear_governance_publisher`] when the caller needs the
+    /// explicit failure.
     pub fn clear_governance_publisher(&self) {
-        if let Ok(mut guard) = self.governance_publisher.write() {
-            *guard = None;
+        if let Err(err) = self.try_clear_governance_publisher() {
+            iroha_logger::error!(%err, "failed to clear SoraFS governance publisher");
         }
+    }
+
+    /// Remove an unpinned governance publisher.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a signed startup publisher is pinned or the active
+    /// publisher lock is poisoned.
+    pub fn try_clear_governance_publisher(&self) -> Result<(), GovernancePublishError> {
+        if self.startup_governance_publisher.is_some() {
+            return Err(GovernancePublishError::other(
+                "startup-installed signed Governance publisher cannot be cleared",
+            ));
+        }
+        *self
+            .governance_publisher
+            .write()
+            .map_err(|_| GovernancePublishError::other("governance publisher lock poisoned"))? =
+            None;
+        Ok(())
     }
 
     /// Return whether this node currently has a governance publisher configured.
@@ -5771,6 +7489,263 @@ impl NodeHandle {
             .map_or(0, |outbox| outbox.entries.len())
     }
 
+    fn privacy_leader_lease_scope(
+        &self,
+        query_id: [u8; 32],
+        window: PrivacyAggregateCycleWindow,
+    ) -> Result<TransparencyLeaderLeaseScopeV1, GovernancePublishError> {
+        let holder_identity = self.config.provider_id().ok_or_else(|| {
+            GovernancePublishError::other(
+                "privacy leader lease requires a configured public provider identity",
+            )
+        })?;
+        TransparencyLeaderLeaseScopeV1::try_new(query_id, window, holder_identity.0).map_err(
+            |error| {
+                GovernancePublishError::other(format!("build privacy leader-lease scope: {error}"))
+            },
+        )
+    }
+
+    fn acquire_privacy_leader_lease(
+        &self,
+        query_id: [u8; 32],
+        window: PrivacyAggregateCycleWindow,
+        observed_at_unix: u64,
+    ) -> Result<TransparencyLeaderLeaseGrantV1, GovernancePublishError> {
+        let provider = self
+            .transparency_leader_lease_provider
+            .as_ref()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "qualified transparency leader-lease provider is unavailable",
+                )
+            })?;
+        let scope = self.privacy_leader_lease_scope(query_id, window)?;
+        let lease_ttl = self
+            .configured_privacy_aggregate_schedule()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "privacy leader lease requires the configured publication cadence",
+                )
+            })?
+            .cycle_seconds;
+        let expires_at_unix = observed_at_unix
+            .checked_add(lease_ttl)
+            .ok_or_else(|| GovernancePublishError::other("privacy leader-lease expiry overflow"))?;
+        let grant = provider
+            .0
+            .acquire(scope, observed_at_unix, expires_at_unix)
+            .map_err(|error| {
+                GovernancePublishError::other(format!("acquire transparency leader lease: {error}"))
+            })?;
+
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        if let Err(error) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            self.mark_durability_unhealthy(format!(
+                "failed to durably checkpoint transparency leader-lease fencing floor: {error}"
+            ));
+            return Err(GovernancePublishError::other(format!(
+                "durably checkpoint transparency leader-lease fencing floor: {error}"
+            )));
+        }
+        drop(checkpoint_guard);
+        let validated = provider
+            .0
+            .validate_for_use(scope, observed_at_unix)
+            .map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "validate acquired transparency leader lease: {error}"
+                ))
+            })?;
+        if validated != grant {
+            return Err(GovernancePublishError::other(
+                "validated transparency leader lease changed after durable checkpoint",
+            ));
+        }
+        Ok(grant)
+    }
+
+    fn validate_privacy_leader_lease_for_use(
+        &self,
+        scope: TransparencyLeaderLeaseScopeV1,
+        observed_at_unix: u64,
+        grant: &TransparencyLeaderLeaseGrantV1,
+    ) -> Result<(), GovernancePublishError> {
+        let provider = self
+            .transparency_leader_lease_provider
+            .as_ref()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "qualified transparency leader-lease provider is unavailable",
+                )
+            })?;
+        let validated = provider
+            .0
+            .validate_for_use(scope, observed_at_unix)
+            .map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "validate transparency leader lease for use: {error}"
+                ))
+            })?;
+        if &validated != grant {
+            return Err(GovernancePublishError::other(
+                "active transparency leader lease differs from the retained grant",
+            ));
+        }
+        Ok(())
+    }
+
+    fn release_privacy_leader_lease(
+        &self,
+        grant: &TransparencyLeaderLeaseGrantV1,
+        observed_at_unix: u64,
+    ) -> Result<(), GovernancePublishError> {
+        self.transparency_leader_lease_provider
+            .as_ref()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "qualified transparency leader-lease provider is unavailable",
+                )
+            })?
+            .0
+            .release(grant.scope(), observed_at_unix)
+            .map(|_| ())
+            .map_err(|error| {
+                GovernancePublishError::other(format!("release transparency leader lease: {error}"))
+            })
+    }
+
+    fn with_privacy_leader_lease<T>(
+        &self,
+        query_id: [u8; 32],
+        window: PrivacyAggregateCycleWindow,
+        observed_at_unix: u64,
+        operation: impl FnOnce(&TransparencyLeaderLeaseGrantV1) -> Result<T, GovernancePublishError>,
+    ) -> Result<T, GovernancePublishError> {
+        let grant = self.acquire_privacy_leader_lease(query_id, window, observed_at_unix)?;
+        let result = operation(&grant);
+        let release = self.release_privacy_leader_lease(&grant, observed_at_unix);
+        match (result, release) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Err(error), Err(release_error)) => Err(GovernancePublishError::other(format!(
+                "{error}; additionally failed to release transparency leader lease: {release_error}"
+            ))),
+        }
+    }
+
+    fn privacy_leader_lease_scope_for_outbox_entry(
+        &self,
+        entry: &GovernanceOutboxEntryV1,
+    ) -> Result<Option<TransparencyLeaderLeaseScopeV1>, GovernancePublishError> {
+        if entry.kind != GovernanceOutboxKindV1::TransparencyLedgerPublication {
+            return Ok(None);
+        }
+        let publication = decode_canonical_governance_payload::<ModerationLedgerCyclePublicationV1>(
+            &entry.payload_bytes,
+        )?;
+        if publication.privacy_aggregates.is_empty() {
+            return Ok(None);
+        }
+        let release_ledger = self
+            .privacy_release_ledger
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?;
+        let record = release_ledger
+            .records
+            .iter()
+            .find(|record| record.release_id == publication.block.cycle_id);
+        #[cfg(test)]
+        if record.is_none() && self.config.privacy_aggregate_policy().is_none() {
+            return Ok(None);
+        }
+        let record = record.ok_or_else(|| {
+            GovernancePublishError::other(
+                "privacy publication outbox entry has no durable release record",
+            )
+        })?;
+        if record.status != transparency::PrivacyReleaseStatusV1::Published
+            || record.publication_payload_digest != Some(entry.payload_digest)
+        {
+            return Err(GovernancePublishError::other(
+                "privacy publication outbox entry does not match its durable release record",
+            ));
+        }
+        self.privacy_leader_lease_scope(
+            record.query_id,
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix: record.cycle_start_unix,
+                cycle_end_unix: record.cycle_end_unix,
+                due_at_unix: record.due_at_unix,
+            },
+        )
+        .map(Some)
+    }
+
+    fn privacy_publication_authorization_for_outbox_entry(
+        &self,
+        entry: &GovernanceOutboxEntryV1,
+        grant: &TransparencyLeaderLeaseGrantV1,
+    ) -> Result<PrivacyPublicationAuthorizationV1, GovernancePublishError> {
+        validate_governance_outbox_entry(entry)?;
+        let publication = decode_canonical_governance_payload::<ModerationLedgerCyclePublicationV1>(
+            &entry.payload_bytes,
+        )?;
+        if publication.privacy_aggregates.is_empty() {
+            return Err(GovernancePublishError::other(
+                "privacy publication authorization requires a privacy aggregate payload",
+            ));
+        }
+        let release_ledger = self
+            .privacy_release_ledger
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?
+            .clone();
+        release_ledger.validate().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "invalid durable privacy release ledger: {error}"
+            ))
+        })?;
+        let release = release_ledger
+            .records
+            .iter()
+            .find(|record| record.release_id == publication.block.cycle_id)
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "privacy publication outbox entry has no durable release record",
+                )
+            })?;
+        let local_head = release_ledger.head(release.query_id).map_err(|error| {
+            GovernancePublishError::other(format!(
+                "privacy release ledger does not have a canonical head: {error}"
+            ))
+        })?;
+        let anchor = self.privacy_release_anchor.as_deref().ok_or_else(|| {
+            GovernancePublishError::other("finalized privacy release anchor is unavailable")
+        })?;
+        let finalized = anchor.finalized_head(release.query_id).map_err(|error| {
+            GovernancePublishError::other(format!(
+                "read finalized privacy release anchor before publication: {error}"
+            ))
+        })?;
+        if finalized != local_head {
+            return Err(GovernancePublishError::other(
+                "privacy publication release chain is not exactly finalized",
+            ));
+        }
+        let authorization = PrivacyPublicationAuthorizationV1::try_new(
+            grant,
+            finalized,
+            release,
+            entry.payload_digest,
+        )?;
+        authorization.validate_publication(&publication, &entry.payload_bytes)?;
+        Ok(authorization)
+    }
+
     /// Publish and durably acknowledge all queued governance artifacts.
     ///
     /// Publication is at-least-once. Publishers must therefore treat identical
@@ -5781,6 +7756,14 @@ impl NodeHandle {
     /// Returns an error if publication fails, the outbox is corrupt, or its
     /// acknowledgement checkpoint cannot be committed safely.
     pub fn flush_governance_outbox(&self) -> Result<usize, GovernancePublishError> {
+        self.flush_governance_outbox_at(unix_now_secs(), None)
+    }
+
+    fn flush_governance_outbox_at(
+        &self,
+        observed_at_unix: u64,
+        retained_lease: Option<&TransparencyLeaderLeaseGrantV1>,
+    ) -> Result<usize, GovernancePublishError> {
         let _drain_guard = self
             .governance_outbox_drain_lock
             .lock()
@@ -5802,7 +7785,37 @@ impl NodeHandle {
             else {
                 return Ok(published);
             };
-            publish_governance_outbox_entry(publisher.as_ref(), &entry)?;
+            if let Some(scope) = self.privacy_leader_lease_scope_for_outbox_entry(&entry)? {
+                if let Some(grant) = retained_lease.filter(|grant| grant.scope() == scope) {
+                    self.validate_privacy_leader_lease_for_use(scope, observed_at_unix, grant)?;
+                    let authorization =
+                        self.privacy_publication_authorization_for_outbox_entry(&entry, grant)?;
+                    publish_governance_outbox_entry(
+                        publisher.as_ref(),
+                        &entry,
+                        Some(&authorization),
+                    )?;
+                } else {
+                    self.with_privacy_leader_lease(
+                        scope.query_id(),
+                        scope.window(),
+                        observed_at_unix,
+                        |grant| {
+                            let authorization = self
+                                .privacy_publication_authorization_for_outbox_entry(
+                                    &entry, grant,
+                                )?;
+                            publish_governance_outbox_entry(
+                                publisher.as_ref(),
+                                &entry,
+                                Some(&authorization),
+                            )
+                        },
+                    )?;
+                }
+            } else {
+                publish_governance_outbox_entry(publisher.as_ref(), &entry, None)?;
+            }
 
             let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
                 GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
@@ -6124,7 +8137,11 @@ impl NodeHandle {
         Ok(())
     }
 
-    /// Publish a typed SoraFS transparency ledger cycle to the governance pipeline.
+    /// Publish a typed non-privacy SoraFS transparency ledger cycle.
+    ///
+    /// Privacy aggregate cycles must use the finalized release scheduler so
+    /// durable mutation, anchor advancement, publication, and retry all carry
+    /// the same externally fenced leader lease.
     pub fn publish_transparency_ledger_publication(
         &self,
         publication: ModerationLedgerCyclePublicationV1,
@@ -6132,6 +8149,11 @@ impl NodeHandle {
         publication.validate().map_err(|err| {
             GovernancePublishError::other(format!("invalid transparency ledger publication: {err}"))
         })?;
+        if !publication.privacy_aggregates.is_empty() {
+            return Err(GovernancePublishError::other(
+                "privacy transparency publication must use the finalized release scheduler and its exact live leader lease",
+            ));
+        }
         let encoded = norito::to_bytes(&publication).map_err(|err| {
             GovernancePublishError::other(format!("encode transparency ledger publication: {err}"))
         })?;
@@ -6596,6 +8618,14 @@ impl NodeHandle {
     }
 
     fn reconcile_privacy_release_anchor(&self) -> Result<(), GovernancePublishError> {
+        self.reconcile_privacy_release_anchor_at(unix_now_secs(), None)
+    }
+
+    fn reconcile_privacy_release_anchor_at(
+        &self,
+        observed_at_unix: u64,
+        retained_lease: Option<&TransparencyLeaderLeaseGrantV1>,
+    ) -> Result<(), GovernancePublishError> {
         let policy = self.config.privacy_aggregate_policy();
         let schedule = self.configured_privacy_aggregate_schedule();
         let release_ledger = self
@@ -6711,23 +8741,39 @@ impl NodeHandle {
                 }
             }
             let next = PrivacyReleaseAnchorHeadV1::from_record(record);
-            anchor
-                .compare_and_set_finalized_head(finalized, next)
-                .map_err(|error| {
+            let window = PrivacyAggregateCycleWindow {
+                cycle_start_unix: record.cycle_start_unix,
+                cycle_end_unix: record.cycle_end_unix,
+                due_at_unix: record.due_at_unix,
+            };
+            let scope = self.privacy_leader_lease_scope(query_id, window)?;
+            let advance = |grant: &TransparencyLeaderLeaseGrantV1| {
+                self.validate_privacy_leader_lease_for_use(scope, observed_at_unix, grant)?;
+                anchor
+                    .compare_and_set_finalized_head(finalized, next, grant)
+                    .map_err(|error| {
+                        GovernancePublishError::other(format!(
+                            "advance finalized privacy release anchor: {error}"
+                        ))
+                    })?;
+                let observed = anchor.finalized_head(query_id).map_err(|error| {
                     GovernancePublishError::other(format!(
-                        "advance finalized privacy release anchor: {error}"
+                        "confirm finalized privacy release anchor: {error}"
                     ))
                 })?;
-            let observed = anchor.finalized_head(query_id).map_err(|error| {
-                GovernancePublishError::other(format!(
-                    "confirm finalized privacy release anchor: {error}"
-                ))
-            })?;
-            if observed != next {
-                return Err(GovernancePublishError::other(
-                    "finalized privacy release anchor did not confirm the exact committed head",
-                ));
-            }
+                if observed != next {
+                    return Err(GovernancePublishError::other(
+                        "finalized privacy release anchor did not confirm the exact committed head",
+                    ));
+                }
+                Ok(observed)
+            };
+            let observed =
+                if let Some(grant) = retained_lease.filter(|grant| grant.scope() == scope) {
+                    advance(grant)?
+                } else {
+                    self.with_privacy_leader_lease(query_id, window, observed_at_unix, advance)?
+                };
             finalized = observed;
         }
         Ok(())
@@ -6815,7 +8861,16 @@ impl NodeHandle {
             previous_block_hash,
             aggregates,
         )?;
-        self.publish_transparency_ledger_publication(publication.clone())?;
+        let encoded = norito::to_bytes(&publication).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "encode test-only privacy aggregate publication: {err}"
+            ))
+        })?;
+        self.enqueue_governance_outbox(
+            GovernanceOutboxKindV1::TransparencyLedgerPublication,
+            encoded,
+        )?;
+        self.flush_governance_outbox()?;
         Ok(publication)
     }
 
@@ -7039,7 +9094,8 @@ impl NodeHandle {
                 "finalized privacy release anchor is unavailable",
             ));
         }
-        self.reconcile_privacy_release_anchor()?;
+        self.reconcile_privacy_release_anchor_at(now_unix, None)?;
+        self.flush_governance_outbox_at(now_unix, None)?;
         let request_digest =
             privacy_publish_request_digest(config.query_id, &idempotency_key, expected_cycle_id);
         let head = release_ledger.head(config.query_id).map_err(|error| {
@@ -7092,7 +9148,7 @@ impl NodeHandle {
                     )
                 })?;
             validate_privacy_publish_receipt_release(&receipt, record)?;
-            self.flush_governance_outbox()?;
+            self.flush_governance_outbox_at(now_unix, None)?;
             return receipt.outcome();
         }
         if cycle_id != expected_cycle_id {
@@ -7127,128 +9183,145 @@ impl NodeHandle {
                 "privacy aggregate published-cycle retention exhausted (limit {state_limit})"
             )));
         }
-        let events = self
-            .privacy_aggregate_source_events
-            .read()
-            .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?
-            .values()
-            .filter(|event| {
-                event.occurred_at_unix >= window.cycle_start_unix
-                    && event.occurred_at_unix < window.cycle_end_unix
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let private_source_digest = transparency::canonical_private_source_digest(
-            window.cycle_start_unix,
-            window.cycle_end_unix,
-            &config,
-            &events,
-        )
-        .map_err(|error| {
-            GovernancePublishError::other(format!(
-                "digest scheduled privacy aggregate source: {error}"
-            ))
-        })?;
-        let cycle_prf_input = self.derive_privacy_cycle_prf_input(&config, window)?;
-        let prf_evidence = cycle_prf_input.as_ref().map(|input| {
-            (
-                input.request().binding_digest(),
-                input.commitment().commitment,
+        self.with_privacy_leader_lease(config.query_id, window, now_unix, |leader_lease| {
+            let events = self
+                .privacy_aggregate_source_events
+                .read()
+                .map_err(|_| {
+                    GovernancePublishError::other("privacy aggregate event index poisoned")
+                })?
+                .values()
+                .filter(|event| {
+                    event.occurred_at_unix >= window.cycle_start_unix
+                        && event.occurred_at_unix < window.cycle_end_unix
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let private_source_digest = transparency::canonical_private_source_digest(
+                window.cycle_start_unix,
+                window.cycle_end_unix,
+                &config,
+                &events,
             )
-        });
-        let aggregates = match transparency::build_privacy_aggregates_from_source_events(
-            window.cycle_start_unix,
-            window.cycle_end_unix,
-            &config,
-            cycle_prf_input,
-            &events,
-        ) {
-            Ok(aggregates) => aggregates,
-            Err(
-                transparency::PrivacyAggregateWorkerError::AllBucketsSuppressed
-                | transparency::PrivacyAggregateWorkerError::NoSourceEvents,
-            ) => {
-                let receipt = PrivacyPublishRequestReceiptV1 {
-                    idempotency_key,
-                    request_digest,
-                    query_id: config.query_id,
-                    requested_now_unix: now_unix,
-                    cycle_id,
-                    cycle_start_unix: window.cycle_start_unix,
-                    cycle_end_unix: window.cycle_end_unix,
-                    publish_delay_seconds: schedule.publish_delay_seconds,
-                    due_at_unix: window.due_at_unix,
-                    outcome: PrivacyPublishRequestOutcomeV1::AllBucketsSuppressed,
-                };
-                self.commit_processed_privacy_cycle(
-                    cycle_id,
+            .map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "digest scheduled privacy aggregate source: {error}"
+                ))
+            })?;
+            let cycle_prf_input = self.derive_privacy_cycle_prf_input(&config, window)?;
+            let prf_evidence = cycle_prf_input.as_ref().map(|input| {
+                (
+                    input.request().binding_digest(),
+                    input.commitment().commitment,
+                )
+            });
+            let aggregates = match transparency::build_privacy_aggregates_from_source_events(
+                window.cycle_start_unix,
+                window.cycle_end_unix,
+                &config,
+                cycle_prf_input,
+                &events,
+            ) {
+                Ok(aggregates) => aggregates,
+                Err(
+                    transparency::PrivacyAggregateWorkerError::AllBucketsSuppressed
+                    | transparency::PrivacyAggregateWorkerError::NoSourceEvents,
+                ) => {
+                    let receipt = PrivacyPublishRequestReceiptV1 {
+                        idempotency_key,
+                        request_digest,
+                        query_id: config.query_id,
+                        requested_now_unix: now_unix,
+                        cycle_id,
+                        cycle_start_unix: window.cycle_start_unix,
+                        cycle_end_unix: window.cycle_end_unix,
+                        publish_delay_seconds: schedule.publish_delay_seconds,
+                        due_at_unix: window.due_at_unix,
+                        outcome: PrivacyPublishRequestOutcomeV1::AllBucketsSuppressed,
+                    };
+                    self.commit_processed_privacy_cycle(
+                        SuppressedPrivacyCycleCommitInput {
+                            cycle_id,
+                            window,
+                            config: &config,
+                            private_source_digest,
+                            previous_publication_block_hash: head.latest_publication_block_hash(),
+                            request_receipt: receipt,
+                        },
+                        leader_lease,
+                        now_unix,
+                    )?;
+                    return Ok(PrivacyAggregateScheduleOutcome::AllBucketsSuppressed {
+                        window,
+                        cycle_id,
+                    });
+                }
+                Err(err) => {
+                    return Err(GovernancePublishError::other(format!(
+                        "build scheduled privacy aggregate cycle: {err}"
+                    )));
+                }
+            };
+            let publication = Self::build_privacy_aggregate_publication(
+                cycle_id,
+                window.cycle_start_unix,
+                window.cycle_end_unix,
+                window.cycle_end_unix,
+                head.latest_publication_block_hash(),
+                aggregates,
+            )?;
+            let publication_bytes = norito::to_bytes(&publication).map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "encode privacy publication idempotency receipt: {err}"
+                ))
+            })?;
+            let receipt = PrivacyPublishRequestReceiptV1 {
+                idempotency_key,
+                request_digest,
+                query_id: config.query_id,
+                requested_now_unix: now_unix,
+                cycle_id,
+                cycle_start_unix: window.cycle_start_unix,
+                cycle_end_unix: window.cycle_end_unix,
+                publish_delay_seconds: schedule.publish_delay_seconds,
+                due_at_unix: window.due_at_unix,
+                outcome: PrivacyPublishRequestOutcomeV1::Published { publication_bytes },
+            };
+            self.commit_published_privacy_cycle(
+                PublishedPrivacyCycleCommitInput {
                     window,
-                    &config,
+                    publication: &publication,
+                    config: &config,
                     private_source_digest,
-                    head.latest_publication_block_hash(),
-                    receipt,
-                )?;
-                return Ok(PrivacyAggregateScheduleOutcome::AllBucketsSuppressed {
-                    window,
-                    cycle_id,
-                });
-            }
-            Err(err) => {
-                return Err(GovernancePublishError::other(format!(
-                    "build scheduled privacy aggregate cycle: {err}"
-                )));
-            }
-        };
-        let publication = Self::build_privacy_aggregate_publication(
-            cycle_id,
-            window.cycle_start_unix,
-            window.cycle_end_unix,
-            window.cycle_end_unix,
-            head.latest_publication_block_hash(),
-            aggregates,
-        )?;
-        let publication_bytes = norito::to_bytes(&publication).map_err(|err| {
-            GovernancePublishError::other(format!(
-                "encode privacy publication idempotency receipt: {err}"
-            ))
-        })?;
-        let receipt = PrivacyPublishRequestReceiptV1 {
-            idempotency_key,
-            request_digest,
-            query_id: config.query_id,
-            requested_now_unix: now_unix,
-            cycle_id,
-            cycle_start_unix: window.cycle_start_unix,
-            cycle_end_unix: window.cycle_end_unix,
-            publish_delay_seconds: schedule.publish_delay_seconds,
-            due_at_unix: window.due_at_unix,
-            outcome: PrivacyPublishRequestOutcomeV1::Published { publication_bytes },
-        };
-        self.commit_published_privacy_cycle(
-            window,
-            &publication,
-            &config,
-            private_source_digest,
-            prf_evidence,
-            composition_budget,
-            receipt,
-        )?;
-        Ok(PrivacyAggregateScheduleOutcome::Published {
-            window,
-            publication,
+                    prf_evidence,
+                    composition_budget,
+                    request_receipt: receipt,
+                },
+                leader_lease,
+                now_unix,
+            )?;
+            Ok(PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            })
         })
     }
 
     fn commit_published_privacy_cycle(
         &self,
-        window: PrivacyAggregateCycleWindow,
-        publication: &ModerationLedgerCyclePublicationV1,
-        config: &PrivacyAggregateCycleConfig,
-        private_source_digest: [u8; 32],
-        prf_evidence: Option<([u8; 32], [u8; 32])>,
-        composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
-        request_receipt: PrivacyPublishRequestReceiptV1,
+        input: PublishedPrivacyCycleCommitInput<'_>,
+        leader_lease: &TransparencyLeaderLeaseGrantV1,
+        observed_at_unix: u64,
     ) -> Result<(), GovernancePublishError> {
+        let PublishedPrivacyCycleCommitInput {
+            window,
+            publication,
+            config,
+            private_source_digest,
+            prf_evidence,
+            composition_budget,
+            request_receipt,
+        } = input;
         publication.validate().map_err(|err| {
             GovernancePublishError::other(format!(
                 "invalid scheduled privacy aggregate publication: {err}"
@@ -7489,8 +9562,8 @@ impl NodeHandle {
             return Err(GovernancePublishError::other(err.to_string()));
         }
         drop(checkpoint_guard);
-        self.reconcile_privacy_release_anchor()?;
-        self.flush_governance_outbox()?;
+        self.reconcile_privacy_release_anchor_at(observed_at_unix, Some(leader_lease))?;
+        self.flush_governance_outbox_at(observed_at_unix, Some(leader_lease))?;
         Ok(())
     }
 
@@ -7542,13 +9615,18 @@ impl NodeHandle {
 
     fn commit_processed_privacy_cycle(
         &self,
-        cycle_id: [u8; 16],
-        window: PrivacyAggregateCycleWindow,
-        config: &PrivacyAggregateCycleConfig,
-        private_source_digest: [u8; 32],
-        previous_publication_block_hash: Option<[u8; 32]>,
-        request_receipt: PrivacyPublishRequestReceiptV1,
+        input: SuppressedPrivacyCycleCommitInput<'_>,
+        leader_lease: &TransparencyLeaderLeaseGrantV1,
+        observed_at_unix: u64,
     ) -> Result<(), GovernancePublishError> {
+        let SuppressedPrivacyCycleCommitInput {
+            cycle_id,
+            window,
+            config,
+            private_source_digest,
+            previous_publication_block_hash,
+            request_receipt,
+        } = input;
         let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
@@ -7702,7 +9780,7 @@ impl NodeHandle {
             return Err(GovernancePublishError::other(err.to_string()));
         }
         drop(checkpoint_guard);
-        self.reconcile_privacy_release_anchor()?;
+        self.reconcile_privacy_release_anchor_at(observed_at_unix, Some(leader_lease))?;
         Ok(())
     }
 
@@ -8206,6 +10284,176 @@ impl NodeHandle {
         self.privacy_release_anchor
             .as_ref()
             .map(|active| active.0.binding())
+    }
+
+    /// Return the exact external leader-lease binding retained by this node.
+    #[must_use]
+    pub fn transparency_leader_lease_provider_binding(
+        &self,
+    ) -> Option<&TransparencyRuntimeProviderBindingV1> {
+        self.transparency_leader_lease_provider
+            .as_ref()
+            .map(|active| active.0.binding())
+    }
+
+    /// Return the exact sealed signed-producer checkpoint-store binding.
+    #[must_use]
+    pub fn governance_dag_checkpoint_store_binding(
+        &self,
+    ) -> Option<(&str, GovernanceDagRuntimeProviderQualificationV1)> {
+        self.governance_dag_runtime_checkpoint_store
+            .as_ref()
+            .map(|store| (store.handle(), store.qualification()))
+    }
+
+    /// Revalidate the pinned signed Governance publisher and fused privacy target.
+    ///
+    /// Torii and other prebuilt-node launchers call this before starting any
+    /// side-effectful worker. A configured Governance root must retain the exact
+    /// startup-installed publisher, signer, and producer checkpoint store. Both
+    /// providers are requalified and the sealed producer root is reconciled
+    /// live. Enabled privacy publication additionally requires both retained
+    /// target roles to match the exact configured handle, revision, and policy
+    /// digest. The authenticated reader must prove that every persisted cache
+    /// head and stable publication identity reaches the current target head.
+    /// Disabled privacy rejects a configured or retained fused role.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GovernancePublishError`] when the configured/retained role set is
+    /// incomplete or unexpected, the pinned publisher was removed or
+    /// substituted, the signer, checkpoint store, or either privacy provider is
+    /// unavailable, stale, revoked, substituted, or test-marked, the live
+    /// bindings differ, the local producer root does not match its sealed
+    /// checkpoint, or persisted target ancestry/inclusion cannot be authenticated.
+    pub fn revalidate_fenced_privacy_runtime(&self) -> Result<(), GovernancePublishError> {
+        match (
+            self.config.governance_dir(),
+            self.startup_governance_publisher.as_ref(),
+            self.governance_publication_lock.as_ref(),
+            self.governance_runtime_root.as_deref(),
+            self.governance_runtime_root_guard.as_ref(),
+            self.governance_dag_runtime_signer.as_ref(),
+            self.governance_dag_runtime_checkpoint_store.as_ref(),
+        ) {
+            (None, None, None, None, None, None, None) => {}
+            (
+                Some(_),
+                Some(pinned),
+                Some(publication_lock),
+                Some(root),
+                Some(root_guard),
+                Some(signer),
+                Some(store),
+            ) => {
+                signer.assert_qualification()?;
+                store.assert_qualification()?;
+                let active = self.governance_publisher.read().map_err(|_| {
+                    GovernancePublishError::other("governance publisher lock poisoned")
+                })?;
+                if active
+                    .as_ref()
+                    .is_none_or(|candidate| !Arc::ptr_eq(candidate, pinned))
+                {
+                    return Err(GovernancePublishError::other(
+                        "active Governance publisher is not the exact startup-installed signed publisher",
+                    ));
+                }
+                drop(active);
+                let _publication_guard = publication_lock.lock().map_err(|_| {
+                    GovernancePublishError::other(
+                        "filesystem governance publisher transaction lock is poisoned",
+                    )
+                })?;
+                root_guard.revalidate()?;
+                governance::revalidate_runtime_dag_producer_state(root, root_guard, signer, store)?;
+                root_guard.revalidate()?;
+                signer.assert_qualification()?;
+                store.assert_qualification()?;
+            }
+            _ => {
+                return Err(GovernancePublishError::other(
+                    "configured signed Governance publication did not retain its exact publisher, transaction fence, runtime signer, and sealed producer checkpoint store",
+                ));
+            }
+        }
+        let required = self.config.privacy_aggregate_schedule().is_some()
+            && self.config.privacy_aggregate_policy().is_some();
+        let configured = self.config.privacy_fenced_publisher_binding();
+        match (
+            required,
+            configured,
+            self.fenced_transparency_publisher.as_ref(),
+            self.fenced_transparency_head_reader.as_ref(),
+        ) {
+            (false, None, None, None) => Ok(()),
+            (false, _, _, _) => Err(GovernancePublishError::other(
+                "disabled privacy publication retains an unexpected fused target binding or role",
+            )),
+            (true, None, _, _) => Err(GovernancePublishError::other(
+                "enabled privacy publication has no configured fused target binding",
+            )),
+            (true, Some(_), None, _) => Err(GovernancePublishError::other(
+                "enabled privacy publication did not retain its fused target writer",
+            )),
+            (true, Some(_), Some(_), None) => Err(GovernancePublishError::other(
+                "enabled privacy publication did not retain its authenticated head reader",
+            )),
+            (true, Some(binding), Some(publisher), Some(reader)) => {
+                let qualification = binding.qualification();
+                let expected = GovernanceDagRuntimeProviderQualificationV1::new(
+                    qualification.revision(),
+                    qualification.policy_digest(),
+                );
+                if publisher.handle() != binding.handle()
+                    || reader.handle() != binding.handle()
+                    || publisher.qualification() != expected
+                    || reader.qualification() != expected
+                {
+                    return Err(GovernancePublishError::other(
+                        "retained fused privacy runtime does not match the exact configured binding",
+                    ));
+                }
+                publisher.assert_qualification()?;
+                reader.assert_qualification()?;
+                governance::ensure_fenced_privacy_runtime_bindings_match(publisher, reader)?;
+                let root = self.governance_runtime_root.as_deref().ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "enabled privacy publication has no signed Governance root",
+                    )
+                })?;
+                let publication_lock =
+                    self.governance_publication_lock.as_ref().ok_or_else(|| {
+                        GovernancePublishError::other(
+                            "enabled privacy publication did not retain its transaction fence",
+                        )
+                    })?;
+                let _publication_guard = publication_lock.lock().map_err(|_| {
+                    GovernancePublishError::other(
+                        "filesystem governance publisher transaction lock is poisoned",
+                    )
+                })?;
+                governance::synchronize_fenced_privacy_authoritative_head(root, reader, None)?;
+                if let Some(signer) = self.governance_dag_runtime_signer.as_ref() {
+                    signer.assert_qualification()?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Return the highest external fencing token durably accepted in memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the qualified provider state cannot be read.
+    pub fn transparency_leader_lease_fencing_floor(
+        &self,
+    ) -> Result<Option<u64>, TransparencyLeaderLeaseErrorV1> {
+        self.transparency_leader_lease_provider
+            .as_ref()
+            .map(|active| active.0.fencing_floor())
+            .transpose()
     }
 
     /// Authenticate and durably record one governed moderation screening result.
@@ -9809,7 +12057,7 @@ impl NodeHandle {
 
     fn export_auxiliary_runtime_checkpoint(
         &self,
-    ) -> Result<AuxiliaryRuntimeCheckpointV2, GovernancePublishError> {
+    ) -> Result<AuxiliaryRuntimeCheckpointV3, GovernancePublishError> {
         let capacity_runtime = self.capacity.checkpoint().map_err(|err| {
             GovernancePublishError::other(format!("export capacity runtime checkpoint: {err}"))
         })?;
@@ -9915,6 +12163,15 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?
             .clone();
+        let transparency_leader_lease_fencing_floor = self
+            .transparency_leader_lease_provider
+            .as_ref()
+            .map_or(Ok(0), |provider| provider.0.fencing_floor())
+            .map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "read transparency leader-lease fencing floor: {error}"
+                ))
+            })?;
         let published_evidence_viewer_audit_cycles = self
             .published_evidence_viewer_audit_cycles
             .read()
@@ -9928,8 +12185,8 @@ impl NodeHandle {
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
         let governance_outbox_next_sequence = governance_outbox.next_sequence;
         let governance_outbox_entries = governance_outbox.entries.values().cloned().collect();
-        Ok(AuxiliaryRuntimeCheckpointV2 {
-            version: AUX_RUNTIME_STATE_VERSION_V2,
+        Ok(AuxiliaryRuntimeCheckpointV3 {
+            version: AUX_RUNTIME_STATE_VERSION_V3,
             capacity_runtime,
             por_tracker: self.por.checkpoint(),
             por_history,
@@ -9946,6 +12203,7 @@ impl NodeHandle {
             published_privacy_aggregate_cycles,
             privacy_composition_budget,
             privacy_release_ledger,
+            transparency_leader_lease_fencing_floor,
             published_evidence_viewer_audit_cycles,
             governance_outbox_next_sequence,
             governance_outbox_entries,
@@ -10045,7 +12303,7 @@ impl NodeHandle {
             // for those sequences; domain restore validation still enforces
             // the configured state and event limits.
             .max(bytes.len());
-        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV2>(
+        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV3>(
             &bytes,
             retention.checkpoint_max_bytes(),
             maximum_sequence_elements,
@@ -10058,13 +12316,29 @@ impl NodeHandle {
 
     fn restore_auxiliary_runtime_checkpoint(
         &self,
-        checkpoint: AuxiliaryRuntimeCheckpointV2,
+        checkpoint: AuxiliaryRuntimeCheckpointV3,
     ) -> Result<(), GovernancePublishError> {
-        if checkpoint.version != AUX_RUNTIME_STATE_VERSION_V2 {
+        if checkpoint.version != AUX_RUNTIME_STATE_VERSION_V3 {
             return Err(GovernancePublishError::other(format!(
                 "unsupported auxiliary runtime checkpoint version {}",
                 checkpoint.version
             )));
+        }
+        match self.transparency_leader_lease_provider.as_ref() {
+            Some(provider) => provider
+                .0
+                .restore_fencing_floor(checkpoint.transparency_leader_lease_fencing_floor)
+                .map_err(|error| {
+                    GovernancePublishError::other(format!(
+                        "restore transparency leader-lease fencing floor: {error}"
+                    ))
+                })?,
+            None if checkpoint.transparency_leader_lease_fencing_floor != 0 => {
+                return Err(GovernancePublishError::other(
+                    "auxiliary checkpoint contains a leader-lease fencing floor without a configured provider",
+                ));
+            }
+            None => {}
         }
         let retention = self.config.runtime_retention();
         let state_limit = retention.state_entry_limit();
@@ -12220,6 +14494,36 @@ impl NodeHandle {
     /// beacon or VRF authentication. Torii retires direct challenge ingestion;
     /// the coordinator scheduler is the production authority for this method.
     pub fn record_por_challenge(&self, challenge: &PorChallengeV1) -> Result<(), PorTrackerError> {
+        let replay_archive = self
+            .por_finalized_replay_archive
+            .as_ref()
+            .map(|archive| archive.0.as_ref());
+        self.record_por_challenge_with_optional_replay_archive(challenge, replay_archive)
+    }
+
+    /// Record or replay a challenge using the checkpoint-pinned archive.
+    pub fn record_por_challenge_with_replay_archive(
+        &self,
+        challenge: &PorChallengeV1,
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+    ) -> Result<(), PorTrackerError> {
+        self.record_por_challenge_with_optional_replay_archive(challenge, Some(replay_archive))
+    }
+
+    fn record_por_challenge_with_optional_replay_archive(
+        &self,
+        challenge: &PorChallengeV1,
+        replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
+    ) -> Result<(), PorTrackerError> {
+        let proof_bounds = match (self.config.por_replay_archive_policy(), replay_archive) {
+            (Some(policy), Some(archive)) => {
+                verify_por_replay_archive_provider(policy, archive)?;
+                Some(policy.proof_bounds())
+            }
+            (Some(_), None) => return Err(PorTrackerError::ReplayArchiveRequired),
+            (None, Some(_)) => return Err(PorTrackerError::ReplayArchiveBindingMismatch),
+            (None, None) => None,
+        };
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             PorTrackerError::RuntimeCheckpoint(
                 "auxiliary checkpoint transaction lock poisoned".to_owned(),
@@ -12228,7 +14532,27 @@ impl NodeHandle {
         self.ensure_durability_healthy()
             .map_err(PorTrackerError::RuntimeCheckpoint)?;
         let previous = self.por.checkpoint();
-        self.por.record_challenge(challenge)?;
+        match replay_archive {
+            Some(replay_archive) => self.por.record_challenge_with_archive_and_bounds(
+                challenge,
+                replay_archive,
+                proof_bounds.expect("configured archive has proof bounds"),
+            )?,
+            None => self.por.record_challenge(challenge)?,
+        }
+        if let (Some(policy), Some(replay_archive)) =
+            (self.config.por_replay_archive_policy(), replay_archive)
+            && let Err(error) = verify_por_replay_archive_provider(policy, replay_archive)
+        {
+            if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR challenge after replay-archive provider drift",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
+            return Err(error);
+        }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
                 return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
@@ -12282,6 +14606,172 @@ impl NodeHandle {
         self.por.protocol_metrics()
     }
 
+    /// Return the exact next retained PoR terminal awaiting reputation admission.
+    pub fn next_por_reputation_terminal_work(
+        &self,
+    ) -> Result<Option<PorReputationTerminalWorkV1>, PorTrackerError> {
+        self.por.next_reputation_terminal_work()
+    }
+
+    /// Return the number of retained PoR terminals awaiting acknowledgement.
+    #[must_use]
+    pub fn pending_por_reputation_terminal_count(&self) -> u64 {
+        self.por.pending_reputation_terminal_count()
+    }
+
+    /// Durably acknowledge the exact next retained PoR reputation terminal.
+    ///
+    /// The cursor advances in the same auxiliary checkpoint family as PoR
+    /// finalization. Missing durable storage, skipped or substituted work, and
+    /// checkpoint failures all fail closed.
+    pub fn acknowledge_por_reputation_terminal(
+        &self,
+        sequence: u64,
+        work_digest: [u8; 32],
+    ) -> Result<PorReputationTerminalAckOutcomeV1, PorTrackerError> {
+        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            PorTrackerError::RuntimeCheckpoint(
+                "auxiliary checkpoint transaction lock poisoned".to_owned(),
+            )
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(PorTrackerError::RuntimeCheckpoint)?;
+        if self.auxiliary_runtime_checkpoint_path.is_none() {
+            return Err(PorTrackerError::RuntimeCheckpoint(
+                "durable auxiliary checkpoint is required for PoR reputation acknowledgement"
+                    .to_owned(),
+            ));
+        }
+        let previous = self.por.checkpoint();
+        let outcome = self
+            .por
+            .acknowledge_reputation_terminal(sequence, work_digest)?;
+        if outcome == PorReputationTerminalAckOutcomeV1::ExactReplay {
+            return Ok(outcome);
+        }
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            }
+            if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR reputation acknowledgement after checkpoint error",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
+            return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+        }
+        Ok(outcome)
+    }
+
+    /// Durably compact an acknowledged finalized prefix into an authenticated archive.
+    ///
+    /// External appends happen before the auxiliary checkpoint advances. A
+    /// checkpoint failure restores the exact local prefix; retry then requires
+    /// the archive to return the identical signed receipt.
+    pub fn compact_acknowledged_por_replay_archive(
+        &self,
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+        expected_binding: PorFinalizedReplayArchiveBindingV1,
+        maximum_records: u32,
+    ) -> Result<u32, PorTrackerError> {
+        let Some(policy) = self.config.por_replay_archive_policy() else {
+            return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+        };
+        if expected_binding != policy.binding() {
+            return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+        }
+        verify_por_replay_archive_provider(policy, replay_archive)?;
+        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            PorTrackerError::RuntimeCheckpoint(
+                "auxiliary checkpoint transaction lock poisoned".to_owned(),
+            )
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(PorTrackerError::RuntimeCheckpoint)?;
+        if self.auxiliary_runtime_checkpoint_path.is_none() {
+            return Err(PorTrackerError::RuntimeCheckpoint(
+                "durable auxiliary checkpoint is required for PoR replay-archive compaction"
+                    .to_owned(),
+            ));
+        }
+        let previous = self.por.checkpoint();
+        let compacted = self.por.compact_acknowledged_with_replay_archive(
+            replay_archive,
+            expected_binding,
+            maximum_records,
+        )?;
+        if let Err(error) = verify_por_replay_archive_provider(policy, replay_archive) {
+            if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR compaction after replay-archive provider drift",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
+            return Err(error);
+        }
+        if compacted == 0 {
+            return Ok(0);
+        }
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            }
+            if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR replay-archive compaction after checkpoint error",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
+            return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+        }
+        Ok(compacted)
+    }
+
+    /// Reconcile the configured bounded acknowledged prefix into the exact
+    /// deployment-owned replay archive.
+    pub fn compact_configured_por_replay_archive(&self) -> Result<u32, PorTrackerError> {
+        let Some(policy) = self.config.por_replay_archive_policy() else {
+            return Ok(0);
+        };
+        let archive = self
+            .por_finalized_replay_archive
+            .as_ref()
+            .ok_or(PorTrackerError::ReplayArchiveRequired)?;
+        self.compact_acknowledged_por_replay_archive(
+            archive.0.as_ref(),
+            policy.binding(),
+            policy.max_records_per_tick(),
+        )
+    }
+
+    /// Reconcile one retained PoR terminal into the durable reputation outbox.
+    ///
+    /// Admission happens before acknowledgement. If the process crashes or the
+    /// node checkpoint fails after admission, restart presents the identical
+    /// work again; the admission boundary must return `ExactReplay`, after
+    /// which the node durably advances its cursor.
+    pub fn reconcile_next_por_reputation_terminal(
+        &self,
+        admission: &dyn reputation::runtime::ReputationNativeOutcomeAdmissionApiV1,
+    ) -> Result<PorReputationReconcileOutcomeV1, PorReputationReconcileErrorV1> {
+        let Some(work) = self.next_por_reputation_terminal_work()? else {
+            return Ok(PorReputationReconcileOutcomeV1::Idle);
+        };
+        let admitted =
+            admission.record_por_terminal(ProviderId::new(work.provider_id), work.terminal)?;
+        let acknowledgement =
+            self.acknowledge_por_reputation_terminal(work.sequence, work.work_digest)?;
+        Ok(PorReputationReconcileOutcomeV1::Reconciled {
+            work,
+            admission: admitted,
+            acknowledgement,
+        })
+    }
+
     /// Record an audit verdict and update telemetry counters accordingly.
     pub fn record_por_verdict(
         &self,
@@ -12290,6 +14780,54 @@ impl NodeHandle {
         auditor_threshold: usize,
         repair_handoff: &dyn PorRepairHandoff,
     ) -> Result<PorVerdictOutcome, PorTrackerError> {
+        let replay_archive = self
+            .por_finalized_replay_archive
+            .as_ref()
+            .map(|archive| archive.0.as_ref());
+        self.record_por_verdict_with_optional_replay_archive(
+            verdict,
+            trusted_auditor_keys,
+            auditor_threshold,
+            repair_handoff,
+            replay_archive,
+        )
+    }
+
+    /// Record or exactly replay a verdict using the checkpoint-pinned archive.
+    pub fn record_por_verdict_with_replay_archive(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+        repair_handoff: &dyn PorRepairHandoff,
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+    ) -> Result<PorVerdictOutcome, PorTrackerError> {
+        self.record_por_verdict_with_optional_replay_archive(
+            verdict,
+            trusted_auditor_keys,
+            auditor_threshold,
+            repair_handoff,
+            Some(replay_archive),
+        )
+    }
+
+    fn record_por_verdict_with_optional_replay_archive(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+        repair_handoff: &dyn PorRepairHandoff,
+        replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
+    ) -> Result<PorVerdictOutcome, PorTrackerError> {
+        let proof_bounds = match (self.config.por_replay_archive_policy(), replay_archive) {
+            (Some(policy), Some(archive)) => {
+                verify_por_replay_archive_provider(policy, archive)?;
+                Some(policy.proof_bounds())
+            }
+            (Some(_), None) => return Err(PorTrackerError::ReplayArchiveRequired),
+            (None, Some(_)) => return Err(PorTrackerError::ReplayArchiveBindingMismatch),
+            (None, None) => None,
+        };
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             PorTrackerError::RuntimeCheckpoint(
                 "auxiliary checkpoint transaction lock poisoned".to_owned(),
@@ -12310,13 +14848,37 @@ impl NodeHandle {
             }
         }
         let previous_tracker = self.por.checkpoint();
-        let transition = self.por.record_verdict_with(
-            verdict,
-            trusted_auditor_keys,
-            auditor_threshold,
-            |intent| repair_handoff.enqueue_failed_por_repair(intent),
-        )?;
+        let transition = match replay_archive {
+            Some(replay_archive) => self.por.record_verdict_with_archive_and_bounds(
+                verdict,
+                trusted_auditor_keys,
+                auditor_threshold,
+                replay_archive,
+                proof_bounds.expect("configured archive has proof bounds"),
+                |intent| repair_handoff.enqueue_failed_por_repair(intent),
+            )?,
+            None => self.por.record_verdict_with(
+                verdict,
+                trusted_auditor_keys,
+                auditor_threshold,
+                |intent| repair_handoff.enqueue_failed_por_repair(intent),
+            )?,
+        };
+        if let (Some(policy), Some(replay_archive)) =
+            (self.config.por_replay_archive_policy(), replay_archive)
+            && let Err(error) = verify_por_replay_archive_provider(policy, replay_archive)
+        {
+            if let Err(rollback) = self.por.restore_checkpoint(previous_tracker) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR verdict after replay-archive provider drift",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
+            return Err(error);
+        }
         let stats = transition.stats;
+        let reputation_work = transition.reputation_work;
         if !transition.newly_finalized {
             let consecutive_failures = self
                 .por_history
@@ -12330,6 +14892,7 @@ impl NodeHandle {
                 stats,
                 repair_task_id: transition.repair_task_id,
                 consecutive_failures,
+                reputation_work,
             });
         }
         let previous_history = self
@@ -12381,6 +14944,7 @@ impl NodeHandle {
             stats,
             repair_task_id: transition.repair_task_id,
             consecutive_failures,
+            reputation_work,
         })
     }
 
@@ -12688,9 +15252,14 @@ impl NodeHandle {
         signer_resolver: Arc<Resolver>,
         ingress: Arc<Ingress>,
         clock: Arc<Clock>,
-    ) -> Result<
-        ProviderIngestRuntimeV1<Ledger, Fetch, Storage, Builder, Resolver, Ingress, Clock>,
-        FinalizedProviderIngestError,
+    ) -> FinalizedProviderIngestRuntimeResultV1<
+        Ledger,
+        Fetch,
+        Storage,
+        Builder,
+        Resolver,
+        Ingress,
+        Clock,
     >
     where
         Ledger: ProviderIngestFinalizedLedgerV1,
@@ -13253,9 +15822,9 @@ fn moderation_evidence_viewer_error_from_object_error(
                     .to_owned(),
             }
         }
-        ModerationQuarantineObjectError::KeyWrapping { key_id } => {
+        ModerationQuarantineObjectError::KeyWrapping { key_id, failure } => {
             ModerationEvidenceViewerError::InvalidSnapshot {
-                message: format!("quarantine key operation failed for `{key_id}`"),
+                message: format!("quarantine key operation failed for `{key_id}`: {failure}"),
             }
         }
         ModerationQuarantineObjectError::InvalidRange {
@@ -13284,7 +15853,7 @@ mod tests {
         str::FromStr,
         sync::{
             Arc, Barrier, Mutex,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -13362,6 +15931,8 @@ mod tests {
         resign_sample_verdict as resign_por_sample_verdict,
         sample_auditor_keys as por_sample_auditor_keys, sample_challenge as por_sample_challenge,
         sample_proof as por_sample_proof, sample_provider_key as por_sample_provider_key,
+        sample_replay_archive_head as por_sample_replay_archive_head,
+        sample_replay_archive_record_and_head as por_sample_replay_archive_record_and_head,
         sample_verdict as por_sample_verdict,
     };
     use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
@@ -13369,25 +15940,27 @@ mod tests {
     #[test]
     fn finalized_capacity_projection_has_no_production_local_mutation_entrypoints() {
         let source = include_str!("lib.rs");
-        for retired in [
-            "pub fn record_capacity_declaration(",
-            "pub fn schedule_replication_order(",
-            "pub fn complete_replication_order(",
-            "fn record_uptime_observation(",
-            "fn record_por_observation(",
-            "fn record_replication_failure(",
+        for (prefix, method) in [
+            ("pub fn ", "record_capacity_declaration"),
+            ("pub fn ", "schedule_replication_order"),
+            ("pub fn ", "complete_replication_order"),
+            ("fn ", "record_uptime_observation"),
+            ("fn ", "record_por_observation"),
+            ("fn ", "record_replication_failure"),
         ] {
+            let retired = format!("{prefix}{method}(");
             assert!(
-                !source.contains(retired),
+                !source.contains(&retired),
                 "retired local capacity mutation entrypoint reappeared: {retired}"
             );
         }
-        for test_only in [
-            "pub(crate) fn record_capacity_declaration(",
-            "pub(crate) fn schedule_replication_order(",
-            "pub(crate) fn complete_replication_order(",
+        for method in [
+            "record_capacity_declaration",
+            "schedule_replication_order",
+            "complete_replication_order",
         ] {
-            let offset = source.find(test_only).expect("test-only capacity helper");
+            let test_only = format!("pub(crate) fn {method}(");
+            let offset = source.find(&test_only).expect("test-only capacity helper");
             let prefix = &source[offset.saturating_sub(32)..offset];
             assert!(
                 prefix.contains("#[cfg(test)]"),
@@ -13406,6 +15979,503 @@ mod tests {
         ) -> Result<[u8; 32], PorRepairHandoffError> {
             Ok(intent.repair_task_id())
         }
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingReputationAdmission {
+        retained: Mutex<
+            Option<(
+                ProviderId,
+                iroha_data_model::sorafs::reputation::PorTerminalOutcomeV1,
+            )>,
+        >,
+        calls: AtomicU64,
+    }
+
+    impl reputation::runtime::ReputationNativeOutcomeAdmissionApiV1 for RecordingReputationAdmission {
+        fn activation_state(
+            &self,
+        ) -> Result<
+            reputation::runtime::ReputationNativeOutcomeAdmissionStateV1,
+            reputation::runtime::ReputationRuntimeError,
+        > {
+            Ok(reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
+        }
+
+        fn record_por_terminal(
+            &self,
+            provider_id: ProviderId,
+            outcome: iroha_data_model::sorafs::reputation::PorTerminalOutcomeV1,
+        ) -> Result<
+            reputation::runtime::ReputationJournalEnqueueOutcomeV1,
+            reputation::runtime::ReputationRuntimeError,
+        > {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            let mut retained = self
+                .retained
+                .lock()
+                .map_err(|_| reputation::runtime::ReputationRuntimeError::RuntimePoisoned)?;
+            let event_id =
+                iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1([0xE1; 32]);
+            match retained.as_ref() {
+                None => {
+                    *retained = Some((provider_id, outcome));
+                    Ok(
+                        reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted {
+                            event_id,
+                        },
+                    )
+                }
+                Some((retained_provider, retained_outcome))
+                    if *retained_provider == provider_id && *retained_outcome == outcome =>
+                {
+                    Ok(
+                        reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                            event_id,
+                        },
+                    )
+                }
+                Some(_) => Err(reputation::runtime::ReputationRuntimeError::JournalSourceConflict),
+            }
+        }
+
+        fn record_stream_token_outcome(
+            &self,
+            _provider_id: ProviderId,
+            _outcome: iroha_data_model::sorafs::reputation::StreamTokenValidationOutcomeV1,
+        ) -> Result<
+            reputation::runtime::CountedStreamTokenProducerOutcomeV1,
+            reputation::runtime::ReputationRuntimeError,
+        > {
+            Err(reputation::runtime::ReputationRuntimeError::RuntimeBindingMismatch)
+        }
+    }
+
+    fn startup_por_archive_binding(seed: u8) -> PorFinalizedReplayArchiveBindingV1 {
+        let key_pair =
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 key");
+        let public_key = key_pair.public_key().to_bytes().1;
+        let mut signing_public_key = [0_u8; 32];
+        signing_public_key.copy_from_slice(&public_key);
+        PorFinalizedReplayArchiveBindingV1::try_new(
+            [seed.wrapping_add(1); 32],
+            7,
+            [seed.wrapping_add(2); 32],
+            signing_public_key,
+        )
+        .expect("valid archive binding")
+    }
+
+    fn storage_config_with_por_archive(
+        binding: PorFinalizedReplayArchiveBindingV1,
+    ) -> (StorageConfig, TempDir) {
+        let temp_dir = tempfile::tempdir().expect("create replay-archive temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let policy = config::PorReplayArchivePolicyV1::try_new(
+            "hsm://sorafs/por-replay-archive/primary",
+            binding,
+            Duration::from_secs(1),
+            16,
+            iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::MAX_SUCCESSOR_RECEIPTS,
+            iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::MAX_SUCCESSOR_PROOF_BYTES,
+        )
+        .expect("valid replay-archive worker policy");
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .por_replay_archive_policy(Some(policy))
+            .build();
+        (config, temp_dir)
+    }
+
+    #[derive(Debug)]
+    struct StartupPorReplayArchive {
+        handle: &'static str,
+        first_binding: PorFinalizedReplayArchiveBindingV1,
+        later_binding: Option<PorFinalizedReplayArchiveBindingV1>,
+        readiness_error: Option<PorFinalizedReplayArchiveExternalErrorV1>,
+        current_head: Option<PorFinalizedReplayArchiveReceiptV1>,
+        lookup_result: Option<PorFinalizedReplayArchiveLookupV1>,
+        binding_calls: AtomicUsize,
+        lookup_calls: AtomicUsize,
+    }
+
+    impl StartupPorReplayArchive {
+        fn exact(binding: PorFinalizedReplayArchiveBindingV1) -> Self {
+            Self {
+                handle: "hsm://sorafs/por-replay-archive/primary",
+                first_binding: binding,
+                later_binding: None,
+                readiness_error: None,
+                current_head: None,
+                lookup_result: None,
+                binding_calls: AtomicUsize::new(0),
+                lookup_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl PorFinalizedReplayArchiveV1 for StartupPorReplayArchive {
+        fn runtime_handle(&self) -> &str {
+            self.handle
+        }
+
+        fn binding(
+            &self,
+        ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            let call = self.binding_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(if call == 0 {
+                self.first_binding
+            } else {
+                self.later_binding.unwrap_or(self.first_binding)
+            })
+        }
+
+        fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
+            self.readiness_error.map_or(Ok(()), Err)
+        }
+
+        fn current_head(
+            &self,
+        ) -> Result<
+            Option<PorFinalizedReplayArchiveReceiptV1>,
+            PorFinalizedReplayArchiveExternalErrorV1,
+        > {
+            Ok(self.current_head)
+        }
+
+        fn append(
+            &self,
+            _record: &PorFinalizedReplayArchiveRecordV1,
+            _expected_previous_head: Option<[u8; 32]>,
+        ) -> Result<PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected)
+        }
+
+        fn lookup(
+            &self,
+            challenge_id: [u8; 32],
+            expected_checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+            _proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+        ) -> Result<PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.lookup_calls.fetch_add(1, Ordering::Relaxed);
+            if self.current_head != Some(expected_checkpoint_head) {
+                return Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected);
+            }
+            match self.lookup_result.as_ref() {
+                Some(PorFinalizedReplayArchiveLookupV1::Found(readback))
+                    if readback.record.challenge_id() == challenge_id =>
+                {
+                    Ok(PorFinalizedReplayArchiveLookupV1::Found(readback.clone()))
+                }
+                Some(PorFinalizedReplayArchiveLookupV1::Absent(absence))
+                    if absence.challenge_id() == challenge_id =>
+                {
+                    Ok(PorFinalizedReplayArchiveLookupV1::Absent(*absence))
+                }
+                _ => Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum PostQualificationDrift {
+        Handle,
+        Readiness,
+    }
+
+    #[derive(Debug)]
+    struct PostQualificationDriftArchive {
+        inner: StartupPorReplayArchive,
+        drift: PostQualificationDrift,
+        armed: AtomicBool,
+        calls_after_arm: AtomicUsize,
+    }
+
+    impl PostQualificationDriftArchive {
+        fn new(binding: PorFinalizedReplayArchiveBindingV1, drift: PostQualificationDrift) -> Self {
+            Self {
+                inner: StartupPorReplayArchive::exact(binding),
+                drift,
+                armed: AtomicBool::new(false),
+                calls_after_arm: AtomicUsize::new(0),
+            }
+        }
+
+        fn arm(&self) {
+            self.calls_after_arm.store(0, Ordering::Relaxed);
+            self.armed.store(true, Ordering::Relaxed);
+        }
+
+        fn drifted_on_second_call(&self, operation: PostQualificationDrift) -> bool {
+            matches!(
+                (self.drift, operation),
+                (
+                    PostQualificationDrift::Handle,
+                    PostQualificationDrift::Handle
+                ) | (
+                    PostQualificationDrift::Readiness,
+                    PostQualificationDrift::Readiness
+                )
+            ) && self.armed.load(Ordering::Relaxed)
+                && self.calls_after_arm.fetch_add(1, Ordering::Relaxed) != 0
+        }
+    }
+
+    impl PorFinalizedReplayArchiveV1 for PostQualificationDriftArchive {
+        fn runtime_handle(&self) -> &str {
+            if self.drifted_on_second_call(PostQualificationDrift::Handle) {
+                "test://substituted/por-replay-archive"
+            } else {
+                self.inner.runtime_handle()
+            }
+        }
+
+        fn binding(
+            &self,
+        ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.inner.binding()
+        }
+
+        fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
+            if self.drifted_on_second_call(PostQualificationDrift::Readiness) {
+                Err(PorFinalizedReplayArchiveExternalErrorV1::Unavailable)
+            } else {
+                self.inner.check_readiness()
+            }
+        }
+
+        fn current_head(
+            &self,
+        ) -> Result<
+            Option<PorFinalizedReplayArchiveReceiptV1>,
+            PorFinalizedReplayArchiveExternalErrorV1,
+        > {
+            self.inner.current_head()
+        }
+
+        fn append(
+            &self,
+            record: &PorFinalizedReplayArchiveRecordV1,
+            expected_previous_head: Option<[u8; 32]>,
+        ) -> Result<PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.inner.append(record, expected_previous_head)
+        }
+
+        fn lookup(
+            &self,
+            challenge_id: [u8; 32],
+            expected_checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+            proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+        ) -> Result<PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            self.inner
+                .lookup(challenge_id, expected_checkpoint_head, proof_bounds)
+        }
+    }
+
+    #[test]
+    fn node_archive_injection_is_exact_and_standard_challenge_path_uses_it() {
+        let binding = startup_por_archive_binding(0xD1);
+        let (config, _temp_dir) = storage_config_with_por_archive(binding);
+        let archive = Arc::new(StartupPorReplayArchive::exact(binding));
+        let handle = NodeHandle::try_new_with_policies_and_runtime_deps(
+            config,
+            RepairConfig::default(),
+            GcConfig::default(),
+            NodeRuntimeDeps::default().with_por_finalized_replay_archive(archive.clone()),
+        )
+        .expect("exact replay archive starts");
+
+        handle
+            .record_por_challenge(&por_sample_challenge())
+            .expect("standard challenge path records fresh local state");
+        assert_eq!(
+            archive.lookup_calls.load(Ordering::Relaxed),
+            0,
+            "without a checkpointed archive head the node must not fabricate an absence lookup"
+        );
+        assert!(
+            archive.binding_calls.load(Ordering::Relaxed) >= 4,
+            "startup and route admission must each observe a stable binding twice"
+        );
+    }
+
+    #[test]
+    fn node_archive_operation_rolls_back_on_post_handle_or_readiness_drift() {
+        for (seed, drift) in [
+            (0xD5, PostQualificationDrift::Handle),
+            (0xD6, PostQualificationDrift::Readiness),
+        ] {
+            let binding = startup_por_archive_binding(seed);
+            let (config, _temp_dir) = storage_config_with_por_archive(binding);
+            let archive = Arc::new(PostQualificationDriftArchive::new(binding, drift));
+            let node = NodeHandle::try_new_with_policies_and_runtime_deps(
+                config,
+                RepairConfig::default(),
+                GcConfig::default(),
+                NodeRuntimeDeps::default().with_por_finalized_replay_archive(archive.clone()),
+            )
+            .expect("exact provider starts before drift is armed");
+            let before = node.por.checkpoint();
+            archive.arm();
+            assert!(
+                node.record_por_challenge(&por_sample_challenge()).is_err(),
+                "post-operation {drift:?} drift must fail closed"
+            );
+            assert_eq!(
+                node.por.checkpoint(),
+                before,
+                "post-operation {drift:?} drift must roll local state back"
+            );
+        }
+    }
+
+    #[test]
+    fn node_archive_startup_rejects_nonempty_head_without_a_restored_local_head() {
+        let (binding, current_head) = por_sample_replay_archive_head(0xD3);
+        let (config, _temp_dir) = storage_config_with_por_archive(binding);
+        let mut archive = StartupPorReplayArchive::exact(binding);
+        archive.current_head = Some(current_head);
+        assert!(matches!(
+            NodeHandle::try_new_with_policies_and_runtime_deps(
+                config,
+                RepairConfig::default(),
+                GcConfig::default(),
+                NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(archive)),
+            ),
+            Err(NodeInitError::PorReplayArchive { .. })
+        ));
+    }
+
+    #[test]
+    fn node_archive_startup_reconciles_and_persists_an_exact_first_append_prefix() {
+        let (binding, record, current_head) = por_sample_replay_archive_record_and_head(0xD4);
+        let (config, _temp_dir) = storage_config_with_por_archive(binding);
+        let initial_archive = Arc::new(StartupPorReplayArchive::exact(binding));
+        let node = NodeHandle::try_new_with_policies_and_runtime_deps(
+            config.clone(),
+            RepairConfig::default(),
+            GcConfig::default(),
+            NodeRuntimeDeps::default().with_por_finalized_replay_archive(initial_archive),
+        )
+        .expect("start against an empty exact archive");
+        let challenge = por_sample_challenge();
+        let proof = por_sample_proof(&challenge);
+        let verdict = por_sample_verdict(&challenge, proof.proof_digest());
+        node.record_por_challenge(&challenge)
+            .expect("checkpoint challenge");
+        node.record_por_proof(&proof, &por_sample_provider_key())
+            .expect("checkpoint proof");
+        node.record_por_verdict(
+            &verdict,
+            &por_sample_auditor_keys(),
+            1,
+            &SuccessfulPorRepairHandoff,
+        )
+        .expect("checkpoint finalized terminal");
+        let work = node
+            .next_por_reputation_terminal_work()
+            .expect("read retained terminal")
+            .expect("one retained terminal");
+        node.acknowledge_por_reputation_terminal(work.sequence, work.work_digest)
+            .expect("checkpoint acknowledgement before external append");
+        assert!(node.por.checkpoint().replay_archive_receipt.is_none());
+        drop(node);
+
+        let mut live_ahead = StartupPorReplayArchive::exact(binding);
+        live_ahead.current_head = Some(current_head);
+        live_ahead.lookup_result = Some(PorFinalizedReplayArchiveLookupV1::Found(
+            PorFinalizedReplayArchiveReadbackV1 {
+                record,
+                receipt: current_head,
+                successor_receipts: Vec::new(),
+            },
+        ));
+        let reopened = NodeHandle::try_new_with_policies_and_runtime_deps(
+            config.clone(),
+            RepairConfig::default(),
+            GcConfig::default(),
+            NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(live_ahead)),
+        )
+        .expect("reconcile an exact acknowledged first-append crash window");
+        let reconciled = reopened.por.checkpoint();
+        assert!(reconciled.finalized.is_empty());
+        assert_eq!(reconciled.replay_archive_receipt, Some(current_head));
+        drop(reopened);
+
+        let mut persisted = StartupPorReplayArchive::exact(binding);
+        persisted.current_head = Some(current_head);
+        let reopened_again = NodeHandle::try_new_with_policies_and_runtime_deps(
+            config,
+            RepairConfig::default(),
+            GcConfig::default(),
+            NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(persisted)),
+        )
+        .expect("reopen from the reconciled local checkpoint without another lookup");
+        assert_eq!(
+            reopened_again.por.checkpoint().replay_archive_receipt,
+            Some(current_head)
+        );
+    }
+
+    #[test]
+    fn node_archive_injection_rejects_missing_unrequested_substituted_and_stale_adapters() {
+        let binding = startup_por_archive_binding(0xD2);
+        let (missing_config, _missing_dir) = storage_config_with_por_archive(binding);
+        assert!(matches!(
+            NodeHandle::try_new_with_policies_and_runtime_deps(
+                missing_config,
+                RepairConfig::default(),
+                GcConfig::default(),
+                NodeRuntimeDeps::default(),
+            ),
+            Err(NodeInitError::PorReplayArchive { .. })
+        ));
+
+        let (unrequested_config, _unrequested_dir) = storage_config_with_temp_dir();
+        assert!(matches!(
+            NodeHandle::try_new_with_policies_and_runtime_deps(
+                unrequested_config,
+                RepairConfig::default(),
+                GcConfig::default(),
+                NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(
+                    StartupPorReplayArchive::exact(binding),
+                )),
+            ),
+            Err(NodeInitError::PorReplayArchive { .. })
+        ));
+
+        let (substituted_config, _substituted_dir) = storage_config_with_por_archive(binding);
+        let mut substituted = StartupPorReplayArchive::exact(binding);
+        substituted.handle = "hsm://sorafs/por-replay-archive/substituted";
+        assert!(matches!(
+            NodeHandle::try_new_with_policies_and_runtime_deps(
+                substituted_config,
+                RepairConfig::default(),
+                GcConfig::default(),
+                NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(substituted)),
+            ),
+            Err(NodeInitError::PorReplayArchive { .. })
+        ));
+
+        let (stale_config, _stale_dir) = storage_config_with_por_archive(binding);
+        let mut stale = StartupPorReplayArchive::exact(binding);
+        stale.readiness_error = Some(PorFinalizedReplayArchiveExternalErrorV1::Rejected);
+        assert!(matches!(
+            NodeHandle::try_new_with_policies_and_runtime_deps(
+                stale_config,
+                RepairConfig::default(),
+                GcConfig::default(),
+                NodeRuntimeDeps::default().with_por_finalized_replay_archive(Arc::new(stale)),
+            ),
+            Err(NodeInitError::PorReplayArchive { .. })
+        ));
     }
 
     fn xor(value: &str) -> XorQuantity {
@@ -14389,11 +17459,14 @@ mod tests {
             }
         }
 
-        fn wrapping_key(&self, key_id: &str) -> Result<[u8; 32], String> {
+        fn wrapping_key(
+            &self,
+            key_id: &str,
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             self.keys
                 .get(key_id)
                 .copied()
-                .ok_or_else(|| "unknown test wrapping key handle".to_owned())
+                .ok_or(ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked)
         }
 
         fn nonce(key_id: &str, context_digest: [u8; 32], key: [u8; 32]) -> [u8; 12] {
@@ -14425,15 +17498,25 @@ mod tests {
             &self.active_key_id
         }
 
-        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+        fn wrap_dek(
+            &self,
+            context_digest: [u8; 32],
+            dek: &[u8; 32],
+        ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
 
             let key = self.wrapping_key(&self.active_key_id)?;
             let nonce = Self::nonce(&self.active_key_id, context_digest, key);
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .encrypt(nonce.as_slice(), context_digest.as_slice(), dek.as_slice())
-                .map_err(|error| error.to_string())
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })
         }
 
         fn unwrap_dek(
@@ -14441,17 +17524,23 @@ mod tests {
             key_id: &str,
             context_digest: [u8; 32],
             wrapped_dek: &[u8],
-        ) -> Result<[u8; 32], String> {
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
 
             let key = self.wrapping_key(key_id)?;
             let nonce = Self::nonce(key_id, context_digest, key);
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .decrypt(nonce.as_slice(), context_digest.as_slice(), wrapped_dek)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .try_into()
-                .map_err(|_| "unwrapped test DEK is not 32 bytes".to_owned())
+                .map_err(|_| ModerationQuarantineKeyOperationErrorV1::Rejected)
         }
     }
 
@@ -14491,6 +17580,9 @@ mod tests {
 
     const TEST_PRIVACY_CYCLE_PRF_PROVIDER_HANDLE: &str = "threshold-prf:transparency:primary";
     const TEST_PRIVACY_RELEASE_ANCHOR_HANDLE: &str = "governance-dag:transparency:primary";
+    const TEST_TRANSPARENCY_LEADER_LEASE_HANDLE: &str = "sealed-cas:transparency:leader-primary";
+    const TEST_FENCED_TRANSPARENCY_PROVIDER_HANDLE: &str =
+        "governance-cas:transparency:privacy-primary";
 
     fn test_privacy_cycle_prf_provider_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(
@@ -14508,6 +17600,48 @@ mod tests {
             [0xD7; 32],
         )
         .expect("valid test release-anchor provider binding")
+    }
+
+    fn test_transparency_leader_lease_binding() -> TransparencyRuntimeProviderBindingV1 {
+        TransparencyRuntimeProviderBindingV1::try_new(
+            TEST_TRANSPARENCY_LEADER_LEASE_HANDLE,
+            1,
+            [0xE7; 32],
+        )
+        .expect("valid test transparency leader-lease binding")
+    }
+
+    fn test_fenced_transparency_provider_binding() -> TransparencyRuntimeProviderBindingV1 {
+        TransparencyRuntimeProviderBindingV1::try_new(
+            TEST_FENCED_TRANSPARENCY_PROVIDER_HANDLE,
+            1,
+            [0xF7; 32],
+        )
+        .expect("valid test fused transparency provider binding")
+    }
+
+    fn with_test_signed_governance_config(
+        builder: config::StorageConfigBuilder,
+        root: &Path,
+    ) -> config::StorageConfigBuilder {
+        let signer = TestGovernanceDagSigner::new();
+        builder
+            .governance_dir(Some(root.join("governance")))
+            .governance_dag_publisher_peer_id(Some(
+                String::from_utf8(signer.publisher_peer_id().to_vec())
+                    .expect("test Governance peer id is UTF-8"),
+            ))
+            .governance_dag_signer_handle(Some(signer.handle().to_owned()))
+            .governance_dag_signer_qualification(Some(
+                TestGovernanceDagSigner::expected_qualification(),
+            ))
+            .governance_dag_checkpoint_store_handle(Some(
+                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+            ))
+            .governance_dag_checkpoint_store_qualification(Some(
+                TestGovernanceDagCheckpointStore::expected_qualification(),
+            ))
+            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
     }
 
     struct TestPrivacyCyclePrfProvider {
@@ -14632,6 +17766,7 @@ mod tests {
             &self,
             expected: PrivacyReleaseAnchorHeadV1,
             next: PrivacyReleaseAnchorHeadV1,
+            _lease: &TransparencyLeaderLeaseGrantV1,
         ) -> Result<(), PrivacyReleaseAnchorErrorV1> {
             if expected.query_id() != next.query_id()
                 || next.sequence() != expected.sequence().saturating_add(1)
@@ -14674,12 +17809,390 @@ mod tests {
         Arc::new(TestPrivacyReleaseAnchor::default())
     }
 
+    #[derive(Default)]
+    struct TestTransparencyLeaderLeaseProvider {
+        state: Mutex<Option<TransparencyLeaderLeaseGrantV1>>,
+        fencing_token: AtomicU64,
+    }
+
+    impl ProductionTransparencyRuntimeProviderV1 for TestTransparencyLeaderLeaseProvider {
+        fn handle(&self) -> &str {
+            TEST_TRANSPARENCY_LEADER_LEASE_HANDLE
+        }
+
+        fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
+            Ok(TransparencyRuntimeProviderQualificationV1::new(
+                1, [0xE7; 32],
+            ))
+        }
+    }
+
+    impl TransparencyLeaderLeaseProviderV1 for TestTransparencyLeaderLeaseProvider {
+        fn acquire(
+            &self,
+            request: &TransparencyLeaderLeaseAcquireRequestV1,
+        ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+            if state
+                .as_ref()
+                .is_some_and(|active| request.acquire_at_unix() < active.expires_at_unix())
+            {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Conflict);
+            }
+            let fencing_token = self
+                .fencing_token
+                .load(Ordering::SeqCst)
+                .max(request.fencing_floor())
+                .checked_add(1)
+                .ok_or(TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+            self.fencing_token.store(fencing_token, Ordering::SeqCst);
+            let mut lease_id = [0xA7; 32];
+            lease_id[..8].copy_from_slice(&fencing_token.to_le_bytes());
+            let grant = TransparencyLeaderLeaseGrantV1::try_new(
+                lease_id,
+                request.scope(),
+                fencing_token,
+                request.acquire_at_unix(),
+                request.expires_at_unix(),
+                test_transparency_leader_lease_binding(),
+            )
+            .map_err(|_| TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+            *state = Some(grant.clone());
+            Ok(grant)
+        }
+
+        fn renew(
+            &self,
+            request: &TransparencyLeaderLeaseRenewRequestV1,
+        ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+            if state.as_ref() != Some(request.current_grant()) {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Conflict);
+            }
+            let fencing_token = self
+                .fencing_token
+                .load(Ordering::SeqCst)
+                .max(request.fencing_floor())
+                .checked_add(1)
+                .ok_or(TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+            self.fencing_token.store(fencing_token, Ordering::SeqCst);
+            let grant = TransparencyLeaderLeaseGrantV1::try_new(
+                request.current_grant().lease_id(),
+                request.current_grant().scope(),
+                fencing_token,
+                request.renew_at_unix(),
+                request.expires_at_unix(),
+                test_transparency_leader_lease_binding(),
+            )
+            .map_err(|_| TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+            *state = Some(grant.clone());
+            Ok(grant)
+        }
+
+        fn release(
+            &self,
+            request: &TransparencyLeaderLeaseReleaseRequestV1,
+        ) -> Result<TransparencyLeaderLeaseReleaseReceiptV1, TransparencyLeaderLeaseProviderErrorV1>
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+            if state.as_ref() != Some(request.current_grant()) {
+                return Err(TransparencyLeaderLeaseProviderErrorV1::Conflict);
+            }
+            let grant = state
+                .take()
+                .ok_or(TransparencyLeaderLeaseProviderErrorV1::Conflict)?;
+            TransparencyLeaderLeaseReleaseReceiptV1::try_new(
+                grant.lease_id(),
+                grant.scope(),
+                grant.fencing_token(),
+                request.release_at_unix(),
+                test_transparency_leader_lease_binding(),
+            )
+            .map_err(|_| TransparencyLeaderLeaseProviderErrorV1::Internal)
+        }
+    }
+
+    fn test_transparency_leader_lease_provider()
+    -> Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> {
+        Arc::new(TestTransparencyLeaderLeaseProvider::default())
+    }
+
+    #[derive(Debug, Default)]
+    struct TestFencedTransparencyState {
+        head: Option<FencedTransparencyTargetHeadV1>,
+        publications:
+            BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>,
+        receipts: BTreeMap<
+            [u8; 32],
+            (
+                FencedPrivacyPublicationRequestV1,
+                FencedPrivacyPublicationReceiptV1,
+            ),
+        >,
+        history: Vec<FencedTransparencyTargetHeadV1>,
+    }
+
+    struct TestFencedTransparencyProvider {
+        handle: &'static str,
+        qualification: GovernanceDagRuntimeProviderQualificationV1,
+        qualification_error: bool,
+        state: Mutex<TestFencedTransparencyState>,
+        head_override: Mutex<Option<Option<FencedTransparencyTargetHeadV1>>>,
+        governance_checkpoint_store: Arc<TestGovernanceDagCheckpointStore>,
+    }
+
+    impl std::fmt::Debug for TestFencedTransparencyProvider {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("TestFencedTransparencyProvider(<runtime-only>)")
+        }
+    }
+
+    impl TestFencedTransparencyProvider {
+        fn bound() -> Self {
+            Self::with_qualification(
+                TEST_FENCED_TRANSPARENCY_PROVIDER_HANDLE,
+                GovernanceDagRuntimeProviderQualificationV1::new(1, [0xF7; 32]),
+                false,
+            )
+        }
+
+        fn with_qualification(
+            handle: &'static str,
+            qualification: GovernanceDagRuntimeProviderQualificationV1,
+            qualification_error: bool,
+        ) -> Self {
+            Self {
+                handle,
+                qualification,
+                qualification_error,
+                state: Mutex::new(TestFencedTransparencyState::default()),
+                head_override: Mutex::new(None),
+                governance_checkpoint_store: Arc::new(TestGovernanceDagCheckpointStore::default()),
+            }
+        }
+
+        fn override_authoritative_head(
+            &self,
+            head: Option<Option<FencedTransparencyTargetHeadV1>>,
+        ) {
+            *self
+                .head_override
+                .lock()
+                .expect("test authoritative-head override") = head;
+        }
+    }
+
+    impl FencedTransparencyPublisherV1 for TestFencedTransparencyProvider {
+        fn handle(&self) -> &str {
+            self.handle
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if self.qualification_error {
+                return Err("target_credential=must-never-escape".to_owned());
+            }
+            Ok(self.qualification)
+        }
+
+        fn compare_and_append_privacy(
+            &self,
+            request: &FencedPrivacyPublicationRequestV1,
+        ) -> Result<FencedPrivacyPublicationReceiptV1, FencedTransparencyPublishErrorV1> {
+            request.validate()?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| FencedTransparencyPublishErrorV1::Ambiguous)?;
+            if let Some((retained_request, receipt)) = state.receipts.get(&request.request_digest())
+            {
+                return if retained_request == request {
+                    Ok(receipt.clone())
+                } else {
+                    Err(FencedTransparencyPublishErrorV1::InvalidRequest)
+                };
+            }
+            if let Some((idempotency_digest, payload_digest, included_head)) = state
+                .publications
+                .get(&request.publication_scope())
+                .copied()
+            {
+                if idempotency_digest != request.publication_idempotency_digest()
+                    || payload_digest != request.payload_digest()
+                {
+                    return Err(FencedTransparencyPublishErrorV1::PublicationConflict);
+                }
+                let readback_head = state
+                    .head
+                    .ok_or(FencedTransparencyPublishErrorV1::InvalidReceipt)?;
+                let receipt = FencedPrivacyPublicationReceiptV1::from_verified_existing(
+                    request,
+                    self.handle,
+                    self.qualification,
+                    included_head,
+                    readback_head,
+                )?;
+                state
+                    .receipts
+                    .insert(request.request_digest(), (request.clone(), receipt.clone()));
+                return Ok(receipt);
+            }
+            if state.head != request.expected_authoritative_head() {
+                return Err(FencedTransparencyPublishErrorV1::CompareConflict);
+            }
+            if request.fencing_token()
+                <= state
+                    .head
+                    .map_or(0, FencedTransparencyTargetHeadV1::fencing_floor)
+            {
+                return Err(FencedTransparencyPublishErrorV1::StaleFencingToken);
+            }
+            let receipt = FencedPrivacyPublicationReceiptV1::from_verified_append(
+                request,
+                self.handle,
+                self.qualification,
+            )?;
+            state.head = Some(receipt.included_head());
+            state.history.push(receipt.included_head());
+            state.publications.insert(
+                request.publication_scope(),
+                (
+                    request.publication_idempotency_digest(),
+                    request.payload_digest(),
+                    receipt.included_head(),
+                ),
+            );
+            state
+                .receipts
+                .insert(request.request_digest(), (request.clone(), receipt.clone()));
+            Ok(receipt)
+        }
+    }
+
+    impl FencedTransparencyAuthoritativeHeadReaderV1 for TestFencedTransparencyProvider {
+        fn handle(&self) -> &str {
+            self.handle
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if self.qualification_error {
+                return Err("target_credential=must-never-escape".to_owned());
+            }
+            Ok(self.qualification)
+        }
+
+        fn read_authoritative_head_with_ancestry(
+            &self,
+            required_ancestors: &[FencedTransparencyTargetHeadV1],
+            required_publications: &[FencedTransparencyPublicationInclusionV1],
+        ) -> Result<FencedTransparencyHeadAncestryProofV1, String> {
+            let head_override = *self
+                .head_override
+                .lock()
+                .map_err(|_| "target_credential=must-never-escape".to_owned())?;
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "target_credential=must-never-escape".to_owned())?;
+            let authoritative_head = head_override.unwrap_or(state.head);
+            if authoritative_head != state.head {
+                return Err("target ancestry proof unavailable".to_owned());
+            }
+            let current_index = authoritative_head
+                .map(|head| {
+                    state
+                        .history
+                        .iter()
+                        .position(|candidate| *candidate == head)
+                        .ok_or_else(|| "target ancestry proof unavailable".to_owned())
+                })
+                .transpose()?;
+            for ancestor in required_ancestors {
+                let ancestor_index = state
+                    .history
+                    .iter()
+                    .position(|candidate| candidate == ancestor)
+                    .ok_or_else(|| "target ancestry proof unavailable".to_owned())?;
+                if current_index.is_none_or(|current| ancestor_index > current) {
+                    return Err("target ancestry proof unavailable".to_owned());
+                }
+            }
+            for publication in required_publications {
+                if !state.publications.values().any(
+                    |(publication_idempotency_digest, payload_digest, included_head)| {
+                        *publication_idempotency_digest
+                            == publication.publication_idempotency_digest()
+                            && *payload_digest == publication.payload_digest()
+                            && *included_head == publication.included_head()
+                    },
+                ) {
+                    return Err("target publication inclusion proof unavailable".to_owned());
+                }
+            }
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"sorafs.test.node.fenced-head-ancestry-proof.v1");
+            fenced_privacy_digest_head(&mut hasher, authoritative_head);
+            for ancestor in required_ancestors {
+                fenced_privacy_digest_head(&mut hasher, Some(*ancestor));
+            }
+            for publication in required_publications {
+                hasher.update(&publication.publication_idempotency_digest());
+                hasher.update(&publication.payload_digest());
+                fenced_privacy_digest_head(&mut hasher, Some(publication.included_head()));
+            }
+            FencedTransparencyHeadAncestryProofV1::try_new(
+                authoritative_head,
+                required_ancestors.to_vec(),
+                required_publications.to_vec(),
+                *hasher.finalize().as_bytes(),
+            )
+            .map_err(|_| "target ancestry proof malformed".to_owned())
+        }
+    }
+
+    fn with_test_fenced_privacy_runtime(
+        deps: NodeRuntimeDeps,
+        provider: Arc<TestFencedTransparencyProvider>,
+    ) -> NodeRuntimeDeps {
+        let publisher: Arc<dyn FencedTransparencyPublisherV1> = provider.clone();
+        let head_reader: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = provider.clone();
+        deps.with_governance_dag_signer(Arc::new(TestGovernanceDagSigner::new()))
+            .with_governance_dag_checkpoint_store(Arc::clone(&provider.governance_checkpoint_store))
+            .with_fenced_transparency_publisher(publisher)
+            .with_fenced_transparency_head_reader(head_reader)
+    }
+
+    fn with_fresh_test_fenced_privacy_runtime(deps: NodeRuntimeDeps) -> NodeRuntimeDeps {
+        with_test_fenced_privacy_runtime(deps, Arc::new(TestFencedTransparencyProvider::bound()))
+    }
+
+    fn test_privacy_runtime_deps_without_fenced_target() -> NodeRuntimeDeps {
+        NodeRuntimeDeps::default()
+            .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+            .with_privacy_release_anchor(test_privacy_release_anchor())
+            .with_transparency_leader_lease_provider(test_transparency_leader_lease_provider())
+            .with_governance_dag_signer(Arc::new(TestGovernanceDagSigner::new()))
+            .with_governance_dag_checkpoint_store(Arc::new(
+                TestGovernanceDagCheckpointStore::default(),
+            ))
+    }
+
     fn node_with_test_privacy_cycle_prf_provider(config: StorageConfig) -> NodeHandle {
         NodeHandle::try_new_with_runtime_deps(
             config,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(test_privacy_release_anchor()),
+            with_fresh_test_fenced_privacy_runtime(
+                test_privacy_runtime_deps_without_fenced_target(),
+            ),
         )
         .expect("initialise node with test-only privacy cycle PRF provider")
     }
@@ -15152,7 +18665,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_initialization_rejects_retired_v1_marker_and_checkpoint() {
+    fn runtime_initialization_rejects_retired_markers_and_checkpoints() {
         for (retired_path, component) in [
             (
                 retired_runtime_state_initialization_path_v1 as fn(&Path) -> PathBuf,
@@ -15162,11 +18675,19 @@ mod tests {
                 retired_auxiliary_runtime_checkpoint_path_v1 as fn(&Path) -> PathBuf,
                 "retired auxiliary runtime checkpoint",
             ),
+            (
+                retired_runtime_state_initialization_path_v2 as fn(&Path) -> PathBuf,
+                "retired runtime initialization marker",
+            ),
+            (
+                retired_auxiliary_runtime_checkpoint_path_v2 as fn(&Path) -> PathBuf,
+                "retired auxiliary runtime checkpoint",
+            ),
         ] {
             let (cfg, _dir) = storage_config_with_temp_dir();
             drop(NodeHandle::new(cfg.clone()));
             let path = retired_path(cfg.data_dir());
-            write_local_checkpoint_atomic(&path, b"retired-v1")
+            write_local_checkpoint_atomic(&path, b"retired-runtime-state")
                 .expect("write retired runtime-state artifact");
 
             let error =
@@ -15185,7 +18706,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_initialization_rejects_noncanonical_v2_marker() {
+    fn runtime_initialization_rejects_noncanonical_v3_marker() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         drop(NodeHandle::new(cfg.clone()));
         let marker = runtime_state_initialization_path(cfg.data_dir());
@@ -15196,7 +18717,7 @@ mod tests {
         .expect("replace runtime-state marker");
 
         let error = NodeHandle::try_new(cfg)
-            .expect_err("noncanonical runtime-state v2 marker must fail startup");
+            .expect_err("noncanonical runtime-state v3 marker must fail startup");
         assert!(
             matches!(
                 error,
@@ -15204,7 +18725,7 @@ mod tests {
                     component: "runtime initialization marker",
                     ref message,
                     ..
-                } if message.contains("runtime-state v2")
+                } if message.contains("runtime-state v3")
             ),
             "unexpected startup error: {error}"
         );
@@ -15216,26 +18737,30 @@ mod tests {
         drop(NodeHandle::new(cfg.clone()));
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read initialized auxiliary checkpoint");
-        let mut checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV2>(&bytes)
-            .expect("decode initialized auxiliary checkpoint");
-        checkpoint.version = 1;
-        let retired = norito::to_bytes(&checkpoint).expect("encode retired checkpoint version");
-        write_local_checkpoint_atomic(&path, &retired)
-            .expect("replace auxiliary checkpoint with retired version");
+        for retired_version in [1, 2] {
+            let mut checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV3>(&bytes)
+                .expect("decode initialized auxiliary checkpoint");
+            checkpoint.version = retired_version;
+            let retired = norito::to_bytes(&checkpoint).expect("encode retired checkpoint version");
+            write_local_checkpoint_atomic(&path, &retired)
+                .expect("replace auxiliary checkpoint with retired version");
 
-        let error =
-            NodeHandle::try_new(cfg).expect_err("retired auxiliary version must fail startup");
-        assert!(
-            matches!(
-                error,
-                NodeInitError::Checkpoint {
-                    component: "auxiliary runtime",
-                    ref message,
-                    ..
-                } if message.contains("unsupported auxiliary runtime checkpoint version 1")
-            ),
-            "unexpected startup error: {error}"
-        );
+            let error = NodeHandle::try_new(cfg.clone())
+                .expect_err("retired auxiliary version must fail startup");
+            assert!(
+                matches!(
+                    error,
+                    NodeInitError::Checkpoint {
+                        component: "auxiliary runtime",
+                        ref message,
+                        ..
+                    } if message.contains(&format!(
+                        "unsupported auxiliary runtime checkpoint version {retired_version}"
+                    ))
+                ),
+                "unexpected startup error: {error}"
+            );
+        }
     }
 
     #[test]
@@ -16412,31 +19937,36 @@ mod tests {
     }
 
     fn privacy_aggregate_policy_config_for_cycle(
-        cycle: PrivacyAggregateCycleConfig,
+        mut cycle: PrivacyAggregateCycleConfig,
     ) -> config::PrivacyAggregatePolicyConfig {
-        config::PrivacyAggregatePolicyConfig::new(
-            cycle.query_id,
-            cycle.first_cycle_start_unix,
-            cycle.cycle_seconds,
-            cycle.aggregate_id_prefix,
-            cycle.populations,
-            cycle.metrics,
-            cycle.privacy,
-            cycle.policy_digest,
-            privacy_composition_budget_policy(),
-        )
-        .expect("test privacy aggregate policy")
+        // Runtime publication metadata is valid on generated records, but it
+        // is intentionally excluded from the governed policy projection.
+        cycle.metadata.clear();
+        config::PrivacyAggregatePolicyConfig::new(cycle, privacy_composition_budget_policy())
+            .expect("test privacy aggregate policy")
     }
 
     fn privacy_aggregate_storage_config(root: &Path) -> StorageConfig {
-        StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
-            .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
-            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
-            .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-            .privacy_release_anchor_provider_binding(Some(test_privacy_release_anchor_binding()))
-            .build()
+        with_test_signed_governance_config(
+            StorageConfig::builder()
+                .enabled(true)
+                .provider_id(Some(ProviderId::new([0x91; 32])))
+                .data_dir(root.join("storage"))
+                .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
+                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
+                .privacy_release_anchor_provider_binding(
+                    Some(test_privacy_release_anchor_binding()),
+                )
+                .privacy_leader_lease_provider_binding(Some(
+                    test_transparency_leader_lease_binding(),
+                ))
+                .privacy_fenced_publisher_binding(
+                    Some(test_fenced_transparency_provider_binding()),
+                ),
+            root,
+        )
+        .build()
     }
 
     fn privacy_aggregate_storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
@@ -18758,7 +22288,7 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for tamper in 0..3 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
                 norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
             let entry = checkpoint
                 .governance_outbox_entries
@@ -18807,7 +22337,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         let entry = checkpoint
             .governance_outbox_entries
@@ -18850,7 +22380,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         checkpoint.reputation_events[0].snapshot_id = [0x99; 16];
         write_local_checkpoint_atomic(
@@ -18880,7 +22410,7 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for case in 0..7_u8 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
                 norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
             match case {
                 0 => {
@@ -18970,6 +22500,35 @@ mod tests {
             .expect("decode transparency ledger publication");
         assert_eq!(decoded.block.entry_count, 2);
         decoded.validate().expect("publication validates");
+    }
+
+    #[test]
+    fn direct_privacy_publication_rejects_unfenced_outbox_mutation() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let publication = NodeHandle::build_privacy_aggregate_publication(
+            *b"cycle-2026-wk-03",
+            1_800_000_000,
+            1_800_604_800,
+            1_800_604_800,
+            None,
+            vec![privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0)],
+        )
+        .expect("build privacy aggregate publication");
+
+        let error = handle
+            .publish_transparency_ledger_publication(publication)
+            .expect_err("direct privacy publication must not bypass leader fencing");
+        assert!(
+            error
+                .to_string()
+                .contains("must use the finalized release scheduler")
+        );
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert!(publisher.take().is_empty());
     }
 
     #[test]
@@ -19529,9 +23088,6 @@ mod tests {
     fn publish_due_privacy_aggregate_cycle_from_source_events_publishes_once() {
         let (cfg, _dir) = privacy_aggregate_storage_config_with_temp_dir();
         let handle = node_with_test_privacy_cycle_prf_provider(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
         for event in [
             privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
             privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
@@ -19582,16 +23138,22 @@ mod tests {
             repeated,
             PrivacyAggregateScheduleOutcome::Published { .. }
         ));
-        assert_eq!(publisher.take().len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert_eq!(
+            handle
+                .privacy_composition_budget_snapshot()
+                .expect("privacy budget after exact replay")
+                .chains[0]
+                .charges
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn publish_due_privacy_aggregate_cycle_from_source_events_catches_up_stale_windows() {
         let (cfg, _dir) = privacy_aggregate_storage_config_with_temp_dir();
         let handle = node_with_test_privacy_cycle_prf_provider(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
         for event in [
             privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
             privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
@@ -19720,7 +23282,16 @@ mod tests {
                 .to_string()
                 .contains("idempotency key equivocation")
         );
-        assert_eq!(publisher.take().len(), 2);
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert_eq!(
+            handle
+                .privacy_composition_budget_snapshot()
+                .expect("privacy budget after catch-up")
+                .chains[0]
+                .charges
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -19732,14 +23303,16 @@ mod tests {
         let trait_provider: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = provider.clone();
         let handle = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(trait_provider)
-                .with_privacy_release_anchor(test_privacy_release_anchor()),
+            with_fresh_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(trait_provider)
+                    .with_privacy_release_anchor(test_privacy_release_anchor())
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+            ),
         )
         .expect("initialise node with recording threshold PRF provider");
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
         for event in [
             privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
             privacy_source_event("beta-1", "jurisdiction-b", 0xB0, 210),
@@ -19792,7 +23365,7 @@ mod tests {
             }
             other => panic!("expected second published outcome, got {other:?}"),
         }
-        assert_eq!(publisher.take().len(), 2);
+        assert_eq!(handle.pending_governance_publication_count(), 0);
         let requests = provider.requests();
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].policy_digest(), [0xC0; 32]);
@@ -19885,7 +23458,10 @@ mod tests {
                 cfg,
                 NodeRuntimeDeps::default()
                     .with_privacy_cycle_prf_provider(provider)
-                    .with_privacy_release_anchor(test_privacy_release_anchor()),
+                    .with_privacy_release_anchor(test_privacy_release_anchor())
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
             )
             .expect_err("invalid production threshold-PRF qualification must fail startup");
             assert!(matches!(
@@ -19920,6 +23496,305 @@ mod tests {
     }
 
     #[test]
+    fn differential_privacy_startup_requires_transparency_leader_lease_provider() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = privacy_aggregate_storage_config(&root);
+        assert!(matches!(
+            NodeHandle::try_new_with_runtime_deps(
+                cfg,
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(test_privacy_release_anchor()),
+            ),
+            Err(
+                NodeInitError::TransparencyLeaderLeaseProviderQualification {
+                    error: TransparencyLeaderLeaseErrorV1::ProviderQualification(
+                        TransparencyRuntimeProviderQualificationErrorV1::MissingProvider
+                    ),
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn differential_privacy_startup_requires_fused_target_binding_and_both_runtime_roles() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let data_dir = root.join("storage");
+        let without_binding = with_test_signed_governance_config(
+            StorageConfig::builder()
+                .enabled(true)
+                .provider_id(Some(ProviderId::new([0x91; 32])))
+                .data_dir(data_dir.clone())
+                .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
+                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
+                .privacy_release_anchor_provider_binding(
+                    Some(test_privacy_release_anchor_binding()),
+                )
+                .privacy_leader_lease_provider_binding(Some(
+                    test_transparency_leader_lease_binding(),
+                )),
+            &root,
+        )
+        .build();
+        let error = NodeHandle::try_new_with_runtime_deps(
+            without_binding,
+            test_privacy_runtime_deps_without_fenced_target(),
+        )
+        .expect_err("privacy publication must require its configured fused target binding");
+        assert!(
+            error
+                .to_string()
+                .contains("requires an exact configured fused target binding")
+        );
+        assert!(!data_dir.exists());
+
+        for (label, inject_writer, inject_reader, expected) in [
+            (
+                "missing writer",
+                false,
+                true,
+                "requires an injected fused target writer",
+            ),
+            (
+                "missing reader",
+                true,
+                false,
+                "requires an injected authenticated authoritative-head reader",
+            ),
+        ] {
+            let temp_dir = tempfile::tempdir().expect("create missing-role temp dir");
+            let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+            let config = privacy_aggregate_storage_config(&root);
+            let data_dir = config.data_dir().clone();
+            let provider = Arc::new(TestFencedTransparencyProvider::bound());
+            let mut deps = test_privacy_runtime_deps_without_fenced_target();
+            if inject_writer {
+                let writer: Arc<dyn FencedTransparencyPublisherV1> = provider.clone();
+                deps = deps.with_fenced_transparency_publisher(writer);
+            }
+            if inject_reader {
+                let reader: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = provider;
+                deps = deps.with_fenced_transparency_head_reader(reader);
+            }
+            let error = NodeHandle::try_new_with_runtime_deps(config, deps).expect_err(label);
+            assert!(
+                error.to_string().contains(expected),
+                "{label} produced unexpected error: {error}"
+            );
+            assert!(!data_dir.exists(), "{label} opened durable state");
+        }
+    }
+
+    #[test]
+    fn fused_privacy_target_qualification_fails_before_persistence() {
+        for (label, provider, expected) in [
+            (
+                "substituted handle",
+                TestFencedTransparencyProvider::with_qualification(
+                    "governance-cas:transparency:privacy-secondary",
+                    GovernanceDagRuntimeProviderQualificationV1::new(1, [0xF7; 32]),
+                    false,
+                ),
+                "identity or policy does not match configuration",
+            ),
+            (
+                "substituted revision",
+                TestFencedTransparencyProvider::with_qualification(
+                    TEST_FENCED_TRANSPARENCY_PROVIDER_HANDLE,
+                    GovernanceDagRuntimeProviderQualificationV1::new(2, [0xF7; 32]),
+                    false,
+                ),
+                "identity or policy does not match configuration",
+            ),
+            (
+                "substituted policy",
+                TestFencedTransparencyProvider::with_qualification(
+                    TEST_FENCED_TRANSPARENCY_PROVIDER_HANDLE,
+                    GovernanceDagRuntimeProviderQualificationV1::new(1, [0xF8; 32]),
+                    false,
+                ),
+                "identity or policy does not match configuration",
+            ),
+            (
+                "test-marked provider",
+                TestFencedTransparencyProvider::with_qualification(
+                    "governance-cas:transparency:test",
+                    GovernanceDagRuntimeProviderQualificationV1::new(1, [0xF7; 32]),
+                    false,
+                ),
+                "identity or policy does not match configuration",
+            ),
+            (
+                "stale provider",
+                TestFencedTransparencyProvider::with_qualification(
+                    TEST_FENCED_TRANSPARENCY_PROVIDER_HANDLE,
+                    GovernanceDagRuntimeProviderQualificationV1::new(1, [0xF7; 32]),
+                    true,
+                ),
+                "unavailable, stale, or unqualified",
+            ),
+        ] {
+            let temp_dir = tempfile::tempdir().expect("create qualification temp dir");
+            let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+            let config = privacy_aggregate_storage_config(&root);
+            let data_dir = config.data_dir().clone();
+            let provider = Arc::new(provider);
+            let error = NodeHandle::try_new_with_runtime_deps(
+                config,
+                with_test_fenced_privacy_runtime(
+                    test_privacy_runtime_deps_without_fenced_target(),
+                    provider,
+                ),
+            )
+            .expect_err(label);
+            assert!(
+                error.to_string().contains(expected),
+                "{label} produced unexpected error: {error}"
+            );
+            assert!(!error.to_string().contains("must-never-escape"));
+            assert!(!format!("{error:?}").contains("must-never-escape"));
+            assert!(!data_dir.exists(), "{label} opened durable state");
+        }
+    }
+
+    #[test]
+    fn fused_privacy_head_reader_must_match_the_writer_binding() {
+        let temp_dir = tempfile::tempdir().expect("create reader mismatch temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let config = privacy_aggregate_storage_config(&root);
+        let data_dir = config.data_dir().clone();
+        let writer: Arc<dyn FencedTransparencyPublisherV1> =
+            Arc::new(TestFencedTransparencyProvider::bound());
+        let reader: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> =
+            Arc::new(TestFencedTransparencyProvider::with_qualification(
+                "governance-cas:transparency:privacy-secondary",
+                GovernanceDagRuntimeProviderQualificationV1::new(1, [0xF7; 32]),
+                false,
+            ));
+        let error = NodeHandle::try_new_with_runtime_deps(
+            config,
+            test_privacy_runtime_deps_without_fenced_target()
+                .with_fenced_transparency_publisher(writer)
+                .with_fenced_transparency_head_reader(reader),
+        )
+        .expect_err("substituted authoritative-head reader must fail startup");
+        assert!(
+            error
+                .to_string()
+                .contains("head reader identity or policy does not match configuration")
+        );
+        assert!(!data_dir.exists());
+    }
+
+    #[test]
+    fn disabled_privacy_publication_rejects_unrequested_fused_target_inputs() {
+        for (label, config_binding, writer, reader, expected) in [
+            (
+                "configured binding",
+                true,
+                false,
+                false,
+                "binding is unexpected",
+            ),
+            ("runtime writer", false, true, false, "writer is unexpected"),
+            ("runtime reader", false, false, true, "reader is unexpected"),
+        ] {
+            let temp_dir = tempfile::tempdir().expect("create unexpected-input temp dir");
+            let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+            let mut builder = StorageConfig::builder().data_dir(root.join("storage"));
+            if config_binding {
+                builder = builder.privacy_fenced_publisher_binding(Some(
+                    test_fenced_transparency_provider_binding(),
+                ));
+            }
+            let provider = Arc::new(TestFencedTransparencyProvider::bound());
+            let mut deps = NodeRuntimeDeps::default();
+            if writer {
+                let provider: Arc<dyn FencedTransparencyPublisherV1> = provider.clone();
+                deps = deps.with_fenced_transparency_publisher(provider);
+            }
+            if reader {
+                let provider: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = provider;
+                deps = deps.with_fenced_transparency_head_reader(provider);
+            }
+            let error =
+                NodeHandle::try_new_with_runtime_deps(builder.build(), deps).expect_err(label);
+            assert!(
+                error.to_string().contains(expected),
+                "{label} produced unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_startup_without_explicit_signed_governance_root_fails_before_state() {
+        let temp_dir = tempfile::tempdir().expect("create privacy publisher temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let data_dir = root.join("storage");
+        let governance_dir = root.join("governance");
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .provider_id(Some(ProviderId::new([0x91; 32])))
+            .data_dir(data_dir.clone())
+            .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
+            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+            .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
+            .privacy_release_anchor_provider_binding(Some(test_privacy_release_anchor_binding()))
+            .privacy_leader_lease_provider_binding(Some(test_transparency_leader_lease_binding()))
+            .privacy_fenced_publisher_binding(Some(test_fenced_transparency_provider_binding()))
+            .build();
+        assert!(config.governance_dir().is_none());
+        let provider = Arc::new(TestFencedTransparencyProvider::bound());
+        let error = NodeHandle::try_new_with_runtime_deps(
+            config,
+            with_test_fenced_privacy_runtime(
+                test_privacy_runtime_deps_without_fenced_target(),
+                Arc::clone(&provider),
+            ),
+        )
+        .expect_err("privacy publication must not derive an unsigned local publisher root");
+        assert!(
+            error
+                .to_string()
+                .contains("requires an explicit signed Governance DAG directory"),
+            "unexpected startup error: {error}"
+        );
+        assert!(!data_dir.exists());
+        assert!(!governance_dir.exists());
+        let state = provider.state.lock().expect("fused target state");
+        assert!(state.head.is_none());
+        assert!(state.publications.is_empty());
+        assert!(state.receipts.is_empty());
+    }
+
+    #[test]
+    fn disabled_privacy_publication_rejects_unrequested_leader_lease_provider() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = StorageConfig::builder()
+            .data_dir(root.join("storage"))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new_with_runtime_deps(
+                cfg,
+                NodeRuntimeDeps::default().with_transparency_leader_lease_provider(
+                    test_transparency_leader_lease_provider(),
+                ),
+            ),
+            Err(
+                NodeInitError::TransparencyLeaderLeaseProviderQualification {
+                    error: TransparencyLeaderLeaseErrorV1::ProviderQualification(
+                        TransparencyRuntimeProviderQualificationErrorV1::UnexpectedProvider
+                    ),
+                }
+            )
+        ));
+    }
+
+    #[test]
     fn privacy_cycle_prf_rejects_zero_output_before_provider_boundary() {
         assert_eq!(
             PrivacyCyclePrfOutputV1::new([0; 32]).expect_err("zero output must fail"),
@@ -19937,9 +23812,14 @@ mod tests {
         );
         let handle = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(provider)
-                .with_privacy_release_anchor(test_privacy_release_anchor()),
+            with_fresh_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(provider)
+                    .with_privacy_release_anchor(test_privacy_release_anchor())
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+            ),
         )
         .expect("initialise node with error-injecting threshold PRF provider");
         for event in [
@@ -19974,30 +23854,48 @@ mod tests {
             .path()
             .canonicalize()
             .expect("canonical debug-provider temp dir");
-        let config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
-            .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config()))
-            .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
-            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
-            .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-            .privacy_release_anchor_provider_binding(Some(test_privacy_release_anchor_binding()))
-            .build();
+        let config = with_test_signed_governance_config(
+            StorageConfig::builder()
+                .enabled(true)
+                .provider_id(Some(ProviderId::new([0x91; 32])))
+                .data_dir(root.join("storage"))
+                .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config()))
+                .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
+                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
+                .privacy_release_anchor_provider_binding(
+                    Some(test_privacy_release_anchor_binding()),
+                )
+                .privacy_leader_lease_provider_binding(Some(
+                    test_transparency_leader_lease_binding(),
+                ))
+                .privacy_fenced_publisher_binding(
+                    Some(test_fenced_transparency_provider_binding()),
+                ),
+            &root,
+        )
+        .build();
         let privacy_provider: Arc<dyn ProductionPrivacyCyclePrfProviderV1> =
             Arc::new(TestPrivacyCyclePrfProvider::bound());
         let quarantine_wrapper = test_quarantine_key_wrapper();
-        let node = NodeHandle::try_new_with_runtime_deps(
-            config,
+        let runtime_deps = with_fresh_test_fenced_privacy_runtime(
             NodeRuntimeDeps::default()
                 .with_moderation_quarantine_key_wrapper(quarantine_wrapper)
                 .with_privacy_cycle_prf_provider(privacy_provider)
-                .with_privacy_release_anchor(test_privacy_release_anchor()),
-        )
-        .expect("initialise node with runtime crypto providers");
+                .with_privacy_release_anchor(test_privacy_release_anchor())
+                .with_transparency_leader_lease_provider(test_transparency_leader_lease_provider()),
+        );
+        let runtime_debug = format!("{runtime_deps:?}");
+        assert!(runtime_debug.contains("fenced_transparency_publisher: true"));
+        assert!(runtime_debug.contains("fenced_transparency_head_reader: true"));
+        assert!(!runtime_debug.contains("TestFencedTransparencyProvider"));
+        let node = NodeHandle::try_new_with_runtime_deps(config, runtime_deps)
+            .expect("initialise node with runtime crypto providers");
         let debug = format!("{node:?}");
         assert!(debug.contains("ModerationQuarantineKeyWrapper(<runtime-only>)"));
         assert!(debug.contains("PrivacyCyclePrfProviderV1(<runtime-only>)"));
         assert!(debug.contains("PrivacyReleaseAnchorV1(<runtime-only>)"));
+        assert!(debug.contains("TransparencyLeaderLeaseProviderV1(<runtime-only>)"));
         assert!(!debug.contains("kms:test/quarantine-v1"));
         assert!(!debug.contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK"));
     }
@@ -20007,22 +23905,32 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let schedule = privacy_aggregate_schedule_config();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
-            .privacy_aggregate_schedule(Some(schedule))
-            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
-            .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-            .privacy_release_anchor_provider_binding(Some(test_privacy_release_anchor_binding()))
-            .build();
+        let cfg = with_test_signed_governance_config(
+            StorageConfig::builder()
+                .enabled(true)
+                .provider_id(Some(ProviderId::new([0x91; 32])))
+                .data_dir(root.join("storage"))
+                .privacy_aggregate_schedule(Some(schedule))
+                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
+                .privacy_release_anchor_provider_binding(
+                    Some(test_privacy_release_anchor_binding()),
+                )
+                .privacy_leader_lease_provider_binding(Some(
+                    test_transparency_leader_lease_binding(),
+                ))
+                .privacy_fenced_publisher_binding(
+                    Some(test_fenced_transparency_provider_binding()),
+                ),
+            &root,
+        )
+        .build();
         let handle = node_with_test_privacy_cycle_prf_provider(cfg);
         assert_eq!(
             handle.configured_privacy_aggregate_schedule(),
             Some(schedule)
         );
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        assert!(handle.has_governance_publisher());
         for event in [
             privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
             privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
@@ -20050,7 +23958,7 @@ mod tests {
             other => panic!("expected published outcome, got {other:?}"),
         };
         assert_eq!(publication.block.generated_at_unix, 200);
-        assert_eq!(publisher.take().len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 0);
         assert_eq!(handle.privacy_aggregate_source_event_count(), 0);
         let budget = handle
             .privacy_composition_budget_snapshot()
@@ -20089,24 +23997,43 @@ mod tests {
     }
 
     #[test]
-    fn privacy_publication_budget_state_and_outbox_restore_atomically() {
+    fn privacy_publication_budget_state_and_fused_head_restore_atomically() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let schedule = privacy_aggregate_schedule_config();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
-            .privacy_aggregate_schedule(Some(schedule))
-            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
-            .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-            .privacy_release_anchor_provider_binding(Some(test_privacy_release_anchor_binding()))
-            .build();
+        let cfg = with_test_signed_governance_config(
+            StorageConfig::builder()
+                .enabled(true)
+                .provider_id(Some(ProviderId::new([0x91; 32])))
+                .data_dir(root.join("storage"))
+                .privacy_aggregate_schedule(Some(schedule))
+                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
+                .privacy_release_anchor_provider_binding(
+                    Some(test_privacy_release_anchor_binding()),
+                )
+                .privacy_leader_lease_provider_binding(Some(
+                    test_transparency_leader_lease_binding(),
+                ))
+                .privacy_fenced_publisher_binding(
+                    Some(test_fenced_transparency_provider_binding()),
+                ),
+            &root,
+        )
+        .build();
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
+        let fused_provider = Arc::new(TestFencedTransparencyProvider::bound());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg.clone(),
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor.clone()),
+            with_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor.clone())
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+                fused_provider.clone(),
+            ),
         )
         .expect("initialise source node with shared release anchor");
         for event in [
@@ -20123,26 +24050,60 @@ mod tests {
                 privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
                 "restore-cycle-1".to_string(),
             )
-            .expect("commit configured privacy cycle without publisher");
+            .expect("commit configured privacy cycle through the fused publisher");
         let cycle_id = match published {
             PrivacyAggregateScheduleOutcome::Published { publication, .. } => {
                 publication.block.cycle_id
             }
             other => panic!("expected published outcome, got {other:?}"),
         };
-        assert_eq!(source.pending_governance_publication_count(), 1);
+        assert_eq!(source.pending_governance_publication_count(), 0);
         assert_eq!(source.privacy_aggregate_source_event_count(), 0);
+        let persisted_fencing_floor = source
+            .transparency_leader_lease_fencing_floor()
+            .expect("read source leader-lease fencing floor")
+            .expect("privacy publication has a leader-lease provider");
+        assert!(persisted_fencing_floor > 0);
+        source
+            .revalidate_fenced_privacy_runtime()
+            .expect("current fused head and inclusion revalidate");
+        fused_provider.override_authoritative_head(Some(None));
+        let error = source
+            .revalidate_fenced_privacy_runtime()
+            .expect_err("post-construction target rollback must fail preflight");
+        assert!(
+            error.to_string().contains("authoritative")
+                || error.to_string().contains("ancestry")
+                || error.to_string().contains("unavailable"),
+            "unexpected target rollback error: {error}"
+        );
+        fused_provider.override_authoritative_head(None);
+        source
+            .revalidate_fenced_privacy_runtime()
+            .expect("restored authoritative target revalidates");
         drop(source);
 
         let restored = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor),
+            with_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor)
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+                fused_provider,
+            ),
         )
         .expect("restore node with shared release anchor");
-        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
         assert_eq!(restored.privacy_aggregate_source_event_count(), 0);
+        assert_eq!(
+            restored
+                .transparency_leader_lease_fencing_floor()
+                .expect("read restored leader-lease fencing floor"),
+            Some(persisted_fencing_floor)
+        );
         let budget = restored
             .privacy_composition_budget_snapshot()
             .expect("restored privacy budget");
@@ -20170,11 +24131,6 @@ mod tests {
             1
         );
 
-        let publisher = Arc::new(RecordingPublisher::default());
-        restored
-            .try_set_governance_publisher(publisher.clone())
-            .expect("replay durable privacy publication");
-        assert_eq!(publisher.take().len(), 1);
         assert_eq!(restored.pending_governance_publication_count(), 0);
     }
 
@@ -20185,11 +24141,18 @@ mod tests {
         let cfg = privacy_aggregate_storage_config(&root);
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
+        let fused_provider = Arc::new(TestFencedTransparencyProvider::bound());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg.clone(),
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor.clone()),
+            with_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor.clone())
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+                fused_provider.clone(),
+            ),
         )
         .expect("initialise privacy receipt source node");
         assert!(matches!(
@@ -20205,7 +24168,7 @@ mod tests {
 
         let original = fs::read(&checkpoint_path).expect("read privacy receipt checkpoint");
         for tamper in 0..2 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
                 norito::decode_from_bytes(&original).expect("decode privacy receipt checkpoint");
             let receipt = checkpoint
                 .privacy_publish_request_receipts
@@ -20225,9 +24188,15 @@ mod tests {
             .expect("write tampered privacy receipt checkpoint");
             let error = NodeHandle::try_new_with_runtime_deps(
                 cfg.clone(),
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor.clone()),
+                with_test_fenced_privacy_runtime(
+                    NodeRuntimeDeps::default()
+                        .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                        .with_privacy_release_anchor(anchor.clone())
+                        .with_transparency_leader_lease_provider(
+                            test_transparency_leader_lease_provider(),
+                        ),
+                    fused_provider.clone(),
+                ),
             )
             .expect_err("tampered privacy publish receipt must fail restart");
             assert!(matches!(
@@ -20242,9 +24211,15 @@ mod tests {
             .expect("restore canonical privacy receipt checkpoint");
         NodeHandle::try_new_with_runtime_deps(
             cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor),
+            with_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor)
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+                fused_provider,
+            ),
         )
         .expect("canonical privacy receipt checkpoint restores");
     }
@@ -20258,9 +24233,14 @@ mod tests {
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg.clone(),
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor.clone()),
+            with_fresh_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor.clone())
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+            ),
         )
         .expect("initialise privacy source-receipt node");
         source
@@ -20284,7 +24264,7 @@ mod tests {
         drop(source);
 
         let bytes = fs::read(&checkpoint_path).expect("read receipt-only checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
             norito::decode_from_bytes(&bytes).expect("decode receipt-only checkpoint");
         assert!(checkpoint.privacy_source_events.is_empty());
         checkpoint
@@ -20300,9 +24280,14 @@ mod tests {
 
         let error = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor),
+            with_fresh_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor)
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+            ),
         )
         .expect_err("oversized retained source-event receipt must fail restart");
         assert!(matches!(
@@ -20322,9 +24307,14 @@ mod tests {
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor.clone()),
+            with_fresh_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor.clone())
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+            ),
         )
         .expect("initialise privacy delay-lineage node");
         assert!(matches!(
@@ -20369,21 +24359,38 @@ mod tests {
                 privacy_aggregate_policy_config_for_cycle(width_cycle),
             ),
         ] {
-            let rotated_cfg = StorageConfig::builder()
-                .enabled(true)
-                .data_dir(root.join("storage"))
-                .privacy_aggregate_schedule(Some(schedule))
-                .privacy_aggregate_policy(Some(policy))
-                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-                .privacy_release_anchor_provider_binding(
-                    Some(test_privacy_release_anchor_binding()),
-                )
-                .build();
+            let rotated_cfg = with_test_signed_governance_config(
+                StorageConfig::builder()
+                    .enabled(true)
+                    .provider_id(Some(ProviderId::new([0x91; 32])))
+                    .data_dir(root.join("storage"))
+                    .privacy_aggregate_schedule(Some(schedule))
+                    .privacy_aggregate_policy(Some(policy))
+                    .privacy_cycle_prf_provider_binding(Some(
+                        test_privacy_cycle_prf_provider_binding(),
+                    ))
+                    .privacy_release_anchor_provider_binding(Some(
+                        test_privacy_release_anchor_binding(),
+                    ))
+                    .privacy_leader_lease_provider_binding(Some(
+                        test_transparency_leader_lease_binding(),
+                    ))
+                    .privacy_fenced_publisher_binding(Some(
+                        test_fenced_transparency_provider_binding(),
+                    )),
+                &root,
+            )
+            .build();
             let error = NodeHandle::try_new_with_runtime_deps(
                 rotated_cfg,
-                NodeRuntimeDeps::default()
-                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                    .with_privacy_release_anchor(anchor.clone()),
+                with_fresh_test_fenced_privacy_runtime(
+                    NodeRuntimeDeps::default()
+                        .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                        .with_privacy_release_anchor(anchor.clone())
+                        .with_transparency_leader_lease_provider(
+                            test_transparency_leader_lease_provider(),
+                        ),
+                ),
             )
             .expect_err("cadence rotation must fail the durable query lineage");
             assert!(
@@ -20414,9 +24421,14 @@ mod tests {
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
         let source = NodeHandle::try_new_with_runtime_deps(
             cfg.clone(),
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor.clone()),
+            with_fresh_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor.clone())
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+            ),
         )
         .expect("initialise source node");
         for event in [
@@ -20451,9 +24463,14 @@ mod tests {
             .expect("simulate checkpoint rollback behind finalized head");
         let error = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
-                .with_privacy_release_anchor(anchor),
+            with_fresh_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor)
+                    .with_transparency_leader_lease_provider(
+                        test_transparency_leader_lease_provider(),
+                    ),
+            ),
         )
         .expect_err("rollback behind the finalized release anchor must fail");
         assert!(
@@ -20485,9 +24502,6 @@ mod tests {
     fn publish_due_privacy_aggregate_cycle_from_source_events_emits_fixed_empty_population_set() {
         let (cfg, _dir) = privacy_aggregate_storage_config_with_temp_dir();
         let handle = node_with_test_privacy_cycle_prf_provider(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
         let empty = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
@@ -20511,7 +24525,7 @@ mod tests {
         };
         assert_eq!(publication.block.generated_at_unix, 200);
         assert_eq!(publication.block.entry_count, 2);
-        assert_eq!(publisher.take().len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 0);
     }
 
     #[test]
@@ -20546,8 +24560,12 @@ mod tests {
         assert!(matches!(
             error,
             NodeInitError::GovernancePublisher(message)
-                if message.contains("requires peer id, signer handle, public key")
+                if message.contains(
+                    "requires peer id, signer handle, signer revision, signer policy digest, public key"
+                )
         ));
+        assert!(!missing_identity_root.join("storage").exists());
+        assert!(!missing_identity_root.join("governance").exists());
 
         let signer = Arc::new(TestGovernanceDagSigner::new());
         let signed_dir = tempfile::tempdir().expect("signed publisher temp dir");
@@ -20564,6 +24582,15 @@ mod tests {
                     .expect("test peer id is UTF-8"),
             ))
             .governance_dag_signer_handle(Some(signer.handle().to_owned()))
+            .governance_dag_signer_qualification(Some(
+                TestGovernanceDagSigner::expected_qualification(),
+            ))
+            .governance_dag_checkpoint_store_handle(Some(
+                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+            ))
+            .governance_dag_checkpoint_store_qualification(Some(
+                TestGovernanceDagCheckpointStore::expected_qualification(),
+            ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
         let error = NodeHandle::try_new(signed_config.clone())
@@ -20576,10 +24603,94 @@ mod tests {
 
         let handle = NodeHandle::try_new_with_runtime_deps(
             signed_config,
-            NodeRuntimeDeps::default().with_governance_dag_signer(signer),
+            NodeRuntimeDeps::default()
+                .with_governance_dag_signer(signer.clone())
+                .with_governance_dag_checkpoint_store(Arc::new(
+                    TestGovernanceDagCheckpointStore::default(),
+                )),
         )
         .expect("complete runtime-signed Governance DAG publisher starts");
         assert!(handle.has_governance_publisher());
+        handle
+            .revalidate_fenced_privacy_runtime()
+            .expect("startup-pinned signed publisher revalidates");
+
+        let replacement: Arc<dyn GovernancePublisher> = Arc::new(RecordingPublisher::default());
+        let error = handle
+            .try_set_governance_publisher(replacement)
+            .expect_err("startup-pinned signed publisher cannot be replaced");
+        assert!(error.to_string().contains("cannot be replaced"));
+        handle.clear_governance_publisher();
+        assert!(
+            handle.has_governance_publisher(),
+            "startup-pinned signed publisher cannot be cleared"
+        );
+        handle
+            .revalidate_fenced_privacy_runtime()
+            .expect("rejected publisher mutation leaves the exact instance active");
+
+        signer.qualification_refuse.store(true, Ordering::SeqCst);
+        let error = handle
+            .revalidate_fenced_privacy_runtime()
+            .expect_err("post-construction signer revocation must fail preflight");
+        assert!(error.to_string().contains("stale"));
+        assert!(!error.to_string().contains("must-never-escape"));
+        signer.qualification_refuse.store(false, Ordering::SeqCst);
+        handle
+            .revalidate_fenced_privacy_runtime()
+            .expect("restored signer qualification revalidates");
+    }
+
+    #[test]
+    fn node_restart_recovers_checkpoint_cas_applied_response_error() {
+        let temp = tempfile::tempdir().expect("producer recovery temp dir");
+        let root = temp.path().canonicalize().expect("canonical temp root");
+        let config = with_test_signed_governance_config(
+            StorageConfig::builder()
+                .enabled(true)
+                .data_dir(root.join("storage")),
+            &root,
+        )
+        .build();
+        let checkpoint_store = Arc::new(TestGovernanceDagCheckpointStore::default());
+        let node = NodeHandle::try_new_with_runtime_deps(
+            config.clone(),
+            NodeRuntimeDeps::default()
+                .with_governance_dag_signer(Arc::new(TestGovernanceDagSigner::new()))
+                .with_governance_dag_checkpoint_store(checkpoint_store.clone()),
+        )
+        .expect("start node with signed producer providers");
+        checkpoint_store
+            .fail_after_next_checkpoint_cas
+            .store(true, Ordering::SeqCst);
+        let error = node
+            .publish_appeal_finance_weekly_rollup(appeal_finance_weekly_rollup_fixture())
+            .expect_err("ambiguous checkpoint CAS response must surface");
+        assert!(error.to_string().contains("compare-and-swap failed"));
+        assert!(
+            checkpoint_store
+                .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
+                .expect("load retained producer intent")
+                .is_some()
+        );
+        drop(node);
+
+        let restored = NodeHandle::try_new_with_runtime_deps(
+            config,
+            NodeRuntimeDeps::default()
+                .with_governance_dag_signer(Arc::new(TestGovernanceDagSigner::new()))
+                .with_governance_dag_checkpoint_store(checkpoint_store.clone()),
+        )
+        .expect("restart authenticates already-committed producer target");
+        assert!(
+            checkpoint_store
+                .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
+                .expect("reload producer intent")
+                .is_none()
+        );
+        restored
+            .revalidate_fenced_privacy_runtime()
+            .expect("restored signed producer root revalidates");
     }
 
     #[test]
@@ -20598,13 +24709,26 @@ mod tests {
                     .expect("test peer id is UTF-8"),
             ))
             .governance_dag_signer_handle(Some(signer.handle().to_owned()))
+            .governance_dag_signer_qualification(Some(
+                TestGovernanceDagSigner::expected_qualification(),
+            ))
+            .governance_dag_checkpoint_store_handle(Some(
+                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+            ))
+            .governance_dag_checkpoint_store_qualification(Some(
+                TestGovernanceDagCheckpointStore::expected_qualification(),
+            ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
         signer.qualification_refuse.store(true, Ordering::SeqCst);
 
         let error = NodeHandle::try_new_with_runtime_deps(
             config,
-            NodeRuntimeDeps::default().with_governance_dag_signer(signer),
+            NodeRuntimeDeps::default()
+                .with_governance_dag_signer(signer)
+                .with_governance_dag_checkpoint_store(Arc::new(
+                    TestGovernanceDagCheckpointStore::default(),
+                )),
         )
         .expect_err("stale signer must fail before node durability opens");
         let rendered = error.to_string();
@@ -20636,6 +24760,196 @@ mod tests {
                     .expect("test peer id is UTF-8"),
             ))
             .governance_dag_signer_handle(Some("pkcs11:governance-dag:test".to_owned()))
+            .governance_dag_signer_qualification(Some(
+                TestGovernanceDagSigner::expected_qualification(),
+            ))
+            .governance_dag_checkpoint_store_handle(Some(
+                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+            ))
+            .governance_dag_checkpoint_store_qualification(Some(
+                TestGovernanceDagCheckpointStore::expected_qualification(),
+            ))
+            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
+            .build();
+
+        let error = NodeHandle::try_new_with_runtime_deps(
+            config,
+            NodeRuntimeDeps::default()
+                .with_governance_dag_signer(signer)
+                .with_governance_dag_checkpoint_store(Arc::new(
+                    TestGovernanceDagCheckpointStore::default(),
+                )),
+        )
+        .expect_err("test-marked signer handle must fail before node durability opens");
+        assert!(error.to_string().contains("test-marked"));
+        assert!(!data_dir.exists());
+        assert!(!governance_dir.exists());
+    }
+
+    #[test]
+    fn governance_signer_rejects_substituted_qualification_and_startup_drift_before_state() {
+        for (
+            label,
+            configured_handle,
+            expected_qualification,
+            drift_on_second_read,
+            expected_error,
+        ) in [
+            (
+                "substituted signer handle",
+                "pkcs11:governance-dag:other",
+                TestGovernanceDagSigner::expected_qualification(),
+                false,
+                "handle does not match",
+            ),
+            (
+                "substituted revision",
+                "pkcs11:governance-dag:node-primary",
+                GovernanceDagRuntimeProviderQualificationV1::new(2, [0x84; 32]),
+                false,
+                "policy qualification does not match",
+            ),
+            (
+                "substituted policy digest",
+                "pkcs11:governance-dag:node-primary",
+                GovernanceDagRuntimeProviderQualificationV1::new(1, [0x85; 32]),
+                false,
+                "policy qualification does not match",
+            ),
+            (
+                "qualification drift",
+                "pkcs11:governance-dag:node-primary",
+                TestGovernanceDagSigner::expected_qualification(),
+                true,
+                "policy changed during startup qualification",
+            ),
+        ] {
+            let temp = tempfile::tempdir().expect("signer binding temp dir");
+            let root = temp.path().canonicalize().expect("canonical temp root");
+            let data_dir = root.join("storage");
+            let governance_dir = root.join("governance");
+            let signer = Arc::new(TestGovernanceDagSigner::new());
+            signer
+                .drift_on_second_qualification_read
+                .store(drift_on_second_read, Ordering::SeqCst);
+            let config = StorageConfig::builder()
+                .enabled(true)
+                .data_dir(data_dir.clone())
+                .governance_dir(Some(governance_dir.clone()))
+                .governance_dag_publisher_peer_id(Some(
+                    String::from_utf8(signer.publisher_peer_id().to_vec())
+                        .expect("test peer id is UTF-8"),
+                ))
+                .governance_dag_signer_handle(Some(configured_handle.to_owned()))
+                .governance_dag_signer_qualification(Some(expected_qualification))
+                .governance_dag_checkpoint_store_handle(Some(
+                    TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+                ))
+                .governance_dag_checkpoint_store_qualification(Some(
+                    TestGovernanceDagCheckpointStore::expected_qualification(),
+                ))
+                .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
+                .build();
+
+            let error = NodeHandle::try_new_with_runtime_deps(
+                config,
+                NodeRuntimeDeps::default()
+                    .with_governance_dag_signer(signer)
+                    .with_governance_dag_checkpoint_store(Arc::new(
+                        TestGovernanceDagCheckpointStore::default(),
+                    )),
+            )
+            .expect_err(label);
+            assert!(
+                error.to_string().contains(expected_error),
+                "{label} produced unexpected error: {error}"
+            );
+            assert!(!data_dir.exists(), "{label} opened storage state");
+            assert!(
+                !governance_dir.exists(),
+                "{label} opened Governance DAG state"
+            );
+        }
+    }
+
+    #[test]
+    fn governance_signer_binding_without_publisher_directory_precedes_durable_state() {
+        for complete_binding in [false, true] {
+            let label = if complete_binding {
+                "complete dormant signer binding"
+            } else {
+                "partial dormant signer binding"
+            };
+            let temp = tempfile::tempdir().expect("dormant signer temp dir");
+            let root = temp.path().canonicalize().expect("canonical temp root");
+            let data_dir = root.join("storage");
+            let governance_dir = root.join("governance");
+            let signer = Arc::new(TestGovernanceDagSigner::new());
+            let mut builder = StorageConfig::builder()
+                .enabled(true)
+                .data_dir(data_dir.clone())
+                .governance_dag_signer_handle(Some(signer.handle().to_owned()));
+            if complete_binding {
+                builder = builder
+                    .governance_dag_publisher_peer_id(Some(
+                        String::from_utf8(signer.publisher_peer_id().to_vec())
+                            .expect("test peer id is UTF-8"),
+                    ))
+                    .governance_dag_signer_qualification(Some(
+                        TestGovernanceDagSigner::expected_qualification(),
+                    ))
+                    .governance_dag_checkpoint_store_handle(Some(
+                        TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+                    ))
+                    .governance_dag_checkpoint_store_qualification(Some(
+                        TestGovernanceDagCheckpointStore::expected_qualification(),
+                    ))
+                    .governance_dag_publisher_public_key_hex(Some(hex::encode(
+                        signer.public_key(),
+                    )));
+            }
+            let error = NodeHandle::try_new_with_runtime_deps(
+                builder.build(),
+                NodeRuntimeDeps::default().with_governance_dag_signer(signer),
+            )
+            .expect_err(label);
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("forbidden without a configured Governance DAG directory"),
+                "{label} produced unexpected error: {error}"
+            );
+            assert!(!data_dir.exists(), "{label} opened storage state");
+            assert!(!governance_dir.exists(), "{label} opened publisher state");
+        }
+    }
+
+    #[test]
+    fn governance_publisher_rejects_disabled_storage_before_durable_state() {
+        let temp = tempfile::tempdir().expect("disabled publisher temp dir");
+        let root = temp.path().canonicalize().expect("canonical temp root");
+        let data_dir = root.join("storage");
+        let governance_dir = root.join("governance");
+        let signer = Arc::new(TestGovernanceDagSigner::new());
+        let config = StorageConfig::builder()
+            .enabled(false)
+            .data_dir(data_dir.clone())
+            .governance_dir(Some(governance_dir.clone()))
+            .governance_dag_publisher_peer_id(Some(
+                String::from_utf8(signer.publisher_peer_id().to_vec())
+                    .expect("test peer id is UTF-8"),
+            ))
+            .governance_dag_signer_handle(Some(signer.handle().to_owned()))
+            .governance_dag_signer_qualification(Some(
+                TestGovernanceDagSigner::expected_qualification(),
+            ))
+            .governance_dag_checkpoint_store_handle(Some(
+                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+            ))
+            .governance_dag_checkpoint_store_qualification(Some(
+                TestGovernanceDagCheckpointStore::expected_qualification(),
+            ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
 
@@ -20643,8 +24957,11 @@ mod tests {
             config,
             NodeRuntimeDeps::default().with_governance_dag_signer(signer),
         )
-        .expect_err("test-marked signer handle must fail before node durability opens");
-        assert!(error.to_string().contains("test-marked"));
+        .expect_err("disabled storage must not open a Governance DAG publisher");
+        assert!(
+            error.to_string().contains("requires storage.enabled"),
+            "unexpected disabled-publisher error: {error}"
+        );
         assert!(!data_dir.exists());
         assert!(!governance_dir.exists());
     }
@@ -20790,6 +25107,87 @@ mod tests {
     }
 
     #[test]
+    fn por_reputation_admission_replays_without_duplicate_after_ack_checkpoint_failure() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let challenge = por_sample_challenge();
+        let proof = por_sample_proof(&challenge);
+        let verdict = por_sample_verdict(&challenge, proof.proof_digest());
+        handle
+            .record_por_challenge(&challenge)
+            .expect("record challenge");
+        handle
+            .record_por_proof(&proof, &por_sample_provider_key())
+            .expect("record proof");
+        handle
+            .record_por_verdict(
+                &verdict,
+                &por_sample_auditor_keys(),
+                1,
+                &SuccessfulPorRepairHandoff,
+            )
+            .expect("finalize PoR terminal and durable work");
+        assert_eq!(handle.pending_por_reputation_terminal_count(), 1);
+
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let before_ack = fs::read(&checkpoint_path).expect("read pre-ack checkpoint");
+        fs::remove_file(&checkpoint_path).expect("remove checkpoint to inject target failure");
+        fs::create_dir(&checkpoint_path).expect("inject non-file checkpoint target");
+        let admission = RecordingReputationAdmission::default();
+        assert!(matches!(
+            handle.reconcile_next_por_reputation_terminal(&admission),
+            Err(PorReputationReconcileErrorV1::Tracker(
+                PorTrackerError::RuntimeCheckpoint(_)
+            ))
+        ));
+        assert_eq!(admission.calls.load(Ordering::Relaxed), 1);
+        assert!(
+            admission.retained.lock().expect("admission lock").is_some(),
+            "native admission succeeded before node acknowledgement failed"
+        );
+        assert_eq!(
+            handle.pending_por_reputation_terminal_count(),
+            1,
+            "failed acknowledgement checkpoint must roll the cursor back"
+        );
+
+        fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
+        write_local_checkpoint_atomic(&checkpoint_path, &before_ack)
+            .expect("restore exact pre-ack checkpoint");
+        drop(handle);
+
+        let restored = NodeHandle::new(cfg.clone());
+        let outcome = restored
+            .reconcile_next_por_reputation_terminal(&admission)
+            .expect("retry exact retained terminal after restart");
+        assert!(matches!(
+            outcome,
+            PorReputationReconcileOutcomeV1::Reconciled {
+                admission: reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay { .. },
+                acknowledgement: PorReputationTerminalAckOutcomeV1::Advanced,
+                ..
+            }
+        ));
+        assert_eq!(admission.calls.load(Ordering::Relaxed), 2);
+        assert_eq!(restored.pending_por_reputation_terminal_count(), 0);
+        drop(restored);
+
+        let replay = NodeHandle::new(cfg);
+        assert_eq!(replay.pending_por_reputation_terminal_count(), 0);
+        assert_eq!(
+            replay
+                .reconcile_next_por_reputation_terminal(&admission)
+                .expect("no work after durable acknowledgement"),
+            PorReputationReconcileOutcomeV1::Idle
+        );
+        assert_eq!(
+            admission.calls.load(Ordering::Relaxed),
+            2,
+            "durable acknowledgement prevents a duplicate native admission"
+        );
+    }
+
+    #[test]
     fn por_ingestion_status_tracks_failures() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -20802,6 +25200,7 @@ mod tests {
         verdict.outcome = AuditOutcomeV1::Failed;
         verdict.failure_reason = Some("timeout".to_string());
         verdict.proof_digest = None;
+        verdict.decided_at = challenge.deadline_at;
         resign_por_sample_verdict(&mut verdict);
         handle
             .record_por_verdict(
@@ -20842,6 +25241,7 @@ mod tests {
         verdict.outcome = AuditOutcomeV1::Failed;
         verdict.failure_reason = Some("missed".to_string());
         verdict.proof_digest = None;
+        verdict.decided_at = challenge.deadline_at;
         resign_por_sample_verdict(&mut verdict);
         handle
             .record_por_verdict(
@@ -21498,7 +25898,7 @@ mod tests {
             }
             let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
             let bytes = fs::read(&path).expect("read GC intent checkpoint");
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
                 norito::decode_from_bytes(&bytes).expect("decode GC intent checkpoint");
             let intent = checkpoint
                 .gc_eviction_intents
@@ -21559,7 +25959,7 @@ mod tests {
         assert_eq!(handle.pending_governance_publication_count(), 0);
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read linked GC checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
             norito::decode_from_bytes(&bytes).expect("decode linked GC checkpoint");
         let link = checkpoint
             .gc_eviction_audit_links
@@ -21868,13 +26268,26 @@ mod tests {
                     .expect("test peer id is UTF-8"),
             ))
             .governance_dag_signer_handle(Some(signer.handle().to_owned()))
+            .governance_dag_signer_qualification(Some(
+                TestGovernanceDagSigner::expected_qualification(),
+            ))
+            .governance_dag_checkpoint_store_handle(Some(
+                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+            ))
+            .governance_dag_checkpoint_store_qualification(Some(
+                TestGovernanceDagCheckpointStore::expected_qualification(),
+            ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
         let handle = NodeHandle::try_new_with_policies_and_runtime_deps(
             cfg,
             enabled_repair_config(1),
             GcConfig::default(),
-            NodeRuntimeDeps::default().with_governance_dag_signer(signer),
+            NodeRuntimeDeps::default()
+                .with_governance_dag_signer(signer)
+                .with_governance_dag_checkpoint_store(Arc::new(
+                    TestGovernanceDagCheckpointStore::default(),
+                )),
         )
         .expect("runtime-signed governance publisher");
         ensure_test_capacity_provider(&handle);
@@ -22104,7 +26517,6 @@ mod tests {
             heartbeat_interval_secs: 45,
             max_attempts: 6,
             worker_concurrency: 9,
-            ..Default::default()
         };
 
         let actual_gc = iroha_config::parameters::actual::SorafsGc {
@@ -23174,6 +27586,8 @@ mod tests {
         publisher_peer_id: Vec<u8>,
         key_pair: KeyPair,
         qualification_refuse: AtomicBool,
+        qualification_reads: AtomicU64,
+        drift_on_second_qualification_read: AtomicBool,
     }
 
     impl TestGovernanceDagSigner {
@@ -23184,6 +27598,8 @@ mod tests {
                 key_pair: KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519)
                     .expect("derive test Governance DAG key"),
                 qualification_refuse: AtomicBool::new(false),
+                qualification_reads: AtomicU64::new(0),
+                drift_on_second_qualification_read: AtomicBool::new(false),
             }
         }
 
@@ -23196,6 +27612,10 @@ mod tests {
             assert_eq!(algorithm, Algorithm::Ed25519);
             bytes.try_into().expect("Ed25519 public key width")
         }
+
+        fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x84; 32])
+        }
     }
 
     impl GovernanceDagRuntimeSigner for TestGovernanceDagSigner {
@@ -23207,9 +27627,17 @@ mod tests {
             if self.qualification_refuse.load(Ordering::SeqCst) {
                 return Err("hsm_credential=must-never-escape".to_owned());
             }
-            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
-                1, [0x84; 32],
-            ))
+            let read_index = self.qualification_reads.fetch_add(1, Ordering::SeqCst);
+            if self
+                .drift_on_second_qualification_read
+                .load(Ordering::SeqCst)
+                && read_index == 1
+            {
+                return Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                    2, [0x84; 32],
+                ));
+            }
+            Ok(Self::expected_qualification())
         }
 
         fn publisher_peer_id(&self) -> &[u8] {
@@ -23226,6 +27654,112 @@ mod tests {
                 .payload()
                 .try_into()
                 .map_err(|_| "test Governance DAG signature width changed".to_owned())
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestGovernanceDagCheckpointStoreState {
+        records: [Option<GovernanceDagSealedStateRecord>; 4],
+        generation_floors: [u64; 4],
+    }
+
+    impl Default for TestGovernanceDagCheckpointStoreState {
+        fn default() -> Self {
+            Self {
+                records: std::array::from_fn(|_| None),
+                generation_floors: [0; 4],
+            }
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct TestGovernanceDagCheckpointStore {
+        state: Mutex<TestGovernanceDagCheckpointStoreState>,
+        qualification_refuse: AtomicBool,
+        fail_after_next_checkpoint_cas: AtomicBool,
+    }
+
+    impl TestGovernanceDagCheckpointStore {
+        const HANDLE: &'static str = "kms:governance-dag:node-producer-checkpoint";
+
+        const fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x94; 32])
+        }
+
+        const fn slot_index(slot: GovernanceDagSealedStateSlot) -> usize {
+            match slot {
+                GovernanceDagSealedStateSlot::Checkpoint => 0,
+                GovernanceDagSealedStateSlot::PublishIntent => 1,
+                GovernanceDagSealedStateSlot::ProducerCheckpoint => 2,
+                GovernanceDagSealedStateSlot::ProducerPublishIntent => 3,
+            }
+        }
+    }
+
+    impl GovernanceDagSealedCheckpointStore for TestGovernanceDagCheckpointStore {
+        fn handle(&self) -> &str {
+            Self::HANDLE
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if self.qualification_refuse.load(Ordering::SeqCst) {
+                return Err("checkpoint_credential=must-never-escape".to_owned());
+            }
+            Ok(Self::expected_qualification())
+        }
+
+        fn load(
+            &self,
+            slot: GovernanceDagSealedStateSlot,
+        ) -> Result<Option<GovernanceDagSealedStateRecord>, String> {
+            let state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
+            Ok(state.records[Self::slot_index(slot)].clone())
+        }
+
+        fn compare_and_swap(
+            &self,
+            slot: GovernanceDagSealedStateSlot,
+            expected_revision: Option<[u8; 32]>,
+            next: GovernanceDagSealedStateRecord,
+        ) -> Result<(), String> {
+            let index = Self::slot_index(slot);
+            let mut state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
+            if state.records[index].as_ref().map(|record| record.revision) != expected_revision {
+                return Err("compare-and-swap conflict".to_owned());
+            }
+            if next.generation <= state.generation_floors[index]
+                || next.payload.is_empty()
+                || !next.has_valid_revision(slot)
+            {
+                return Err("invalid or non-monotonic record".to_owned());
+            }
+            state.generation_floors[index] = next.generation;
+            state.records[index] = Some(next);
+            drop(state);
+            if slot == GovernanceDagSealedStateSlot::ProducerCheckpoint
+                && self
+                    .fail_after_next_checkpoint_cas
+                    .swap(false, Ordering::SeqCst)
+            {
+                return Err("ambiguous checkpoint CAS response".to_owned());
+            }
+            Ok(())
+        }
+
+        fn delete(
+            &self,
+            slot: GovernanceDagSealedStateSlot,
+            expected_revision: [u8; 32],
+        ) -> Result<(), String> {
+            let index = Self::slot_index(slot);
+            let mut state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
+            if state.records[index].as_ref().map(|record| record.revision)
+                != Some(expected_revision)
+            {
+                return Err("delete conflict".to_owned());
+            }
+            state.records[index] = None;
+            Ok(())
         }
     }
 
@@ -23345,6 +27879,7 @@ mod tests {
             &self,
             _publication: &ModerationLedgerCyclePublicationV1,
             encoded: &[u8],
+            _authorization: Option<&PrivacyPublicationAuthorizationV1>,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
             guard.push(encoded.to_vec());
@@ -23488,6 +28023,7 @@ mod tests {
             &self,
             _publication: &ModerationLedgerCyclePublicationV1,
             _encoded: &[u8],
+            _authorization: Option<&PrivacyPublicationAuthorizationV1>,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");
             *guard += 1;

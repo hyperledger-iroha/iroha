@@ -12,7 +12,6 @@ workspace = true
 
 [features]
 trybuild-tests = ["dep:trybuild"]
-packed-struct = []
 
 [lib]
 proc-macro = true

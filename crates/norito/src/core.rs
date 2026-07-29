@@ -992,6 +992,35 @@ pub(crate) fn take_last_header_flags() -> Option<u8> {
     LAST_HEADER_FLAGS.with(|cell| cell.replace(None))
 }
 
+#[inline]
+pub(crate) fn finalized_encode_flags(
+    base_flags: u8,
+    fixed_offsets_used: bool,
+    field_bitset_used: bool,
+    compact_len_used: bool,
+) -> u8 {
+    debug_assert!(validate_header_flags(base_flags).is_ok());
+
+    let mut final_flags = base_flags;
+    if fixed_offsets_used {
+        final_flags |= header_flags::PACKED_SEQ;
+    } else {
+        final_flags &= !header_flags::PACKED_SEQ;
+    }
+    if field_bitset_used {
+        final_flags |=
+            header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN;
+    } else {
+        final_flags &= !header_flags::FIELD_BITSET;
+        if compact_len_used {
+            final_flags |= header_flags::COMPACT_LEN;
+        } else {
+            final_flags &= !header_flags::COMPACT_LEN;
+        }
+    }
+    final_flags
+}
+
 // Thread-local payload context: base pointer, length, and optional schema hash.
 thread_local! {
     static DECODE_PAYLOAD_CTX: RefCell<Option<PayloadCtxState>> = const { RefCell::new(None) };
@@ -7786,6 +7815,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 ) -> Result<(Vec<u8>, u8), Error> {
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    validate_header_flags(base_flags)?;
     let estimated = value
         .encoded_len_exact()
         .or_else(|| value.encoded_len_hint())
@@ -7801,23 +7831,12 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let mut final_flags = flags;
-    if field_bitset_used {
-        final_flags |= header_flags::FIELD_BITSET;
-    } else {
-        final_flags &= !header_flags::FIELD_BITSET;
-    }
-    if compact_len_used {
-        final_flags |= header_flags::COMPACT_LEN;
-    } else {
-        final_flags &= !header_flags::COMPACT_LEN;
-    }
-    let packed_seq_used = fixed_offsets_used;
-    if packed_seq_used {
-        final_flags |= header_flags::PACKED_SEQ;
-    } else {
-        final_flags &= !header_flags::PACKED_SEQ;
-    }
+    let final_flags = finalized_encode_flags(
+        flags,
+        fixed_offsets_used,
+        field_bitset_used,
+        compact_len_used,
+    );
     record_last_header_flags(final_flags);
     Ok((payload, final_flags))
 }
@@ -7835,6 +7854,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 pub fn encoded_payload_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
     let encode_guard = EncodeContextGuard::enter();
     let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    validate_header_flags(flags)?;
     let mut sink = std::io::sink();
     let mut counted = CountingWriter {
         inner: &mut sink,
@@ -7892,6 +7912,7 @@ pub fn to_bytes<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
 pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(), Error> {
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    validate_header_flags(base_flags)?;
     let estimated = value
         .encoded_len_exact()
         .or_else(|| value.encoded_len_hint())
@@ -7911,23 +7932,12 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     let compact_len_used = compact_len_used();
     drop(encode_guard);
 
-    let mut final_flags = flags;
-    if field_bitset_used {
-        final_flags |= header_flags::FIELD_BITSET;
-    } else {
-        final_flags &= !header_flags::FIELD_BITSET;
-    }
-    if compact_len_used {
-        final_flags |= header_flags::COMPACT_LEN;
-    } else {
-        final_flags &= !header_flags::COMPACT_LEN;
-    }
-    let packed_seq_used = fixed_offsets_used;
-    if packed_seq_used {
-        final_flags |= header_flags::PACKED_SEQ;
-    } else {
-        final_flags &= !header_flags::PACKED_SEQ;
-    }
+    let final_flags = finalized_encode_flags(
+        flags,
+        fixed_offsets_used,
+        field_bitset_used,
+        compact_len_used,
+    );
     record_last_header_flags(final_flags);
 
     let mut header = Header::new(T::schema_hash(), payload_len, checksum);
@@ -7953,6 +7963,7 @@ where
     let start = writer.stream_position()?;
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    validate_header_flags(base_flags)?;
     let flags = base_flags;
 
     let zero_header = [0u8; Header::SIZE];
@@ -7985,22 +7996,12 @@ where
     let compact_len_used = compact_len_used();
     drop(encode_guard);
 
-    let mut final_flags = flags;
-    if field_bitset_used {
-        final_flags |= header_flags::FIELD_BITSET;
-    } else {
-        final_flags &= !header_flags::FIELD_BITSET;
-    }
-    if compact_len_used {
-        final_flags |= header_flags::COMPACT_LEN;
-    } else {
-        final_flags &= !header_flags::COMPACT_LEN;
-    }
-    if fixed_offsets_used {
-        final_flags |= header_flags::PACKED_SEQ;
-    } else {
-        final_flags &= !header_flags::PACKED_SEQ;
-    }
+    let final_flags = finalized_encode_flags(
+        flags,
+        fixed_offsets_used,
+        field_bitset_used,
+        compact_len_used,
+    );
     record_last_header_flags(final_flags);
 
     let end = payload_writer.inner.stream_position()?;

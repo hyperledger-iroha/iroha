@@ -1,0 +1,385 @@
+//! Supervised finalized-PoR reputation reconciliation and archive compaction.
+//!
+//! The worker never owns archive credentials or signing material. It operates
+//! only through the archive already qualified and installed in
+//! [`sorafs_node::NodeHandle`] and the committed reputation runtime's durable
+//! native-outcome admission boundary.
+
+use std::{sync::Arc, time::Duration};
+
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use sorafs_node::{
+    NodeHandle, PorReputationReconcileOutcomeV1,
+    reputation::runtime::{
+        ReputationNativeOutcomeAdmissionApiV1, ReputationNativeOutcomeAdmissionStateV1,
+    },
+};
+
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+
+/// Payload-free worker failure category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PorReplayArchiveWorkerErrorV1 {
+    /// The node has no valid configured archive worker policy.
+    InvalidConfiguration,
+    /// Durable PoR-to-reputation admission or acknowledgement failed.
+    ReputationReconciliation,
+    /// Authenticated archive compaction or checkpointing failed.
+    ArchiveCompaction,
+}
+
+impl std::fmt::Display for PorReplayArchiveWorkerErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidConfiguration => "finalized PoR archive worker configuration is invalid",
+            Self::ReputationReconciliation => {
+                "finalized PoR reputation reconciliation failed closed"
+            }
+            Self::ArchiveCompaction => "finalized PoR archive compaction failed closed",
+        })
+    }
+}
+
+impl std::error::Error for PorReplayArchiveWorkerErrorV1 {}
+
+/// Payload-free result of one bounded worker tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PorReplayArchiveTickOutcomeV1 {
+    /// Whether reconciliation is intentionally idle until runtime activation.
+    pub reputation_deferred: bool,
+    /// Number of exact PoR terminals admitted and acknowledged.
+    pub reconciled_records: u32,
+    /// Number of acknowledged finalized records durably archived and compacted.
+    pub compacted_records: u32,
+}
+
+/// Run one bounded reconciliation and compaction tick.
+pub(crate) fn reconcile_and_compact_once(
+    node: &NodeHandle,
+    admission: &dyn ReputationNativeOutcomeAdmissionApiV1,
+    maximum_records: u32,
+) -> Result<PorReplayArchiveTickOutcomeV1, PorReplayArchiveWorkerErrorV1> {
+    if maximum_records == 0
+        || node
+            .config()
+            .por_replay_archive_policy()
+            .is_none_or(|policy| policy.max_records_per_tick() != maximum_records)
+    {
+        return Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration);
+    }
+    match admission
+        .activation_state()
+        .map_err(|_| PorReplayArchiveWorkerErrorV1::ReputationReconciliation)?
+    {
+        ReputationNativeOutcomeAdmissionStateV1::Deferred => {
+            return Ok(PorReplayArchiveTickOutcomeV1 {
+                reputation_deferred: true,
+                reconciled_records: 0,
+                compacted_records: 0,
+            });
+        }
+        ReputationNativeOutcomeAdmissionStateV1::Active => {}
+    }
+    let mut reconciled_records = 0_u32;
+    for _ in 0..maximum_records {
+        match node
+            .reconcile_next_por_reputation_terminal(admission)
+            .map_err(|_| PorReplayArchiveWorkerErrorV1::ReputationReconciliation)?
+        {
+            PorReputationReconcileOutcomeV1::Idle => break,
+            PorReputationReconcileOutcomeV1::Reconciled { .. } => {
+                reconciled_records = reconciled_records.saturating_add(1);
+            }
+        }
+    }
+    let compacted_records = node
+        .compact_configured_por_replay_archive()
+        .map_err(|_| PorReplayArchiveWorkerErrorV1::ArchiveCompaction)?;
+    Ok(PorReplayArchiveTickOutcomeV1 {
+        reputation_deferred: false,
+        reconciled_records,
+        compacted_records,
+    })
+}
+
+/// Start the bounded supervised worker from the node's exact configured policy.
+///
+/// # Errors
+///
+/// Returns an error when no valid archive policy is installed.
+pub(crate) fn start(
+    node: NodeHandle,
+    admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1>,
+    shutdown_signal: ShutdownSignal,
+) -> Result<Child, PorReplayArchiveWorkerErrorV1> {
+    let policy = node
+        .config()
+        .por_replay_archive_policy()
+        .ok_or(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)?;
+    let poll_interval = policy.poll_interval();
+    let maximum_records = policy.max_records_per_tick();
+    if poll_interval.is_zero() || maximum_records == 0 {
+        return Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration);
+    }
+
+    let task = tokio::task::spawn(async move {
+        let mut interval = tokio::time::interval(poll_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let tick_node = node.clone();
+                    let tick_admission = Arc::clone(&admission);
+                    let result = tokio::task::spawn_blocking(move || {
+                        reconcile_and_compact_once(
+                            &tick_node,
+                            tick_admission.as_ref(),
+                            maximum_records,
+                        )
+                    })
+                    .await;
+                    if !matches!(result, Ok(Ok(_))) {
+                        iroha_logger::error!(
+                            "supervised finalized PoR replay-archive worker failed closed"
+                        );
+                        shutdown_signal.send();
+                        return;
+                    }
+                }
+                () = shutdown_signal.receive() => return,
+                else => return,
+            }
+        }
+    });
+    Ok(Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::sorafs::{
+        capacity::ProviderId,
+        reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
+    };
+    use sorafs_node::{
+        NodeRuntimeDeps, PorFinalizedReplayArchiveBindingV1,
+        PorFinalizedReplayArchiveExternalErrorV1, PorFinalizedReplayArchiveLookupV1,
+        PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveRecordV1,
+        PorFinalizedReplayArchiveV1,
+        config::{GcConfig, PorReplayArchivePolicyV1, RepairConfig, StorageConfig},
+        reputation::runtime::{
+            CountedStreamTokenProducerOutcomeV1, ReputationJournalEnqueueOutcomeV1,
+            ReputationRuntimeError,
+        },
+    };
+    use tempfile::TempDir;
+
+    #[derive(Debug)]
+    struct RejectingAdmission;
+
+    impl ReputationNativeOutcomeAdmissionApiV1 for RejectingAdmission {
+        fn activation_state(
+            &self,
+        ) -> Result<ReputationNativeOutcomeAdmissionStateV1, ReputationRuntimeError> {
+            Ok(ReputationNativeOutcomeAdmissionStateV1::Active)
+        }
+
+        fn record_por_terminal(
+            &self,
+            _provider_id: ProviderId,
+            _outcome: PorTerminalOutcomeV1,
+        ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        }
+
+        fn record_stream_token_outcome(
+            &self,
+            _provider_id: ProviderId,
+            _outcome: StreamTokenValidationOutcomeV1,
+        ) -> Result<CountedStreamTokenProducerOutcomeV1, ReputationRuntimeError> {
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        }
+    }
+
+    #[derive(Debug)]
+    struct DeferredAdmission {
+        calls: AtomicU64,
+        active: AtomicBool,
+        state_error: AtomicBool,
+    }
+
+    impl ReputationNativeOutcomeAdmissionApiV1 for DeferredAdmission {
+        fn activation_state(
+            &self,
+        ) -> Result<ReputationNativeOutcomeAdmissionStateV1, ReputationRuntimeError> {
+            if self.state_error.load(Ordering::Relaxed) {
+                Err(ReputationRuntimeError::RuntimeBindingMismatch)
+            } else if self.active.load(Ordering::Relaxed) {
+                Ok(ReputationNativeOutcomeAdmissionStateV1::Active)
+            } else {
+                Ok(ReputationNativeOutcomeAdmissionStateV1::Deferred)
+            }
+        }
+
+        fn record_por_terminal(
+            &self,
+            _provider_id: ProviderId,
+            _outcome: PorTerminalOutcomeV1,
+        ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        }
+
+        fn record_stream_token_outcome(
+            &self,
+            _provider_id: ProviderId,
+            _outcome: StreamTokenValidationOutcomeV1,
+        ) -> Result<CountedStreamTokenProducerOutcomeV1, ReputationRuntimeError> {
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        }
+    }
+
+    #[derive(Debug)]
+    struct IdleReplayArchive {
+        binding: PorFinalizedReplayArchiveBindingV1,
+    }
+
+    impl PorFinalizedReplayArchiveV1 for IdleReplayArchive {
+        fn runtime_handle(&self) -> &str {
+            "hsm://sorafs/por-replay-archive/worker"
+        }
+
+        fn binding(
+            &self,
+        ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            Ok(self.binding)
+        }
+
+        fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
+            Ok(())
+        }
+
+        fn current_head(
+            &self,
+        ) -> Result<
+            Option<PorFinalizedReplayArchiveReceiptV1>,
+            PorFinalizedReplayArchiveExternalErrorV1,
+        > {
+            Ok(None)
+        }
+
+        fn append(
+            &self,
+            _record: &PorFinalizedReplayArchiveRecordV1,
+            _expected_previous_head: Option<[u8; 32]>,
+        ) -> Result<PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected)
+        }
+
+        fn lookup(
+            &self,
+            _challenge_id: [u8; 32],
+            _expected_checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
+            _proof_bounds: sorafs_node::PorFinalizedReplayArchiveProofBoundsV1,
+        ) -> Result<PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveExternalErrorV1>
+        {
+            Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected)
+        }
+    }
+
+    fn configured_idle_node() -> (NodeHandle, TempDir) {
+        let temp_root = std::env::temp_dir()
+            .canonicalize()
+            .expect("resolve the worker temp root without symlink ancestors");
+        let temp = TempDir::new_in(temp_root).expect("worker tempdir");
+        let key_pair =
+            KeyPair::try_from_seed(vec![0xA4; 32], Algorithm::Ed25519).expect("archive key");
+        let public_key = key_pair.public_key().to_bytes().1;
+        let mut signing_public_key = [0_u8; 32];
+        signing_public_key.copy_from_slice(&public_key);
+        let binding = PorFinalizedReplayArchiveBindingV1::try_new(
+            [0xA1; 32],
+            1,
+            [0xA2; 32],
+            signing_public_key,
+        )
+        .expect("archive binding");
+        let policy = PorReplayArchivePolicyV1::try_new(
+            "hsm://sorafs/por-replay-archive/worker",
+            binding,
+            Duration::from_secs(1),
+            1,
+            8,
+            8_192,
+        )
+        .expect("archive policy");
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp.path().join("storage"))
+            .por_replay_archive_policy(Some(policy))
+            .build();
+        let node = NodeHandle::try_new_with_policies_and_runtime_deps(
+            config,
+            RepairConfig::default(),
+            GcConfig::default(),
+            NodeRuntimeDeps::default()
+                .with_por_finalized_replay_archive(Arc::new(IdleReplayArchive { binding })),
+        )
+        .expect("configured worker node");
+        (node, temp)
+    }
+
+    #[test]
+    fn worker_entrypoints_reject_a_node_without_an_archive_policy() {
+        let node = NodeHandle::new(StorageConfig::default());
+        assert_eq!(
+            reconcile_and_compact_once(&node, &RejectingAdmission, 1),
+            Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)
+        );
+        let admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1> =
+            Arc::new(RejectingAdmission);
+        assert!(matches!(
+            start(node, admission, ShutdownSignal::new()),
+            Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)
+        ));
+    }
+
+    #[test]
+    fn worker_idles_while_reputation_is_deferred_and_fails_closed_on_state_error() {
+        let (node, _temp) = configured_idle_node();
+        let deferred = DeferredAdmission {
+            calls: AtomicU64::new(0),
+            active: AtomicBool::new(false),
+            state_error: AtomicBool::new(false),
+        };
+        assert_eq!(
+            reconcile_and_compact_once(&node, &deferred, 1),
+            Ok(PorReplayArchiveTickOutcomeV1 {
+                reputation_deferred: true,
+                reconciled_records: 0,
+                compacted_records: 0,
+            })
+        );
+        assert_eq!(deferred.calls.load(Ordering::Relaxed), 0);
+
+        deferred.active.store(true, Ordering::Relaxed);
+        assert_eq!(
+            reconcile_and_compact_once(&node, &deferred, 1),
+            Ok(PorReplayArchiveTickOutcomeV1 {
+                reputation_deferred: false,
+                reconciled_records: 0,
+                compacted_records: 0,
+            })
+        );
+        deferred.state_error.store(true, Ordering::Relaxed);
+        assert_eq!(
+            reconcile_and_compact_once(&node, &deferred, 1),
+            Err(PorReplayArchiveWorkerErrorV1::ReputationReconciliation)
+        );
+    }
+}

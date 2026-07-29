@@ -3,13 +3,104 @@ set -euo pipefail
 umask 077
 PATH=/usr/bin:/bin
 export PATH
+unset \
+  DYLD_INSERT_LIBRARIES \
+  DYLD_LIBRARY_PATH \
+  LD_LIBRARY_PATH \
+  LD_PRELOAD \
+  SDKROOT \
+  PYTHONHOME \
+  PYTHONPATH
+
+resolve_trusted_python312() {
+  local candidate canonical
+  local override="${MOBILE_SDK_PYTHON_BINARY:-}"
+  local candidates=()
+
+  if [[ -n "$override" ]]; then
+    if [[ "$override" != /* || ! -f "$override" || -L "$override" || ! -x "$override" ]]; then
+      echo "[-] MOBILE_SDK_PYTHON_BINARY must be an absolute canonical regular executable" >&2
+      return 1
+    fi
+    candidates=("$override")
+  else
+    candidates=(
+      /opt/homebrew/opt/python@3.12/bin/python3.12
+      /opt/homebrew/bin/python3.12
+      /usr/local/opt/python@3.12/bin/python3.12
+      /usr/local/bin/python3.12
+      /usr/bin/python3.12
+      /usr/bin/python3
+    )
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    [[ -f "$candidate" && -x "$candidate" ]] || continue
+    if ! canonical="$(
+      env -i \
+        HOME=/tmp \
+        PATH=/usr/bin:/bin \
+        TMPDIR=/tmp \
+        LANG=C.UTF-8 \
+        LC_ALL=C.UTF-8 \
+        "$candidate" -I -S -c '
+import os
+import pathlib
+import stat
+import sys
+
+if sys.version_info[:2] != (3, 12) or not sys.flags.isolated:
+    raise SystemExit(1)
+if "SDKROOT" in os.environ:
+    raise SystemExit(1)
+resolved = pathlib.Path(sys.executable).resolve(strict=True)
+metadata = resolved.stat()
+if not stat.S_ISREG(metadata.st_mode) or not os.access(resolved, os.X_OK):
+    raise SystemExit(1)
+print(resolved)
+'
+    )"; then
+      continue
+    fi
+    if [[ "$canonical" != /* || ! -f "$canonical" || -L "$canonical" || ! -x "$canonical" ]]; then
+      continue
+    fi
+    if [[ -n "$override" && "$canonical" != "$override" ]]; then
+      echo "[-] MOBILE_SDK_PYTHON_BINARY must already name its canonical executable" >&2
+      return 1
+    fi
+    printf '%s\n' "$canonical"
+    return 0
+  done
+
+  if [[ -n "$override" ]]; then
+    echo "[-] MOBILE_SDK_PYTHON_BINARY must be an isolated Python 3.12 executable" >&2
+  else
+    echo "[-] A trusted absolute Python 3.12 executable is required" >&2
+  fi
+  return 1
+}
+
+PYTHON_BINARY="$(resolve_trusted_python312)" || exit 1
+
+run_python312_clean() {
+  env -i \
+    HOME=/tmp \
+    PATH=/usr/bin:/bin \
+    TMPDIR=/tmp \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    "$PYTHON_BINARY" -I -S "$@"
+}
 
 # Build a NoritoBridge.xcframework from the Rust connect_norito_bridge crate.
 # - Produces a static-library XCFramework for every Apple slice so Xcode links it
 #   without trying to embed/sign a framework inside simulator app bundles.
 # - Bridge packaging skips the broader Norito bindings sync gate because unrelated
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
-# - Requires: rustup + cargo, xcodebuild, lipo.
+# - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo.
+# - MOBILE_SDK_PYTHON_BINARY may select an absolute canonical Python 3.12
+#   executable when the fixed Homebrew/system locators are unavailable.
 #
 # Usage:
 #   scripts/build_norito_xcframework.sh
@@ -40,26 +131,8 @@ if [[ "${NORITO_BRIDGE_BUILD_LOCK_HELD:-0}" != "1" ]]; then
     echo "[-] NoritoBridge build lock runner is unavailable: $LOCK_RUNNER" >&2
     exit 1
   }
-  LOCK_PYTHON_BINARY=""
-  for trusted_python in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-    if [[ -f "$trusted_python" && ! -L "$trusted_python" && -x "$trusted_python" ]]; then
-      LOCK_PYTHON_BINARY="$trusted_python"
-      break
-    fi
-  done
-  [[ -n "$LOCK_PYTHON_BINARY" ]] || {
-    echo "[-] A trusted absolute Python executable is required for the build lock" >&2
-    exit 1
-  }
-  LOCK_PYTHON_BINARY="$("$LOCK_PYTHON_BINARY" -I -c \
-    'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
-    "$LOCK_PYTHON_BINARY")"
-  [[ -f "$LOCK_PYTHON_BINARY" && ! -L "$LOCK_PYTHON_BINARY" && -x "$LOCK_PYTHON_BINARY" ]] || {
-    echo "[-] Canonical Python executable is unavailable: $LOCK_PYTHON_BINARY" >&2
-    exit 1
-  }
   mkdir -p -- "$BUILD_DIR"
-  exec "$LOCK_PYTHON_BINARY" -I "$LOCK_RUNNER" \
+  exec "$PYTHON_BINARY" -I -S "$LOCK_RUNNER" \
     "$BUILD_PUBLISH_LOCK" \
     "NORITO_BRIDGE_BUILD_LOCK_HELD=1" \
     "$SCRIPT_DIR/build_norito_xcframework.sh" "$@"
@@ -143,23 +216,9 @@ CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim
 PINNED_RUST_TOOLCHAIN="1.93.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
-PYTHON_BINARY=""
-for trusted_python in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-  if [[ -x "$trusted_python" ]]; then
-    PYTHON_BINARY="$trusted_python"
-    break
-  fi
-done
-[[ -n "$PYTHON_BINARY" ]] || {
-  echo "[-] python3 is required to authenticate the NoritoBridge source" >&2
-  exit 1
-}
-PYTHON_BINARY="$("$PYTHON_BINARY" -I -c \
-  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
-  "$PYTHON_BINARY")"
-USER_HOME_DIR="$("$PYTHON_BINARY" -I -c \
+USER_HOME_DIR="$(run_python312_clean -c \
   'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
-USER_HOME_DIR="$("$PYTHON_BINARY" -I -c \
+USER_HOME_DIR="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
@@ -211,10 +270,10 @@ RUSTC_BINARY="$(
   env -i "${RUSTUP_ENV[@]}" \
     "$RUSTUP_BINARY" which --toolchain "$PINNED_RUST_TOOLCHAIN" rustc
 )"
-CARGO_BINARY="$("$PYTHON_BINARY" -I -c \
+CARGO_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$CARGO_BINARY")"
-RUSTC_BINARY="$("$PYTHON_BINARY" -I -c \
+RUSTC_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$RUSTC_BINARY")"
 [[ -x "$CARGO_BINARY" && -x "$RUSTC_BINARY" ]] || {
@@ -235,7 +294,7 @@ run_source_seal() {
     NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
     NORITO_BRIDGE_SEAL_CARGO="$CARGO_BINARY" \
     NORITO_BRIDGE_SEAL_RUSTC="$RUSTC_BINARY" \
-    "$PYTHON_BINARY" -I "$SOURCE_SEAL_SCRIPT" "$@"
+    "$PYTHON_BINARY" -I -S "$SOURCE_SEAL_SCRIPT" "$@"
 }
 
 run_source_git() {
@@ -258,7 +317,7 @@ run_isolated_python() {
     TMPDIR="$MOBILE_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    "$PYTHON_BINARY" -I "$@"
+    "$PYTHON_BINARY" -I -S "$@"
 }
 
 bridge_source_fingerprint() {
@@ -311,7 +370,7 @@ sha256_file() {
     TMPDIR="$MOBILE_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    "$PYTHON_BINARY" -I - "$1" <<'PY'
+    "$PYTHON_BINARY" -I -S - "$1" <<'PY'
 from pathlib import Path
 import hashlib
 import sys
@@ -325,7 +384,7 @@ print(digest.hexdigest())
 PY
 }
 
-PYTHON_VERSION="$("$PYTHON_BINARY" -I -c \
+PYTHON_VERSION="$(run_python312_clean -c \
   'import platform; print(platform.python_version())')"
 GIT_VERSION="$(
   env -i \
@@ -417,7 +476,7 @@ fi
   echo "[-] Xcode developer directory is invalid: $XCODE_DEVELOPER_DIR" >&2
   exit 1
 }
-XCODE_DEVELOPER_DIR="$("$PYTHON_BINARY" -I -c \
+XCODE_DEVELOPER_DIR="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$XCODE_DEVELOPER_DIR")"
 
@@ -441,7 +500,7 @@ MACOSX_SDK_VERSION="$(xcrun_value --sdk macosx --show-sdk-version)"
 LIPO_BINARY="$(xcrun_value --find lipo)"
 for sdk_variable in IPHONEOS_SDKROOT IPHONESIMULATOR_SDKROOT MACOSX_SDKROOT; do
   sdkroot="${!sdk_variable}"
-  printf -v "$sdk_variable" '%s' "$("$PYTHON_BINARY" -I -c \
+  printf -v "$sdk_variable" '%s' "$(run_python312_clean -c \
     'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
     "$sdkroot")"
 done
@@ -451,7 +510,7 @@ for sdkroot in "$IPHONEOS_SDKROOT" "$IPHONESIMULATOR_SDKROOT" "$MACOSX_SDKROOT";
     exit 1
   }
 done
-LIPO_BINARY="$("$PYTHON_BINARY" -I -c \
+LIPO_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$LIPO_BINARY")"
 [[ -x "$LIPO_BINARY" ]] || {
@@ -562,7 +621,7 @@ run_hermetic_apple_cargo() {
       exit 1
       ;;
   esac
-  "$PYTHON_BINARY" -I "$HERMETIC_RUNNER" \
+  run_isolated_python "$HERMETIC_RUNNER" \
     --profile "$profile" \
     --set "CARGO=$CARGO_BINARY" \
     --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
@@ -964,6 +1023,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_alias_instruction_round_trip_v1",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",

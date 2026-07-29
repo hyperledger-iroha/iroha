@@ -20,6 +20,7 @@ use std::{
     sync::Arc,
 };
 
+use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_crypto::{
     Algorithm, HybridPublicKey, HybridSecretKey, PublicKey, Signature,
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
@@ -179,22 +180,8 @@ fn bounded_production_runtime_handle(
     field: &'static str,
     value: &str,
 ) -> Result<(), PopCredentialServiceError> {
-    bounded_clean_text(field, value, 256)?;
-    let lowercase = value.to_ascii_lowercase();
-    if !value.is_ascii()
-        || value.bytes().any(|byte| byte.is_ascii_whitespace())
-        || lowercase
-            .split(|character: char| !character.is_ascii_alphanumeric())
-            .any(|component| {
-                matches!(
-                    component,
-                    "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
-                )
-            })
-    {
-        return Err(PopCredentialServiceError::InvalidInput { field });
-    }
-    Ok(())
+    validate_production_runtime_handle(value)
+        .map_err(|_| PopCredentialServiceError::InvalidInput { field })
 }
 
 fn encode_canonical<T: norito::core::NoritoSerialize>(
@@ -3649,20 +3636,27 @@ mod tests {
     }
 
     #[test]
-    fn production_runtime_handles_reject_test_markers_and_non_ascii() {
-        assert_eq!(
-            bounded_production_runtime_handle(
-                "issuer_hsm_key_id",
-                "pkcs11:token=pop;object=issuer-primary",
-            ),
-            Ok(())
-        );
+    fn production_runtime_handles_use_canonical_grammar() {
         for handle in [
-            "pkcs11:token=pop;object=test",
+            "hsm://sorafs/pop/issuer-primary",
+            "kms://sorafs/pop/wallet-primary",
+        ] {
+            assert_eq!(
+                bounded_production_runtime_handle("runtime_handle", handle),
+                Ok(())
+            );
+        }
+        for handle in [
+            "hsm://sorafs/pop/issuer-test",
             "kms://pop/mock/wallet",
             "kms://pop/placeholder/enrollment",
             "kms://pop/private key",
             "kms://pop/ключ",
+            "hsm://sorafs/pop/operator@issuer",
+            "hsm://sorafs/pop/issuer?token",
+            "hsm://sorafs/pop/issuer#fragment",
+            "hsm://sorafs/pop/%69ssuer",
+            "hsm://sorafs/pop/issuer\\primary",
         ] {
             assert!(matches!(
                 bounded_production_runtime_handle("runtime_handle", handle),
@@ -3764,7 +3758,7 @@ mod tests {
     ) {
         let temp = TempDir::new().expect("temp");
         let hsm = Arc::new(TestHsm {
-            key_id: "pkcs11:token=pop;object=issuer".to_owned(),
+            key_id: "hsm://sorafs/pop/issuer-primary".to_owned(),
             keypair: ed25519(1),
         });
         let approvers = vec![ed25519(2), ed25519(3), ed25519(4)];
@@ -3953,7 +3947,7 @@ mod tests {
     #[test]
     fn approval_policy_rejects_duplicate_keys_under_distinct_ids() {
         let hsm = TestHsm {
-            key_id: "pkcs11:token=pop;object=issuer".to_owned(),
+            key_id: "hsm://sorafs/pop/issuer-primary".to_owned(),
             keypair: ed25519(1),
         };
         let approvers = vec![ed25519(2), ed25519(3)];
@@ -4223,7 +4217,7 @@ mod tests {
     #[test]
     fn finalized_sync_rejects_cursor_root_rollback_and_wrong_policy() {
         let hsm = TestHsm {
-            key_id: "pkcs11:token=pop;object=issuer".to_owned(),
+            key_id: "hsm://sorafs/pop/issuer-primary".to_owned(),
             keypair: ed25519(1),
         };
         let policy = policy(&hsm, &[ed25519(2), ed25519(3)]);

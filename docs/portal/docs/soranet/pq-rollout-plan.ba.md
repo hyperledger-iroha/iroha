@@ -99,10 +99,10 @@ rollout_phase = "default"
 
 | Ер өҫтө | Канар (А этап) | Пандия (В этап) | Ғәҙәттәгесә (С. С) |
 |--------|-----------------------------------|----------------------|
-| `sorafs_cli` фетч | `--anonymity-policy stage-a` йәки фазаға таянып | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` фетч | `--anonymity-policy anon-guard-pq` йәки фазаға таянып | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Оркестратор конфиг JSON (I18NI000000045X) | `canary` | `ramp` | `default` |
 | Rust клиент конфигы (`iroha.toml`) | `rollout_phase = "canary"` (по умолчанию) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` командаларға ҡул ҡуйҙы | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `iroha_cli` командаларға ҡул ҡуйҙы | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, теләк буйынса I18NI000000059X | `setRolloutPhase("ramp")`, теләк буйынса I18NI000000061X | `setRolloutPhase("default")`, теләк буйынса I18NI000000063X |
 | JavaScript оркестр ярҙамсылары | I18NI000000064X йәки I18NI000000065X | `"ramp"` / I18NI000000067X | I18NI000000068X / I18NI000000069X X |
 | Питон `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | I18NI0000073X |
@@ -162,7 +162,7 @@ rollout_phase = "default"
 ### рампа → Канар (В этап → А этабы)
 
 1. Импорт һаҡсы-каталог снимок әсирлеккә эләккәнсе I18NI000000124X һәм перерасписание I18NI000000125X шулай итеп, демоция пакеты үҙ эсенә хеш.
-2. I18NI0000126X (йәки `anonymity_policy stage-a` менән өҫтөнлөк) оркестр һәм клиент конфигурацияларында, һуңынан [PQ трещотка runbook](./pq-ratchet-runbook.md) PQ трещотка реплейы торба үткәргесенең нисбәтен иҫбатлау өсөн.
+2. I18NI0000126X (йәки `anonymity_policy anon-guard-pq` менән өҫтөнлөк) оркестр һәм клиент конфигурацияларында, һуңынан [PQ трещотка runbook](./pq-ratchet-runbook.md) PQ трещотка реплейы торба үткәргесенең нисбәтен иҫбатлау өсөн.
 3. Яңыртылған PQ Ratchet һәм SN16 телеметрия скриншоттарын беркетергә плюс иҫкәртмә һөҙөмтәләре инцидент журналы идара итеү тураһында хәбәр итеү алдынан.
 
 ### Гвардия иҫкәртмәләре- Һылтанма I18NI000000128X ҡасан да булһа демоция килеп сыға һәм теләһә ниндәй ваҡытлыса йомшартыу `TODO:` пункт булараҡ ролик трекеры өсөн эҙләү эштәре.

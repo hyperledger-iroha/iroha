@@ -39,10 +39,10 @@ from sorafs_runner_preflight import (  # noqa: E402
     inspect_runner_path_is_symlink,
     run_command_plan,
     require_existing_files,
+    require_runner_canonical_service_origin_args,
     require_runner_non_negative_int,
     require_runner_passthrough_args,
     require_runner_positive_int,
-    require_runner_url_args,
     validate_runner_fixed_evidence_plan,
     validate_runner_output_dir,
     validate_runner_output_parent,
@@ -51,6 +51,8 @@ from sorafs_runner_preflight import (  # noqa: E402
     write_runner_plan,
 )
 
+
+from sorafs_topology_qualification import add_topology_qualification_argument  # noqa: E402
 
 PLAN_SCHEMA = "sorafs.reputation.rollout_evidence_collection_plan.v1"
 PLAN_FIELDS = frozenset(
@@ -80,6 +82,12 @@ REPUTATION_PROVIDER_ID_ERROR = (
 )
 PROVIDER_ARTIFACT_HEX_CHUNK_CHARS = 64
 PROVIDER_ARTIFACT_FILENAME = "artifact.json"
+PROVIDER_SOURCE_ARTIFACT_FILENAME = "source.raw"
+LATEST_SOURCE_ARTIFACT_FILENAME = "latest.cli.raw"
+EVENTS_SOURCE_ARTIFACT_FILENAME = "events.cli.raw"
+REDACTED_AUTH_PRIVATE_KEY_ARGUMENT = (
+    "--auth-private-key-file=<runtime-only-path>"
+)
 PROVIDER_ARTIFACT_NAMESPACES = {
     "provider": "provider-by-provider-id",
     "verify": "verify-by-provider-id",
@@ -91,6 +99,7 @@ VALUE_OPTIONS = frozenset(
     {
         "--sorafs-cli-bin",
         "--verifier",
+        "--canary-builder",
         "--torii-url",
         "--auth-account",
         "--auth-private-key-file",
@@ -103,6 +112,7 @@ VALUE_OPTIONS = frozenset(
         "--consumption-evidence",
         "--out-dir",
         "--summary-out",
+        "--topology-qualification-summary",
         "--now-unix",
         "--max-snapshot-age-secs",
         "--max-ingest-lag-secs",
@@ -125,6 +135,34 @@ class CommandPlan:
     label: str
     artifact: Path | None
     command: list[str]
+
+
+def redact_reputation_command(command: Sequence[str]) -> list[str]:
+    """Redact the runtime key-file path from rendered command vectors."""
+
+    return [
+        (
+            REDACTED_AUTH_PRIVATE_KEY_ARGUMENT
+            if argument.startswith("--auth-private-key-file=")
+            else argument
+        )
+        for argument in command
+    ]
+
+
+def redacted_command_plan(plan: Sequence[CommandPlan]) -> list[CommandPlan]:
+    """Return a render-only plan while retaining executable commands in memory."""
+
+    return [
+        CommandPlan(step.label, step.artifact, redact_reputation_command(step.command))
+        for step in plan
+    ]
+
+
+def redacted_notice_command(step: CommandPlan) -> list[str]:
+    """Return the payload-free command vector shown in RUN notices."""
+
+    return redact_reputation_command(step.command)
 
 
 def i105_payload_is_candidate(payload: str) -> bool:
@@ -241,8 +279,20 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     )
     if not auth_account_is_i105_candidate(args.auth_account):
         errors.append(AUTH_ACCOUNT_ERROR)
-    require_runner_url_args(args, ("torii_url",), errors)
+    require_runner_canonical_service_origin_args(
+        args,
+        ("torii_url",),
+        errors,
+        allow_loopback_http=True,
+    )
     seen_input_files: dict[Path, tuple[str, Path]] = {}
+    errors.extend(
+        require_existing_files(
+            [args.canary_builder],
+            "--canary-builder",
+            seen=seen_input_files,
+        )
+    )
     errors.extend(
         require_existing_files(
             [args.auth_private_key_file],
@@ -318,6 +368,10 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         )
     if watch_max_polls_valid and args.watch_max_polls > U64_MAX:
         errors.append("--watch-max-polls must fit an unsigned 64-bit integer")
+    elif watch_max_polls_valid and args.watch_max_polls != 1:
+        errors.append(
+            "--watch-max-polls must be 1 so the archived source binds the exact watch request"
+        )
     if watch_poll_interval_valid and args.watch_poll_interval_ms > U64_MAX:
         errors.append("--watch-poll-interval-ms must fit an unsigned 64-bit integer")
     return errors
@@ -339,29 +393,63 @@ def provider_artifact_name(provider_id: str, suffix: str) -> Path:
     return Path(namespace, *chunks, PROVIDER_ARTIFACT_FILENAME)
 
 
+def provider_source_artifact_name(provider_id: str, suffix: str) -> Path:
+    """Return the non-JSON raw CLI source path for one provider step."""
+
+    return provider_artifact_name(provider_id, suffix).with_name(
+        PROVIDER_SOURCE_ARTIFACT_FILENAME
+    )
+
+
 def prepare_reputation_artifact_parent(
     step: CommandPlan,
     out_dir: Path,
 ) -> list[str]:
     """Create one canonical provider artifact parent immediately before launch."""
 
-    command = step.command
-    if len(command) < 3 or command[1] != "reputation":
-        return []
-    operation = command[2]
-    suffix = {"fetch": "provider", "verify": "verify"}.get(operation)
-    if suffix is None:
-        return []
-
     errors: list[str] = []
-    provider_args = [
-        argument.removeprefix("--provider-id=")
-        for argument in command
-        if argument.startswith("--provider-id=")
-    ]
+    command = step.command
+    provider_args: list[str]
+    expected_artifact: Path
+    if len(command) >= 3 and command[1] == "reputation":
+        operation = command[2]
+        suffix = {"fetch": "provider", "verify": "verify"}.get(operation)
+        if suffix is None:
+            return []
+        provider_args = [
+            argument.removeprefix("--provider-id=")
+            for argument in command
+            if argument.startswith("--provider-id=")
+        ]
+        if len(provider_args) != 1 or not provider_id_is_canonical(provider_args[0]):
+            return ["provider artifact step must bind one canonical provider id"]
+        expected_artifact = out_dir / provider_source_artifact_name(
+            provider_args[0],
+            suffix,
+        )
+    else:
+        kind_args = [
+            argument.removeprefix("--kind=")
+            for argument in command
+            if argument.startswith("--kind=")
+        ]
+        if len(kind_args) != 1 or kind_args[0] not in {"provider", "verify"}:
+            return []
+        suffix = kind_args[0]
+        provider_args = [
+            argument.removeprefix("--expected-provider-id=")
+            for argument in command
+            if argument.startswith("--expected-provider-id=")
+        ]
+        if len(provider_args) != 1 or not provider_id_is_canonical(provider_args[0]):
+            return ["provider artifact step must bind one canonical provider id"]
+        expected_artifact = out_dir / provider_artifact_name(
+            provider_args[0],
+            suffix,
+        )
+
     if len(provider_args) != 1 or not provider_id_is_canonical(provider_args[0]):
         return ["provider artifact step must bind one canonical provider id"]
-    expected_artifact = out_dir / provider_artifact_name(provider_args[0], suffix)
     if step.artifact != expected_artifact:
         return ["provider artifact path must match its canonical sharded layout"]
     if not validate_runner_output_dir(
@@ -450,7 +538,10 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     summary_out = args.summary_out or out_dir / "rollout-summary.json"
     latest_out = out_dir / "latest.json"
     events_out = out_dir / "events.json"
+    latest_source = out_dir / LATEST_SOURCE_ARTIFACT_FILENAME
+    events_source = out_dir / EVENTS_SOURCE_ARTIFACT_FILENAME
     cli = args.sorafs_cli_bin
+    builder = str(args.canary_builder)
     torii_url = args.torii_url
     auth_args = [
         f"--auth-account={args.auth_account}",
@@ -460,26 +551,51 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     plan = [
         CommandPlan(
             "fetch_latest_snapshot",
-            latest_out,
+            latest_source,
             [
                 cli,
                 "reputation",
                 "snapshot",
                 f"--torii-url={torii_url}",
                 *auth_args,
-                f"--output={latest_out}",
+                f"--output={latest_source}",
+            ],
+        ),
+        CommandPlan(
+            "adapt_latest_snapshot",
+            latest_out,
+            [
+                sys.executable,
+                builder,
+                "--kind=latest",
+                f"--source-cli-json={latest_source}",
+                f"--publish-evidence={args.publish_evidence}",
+                f"--out={latest_out}",
+                f"--now-unix={args.now_unix}",
             ],
         ),
     ]
 
     proof_specs = dict(split_provider_proof_spec(spec) for spec in args.provider_proof)
+    provider_outputs: list[Path] = []
+    verify_outputs: list[Path] = []
     for provider_id in args.provider_id:
         provider_out = out_dir / provider_artifact_name(provider_id, "provider")
         verify_out = out_dir / provider_artifact_name(provider_id, "verify")
+        provider_source = out_dir / provider_source_artifact_name(
+            provider_id,
+            "provider",
+        )
+        verify_source = out_dir / provider_source_artifact_name(
+            provider_id,
+            "verify",
+        )
+        provider_outputs.append(provider_out)
+        verify_outputs.append(verify_out)
         plan.append(
             CommandPlan(
                 f"fetch_provider_{provider_id}",
-                provider_out,
+                provider_source,
                 [
                     cli,
                     "reputation",
@@ -488,14 +604,31 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
                     f"--provider-id={provider_id}",
                     *auth_args,
                     "--format=json",
-                    f"--summary-out={provider_out}",
+                    f"--summary-out={provider_source}",
+                ],
+            )
+        )
+        plan.append(
+            CommandPlan(
+                f"adapt_provider_{provider_id}",
+                provider_out,
+                [
+                    sys.executable,
+                    builder,
+                    "--kind=provider",
+                    f"--source-cli-json={provider_source}",
+                    f"--publish-evidence={args.publish_evidence}",
+                    f"--latest-evidence={latest_out}",
+                    f"--expected-provider-id={provider_id}",
+                    f"--out={provider_out}",
+                    f"--now-unix={args.now_unix}",
                 ],
             )
         )
         plan.append(
             CommandPlan(
                 f"verify_provider_{provider_id}",
-                verify_out,
+                verify_source,
                 [
                     cli,
                     "reputation",
@@ -503,7 +636,27 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
                     f"--snapshot={args.snapshot}",
                     f"--provider-id={provider_id}",
                     f"--proof={proof_specs[provider_id]}",
-                    f"--summary-out={verify_out}",
+                    f"--summary-out={verify_source}",
+                ],
+            )
+        )
+        plan.append(
+            CommandPlan(
+                f"adapt_verify_provider_{provider_id}",
+                verify_out,
+                [
+                    sys.executable,
+                    builder,
+                    "--kind=verify",
+                    f"--source-cli-json={verify_source}",
+                    f"--publish-evidence={args.publish_evidence}",
+                    f"--latest-evidence={latest_out}",
+                    f"--provider-evidence={provider_out}",
+                    f"--expected-provider-id={provider_id}",
+                    f"--expected-snapshot-path={args.snapshot}",
+                    f"--expected-proof-path={proof_specs[provider_id]}",
+                    f"--out={verify_out}",
+                    f"--now-unix={args.now_unix}",
                 ],
             )
         )
@@ -511,7 +664,7 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     plan.append(
         CommandPlan(
             "watch_reputation_events",
-            events_out,
+            events_source,
             [
                 cli,
                 "reputation",
@@ -522,7 +675,25 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
                 f"--limit={args.watch_limit}",
                 f"--max-polls={args.watch_max_polls}",
                 f"--poll-interval-ms={args.watch_poll_interval_ms}",
-                f"--summary-out={events_out}",
+                f"--summary-out={events_source}",
+            ],
+        )
+    )
+    plan.append(
+        CommandPlan(
+            "adapt_reputation_events",
+            events_out,
+            [
+                sys.executable,
+                builder,
+                "--kind=events",
+                f"--source-cli-json={events_source}",
+                f"--publish-evidence={args.publish_evidence}",
+                f"--latest-evidence={latest_out}",
+                f"--expected-since={args.watch_since}",
+                f"--expected-limit={args.watch_limit}",
+                f"--out={events_out}",
+                f"--now-unix={args.now_unix}",
             ],
         )
     )
@@ -530,10 +701,12 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     verifier_command = [
         sys.executable,
         str(args.verifier),
-        "--evidence-dir",
-        str(out_dir),
         "--evidence",
         f"publish={args.publish_evidence}",
+        "--evidence",
+        f"latest={latest_out}",
+        "--evidence",
+        f"events={events_out}",
         "--evidence",
         f"metrics={args.metrics_evidence}",
         "--evidence",
@@ -542,11 +715,17 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         f"consumption={args.consumption_evidence}",
         "--summary-out",
         str(summary_out),
+        "--topology-qualification-summary",
+        str(args.topology_qualification_summary),
         "--max-snapshot-age-secs",
         str(args.max_snapshot_age_secs),
         "--max-ingest-lag-secs",
         str(args.max_ingest_lag_secs),
     ]
+    for provider_out in provider_outputs:
+        verifier_command.extend(["--evidence", f"provider={provider_out}"])
+    for verify_out in verify_outputs:
+        verifier_command.extend(["--evidence", f"verify={verify_out}"])
     if args.now_unix is not None:
         verifier_command.extend(["--now-unix", str(args.now_unix)])
     for provider_id in args.provider_id:
@@ -579,6 +758,7 @@ def evidence_contract() -> dict[str, dict[str, object]]:
 
 
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
+    rendered_plan = redacted_command_plan(plan)
     return {
         "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
@@ -590,7 +770,7 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
                 "artifact": None if step.artifact is None else str(step.artifact),
                 "command": step.command,
             }
-            for step in plan
+            for step in rendered_plan
         ],
     }
 
@@ -604,7 +784,7 @@ def validate_plan_json(
 
     return validate_runner_fixed_evidence_plan(
         rendered,
-        plan,
+        redacted_command_plan(plan),
         diagnostic_prefix="reputation rollout runner plan",
         plan_schema=PLAN_SCHEMA,
         plan_fields=PLAN_FIELDS,
@@ -622,6 +802,7 @@ def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
         plan,
         out_dir,
         prepare_step=lambda step: prepare_reputation_artifact_parent(step, out_dir),
+        notice_command=redacted_notice_command,
     )
 
 
@@ -636,6 +817,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=SCRIPT_DIR / "check_sorafs_reputation_rollout_evidence.py",
         help="Rollout evidence verifier script path.",
+    )
+    parser.add_argument(
+        "--canary-builder",
+        type=Path,
+        default=SCRIPT_DIR / "build_sorafs_reputation_canary.py",
+        help="Strict source-bound reputation canary builder path.",
     )
     parser.add_argument("--torii-url", required=True, help="Deployed Torii base URL.")
     parser.add_argument(
@@ -737,6 +924,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the command plan JSON without running commands.",
     )
+    add_topology_qualification_argument(parser)
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

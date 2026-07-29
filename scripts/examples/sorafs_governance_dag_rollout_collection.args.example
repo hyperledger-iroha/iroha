@@ -37,3 +37,4 @@ artifacts/sorafs/governance-dag/staged/observability.json
 artifacts/sorafs/governance-dag/staged/ipfs-ipns-e2e.json
 --governance-approval-evidence
 artifacts/sorafs/governance-dag/staged/governance-approval.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

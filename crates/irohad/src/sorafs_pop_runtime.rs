@@ -12,7 +12,7 @@ use iroha_torii::sorafs::pop_api::{
 };
 use sorafs_node::pop_credentials::PopCredentialServiceError;
 
-/// Fail-closed PoP runtime startup failure.
+/// Fail-closed `PoP` runtime startup failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopRuntimeStartupError {
     /// A provider registry was injected while the service is disabled.
@@ -46,7 +46,7 @@ impl std::error::Error for PopRuntimeStartupError {
     }
 }
 
-/// Build the PoP runtime from public config and one deployment-owned registry.
+/// Build the `PoP` runtime from public config and one deployment-owned registry.
 ///
 /// The Torii constructor validates the exact configured provider handle,
 /// revision, policy digest, resolved HSM identity, and wallet wrapping-key
@@ -254,7 +254,7 @@ mod tests {
                 .debug_struct("TestProviderRegistry")
                 .field("handle", &self.handle)
                 .field("private_providers", &"[REDACTED]")
-                .finish()
+                .finish_non_exhaustive()
         }
     }
 
@@ -421,8 +421,7 @@ mod tests {
         let issuer_state_dir = config.issuer_state_dir.clone();
         let wallet_state_dir = config.wallet_state_dir.clone();
         let error = build(Some(config), Some(erased_registry(registry)))
-            .err()
-            .expect("PoP startup must fail");
+            .expect_err("PoP startup must fail");
         assert_eq!(error, expected);
         assert!(!issuer_state_dir.exists());
         assert!(!wallet_state_dir.exists());

@@ -47,7 +47,10 @@ use crate::name::Name;
 /// replaces account/policy fee sponsorship with on-chain sponsor programs.
 /// Version 3 adds the flat ordered transaction/trigger executable batch that
 /// atomically interleaves native instructions and deployed-contract calls.
-pub const DATA_MODEL_VERSION: u32 = 3;
+/// Version 4 requires validation-fee policy and payout-lifecycle proposals,
+/// plus their retained registry entries, to bind the exact PLAIN electorate
+/// rules used by their ballot lifecycle.
+pub const DATA_MODEL_VERSION: u32 = 4;
 
 #[macro_use]
 mod id_macros;

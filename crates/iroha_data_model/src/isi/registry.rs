@@ -30,6 +30,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferFreeze>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferBlacklist>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferControl>,
+    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetHoldingLimit>,
     InstructionRegistry::register_slice::<rwa::RwaInstructionBox>,
     |registry| {
         registry.register_with_id::<defi::DeFiInstructionBox>(defi::DeFiInstructionBox::WIRE_ID)
@@ -303,6 +304,12 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkAcePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RotatePrivacyZkAcePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RevokePrivacyZkAcePolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509TrustAnchorV1>,
+    InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509TrustAnchorV1>,
+    InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509TrustAnchorV1>,
+    InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509CertificatePolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509CertificatePolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509CertificatePolicyV1>,
     InstructionRegistry::register_slice::<privacy::SubmitPrivacyProofV1>,
     InstructionRegistry::register_slice::<kaigi::CreateKaigi>,
     InstructionRegistry::register_slice::<kaigi::JoinKaigi>,
@@ -316,6 +323,10 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<zk::ScheduleConfidentialPolicyTransition>,
     InstructionRegistry::register_slice::<zk::CancelConfidentialPolicyTransition>,
     InstructionRegistry::register_slice::<zk::Shield>,
+    InstructionRegistry::register_slice::<zk::RegisterZkAceIdentityCommitment>,
+    InstructionRegistry::register_slice::<zk::RotateZkAceIdentityCommitment>,
+    InstructionRegistry::register_slice::<zk::RevokeZkAceIdentityCommitment>,
+    InstructionRegistry::register_slice::<zk::SubmitZkAceAuthorizedTransfer>,
     InstructionRegistry::register_slice::<zk::ZkTransfer>,
     InstructionRegistry::register_slice::<zk::Unshield>,
     InstructionRegistry::register_slice::<zk::CreateElection>,
@@ -428,6 +439,42 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<zk::CancelConfidentialPolicyTransition>(
         "zk::CancelConfidentialPolicyTransition",
     );
+    registry = with_privacy_stable_ids(registry);
+    registry = registry.register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
+        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
+        musubi::PublishMusubiRelease::WIRE_ID,
+    );
+    registry = registry
+        .register_with_id_slice::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
+    registry = registry.register_with_id_slice::<musubi::SetMusubiShortAlias>(
+        musubi::SetMusubiShortAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<musubi::AssertMusubiReleaseExists>(
+        musubi::AssertMusubiReleaseExists::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
+        "iroha.staking.activate_public_lane_validator",
+    );
+    registry = registry
+        .register_with_id_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>(
+            "iroha.staking.rebind_public_lane_validator_peer",
+        );
+    registry = registry.register_with_id_slice::<crate::isi::staking::ExitPublicLaneValidator>(
+        "iroha.staking.exit_public_lane_validator",
+    );
+    registry = registry.register_with_id_slice::<Upgrade>(Upgrade::WIRE_ID);
+    registry = registry.register_with_id_slice::<CustomInstruction>(CustomInstruction::WIRE_ID);
+    registry = registry.register_with_id_slice::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
+    registry
+}
+
+fn with_privacy_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id_slice::<privacy::RegisterPrivacyProtocolActivationV1>(
         privacy::RegisterPrivacyProtocolActivationV1::WIRE_ID,
     );
@@ -460,40 +507,28 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkAcePolicyV1>(
         privacy::RevokePrivacyZkAcePolicyV1::WIRE_ID,
     );
+    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyZkX509TrustAnchorV1>(
+        privacy::RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RotatePrivacyZkX509TrustAnchorV1>(
+        privacy::RotatePrivacyZkX509TrustAnchorV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509TrustAnchorV1>(
+        privacy::RevokePrivacyZkX509TrustAnchorV1::WIRE_ID,
+    );
+    registry = registry
+        .register_with_id_slice::<privacy::RegisterPrivacyZkX509CertificatePolicyV1>(
+            privacy::RegisterPrivacyZkX509CertificatePolicyV1::WIRE_ID,
+        );
+    registry = registry.register_with_id_slice::<privacy::RotatePrivacyZkX509CertificatePolicyV1>(
+        privacy::RotatePrivacyZkX509CertificatePolicyV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509CertificatePolicyV1>(
+        privacy::RevokePrivacyZkX509CertificatePolicyV1::WIRE_ID,
+    );
     registry = registry.register_with_id_slice::<privacy::SubmitPrivacyProofV1>(
         privacy::SubmitPrivacyProofV1::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
-        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
-        musubi::PublishMusubiRelease::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
-    registry = registry.register_with_id_slice::<musubi::SetMusubiShortAlias>(
-        musubi::SetMusubiShortAlias::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<musubi::AssertMusubiReleaseExists>(
-        musubi::AssertMusubiReleaseExists::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
-        "iroha.staking.activate_public_lane_validator",
-    );
-    registry = registry
-        .register_with_id_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>(
-            "iroha.staking.rebind_public_lane_validator_peer",
-        );
-    registry = registry.register_with_id_slice::<crate::isi::staking::ExitPublicLaneValidator>(
-        "iroha.staking.exit_public_lane_validator",
-    );
-    registry = registry.register_with_id_slice::<Upgrade>(Upgrade::WIRE_ID);
-    registry = registry.register_with_id_slice::<CustomInstruction>(CustomInstruction::WIRE_ID);
-    registry = registry.register_with_id_slice::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
     registry
 }
 
@@ -724,6 +759,9 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
         );
     registry = registry.register_with_id_slice::<asset_transfer_control::SetAssetTransferControl>(
         asset_transfer_control::SetAssetTransferControl::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<asset_transfer_control::SetAssetHoldingLimit>(
+        asset_transfer_control::SetAssetHoldingLimit::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<contract_alias::SetContractAlias>(
         contract_alias::SetContractAlias::WIRE_ID,

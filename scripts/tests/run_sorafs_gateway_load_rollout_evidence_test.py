@@ -21,9 +21,40 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+TOPOLOGY = sys.modules["sorafs_topology_qualification"]
+
 
 def write_payload(path: Path) -> Path:
     path.write_text("{}", encoding="utf-8")
+    return path
+
+
+def write_topology_qualification(root: Path) -> Path:
+    path = root / "topology-qualification.json"
+    payload = {
+        "schema": TOPOLOGY.SUMMARY_SCHEMA,
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": "11" * 32,
+        "canonical_manifest_sha256": "22" * 32,
+        "deployment": {
+            "deployment_id": "gateway-load-prod-a",
+            "environment": "production",
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(TOPOLOGY.CANONICAL_READINESS_LANES),
+        "recognized_lane_slot_count": len(TOPOLOGY.CANONICAL_READINESS_LANES),
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -35,10 +66,12 @@ def complete_args(tmp_path: Path) -> list[str]:
         str(tmp_path / "evidence"),
         "--now-unix",
         "1800600000",
+        "--topology-qualification-summary",
+        str(write_topology_qualification(tmp_path)),
         "--max-evidence-age-secs",
         "86400",
         "--min-staging-duration-secs",
-        "3600",
+        "86400",
         "--min-streams",
         "1000",
         "--min-success-rate-bps",
@@ -99,7 +132,7 @@ def test_dry_run_prints_complete_gateway_load_rollout_plan(
         "max_evidence_age_secs": 86400,
         "max_p95_latency_ms": 1500,
         "max_p99_latency_ms": 3000,
-        "min_staging_duration_secs": 3600,
+        "min_staging_duration_secs": 86400,
         "min_streams": 1000,
         "min_success_rate_bps": 9900,
         "now_unix": 1800600000,
@@ -123,7 +156,23 @@ def test_dry_run_prints_complete_gateway_load_rollout_plan(
         in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
     )
     assert "streams" in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
+    assert (
+        "cache_coverage"
+        in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
+    )
+    assert (
+        "peak_concurrent_range_streams"
+        in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
+    )
     assert "providers" in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
+    assert (
+        "load_conditions"
+        in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
+    )
+    assert (
+        "cache_state"
+        not in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
+    )
     assert "metrics" in plan["evidence_contract"]["telemetry_slo"]["required_payload_fields"]
     assert (
         "http3_endpoint_committed"
@@ -142,6 +191,24 @@ def test_dry_run_prints_complete_gateway_load_rollout_plan(
     assert verifier.count("--require-kind") == len(MODULE.DEFAULT_REQUIRED_KINDS)
     assert "--min-staging-duration-secs" in verifier
     assert "--now-unix" in verifier
+    assert "--topology-qualification-summary" in verifier
+    assert str(tmp_path / "topology-qualification.json") in verifier
+
+
+def test_runner_rejects_weakened_production_load_thresholds(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--min-staging-duration-secs") + 1] = "86399"
+    args[args.index("--min-streams") + 1] = "999"
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "min_staging_duration_secs must be >= 86400" in captured.err
+    assert "min_streams must be >= 1000" in captured.err
+    assert captured.out == ""
 
 
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
@@ -370,6 +437,8 @@ def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
             str(tmp_path / "evidence"),
             "--now-unix",
             "1800600000",
+            "--topology-qualification-summary",
+            str(write_topology_qualification(tmp_path)),
             "--require-kind",
             "local_conformance",
             "--local-conformance-evidence",
@@ -500,6 +569,8 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
             str(tmp_path / "evidence"),
             "--now-unix",
             "1800600000",
+            "--topology-qualification-summary",
+            str(write_topology_qualification(tmp_path)),
             "--require-kind",
             "local_conformance",
             "--local-conformance-evidence",
@@ -523,6 +594,8 @@ def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None
             [
                 "--out-dir",
                 str(tmp_path / "evidence"),
+                "--topology-qualification-summary",
+                str(write_topology_qualification(tmp_path)),
                 "--require-kind",
                 "unknown",
                 "--dry-run",

@@ -214,31 +214,14 @@ class IrohaPeerTransportV1Test {
     }
 
     @Test
-    fun `Kagemusha adapter fails closed without native or roundtrips with native`() {
+    fun `Kagemusha adapter requires ABI 21 and roundtrips exact bytes`() {
         assertEquals(0x0102, IrohaPeerKagemushaAdapterV1.NATIVE_ARCHIVE_SCHEMA_VERSION)
         val archive = portableOfferFixture()
         val nativeAvailable = KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()
-        if (System.getenv("IROHA_REQUIRE_KAGEMUSHA_NATIVE") == "1") {
-            assertTrue(
-                nativeAvailable,
-                "The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library",
-            )
-        }
-        if (!nativeAvailable) {
-            val failure = assertFailsWith<IllegalArgumentException> {
-                KagemushaPeerPayload.decode(
-                    archive,
-                    KagemushaPeerPayloadKind.RECEIVE_REQUEST,
-                )
-            }
-            assertEquals("Invalid Kagemusha receive_request archive", failure.message)
-            assertTrue(failure.cause is IllegalStateException)
-            assertEquals(
-                "connect_norito_bridge ABI 21 artifact streaming is unavailable",
-                failure.cause?.message,
-            )
-            return
-        }
+        assertTrue(
+            nativeAvailable,
+            "A freshly built connect_norito_bridge ABI 21 artifact-streaming library is required",
+        )
 
         val typed = KagemushaPeerPayload.decode(
             archive,

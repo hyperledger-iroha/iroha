@@ -5,5 +5,5 @@ use trybuild::TestCases;
 #[test]
 fn ui() {
     let t = TestCases::new();
-    t.case("tests/ui/instruction_registry.rs");
+    t.pass("tests/ui/instruction_registry.rs");
 }

@@ -1899,8 +1899,6 @@ mod reserve_matrix_tests {
 mod rollout_tests {
     use std::fs;
 
-    use tempfile::tempdir;
-
     use super::*;
 
     #[test]
@@ -6003,8 +6001,12 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
                 "summary `{}` missing `transport_policy` string",
                 path.display()
             )
-        })?
-        .to_string();
+        })?;
+    require_canonical_transport_policy(
+        transport_policy,
+        &format!("summary `{}` transport_policy", path.display()),
+    )?;
+    let transport_policy = transport_policy.to_string();
     let transport_policy_override = summary
         .get("transport_policy_override")
         .and_then(Value::as_bool)
@@ -6018,6 +6020,15 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
         .get("transport_policy_override_label")
         .and_then(Value::as_str)
         .map(|value| value.to_string());
+    if let Some(label) = transport_policy_override_label.as_deref() {
+        require_canonical_transport_policy(
+            label,
+            &format!(
+                "summary `{}` transport_policy_override_label",
+                path.display()
+            ),
+        )?;
+    }
     let telemetry_source = summary
         .get("telemetry_source")
         .and_then(Value::as_str)
@@ -6088,6 +6099,21 @@ fn parse_scoreboard_metadata(
             obj.get("anonymity_policy_override_label"),
         ),
     };
+    if let Some(label) = metadata.transport_policy.as_deref() {
+        require_canonical_transport_policy(
+            label,
+            &format!("scoreboard `{}` metadata.transport_policy", path.display()),
+        )?;
+    }
+    if let Some(label) = metadata.transport_policy_override_label.as_deref() {
+        require_canonical_transport_policy(
+            label,
+            &format!(
+                "scoreboard `{}` metadata.transport_policy_override_label",
+                path.display()
+            ),
+        )?;
+    }
     Ok(Some(metadata))
 }
 
@@ -6133,8 +6159,16 @@ fn metadata_direct_transport_label(metadata: &ScoreboardMetadata) -> Option<&str
 }
 
 fn is_direct_only_label(label: &str) -> bool {
-    let normalised = label.trim().to_ascii_lowercase();
-    normalised == "direct-only" || normalised == "direct_only"
+    label == "direct-only"
+}
+
+fn require_canonical_transport_policy(label: &str, context: &str) -> Result<(), String> {
+    match label {
+        "soranet-first" | "soranet-strict" | "direct-only" => Ok(()),
+        _ => Err(format!(
+            "{context} must be exactly soranet-first|soranet-strict|direct-only, got `{label}`"
+        )),
+    }
 }
 
 fn provider_mix_label_from_counts(direct: u64, gateway: u64) -> &'static str {
@@ -6989,6 +7023,63 @@ mod tests {
             to_string_pretty(&scoreboard).expect("render scoreboard"),
         )
         .expect("write scoreboard");
+    }
+
+    #[test]
+    fn adoption_transport_policies_require_exact_v1_labels() {
+        for canonical in ["soranet-first", "soranet-strict", "direct-only"] {
+            require_canonical_transport_policy(canonical, "test policy")
+                .expect("canonical transport policy");
+        }
+
+        let path = Path::new("selector-fixture.json");
+        for alias in [
+            "direct_only",
+            "DIRECT-ONLY",
+            " direct-only",
+            "direct-only ",
+            "SoraNet-first",
+            "unknown",
+        ] {
+            require_canonical_transport_policy(alias, "test policy")
+                .expect_err("transport policy alias must fail");
+
+            let mut summary = summary_with_providers_value(&[("alpha", 1), ("beta", 1)]);
+            summary
+                .as_object_mut()
+                .expect("summary object")
+                .insert("transport_policy".into(), Value::from(alias));
+            assert!(
+                collect_summary_stats(&summary, path).is_err(),
+                "summary transport policy alias must fail"
+            );
+
+            let metadata = norito::json!({
+                "transport_policy": alias,
+                "transport_policy_override": false,
+                "transport_policy_override_label": null,
+            });
+            parse_scoreboard_metadata(&metadata, path)
+                .expect_err("scoreboard transport policy alias must fail");
+
+            let mut summary = summary_with_providers_value(&[("alpha", 1), ("beta", 1)]);
+            summary
+                .as_object_mut()
+                .expect("summary object")
+                .insert("transport_policy_override_label".into(), Value::from(alias));
+            assert!(
+                collect_summary_stats(&summary, path).is_err(),
+                "summary override label alias must fail"
+            );
+
+            let metadata = norito::json!({
+                "transport_policy": "soranet-first",
+                "transport_policy_override": true,
+                "transport_policy_override_label": alias,
+            });
+            parse_scoreboard_metadata(&metadata, path)
+                .expect_err("scoreboard override label alias must fail");
+        }
     }
 
     #[test]

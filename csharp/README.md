@@ -827,17 +827,56 @@ build or test execution.
 
 ## Pack
 
+The NuGet package is a five-RID hard cut. It contains exactly these native
+assets:
+
+| Rust target | NuGet RID | Package asset |
+|---|---|---|
+| `x86_64-unknown-linux-gnu` | `linux-x64` | `runtimes/linux-x64/native/libconnect_norito_bridge.so` |
+| `aarch64-unknown-linux-gnu` | `linux-arm64` | `runtimes/linux-arm64/native/libconnect_norito_bridge.so` |
+| `x86_64-apple-darwin` | `osx-x64` | `runtimes/osx-x64/native/libconnect_norito_bridge.dylib` |
+| `aarch64-apple-darwin` | `osx-arm64` | `runtimes/osx-arm64/native/libconnect_norito_bridge.dylib` |
+| `x86_64-pc-windows-msvc` | `win-x64` | `runtimes/win-x64/native/connect_norito_bridge.dll` |
+
+Build each library on a runner whose Rust host exactly matches its target. Each
+runner must record and reverify the copied release library with
+`scripts/check_native_sdk_abi21_artifact.py --sdk csharp`. Merge the five
+uploads into an input root containing exactly
+`<target>/<library>` and `<target>/native-sdk-abi21.json`, then assemble the
+pack tree:
+
 ```bash
-export DOTNET_ROOT="$HOME/.dotnet"
-export PATH="$DOTNET_ROOT:$PATH"
-cd csharp
-dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
-cd ..
-ci/check_csharp_sdk_package_consumer.sh
+python3 scripts/package_csharp_native_artifacts.py stage \
+  --input-root /absolute/path/to/csharp-native-inputs \
+  --output-root csharp/artifacts/native-package \
+  --source-root .
+
+dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj \
+  -c Release \
+  --no-build \
+  --output csharp/artifacts/packages \
+  -p:IrohaNativePackageRoot=csharp/artifacts/native-package \
+  -p:IrohaNativePackagePython=python3
 ```
+
+Both commands require the same clean Git revision recorded by all five
+canonical ABI-21 manifests. Missing, extra, noncanonical, substituted, or stale
+inputs fail before NuGet packing. The project invokes `verify-stage` again
+immediately before `GenerateNuspec`; CI then runs `verify-package` against the
+primary `.nupkg` and exercises that package on all five native hosts. The
+workflow is source-complete, but it is not evidence that a five-host run has
+passed until the corresponding CI artifacts exist.
 
 The package-consumer guard creates an isolated temporary `net8.0` application,
 installs `Hyperledger.Iroha.Sdk` from `csharp/artifacts/packages`, verifies the
 consumer project uses `PackageReference` rather than `ProjectReference`, builds
 with warnings as errors, and runs managed Ed25519, canonical request, and SCCP
-route checks through the packed NuGet assembly.
+route checks through the packed NuGet assembly. Set
+`CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER` to the current reviewed RID;
+the guard also verifies the NuGet runtime inventory and requires the packaged
+ABI-21 appeal-finance bridge:
+
+```bash
+CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER=linux-x64 \
+  ci/check_csharp_sdk_package_consumer.sh
+```

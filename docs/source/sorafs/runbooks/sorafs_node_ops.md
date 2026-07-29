@@ -106,10 +106,167 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
   should print `capacity_soak_digest=71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`.
   If pricing or accrual logic changes, refresh the digest and rerun the test.
 
+### Evidence-viewer checkpoint authority
+
+Before enabling `[sorafs.storage.evidence_viewer]`, bind
+`checkpoint_store_handle`, non-zero `checkpoint_store_revision`, and canonical
+non-zero `checkpoint_store_policy_digest_hex` to the deployment's exact
+linearizable sealed-CAS provider, alongside the required WebAuthn, grant,
+receipt-signer, erasure, and immutable compaction-archive bindings. The archive
+also requires a non-zero namespace id and exact Ed25519 public key. Keep
+`compaction_interval_ms` within `1000..=86400000` and
+`compaction_max_records` within `1..=1024`; the checked-in
+[`evidence_viewer_runtime_binding.toml`](../snippets/evidence_viewer_runtime_binding.toml)
+shows the complete non-secret shape. These are public identity and policy pins
+only; CAS/archive credentials, private keys, and vendor diagnostics remain
+inside the runtime providers. The deployment registry must return all six
+dependencies when the viewer is enabled and none when it is disabled. Missing,
+unrequested, substituted, stale, unavailable, or test-marked providers stop
+startup. The stock daemon broker protocol now implements slots 22–26 and 47
+with exact public qualification metadata, canonical bounded requests,
+replay-safe mutation identities, typed ambiguity, and authenticated
+checkpoint/archive readback. A standard-binary deployment still fails closed
+until the broker service is packaged and supplied with genuine
+deployment-owned backends; no local provider is substituted.
+
+Treat the external signed head as authoritative. `checkpoint_path` names only a
+private revalidated cache: it may be absent, match the authoritative record, or
+be exactly one predecessor behind it, but it must never seed or replace the
+external head. Operate at least two Torii replicas against the same authority
+and rehearse concurrent CAS rejection, ambiguous-result readback, provider
+rotation, rollback, restart, and cache-loss recovery before promotion. The
+shutdown-aware worker archives a bounded set, verifies exact canonical readback
+and the archive's Ed25519 receipt, and only then prunes and commits the next CAS
+head. Restart and every explicit live refresh traverse the signed predecessor
+operation ids to archive genesis and verify every historical artifact and both
+signatures before adopting the cache or in-memory state. Rehearse a missing or
+corrupt historical generation, archive-success/checkpoint-failure replay, and
+erasure-before-compaction: a terminal erasure must not regain a retention floor
+when an older session is archived later. An unavailable, ambiguous, zero-digest,
+or partially successful erasure-intent reconciliation must leave the replica
+unavailable for reads until authoritative restart recovery. A poisoned
+quarantine-object index must also surface as unavailable state, never as
+`NotFound`. The source tree supplies the injection contract, not a production
+CAS/HSM/object-lock implementation or deployment evidence.
+
+### Fused privacy publication and signed Governance DAG
+
+Enabling `[sorafs.storage.privacy_aggregates]` requires an explicit
+`[sorafs.storage].governance_dag_dir` and the complete signed publisher binding:
+`governance_dag_publisher_peer_id`, `governance_dag_signer_handle`, non-zero
+`governance_dag_signer_revision`, non-zero
+`governance_dag_signer_policy_digest_hex`, and canonical
+`governance_dag_publisher_public_key_hex`. Any configured
+`governance_dag_dir`, independently of whether the public Governance DAG
+service is enabled, also requires the complete
+`[sorafs.storage.governance_dag_service]` checkpoint-store triple:
+`checkpoint_store_handle`, non-zero `checkpoint_store_revision`, and canonical
+non-zero `checkpoint_store_policy_digest_hex`. Supplying only part of either
+binding, supplying either without a consumer, or omitting either injected
+runtime provider stops startup. The directory is public publication state, not
+permission to place a private key or credential in configuration.
+
+The embedded producer uses service-independent sealed slots for its root
+checkpoint and write-ahead publication intent. Before accepting the first
+append it seals an empty-root binding covering the canonical directory, signer,
+peer, public key, and checkpoint-store identity. Each successor intent binds
+the exact block, head, index, predecessor revision, and resulting digests.
+Startup recovers a retained intent before auditing the root, then authenticates
+canonical JSON and Norito bytes, sidecars, source payloads, signatures, CIDs,
+lineage, reverse maps, head/index agreement, entry counts, and bounded total
+bytes. A local root without its sealed checkpoint, an implicit signer or store
+substitution, an unindexed artifact, or an unsafe filesystem object fails
+closed.
+
+The single `fenced_privacy_publisher_handle`, non-zero
+`fenced_privacy_publisher_revision`, and non-zero
+`fenced_privacy_publisher_policy_digest_hex` binding pins an exact pair:
+`FencedTransparencyPublisherV1` is the writer and
+`FencedTransparencyAuthoritativeHeadReaderV1` is its authenticated reader.
+The deployment registry must supply both roles with exactly that same public
+identity and qualification, or neither when privacy aggregates are disabled.
+Missing, partial, unrequested, substituted, stale, unavailable, or test-marked
+roles fail closed. Torii qualifies both roles before global configuration or
+background workers start. When a prebuilt node is supplied instead, Torii
+revalidates the retained pair against configuration and each live provider;
+the node repeats live revalidation as defense in depth.
+
+Publication retry identity is independent of a leader lease. It binds the query
+and cycle identities, release sequence, release-record digest, and payload
+digest; the lease, fencing token, and predecessor head remain authorization
+metadata.
+An exact retry after lease rotation, failover, or local-cache loss must return
+`AlreadyIncluded` without appending again. The authenticated reader must then
+prove that exact publication identity and payload at its inclusion head and
+prove that head's ancestry to the current authoritative head. A newer head,
+local cache match, or proof for another payload is insufficient; reuse of the
+same publication scope with different evidence is a publication conflict.
+
+Before qualification, rehearse the exact retry under a new lease on at least
+two replicas, verify that no second block is appended, validate exact inclusion
+and ancestry after failover, and preserve the conflict negative. The source
+tree carries the injection, qualification, and replay contracts. On Linux and
+macOS, the stock daemon registry resolves the implemented Governance DAG
+signer/store/request-authenticator, moderation-quarantine, provider-ingest, and
+evidence-viewer roles through a platform-fixed, service-UID-owned local broker.
+The broker client and injected server-library boundary are bounded, canonical,
+session/request-bound, and peer-credential checked; unsupported roles and
+platforms fail closed. Governance outbound operations use only canonical
+descriptor/envelope request authentication, with the exact Ed25519 verifier,
+provider qualification, body bound, lifetime, skew, and replay identity
+revalidated around use; credential headers and compatibility representations
+are rejected. The deployment-owned broker executable and genuine HSM,
+signer/store, Kubo/head, and writer/reader backends are not packaged in-tree.
+The local producer retains a canonical outgoing/incoming dual-signed
+key-transition journal and bounded signed qualification archives; archive
+readback and sealed-CAS readback precede prefix pruning, while implicit rotation
+still fails closed. Each transition advances a monotonic authority segment and
+binds both publisher identities and Ed25519 keys to the exact predecessor
+checkpoint and current head. Recovery rebuilds that bounded lineage, verifies
+every retained block under its active segment, and binds the signed head to the
+tip authority. Authenticated DAG block-prefix pruning still needs a bounded
+retention protocol. The producer durably stages block, head, and full-index
+bytes and seals only their exact lengths and BLAKE3 digests under a 64 KiB
+producer-intent ceiling. Recovery authenticates staged readback before changing
+the live root.
+
+On the filesystem-flag-qualified Linux, Android, macOS, iOS, FreeBSD, OpenBSD,
+NetBSD, and DragonFly targets, configure every producer, service source,
+service state, and mirror root as its exact physical canonical path with no
+symlink component. In particular, use `/private/var/...` rather than `/var/...`
+on macOS. Startup retains `O_DIRECTORY|O_NOFOLLOW` handles for the root and
+every ancestor, applies role-specific owner/mode and trusted-sticky-parent
+policy, and revalidates device, inode, owner, mode, and effective UID around
+filesystem operations. Other Unix targets, and Android architectures outside
+arm, aarch64, x86, x86_64, and riscv64, fail compilation until their native
+flags and target tests are qualified. Cross-UID replacement or owner/mode drift
+observed at a revalidation boundary fails before the then-resolved target is
+touched. Linux/macOS/Windows descendant operations are component-rooted through
+retained no-follow handles with exact object-identity rechecks. Linux and macOS
+require two identical bounded descriptor ACL snapshots and reject protected ACL
+namespaces or untrusted mutation grants. Windows pins the root owner SID,
+strictly parses two identical bounded security descriptors, rejects untrusted
+mutation grants, and retains file IDs through crash recovery and atomic-temp
+cleanup. Treat the still-full index as an allocation/retention blocker rather
+than clearing crash recovery manually. These local contracts do not make L0,
+L1, or L2 green; focused validation, external deployment qualification, and
+promotion evidence remain open.
+
 ## 2. Finalized Registration → Provider Ingest → Fetch
 
 Before enabling the provider worker, bind
 `[sorafs.storage.provider_ingest_runtime]` to the deployment's exact
+`authenticated_source_fetch_handle`, non-zero
+`authenticated_source_fetch_revision`, non-zero
+`authenticated_source_fetch_policy_digest_hex`,
+`completion_signer_resolver_handle`, non-zero
+`completion_signer_resolver_revision`, non-zero
+`completion_signer_resolver_policy_digest_hex`, `completion_signer_handle`,
+non-zero `completion_signer_adapter_revision`, complete
+`completion_signer_policy_id_hex` / `completion_signer_policy_revision` /
+`completion_signer_policy_predecessor_digest_hex` /
+`completion_signer_policy_digest_hex` lineage, admitted
+`completion_signer_algorithm`, canonical `completion_signer_public_key_hex`,
 `checkpoint_store_handle`, non-zero `checkpoint_store_revision`, and non-zero
 `checkpoint_store_policy_digest_hex`, and inject the matching sealed monotonic
 checkpoint provider together with the authenticated source and governed signer
@@ -118,6 +275,46 @@ private keys remain runtime-only. Missing, substituted, stale, or test-marked
 providers must stop startup. Do not replace a failed provider with the local
 checkpoint file: the external sealed head is authoritative and
 `provider_ingest_outbox_v1.to` is only a revalidated cache.
+
+Set
+`[sorafs.storage.provider_ingest_runtime.outbox].checkpoint_operation_timeout_ms`
+to the deployment-reviewed `1..=86400000` millisecond deadline (the default is
+30 seconds). One
+dedicated worker with a one-request bounded queue owns the external checkpoint
+provider boundary. Qualification, head loads, CAS, and mandatory readback all
+use that deadline; a timeout latches the worker closed, never spawns another
+operation thread, and requires dropping the outbox and reopening it from the
+authoritative sealed head before work can resume. Dropping a worker does not
+wait on a hung provider call. The worker retains the checkpoint writer lease
+until that call exits, so repeated reopen attempts fail busy instead of
+accumulating detached workers.
+
+Set
+`[sorafs.storage.provider_ingest_runtime.finalized_archive]` explicitly for
+each deployment. `relative_root` is a normalized relative namespace below the
+daemon's resolved Kura root; absolute paths and dot components are rejected.
+The record, entry, aggregate-byte, provider, per-provider order, aggregate
+provider/order, page, and Kura-tip-lag ceilings are validated together without
+clamping. Enabled startup opens one single-writer archive, reconciles the
+recovered State and Kura tips with a zero-gap barrier, and only then applies the
+configured live-lag ceiling. A new archive establishes an explicit activation
+floor at that authenticated tip and never claims earlier historical coverage.
+
+Retention remains manual by default (`retention_enabled = false`), and manual
+startup rejects any durable checkpoint candidate rather than installing or
+cleaning it up. To admit explicit retention, set `retention_enabled = true`
+together with `retention_authority_handle`,
+`retention_authority_revision`, and
+`retention_authority_policy_digest_hex`, then inject the separately namespaced
+deployment-owned authority matching that exact public binding. Handles are
+credential-free and test-marked handles are rejected. The authority must
+provide linearizable per-chain CAS storage for the canonical V1 approval
+record. A compaction proposal is read-only; checkpoint publication and prefix
+unlink occur only after the exact successor is returned by authoritative
+readback. An ambiguous CAS without that readback, qualification drift,
+rollback, or a competing head leaves local storage unchanged. Startup can
+finish a CAS-before-publication or publication-before-cleanup crash only when
+the same authority still names the exact fence and canonical checkpoint.
 
 1. Produce a manifest + payload bundle (for example with
    `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).

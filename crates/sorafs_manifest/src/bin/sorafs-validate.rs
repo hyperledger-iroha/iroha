@@ -24,11 +24,13 @@ use norito::json;
 use sorafs_manifest::{
     AdvertSignature, FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, GovernanceLogNodeV1,
     GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, HedgingValidationPayloadKindV1,
-    OrderCancelV1, OrderRequestV1, OrderbookValidationPayloadKindV1, PopValidationPayloadKindV1,
-    ProofStreamTier, ProviderAdvertV1, RepairValidationPayloadKindV1, ReplicationOrderSignatureV1,
-    ReplicationOrderV1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
-    SignatureAlgorithm, SignedReplicationOrderV1, ValidationContextFieldV1, ValidationInputV1,
-    ValidationOutcomeV1, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, OrderbookValidationPayloadKindV1,
+    PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1, PopValidationPayloadKindV1, ProofStreamTier,
+    ProviderAdvertV1, RepairValidationPayloadKindV1, ReplicationOrderSignatureV1,
+    ReplicationOrderV1, SIGNED_REPLICATION_ORDER_VERSION_V1, SignatureAlgorithm,
+    SignedReplicationOrderV1, ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
+    decode_order_cancel_v1, decode_order_request_v1, decode_provider_advert_v1,
+    decode_settlement_receipt_v1, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
     sign_settlement_receipt_ed25519_v1, validate_fixture_bundle_payloads,
     validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
     validate_governance_log_node_bytes, validate_hedging_payload_bytes,
@@ -99,8 +101,7 @@ fn run_advert(args: AdvertArgs) -> Result<ExitCode, CliError> {
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
 
-    let bytes = fs::read(&input)
-        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
+    let bytes = read_cli_bytes_bounded(&input, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
     let outcome =
         validate_provider_advert_bytes(&bytes, input.display().to_string(), now, generated_at);
     if let Some(path) = args.telemetry_out {
@@ -213,8 +214,7 @@ fn run_orderbook(args: OrderbookArgs) -> Result<ExitCode, CliError> {
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
 
-    let bytes = fs::read(&input)
-        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
+    let bytes = read_cli_bytes_bounded(&input, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
     let outcome =
         validate_orderbook_payload_bytes(kind, &bytes, input.display().to_string(), generated_at);
     if let Some(path) = args.telemetry_out {
@@ -382,6 +382,46 @@ fn run_pdp(args: PdpArgs) -> Result<ExitCode, CliError> {
 
 fn read_cli_bytes(path: &Path) -> Result<Vec<u8>, CliError> {
     fs::read(path).map_err(|err| CliError::Io(format!("failed to read {}: {err}", path.display())))
+}
+
+fn read_cli_bytes_bounded(path: &Path, maximum_bytes: usize) -> Result<Vec<u8>, CliError> {
+    let maximum_u64 = u64::try_from(maximum_bytes)
+        .map_err(|_| CliError::Internal("CLI byte ceiling exceeds u64".to_owned()))?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_release_no_follow(&mut options);
+    let mut file = options
+        .open(path)
+        .map_err(|err| CliError::Io(format!("failed to open {}: {err}", path.display())))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| CliError::Io(format!("failed to inspect {}: {err}", path.display())))?;
+    if !metadata.is_file() {
+        return Err(CliError::Validation(format!(
+            "{} must be a regular file",
+            path.display()
+        )));
+    }
+    if metadata.len() > maximum_u64 {
+        return Err(CliError::Validation(format!(
+            "{} exceeds the {maximum_bytes}-byte input ceiling",
+            path.display()
+        )));
+    }
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| CliError::Validation(format!("{} is too large", path.display())))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(maximum_u64.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", path.display())))?;
+    if bytes.len() > maximum_bytes {
+        return Err(CliError::Validation(format!(
+            "{} exceeds the {maximum_bytes}-byte input ceiling",
+            path.display()
+        )));
+    }
+    Ok(bytes)
 }
 
 fn run_por(args: PorArgs) -> Result<ExitCode, CliError> {
@@ -784,9 +824,8 @@ fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
     };
 
     let seed = read_signing_seed(&args)?;
-    let input_bytes = fs::read(&input)
-        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
-    let mut advert = match norito::decode_from_bytes::<ProviderAdvertV1>(&input_bytes) {
+    let input_bytes = read_cli_bytes_bounded(&input, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
+    let mut advert = match decode_provider_advert_v1(&input_bytes) {
         Ok(advert) => advert,
         Err(_) => {
             let outcome = validate_provider_advert_bytes(
@@ -935,8 +974,7 @@ fn run_sign_orderbook(args: SignArgs) -> Result<ExitCode, CliError> {
     };
 
     let seed = read_signing_seed(&args)?;
-    let input_bytes = fs::read(&input)
-        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
+    let input_bytes = read_cli_bytes_bounded(&input, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
     let signed_bytes = match sign_orderbook_payload_bytes(payload_kind, &input_bytes, &seed) {
         Ok(bytes) => bytes,
         Err(SignOrderbookPayloadError::Decode) => {
@@ -3256,7 +3294,7 @@ fn sign_orderbook_payload_bytes(
     let signing_key = SigningKey::from_bytes(seed);
     match kind {
         OrderbookValidationPayloadKindV1::OrderRequest => {
-            let order: OrderRequestV1 = norito::decode_from_bytes(input_bytes)
+            let order = decode_order_request_v1(input_bytes)
                 .map_err(|_| SignOrderbookPayloadError::Decode)?;
             let signed = sign_order_request_ed25519_v1(order, &signing_key)
                 .map_err(|err| SignOrderbookPayloadError::Sign(err.to_string()))?;
@@ -3264,7 +3302,7 @@ fn sign_orderbook_payload_bytes(
                 .map_err(|err| SignOrderbookPayloadError::Encode(err.to_string()))
         }
         OrderbookValidationPayloadKindV1::OrderCancel => {
-            let cancel: OrderCancelV1 = norito::decode_from_bytes(input_bytes)
+            let cancel = decode_order_cancel_v1(input_bytes)
                 .map_err(|_| SignOrderbookPayloadError::Decode)?;
             let signed = sign_order_cancel_ed25519_v1(cancel, &signing_key)
                 .map_err(|err| SignOrderbookPayloadError::Sign(err.to_string()))?;
@@ -3272,7 +3310,7 @@ fn sign_orderbook_payload_bytes(
                 .map_err(|err| SignOrderbookPayloadError::Encode(err.to_string()))
         }
         OrderbookValidationPayloadKindV1::SettlementReceipt => {
-            let receipt: SettlementReceiptV1 = norito::decode_from_bytes(input_bytes)
+            let receipt = decode_settlement_receipt_v1(input_bytes)
                 .map_err(|_| SignOrderbookPayloadError::Decode)?;
             let signed = sign_settlement_receipt_ed25519_v1(receipt, &signing_key)
                 .map_err(|err| SignOrderbookPayloadError::Sign(err.to_string()))?;
@@ -3289,24 +3327,23 @@ fn orderbook_payload_public_key(
 ) -> Result<Vec<u8>, CliError> {
     match kind {
         OrderbookValidationPayloadKindV1::OrderRequest => {
-            let order: OrderRequestV1 = norito::decode_from_bytes(input_bytes).map_err(|err| {
+            let order = decode_order_request_v1(input_bytes).map_err(|err| {
                 CliError::Internal(format!("failed to decode signed orderbook order: {err}"))
             })?;
             Ok(order.signature.public_key)
         }
         OrderbookValidationPayloadKindV1::OrderCancel => {
-            let cancel: OrderCancelV1 = norito::decode_from_bytes(input_bytes).map_err(|err| {
+            let cancel = decode_order_cancel_v1(input_bytes).map_err(|err| {
                 CliError::Internal(format!("failed to decode signed orderbook cancel: {err}"))
             })?;
             Ok(cancel.signature.public_key)
         }
         OrderbookValidationPayloadKindV1::SettlementReceipt => {
-            let receipt: SettlementReceiptV1 =
-                norito::decode_from_bytes(input_bytes).map_err(|err| {
-                    CliError::Internal(format!(
-                        "failed to decode signed orderbook settlement receipt: {err}"
-                    ))
-                })?;
+            let receipt = decode_settlement_receipt_v1(input_bytes).map_err(|err| {
+                CliError::Internal(format!(
+                    "failed to decode signed orderbook settlement receipt: {err}"
+                ))
+            })?;
             Ok(receipt.settlement_signature.public_key)
         }
         other => Err(CliError::Config(format!(
@@ -3675,6 +3712,53 @@ mod tests {
         assert!(matches!(
             OutputFormat::parse("xml"),
             Err(CliError::Config(message)) if message.contains("unsupported --format")
+        ));
+    }
+
+    #[test]
+    fn bounded_cli_reader_accepts_boundary_and_rejects_one_over() {
+        let directory = tempfile::tempdir().expect("temporary input directory");
+        let path = directory.path().join("provider-advert.to");
+        fs::write(&path, vec![0xA5; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1])
+            .expect("write exact-boundary input");
+        assert_eq!(
+            read_cli_bytes_bounded(&path, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)
+                .expect("exact input boundary"),
+            vec![0xA5; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1]
+        );
+
+        fs::write(
+            &path,
+            vec![0xA5; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 + 1],
+        )
+        .expect("write one-over input");
+        assert!(matches!(
+            read_cli_bytes_bounded(&path, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1),
+            Err(CliError::Validation(message)) if message.contains("input ceiling")
+        ));
+    }
+
+    #[test]
+    fn bounded_orderbook_cli_reader_accepts_boundary_and_rejects_one_over() {
+        let directory = tempfile::tempdir().expect("temporary input directory");
+        let path = directory.path().join("orderbook.to");
+        fs::write(&path, vec![0xA5; ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1])
+            .expect("write exact-boundary orderbook input");
+        assert_eq!(
+            read_cli_bytes_bounded(&path, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)
+                .expect("exact orderbook input boundary")
+                .len(),
+            ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1
+        );
+
+        fs::write(
+            &path,
+            vec![0xA5; ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1],
+        )
+        .expect("write one-over orderbook input");
+        assert!(matches!(
+            read_cli_bytes_bounded(&path, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1),
+            Err(CliError::Validation(message)) if message.contains("input ceiling")
         ));
     }
 

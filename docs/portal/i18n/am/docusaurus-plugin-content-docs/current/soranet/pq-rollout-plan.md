@@ -97,10 +97,10 @@ rollout_phase = "default"
 
 | ወለል | ካናሪ (ደረጃ ሀ) | ራምፕ (ደረጃ B) | ነባሪ (ደረጃ ሐ) |
 |--------|---
-| `sorafs_cli` ማምጣት | `--anonymity-policy stage-a` ወይም ደረጃ ላይ መታመን | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` ማምጣት | `--anonymity-policy anon-guard-pq` ወይም ደረጃ ላይ መታመን | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | ኦርኬስትራ ማዋቀር JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | ዝገት ደንበኛ ውቅር (`iroha.toml`) | `rollout_phase = "canary"` (ነባሪ) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` የተፈረመ ትዕዛዞች | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `iroha_cli` የተፈረመ ትዕዛዞች | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | ጃቫ/አንድሮይድ `GatewayFetchOptions` | `setRolloutPhase("canary")`፣ እንደ አማራጭ `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`፣ እንደ አማራጭ I18NI0000061X | `setRolloutPhase("default")`፣ እንደ አማራጭ I18NI0000063X |
 | ጃቫስክሪፕት ኦርኬስትራ ረዳቶች | `rolloutPhase: "canary"` ወይም `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
@@ -124,7 +124,7 @@ rollout_phase = "default"
 
 3. ** ደንበኛ/ኤስዲኬ ካናሪ (ቲ እና 1 ሳምንት)**
 
-   - `rollout_phase = "ramp"`ን በደንበኛ ውቅሮች ውስጥ ገልብጥ ወይም `stage-b` ለተሰየሙት የኤስዲኬ ስብስቦች ይሽራል።
+   - `rollout_phase = "ramp"`ን በደንበኛ ውቅሮች ውስጥ ገልብጥ ወይም `anon-majority-pq` ለተሰየሙት የኤስዲኬ ስብስቦች ይሽራል።
    - የቴሌሜትሪ ልዩነቶችን ያንሱ (`sorafs_orchestrator_policy_events_total` በ `client_id` እና `region` ተመድቦ) እና ከታቀደው ክስተት መዝገብ ጋር አያይዟቸው።
 
 4. ** ነባሪ ማስተዋወቂያ (ቲ እና 3 ሳምንታት) ***
@@ -160,7 +160,7 @@ rollout_phase = "default"
 ### ራምፕ → ካናሪ (ደረጃ B → ደረጃ ሀ)
 
 1. ከማስታወቂያ በፊት የተቀረጸውን የጠባቂ-ማውጫ ቅጽበታዊ ገጽ እይታ በ`sorafs_cli guard-directory import --guard-directory guards.json` አስመጣ እና `sorafs_cli guard-directory verify` እንደገና አስጀምር ስለዚህ የማውረድ ፓኬቱ ሃሽን ያካትታል።
-2. በኦርኬስትራ እና በደንበኛ ውቅሮች ላይ `rollout_phase = "canary"` (ወይም በ`anonymity_policy stage-a` መሻር) ያዋቅሩ፣ በመቀጠል የPQ ratchet drill ከ[PQ ratchet runbook](./pq-ratchet-runbook.md) ዝቅተኛ የቧንቧ መስመር ለማረጋገጥ።
+2. በኦርኬስትራ እና በደንበኛ ውቅሮች ላይ `rollout_phase = "canary"` (ወይም በ`anonymity_policy anon-guard-pq` መሻር) ያዋቅሩ፣ በመቀጠል የPQ ratchet drill ከ[PQ ratchet runbook](./pq-ratchet-runbook.md) ዝቅተኛ የቧንቧ መስመር ለማረጋገጥ።
 3. አስተዳደርን ከማሳወቁ በፊት የተዘመነውን የPQ Ratchet እና SN16 ቴሌሜትሪ ስክሪፕቶች እና የማንቂያ ውጤቶችን ከክስተቱ መዝገብ ጋር ያያይዙ።
 
 ### የጥበቃ ሀዲድ አስታዋሾች- ማመሳከሪያ `docs/source/ops/soranet_transport_rollback.md` በማንኛውም ጊዜ ቅናሽ በሚከሰትበት ጊዜ እና ማንኛውንም ጊዜያዊ ቅነሳን እንደ `TODO:` ንጥል ለክትትል ሥራ በታቀደው መከታተያ ውስጥ ያስገቡ።

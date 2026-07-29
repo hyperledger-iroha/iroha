@@ -1,10 +1,20 @@
 //! Generates PoR, PoTR, repair, and governance DAG fixtures.
+//!
+//! Run without arguments to update the checked-in fixture tree, or pass
+//! `--output-dir PATH` to publish beneath an isolated fixture root.
 
 use std::{
+    env,
     error::Error,
-    fs,
-    path::{Path, PathBuf},
+    ffi::OsString,
+    fs::{self, File},
+    io,
+    path::{Component, Path, PathBuf},
+    sync::{Mutex, MutexGuard},
 };
+
+#[cfg(unix)]
+use std::os::{fd::AsRawFd as _, unix::fs::MetadataExt as _};
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use hex::encode;
@@ -50,6 +60,372 @@ const GOVERNANCE_FIXTURE_PUBLIC_KEY_FINGERPRINT_SHA256: &str =
     "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff";
 const REFERENCE_SDK_INVENTORY_SCHEMA: &str = "sorafs.reference_sdk.validation_fixture_inventory.v1";
 const REFERENCE_SDK_INVENTORY_SCOPE: &str = "sorafs_v1_release";
+const DEFAULT_FIXTURES_ROOT: &str = "fixtures/sorafs_manifest";
+
+struct BoundDirectory {
+    display_path: PathBuf,
+    canonical_path: PathBuf,
+    handle: File,
+}
+
+impl BoundDirectory {
+    fn open(path: &Path, label: &str) -> Result<Self, Box<dyn Error>> {
+        require_real_directory_ancestry(path, label)?;
+        let before = fs::symlink_metadata(path)
+            .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
+        if before.file_type().is_symlink() || !before.is_dir() {
+            return Err(format!("{label} must be an existing non-symlink directory").into());
+        }
+        let handle = File::open(path)
+            .map_err(|error| format!("failed to open {label} `{}`: {error}", path.display()))?;
+        let opened = handle.metadata().map_err(|error| {
+            format!(
+                "failed to inspect opened {label} `{}`: {error}",
+                path.display()
+            )
+        })?;
+        let after = fs::symlink_metadata(path).map_err(|error| {
+            format!(
+                "failed to reinspect {label} `{}` after opening: {error}",
+                path.display()
+            )
+        })?;
+        require_real_directory_ancestry(path, label)?;
+        if after.file_type().is_symlink()
+            || !after.is_dir()
+            || !same_directory_identity(&before, &opened)
+            || !same_directory_identity(&before, &after)
+        {
+            return Err(format!("{label} changed identity while it was bound").into());
+        }
+        let canonical_path = fs::canonicalize(path).map_err(|error| {
+            format!(
+                "failed to canonicalize {label} `{}`: {error}",
+                path.display()
+            )
+        })?;
+        Ok(Self {
+            display_path: path.to_path_buf(),
+            canonical_path,
+            handle,
+        })
+    }
+
+    fn open_child(&self, name: &str, label: &str) -> Result<Self, Box<dyn Error>> {
+        let relative = Path::new(name);
+        if relative.components().count() != 1
+            || !matches!(relative.components().next(), Some(Component::Normal(_)))
+        {
+            return Err(format!("{label} must be one unambiguous directory component").into());
+        }
+        Self::open_bound_child(
+            &self.display_path.join(relative),
+            &self.display_path.join(relative),
+            label,
+        )
+    }
+
+    fn open_bound_child(
+        bound_path: &Path,
+        display_path: &Path,
+        label: &str,
+    ) -> Result<Self, Box<dyn Error>> {
+        let before = fs::symlink_metadata(bound_path).map_err(|error| {
+            format!(
+                "failed to inspect {label} `{}`: {error}",
+                display_path.display()
+            )
+        })?;
+        if before.file_type().is_symlink() || !before.is_dir() {
+            return Err(format!("{label} must be an existing non-symlink directory").into());
+        }
+        let handle = File::open(bound_path).map_err(|error| {
+            format!(
+                "failed to open {label} `{}`: {error}",
+                display_path.display()
+            )
+        })?;
+        let opened = handle.metadata().map_err(|error| {
+            format!(
+                "failed to inspect opened {label} `{}`: {error}",
+                display_path.display()
+            )
+        })?;
+        let after = fs::symlink_metadata(bound_path).map_err(|error| {
+            format!(
+                "failed to reinspect {label} `{}` after opening: {error}",
+                display_path.display()
+            )
+        })?;
+        if after.file_type().is_symlink()
+            || !after.is_dir()
+            || !same_directory_identity(&before, &opened)
+            || !same_directory_identity(&before, &after)
+        {
+            return Err(format!("{label} changed identity while it was bound").into());
+        }
+        let canonical_path = fs::canonicalize(bound_path).map_err(|error| {
+            format!(
+                "failed to canonicalize {label} `{}`: {error}",
+                display_path.display()
+            )
+        })?;
+        Ok(Self {
+            display_path: display_path.to_path_buf(),
+            canonical_path,
+            handle,
+        })
+    }
+
+    fn handle(&self) -> &File {
+        &self.handle
+    }
+
+    fn verify(&self, label: &str) -> Result<(), Box<dyn Error>> {
+        require_real_directory_ancestry(&self.display_path, label)?;
+        let lexical = fs::symlink_metadata(&self.display_path).map_err(|error| {
+            format!(
+                "failed to reinspect {label} `{}`: {error}",
+                self.display_path.display()
+            )
+        })?;
+        let opened = self.handle.metadata().map_err(|error| {
+            format!(
+                "failed to reinspect bound {label} `{}`: {error}",
+                self.display_path.display()
+            )
+        })?;
+        let canonical = fs::canonicalize(&self.display_path).map_err(|error| {
+            format!(
+                "failed to recanonicalize {label} `{}`: {error}",
+                self.display_path.display()
+            )
+        })?;
+        if lexical.file_type().is_symlink()
+            || !lexical.is_dir()
+            || !same_directory_identity(&lexical, &opened)
+            || canonical != self.canonical_path
+        {
+            return Err(format!("{label} changed identity during fixture generation").into());
+        }
+        Ok(())
+    }
+}
+
+static WORKING_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
+
+/// Process-wide guard that anchors every relative generator path to one open
+/// output-root directory.
+///
+/// On Unix, `fchdir` enters the already-verified directory handle rather than
+/// resolving its pathname again. Renaming the root or replacing any ancestor
+/// therefore cannot redirect subsequent fixture reads or writes. The global
+/// lock serializes the process-wide current-directory change, and explicit
+/// restoration runs before pathname identities are revalidated. `Drop`
+/// performs the same restoration on early returns or unwinding.
+struct BoundWorkingDirectory {
+    #[cfg(unix)]
+    previous: File,
+    #[cfg(not(unix))]
+    previous: PathBuf,
+    active: bool,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl BoundWorkingDirectory {
+    fn enter(root: &BoundDirectory) -> Result<Self, Box<dyn Error>> {
+        let lock = WORKING_DIRECTORY_LOCK
+            .lock()
+            .map_err(|_| "fixture generator working-directory lock is poisoned")?;
+        #[cfg(unix)]
+        {
+            let previous = File::open(".")
+                .map_err(|error| format!("failed to bind the current directory: {error}"))?;
+            set_working_directory_handle(root.handle()).map_err(|error| {
+                format!(
+                    "failed to enter bound fixture output root `{}`: {error}",
+                    root.display_path.display()
+                )
+            })?;
+            Ok(Self {
+                previous,
+                active: true,
+                _lock: lock,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows fixture generation remains path-bound and is followed by
+            // canonical path plus metadata identity revalidation. A future
+            // Windows-hosted fixture lane should use a directory-handle
+            // current-directory primitive before it is release-authoritative.
+            let previous = env::current_dir()
+                .map_err(|error| format!("failed to bind the current directory: {error}"))?;
+            env::set_current_dir(&root.canonical_path).map_err(|error| {
+                format!(
+                    "failed to enter bound fixture output root `{}`: {error}",
+                    root.display_path.display()
+                )
+            })?;
+            Ok(Self {
+                previous,
+                active: true,
+                _lock: lock,
+            })
+        }
+    }
+
+    fn restore(mut self) -> Result<(), Box<dyn Error>> {
+        self.restore_inner()
+            .map_err(|error| format!("failed to restore generator working directory: {error}"))?;
+        self.active = false;
+        Ok(())
+    }
+
+    fn restore_inner(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            set_working_directory_handle(&self.previous)
+        }
+        #[cfg(not(unix))]
+        {
+            env::set_current_dir(&self.previous)
+        }
+    }
+}
+
+impl Drop for BoundWorkingDirectory {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.restore_inner();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_working_directory_handle(directory: &File) -> io::Result<()> {
+    use std::os::raw::c_int;
+
+    unsafe extern "C" {
+        fn fchdir(fd: c_int) -> c_int;
+    }
+
+    // SAFETY: `directory` owns a live descriptor for a directory, and `fchdir`
+    // only borrows the integer descriptor for the duration of this call.
+    if unsafe { fchdir(directory.as_raw_fd()) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+struct GeneratorDirectories {
+    root: BoundDirectory,
+    por: BoundDirectory,
+    potr: BoundDirectory,
+    repair: BoundDirectory,
+    repair_negative: BoundDirectory,
+    governance: BoundDirectory,
+    moderation: BoundDirectory,
+    reference_sdk: BoundDirectory,
+}
+
+impl GeneratorDirectories {
+    fn open(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let root = BoundDirectory::open(path, "SoraFS fixture output root")?;
+        let por = root.open_child("por", "PoR fixture output directory")?;
+        let potr = root.open_child("potr", "PoTR fixture output directory")?;
+        let repair = root.open_child("repair", "repair fixture output directory")?;
+        let repair_negative =
+            repair.open_child("negative", "negative repair fixture output directory")?;
+        let governance = root.open_child("governance", "governance fixture output directory")?;
+        let moderation = root.open_child("moderation", "moderation fixture output directory")?;
+        let reference_sdk =
+            root.open_child("reference_sdk", "reference-SDK fixture output directory")?;
+        Ok(Self {
+            root,
+            por,
+            potr,
+            repair,
+            repair_negative,
+            governance,
+            moderation,
+            reference_sdk,
+        })
+    }
+
+    fn verify(&self) -> Result<(), Box<dyn Error>> {
+        self.por.verify("PoR fixture output directory")?;
+        self.potr.verify("PoTR fixture output directory")?;
+        self.repair.verify("repair fixture output directory")?;
+        self.repair_negative
+            .verify("negative repair fixture output directory")?;
+        self.governance
+            .verify("governance fixture output directory")?;
+        self.moderation
+            .verify("moderation fixture output directory")?;
+        self.reference_sdk
+            .verify("reference-SDK fixture output directory")?;
+        self.root.verify("SoraFS fixture output root")
+    }
+}
+
+fn require_real_directory_ancestry(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .map_err(|error| format!("failed to resolve current directory: {error}"))?
+            .join(path)
+    };
+    let mut current = PathBuf::new();
+    for component in absolute.components() {
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            format!(
+                "failed to inspect {label} ancestry `{}`: {error}",
+                current.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{label} ancestry must not contain a symbolic link: {}",
+                current.display()
+            )
+            .into());
+        }
+        if !metadata.is_dir() {
+            return Err(format!(
+                "{label} ancestry must contain directories only: {}",
+                current.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_dir() && right.is_dir() && left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    // The non-Unix fallback binds creation and modification metadata in
+    // addition to canonical-path revalidation. It is not used by the
+    // release-authoritative Unix fixture lane.
+    left.is_dir()
+        && right.is_dir()
+        && left.created().ok() == right.created().ok()
+        && left.modified().ok() == right.modified().ok()
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct Args {
+    fixtures_root: PathBuf,
+    help: bool,
+}
 
 #[derive(Clone, norito::JsonSerialize)]
 struct GovernanceSdkPayloadInventoryEntryV1 {
@@ -141,18 +517,126 @@ struct ReferenceSdkFixtureInventoryV1 {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let fixtures_root = PathBuf::from("fixtures/sorafs_manifest");
-    let por_dir = fixtures_root.join("por");
-    let potr_dir = fixtures_root.join("potr");
-    let repair_dir = fixtures_root.join("repair");
-    let gov_dir = fixtures_root.join("governance");
-    let moderation_dir = fixtures_root.join("moderation");
-    fs::create_dir_all(&por_dir)?;
-    fs::create_dir_all(&potr_dir)?;
-    fs::create_dir_all(&repair_dir)?;
-    fs::create_dir_all(repair_dir.join("negative"))?;
-    fs::create_dir_all(&gov_dir)?;
-    fs::create_dir_all(&moderation_dir)?;
+    let args = parse_args(env::args_os().skip(1))?;
+    if args.help {
+        print_usage();
+        return Ok(());
+    }
+    generate_fixtures(&args.fixtures_root)
+}
+
+fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn Error>> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    if args.len() == 1 && matches!(args[0].to_str(), Some("--help" | "-h")) {
+        return Ok(Args {
+            fixtures_root: PathBuf::from(DEFAULT_FIXTURES_ROOT),
+            help: true,
+        });
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.to_str(), Some("--help" | "-h")))
+    {
+        return Err("`--help` must be used by itself".into());
+    }
+
+    let mut fixtures_root = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--output-dir") => {
+                if fixtures_root.is_some() {
+                    return Err("`--output-dir` may be specified only once".into());
+                }
+                let value = args
+                    .next()
+                    .ok_or("`--output-dir` requires a separate path argument")?;
+                let value_text = value
+                    .to_str()
+                    .ok_or("`--output-dir` path must be valid UTF-8")?;
+                if value_text.is_empty() {
+                    return Err("`--output-dir` path must not be empty".into());
+                }
+                if value_text.starts_with('-') {
+                    return Err("`--output-dir` path must not be ambiguous with an option".into());
+                }
+                if value_text
+                    .split(['/', '\\'])
+                    .any(|component| component == ".")
+                {
+                    return Err("`--output-dir` path must not contain `.` components".into());
+                }
+                if value_text
+                    .split(['/', '\\'])
+                    .any(|component| component == "..")
+                {
+                    return Err("`--output-dir` path must not contain `..` components".into());
+                }
+                let path = PathBuf::from(value);
+                validate_output_dir(&path)?;
+                fixtures_root = Some(path);
+            }
+            Some(other) => return Err(format!("unrecognized argument `{other}`").into()),
+            None => return Err("arguments must be valid UTF-8".into()),
+        }
+    }
+
+    Ok(Args {
+        fixtures_root: fixtures_root.unwrap_or_else(|| PathBuf::from(DEFAULT_FIXTURES_ROOT)),
+        help: false,
+    })
+}
+
+fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
+    let mut has_normal_component = false;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => has_normal_component = true,
+            Component::CurDir => {
+                return Err("`--output-dir` path must not contain `.` components".into());
+            }
+            Component::ParentDir => {
+                return Err("`--output-dir` path must not contain `..` components".into());
+            }
+            Component::Prefix(_) | Component::RootDir => {}
+        }
+    }
+    if !has_normal_component {
+        return Err("`--output-dir` must name a bounded fixture directory".into());
+    }
+    Ok(())
+}
+
+fn print_usage() {
+    println!(
+        "Usage: generate_por_fixtures [--output-dir PATH]\n\
+         \n\
+         Generate the canonical SoraFS PoR, PoTR, repair, governance, moderation,\n\
+         ValidationOutcomeV1, and signed reference-SDK inventory fixtures.\n\
+         PATH must be an existing, complete, non-symlink sorafs_manifest tree."
+    );
+}
+
+fn generate_fixtures(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
+    let directories = GeneratorDirectories::open(fixtures_root)?;
+    let working_directory = BoundWorkingDirectory::enter(&directories.root)?;
+    let generation = generate_bound_fixtures(&directories);
+    let restoration = working_directory.restore();
+    let verification = directories.verify();
+    generation?;
+    restoration?;
+    verification
+}
+
+fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Box<dyn Error>> {
+    let fixtures_root = Path::new(".");
+    let por_dir = Path::new("por");
+    let potr_dir = Path::new("potr");
+    let repair_dir = Path::new("repair");
+    let repair_negative_dir = Path::new("repair/negative");
+    let gov_dir = Path::new("governance");
+    let moderation_dir = Path::new("moderation");
+    let reference_sdk_dir = Path::new("reference_sdk");
 
     let manifest_digest = [0x42; 32];
     let provider_id = [0x10; 32];
@@ -336,7 +820,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     manifest_mismatch_task.manifest_digest = [0x99; 32];
     manifest_mismatch_task.validate()?;
     write_norito_pair(
-        &repair_dir.join("negative/task_manifest_mismatch_v1"),
+        &repair_negative_dir.join("task_manifest_mismatch_v1"),
         &manifest_mismatch_task,
         repair_task_json(&manifest_mismatch_task),
     )?;
@@ -344,7 +828,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     provider_unassigned_task.provider_id = [0x99; 32];
     provider_unassigned_task.validate()?;
     write_norito_pair(
-        &repair_dir.join("negative/task_provider_unassigned_v1"),
+        &repair_negative_dir.join("task_provider_unassigned_v1"),
         &provider_unassigned_task,
         repair_task_json(&provider_unassigned_task),
     )?;
@@ -431,8 +915,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     let appeal_finance_dir = fixtures_root.join("appeal_finance");
-    let reference_sdk_dir = fixtures_root.join("reference_sdk");
-    fs::create_dir_all(&reference_sdk_dir)?;
     let cancel_asset_lock_bytes = fs::read(appeal_finance_dir.join("cancel_asset_lock_v1.to"))?;
     let cancel_asset_lock_outcome =
         sorafs_manifest::validate_appeal_finance_cancel_asset_lock_bytes(
@@ -654,9 +1136,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         "SFS-GOV-006",
     )?;
 
-    write_governance_sdk_fixture_inventory(&gov_dir)?;
-    write_reference_sdk_bundle_outcomes(&fixtures_root)?;
-    write_reference_sdk_fixture_inventory(&fixtures_root)?;
+    write_governance_sdk_fixture_inventory(gov_dir)?;
+    write_reference_sdk_bundle_outcomes(fixtures_root, reference_sdk_dir)?;
+    write_reference_sdk_fixture_inventory(fixtures_root)?;
 
     Ok(())
 }
@@ -1120,7 +1602,10 @@ fn governance_sdk_fixture_binding(path: &Path) -> Result<(u64, String), Box<dyn 
     Ok((u64::try_from(bytes.len())?, encode(sha256(&bytes))))
 }
 
-fn write_reference_sdk_bundle_outcomes(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
+fn write_reference_sdk_bundle_outcomes(
+    fixtures_root: &Path,
+    output_dir: &Path,
+) -> Result<(), Box<dyn Error>> {
     const GENERATED_AT: u64 = 1_700_001_234;
     const LINKED_NOW: u64 = 1_700_000_001;
     const ADMISSION_NOW: u64 = 300;
@@ -1283,8 +1768,6 @@ fn write_reference_sdk_bundle_outcomes(fixtures_root: &Path) -> Result<(), Box<d
         ),
     ];
 
-    let output_dir = fixtures_root.join("reference_sdk");
-    fs::create_dir_all(&output_dir)?;
     let scenarios = [
         (
             "bundle_heterogeneous_positive_validation_outcome_v1.json",
@@ -2878,4 +3361,219 @@ fn governance_dag_head_json(head: &GovernanceDagHeadV1) -> Value {
         Value::from(encode(&head.head_signature.signature)),
     );
     Value::Object(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse<const N: usize>(args: [&str; N]) -> Result<Args, String> {
+        parse_args(args.map(OsString::from)).map_err(|error| error.to_string())
+    }
+
+    fn physical_path(path: &Path) -> PathBuf {
+        fs::canonicalize(path).expect("canonical temporary path")
+    }
+
+    #[test]
+    fn output_dir_defaults_to_checked_in_fixture_root() {
+        assert_eq!(
+            parse([]).expect("default arguments"),
+            Args {
+                fixtures_root: PathBuf::from(DEFAULT_FIXTURES_ROOT),
+                help: false,
+            }
+        );
+    }
+
+    #[test]
+    fn output_dir_accepts_one_separate_bounded_path() {
+        assert_eq!(
+            parse(["--output-dir", "/tmp/sorafs-fixtures/pass-1"])
+                .expect("absolute temporary fixture root"),
+            Args {
+                fixtures_root: PathBuf::from("/tmp/sorafs-fixtures/pass-1"),
+                help: false,
+            }
+        );
+        assert_eq!(
+            parse(["--output-dir", "target/sorafs-fixtures/pass-2"])
+                .expect("relative temporary fixture root"),
+            Args {
+                fixtures_root: PathBuf::from("target/sorafs-fixtures/pass-2"),
+                help: false,
+            }
+        );
+    }
+
+    #[test]
+    fn output_dir_rejects_missing_duplicate_and_joined_values() {
+        assert_eq!(
+            parse(["--output-dir"]).expect_err("missing path"),
+            "`--output-dir` requires a separate path argument"
+        );
+        assert_eq!(
+            parse([
+                "--output-dir",
+                "target/pass-1",
+                "--output-dir",
+                "target/pass-2",
+            ])
+            .expect_err("duplicate output root"),
+            "`--output-dir` may be specified only once"
+        );
+        assert_eq!(
+            parse(["--output-dir=target/pass-1"]).expect_err("joined value"),
+            "unrecognized argument `--output-dir=target/pass-1`"
+        );
+    }
+
+    #[test]
+    fn output_dir_rejects_ambiguous_or_unbounded_paths() {
+        for (path, expected) in [
+            ("", "`--output-dir` path must not be empty"),
+            (
+                "--unexpected",
+                "`--output-dir` path must not be ambiguous with an option",
+            ),
+            (".", "`--output-dir` path must not contain `.` components"),
+            (
+                "target/./fixtures",
+                "`--output-dir` path must not contain `.` components",
+            ),
+            (
+                "../fixtures",
+                "`--output-dir` path must not contain `..` components",
+            ),
+            (
+                "target/../fixtures",
+                "`--output-dir` path must not contain `..` components",
+            ),
+            ("/", "`--output-dir` must name a bounded fixture directory"),
+        ] {
+            assert_eq!(
+                parse(["--output-dir", path]).expect_err("unsafe output path"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn output_dir_rejects_unknown_and_non_utf8_arguments() {
+        assert_eq!(
+            parse(["fixtures/sorafs_manifest"]).expect_err("positional path"),
+            "unrecognized argument `fixtures/sorafs_manifest`"
+        );
+        assert_eq!(
+            parse(["--unknown"]).expect_err("unknown option"),
+            "unrecognized argument `--unknown`"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+
+            let error = parse_args([OsString::from_vec(vec![0xff])])
+                .expect_err("non-UTF-8 option")
+                .to_string();
+            assert_eq!(error, "arguments must be valid UTF-8");
+
+            let error = parse_args([
+                OsString::from("--output-dir"),
+                OsString::from_vec(vec![0xff]),
+            ])
+            .expect_err("non-UTF-8 path")
+            .to_string();
+            assert_eq!(error, "`--output-dir` path must be valid UTF-8");
+        }
+    }
+
+    #[test]
+    fn help_is_supported_only_as_a_standalone_argument() {
+        for flag in ["--help", "-h"] {
+            assert_eq!(
+                parse([flag]).expect("standalone help"),
+                Args {
+                    fixtures_root: PathBuf::from(DEFAULT_FIXTURES_ROOT),
+                    help: true,
+                }
+            );
+        }
+        assert_eq!(
+            parse(["--help", "--output-dir", "target/pass"])
+                .expect_err("help mixed with output root"),
+            "`--help` must be used by itself"
+        );
+    }
+
+    #[test]
+    fn output_root_binding_rejects_an_existing_non_directory() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let output = physical_path(temporary.path()).join("not-a-directory");
+        fs::write(&output, b"fixture").expect("write non-directory output");
+
+        let error = BoundDirectory::open(&output, "test fixture output")
+            .err()
+            .expect("non-directory output must fail")
+            .to_string();
+
+        assert!(error.contains("directories only") || error.contains("non-symlink directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_root_binding_rejects_an_existing_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let temporary_path = physical_path(temporary.path());
+        let real = temporary_path.join("real");
+        let output = temporary_path.join("output");
+        fs::create_dir(&real).expect("create real output");
+        symlink(&real, &output).expect("create output symlink");
+
+        let error = BoundDirectory::open(&output, "test fixture output")
+            .err()
+            .expect("symlinked output must fail")
+            .to_string();
+
+        assert!(error.contains("symbolic link"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bound_output_never_follows_a_parent_substitution() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let temporary_path = physical_path(temporary.path());
+        let parent = temporary_path.join("parent");
+        let output = parent.join("output");
+        fs::create_dir_all(&output).expect("create original output");
+        let bound =
+            BoundDirectory::open(&output, "test fixture output").expect("bind original output");
+
+        let moved_parent = temporary_path.join("moved-parent");
+        let working_directory = BoundWorkingDirectory::enter(&bound).expect("enter bound output");
+        // The pathname now points at a new directory, but the process cwd
+        // remains the originally opened output inode until the guard restores
+        // it. A relative write must therefore land only beneath moved_parent.
+        fs::rename(&parent, &moved_parent).expect("move original parent");
+        fs::create_dir_all(&output).expect("create substituted output");
+        fs::write("sentinel", b"bound").expect("write through bound working directory");
+        working_directory
+            .restore()
+            .expect("restore working directory");
+
+        assert_eq!(
+            fs::read(moved_parent.join("output/sentinel")).expect("read bound sentinel"),
+            b"bound"
+        );
+        assert!(!output.join("sentinel").exists());
+        assert!(
+            bound
+                .verify("test fixture output")
+                .expect_err("path substitution must be reported")
+                .to_string()
+                .contains("changed identity")
+        );
+    }
 }

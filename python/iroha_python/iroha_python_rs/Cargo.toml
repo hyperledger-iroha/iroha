@@ -3,14 +3,16 @@ name = "iroha_python_rs"
 version = "0.0.1"
 edition = "2024"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+] }
+
 [lib]
 name = "iroha_python_rs"
 crate-type = ["cdylib"]
-
-[features]
-compact-len = []
-packed-struct = []
-schema-structural = []
 
 [dependencies]
 iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["bls", "gost", "sm"] }

@@ -32,10 +32,20 @@ use iroha_data_model::zk::{
     ZkAcePublicInputsV1, ZkAceWitnessV1, derive_zk_ace_air_public_digest,
     derive_zk_ace_transfer_digest, zk_ace_pack_bytes_to_field_limbs,
 };
-use norito::{Decode, Encode};
 use rand::TryRngCore;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
+
+#[cfg(test)]
+static PROOF_TEST_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn proof_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    PROOF_TEST_MUTEX
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .expect("ZK-ACE proof test mutex must not be poisoned")
+}
 
 const FIELD_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const FIELD_MODULUS_U128: u128 = FIELD_MODULUS as u128;
@@ -50,8 +60,31 @@ pub(crate) const BLOWUP_LOG2: u8 = 4;
 pub(crate) const QUERY_COUNT: usize = 32;
 /// Independent constraint/FRI lanes sharing one trace commitment.
 pub(crate) const SECURITY_LANES: usize = 3;
-/// Hard ceiling enforced before Norito decoding allocates proof vectors.
-pub(crate) const MAX_PROOF_BYTES: usize = 2 * 1024 * 1024;
+const PROOF_WIRE_MAGIC_V1: [u8; 4] = *b"ZKA1";
+const HASH_BYTES: usize = 32;
+const FIELD_BYTES: usize = 8;
+const QUERY_INDEX_BYTES: usize = 4;
+const PROOF_VERSION_BYTES: usize = 2;
+const FRI_PATH_HASHES_PER_LANE_QUERY: usize = FRI_ROUNDS * (2 * LDE_LOG2 as usize - FRI_ROUNDS + 1);
+const FRI_LANE_QUERY_BYTES: usize =
+    FRI_ROUNDS * 2 * FIELD_BYTES + FRI_PATH_HASHES_PER_LANE_QUERY * HASH_BYTES;
+const QUERY_PROOF_BYTES: usize = QUERY_INDEX_BYTES
+    + 2 * TRACE_WIDTH * FIELD_BYTES
+    + 2 * LDE_LOG2 as usize * HASH_BYTES
+    + SECURITY_LANES * FIELD_BYTES
+    + SECURITY_LANES * LDE_LOG2 as usize * HASH_BYTES
+    + SECURITY_LANES * FRI_LANE_QUERY_BYTES;
+/// Exact length of the only admitted fixed-shape proof wire.
+pub(crate) const CANONICAL_PROOF_BYTES_V1: usize = PROOF_WIRE_MAGIC_V1.len()
+    + PROOF_VERSION_BYTES
+    + HASH_BYTES
+    + SECURITY_LANES * HASH_BYTES
+    + SECURITY_LANES * ((FRI_ROUNDS + 1) * HASH_BYTES + TERMINAL_SIZE * FIELD_BYTES)
+    + QUERY_COUNT * QUERY_PROOF_BYTES;
+/// Hard ceiling enforced before the fixed-shape parser allocates proof vectors.
+pub(crate) const MAX_PROOF_BYTES: usize = CANONICAL_PROOF_BYTES_V1;
+/// Complete consensus-relevant algebraic and commitment profile.
+pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|field=goldilocks:0xffffffff00000001|generator=7|poseidon2=width3:rate2:full8:partial57|trace_rows=4096|trace_width=88|trace_mask_degree=255|lde_rows=65536|blowup=16|constraint_lanes=3|queries=32|merkle=sha256:binary|fri=fold2:rounds12:terminal16:degree1|wire=ZKA1:fixed-shape:big-endian:922214|max_proof_bytes=922214|domains=iroha:privacy:zk-ace:{transparent-stark,trace-leaf,composition-leaf,fri-leaf,merkle-node,field-challenge,composition-transcript,fri-lane-transcript,fri-round-transcript,query-transcript,query-index}:v1";
 /// Degree of the random trace masking polynomial.
 const MASK_DEGREE: usize = 255;
 /// FRI stops on the complete compiled blow-up domain.
@@ -230,7 +263,7 @@ struct FriLaneMaterial {
     terminal_values: Vec<F>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ZkAceStarkProofV1 {
     version: u16,
     trace_root: [u8; 32],
@@ -239,13 +272,13 @@ pub(crate) struct ZkAceStarkProofV1 {
     queries: Vec<ZkAceQueryProofV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ZkAceFriLaneProofV1 {
     roots: Vec<[u8; 32]>,
     terminal_values: Vec<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ZkAceQueryProofV1 {
     index: u32,
     current_row: Vec<u64>,
@@ -257,12 +290,12 @@ struct ZkAceQueryProofV1 {
     fri_lanes: Vec<ZkAceFriLaneQueryV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ZkAceFriLaneQueryV1 {
     rounds: Vec<ZkAceFriRoundOpeningV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ZkAceFriRoundOpeningV1 {
     low: u64,
     high: u64,
@@ -289,8 +322,8 @@ pub(crate) enum ZkAceStarkError {
     ProofTooLarge,
     #[error("ZK-ACE proof is malformed")]
     MalformedProof,
-    #[error("ZK-ACE proof is not a canonical Norito encoding")]
-    NonCanonicalProof,
+    #[error("memory for the exact bounded ZK-ACE proof shape is unavailable")]
+    ProofAllocationUnavailable,
     #[error("ZK-ACE proof shape does not match the compiled profile")]
     ProfileMismatch,
     #[error("ZK-ACE proof contains a non-canonical field element")]
@@ -307,6 +340,208 @@ pub(crate) enum ZkAceStarkError {
     FriDegree,
     #[error("ZK-ACE internal invariant failed: {0}")]
     InternalInvariant(&'static str),
+}
+
+fn exact_vec<T>(capacity: usize) -> Result<Vec<T>, ZkAceStarkError> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| ZkAceStarkError::ProofAllocationUnavailable)?;
+    Ok(values)
+}
+
+struct ProofReaderV1<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> ProofReaderV1<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take<const N: usize>(&mut self) -> Result<[u8; N], ZkAceStarkError> {
+        let end = self
+            .offset
+            .checked_add(N)
+            .ok_or(ZkAceStarkError::MalformedProof)?;
+        let bytes = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(ZkAceStarkError::MalformedProof)?;
+        self.offset = end;
+        bytes
+            .try_into()
+            .map_err(|_| ZkAceStarkError::MalformedProof)
+    }
+
+    fn u16(&mut self) -> Result<u16, ZkAceStarkError> {
+        self.take().map(u16::from_be_bytes)
+    }
+
+    fn u32(&mut self) -> Result<u32, ZkAceStarkError> {
+        self.take().map(u32::from_be_bytes)
+    }
+
+    fn u64(&mut self) -> Result<u64, ZkAceStarkError> {
+        self.take().map(u64::from_be_bytes)
+    }
+
+    fn hashes(&mut self, count: usize) -> Result<Vec<[u8; 32]>, ZkAceStarkError> {
+        let mut hashes = exact_vec(count)?;
+        for _ in 0..count {
+            hashes.push(self.take()?);
+        }
+        Ok(hashes)
+    }
+
+    fn fields(&mut self, count: usize) -> Result<Vec<u64>, ZkAceStarkError> {
+        let mut fields = exact_vec(count)?;
+        for _ in 0..count {
+            fields.push(self.u64()?);
+        }
+        Ok(fields)
+    }
+
+    fn finish(self) -> Result<(), ZkAceStarkError> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(ZkAceStarkError::MalformedProof)
+        }
+    }
+}
+
+fn append_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+fn append_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+fn append_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+fn append_hashes(bytes: &mut Vec<u8>, hashes: &[[u8; 32]]) {
+    for hash in hashes {
+        bytes.extend_from_slice(hash);
+    }
+}
+
+fn append_fields(bytes: &mut Vec<u8>, fields: &[u64]) {
+    for field in fields {
+        append_u64(bytes, *field);
+    }
+}
+
+fn encode_zk_ace_stark_proof_v1(proof: &ZkAceStarkProofV1) -> Result<Vec<u8>, ZkAceStarkError> {
+    validate_proof_shape(proof)?;
+    let mut bytes = exact_vec(CANONICAL_PROOF_BYTES_V1)?;
+    bytes.extend_from_slice(&PROOF_WIRE_MAGIC_V1);
+    append_u16(&mut bytes, proof.version);
+    bytes.extend_from_slice(&proof.trace_root);
+    append_hashes(&mut bytes, &proof.composition_roots);
+    for lane in &proof.fri_lanes {
+        append_hashes(&mut bytes, &lane.roots);
+        append_fields(&mut bytes, &lane.terminal_values);
+    }
+    for query in &proof.queries {
+        append_u32(&mut bytes, query.index);
+        append_fields(&mut bytes, &query.current_row);
+        append_fields(&mut bytes, &query.next_row);
+        append_hashes(&mut bytes, &query.current_row_path);
+        append_hashes(&mut bytes, &query.next_row_path);
+        append_fields(&mut bytes, &query.composition_values);
+        for path in &query.composition_paths {
+            append_hashes(&mut bytes, path);
+        }
+        for lane in &query.fri_lanes {
+            for opening in &lane.rounds {
+                append_u64(&mut bytes, opening.low);
+                append_u64(&mut bytes, opening.high);
+                append_hashes(&mut bytes, &opening.low_path);
+                append_hashes(&mut bytes, &opening.high_path);
+            }
+        }
+    }
+    if bytes.len() != CANONICAL_PROOF_BYTES_V1 {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "fixed-shape proof encoder length mismatch",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn decode_zk_ace_stark_proof_v1(proof_bytes: &[u8]) -> Result<ZkAceStarkProofV1, ZkAceStarkError> {
+    if proof_bytes.len() != CANONICAL_PROOF_BYTES_V1 {
+        return Err(ZkAceStarkError::MalformedProof);
+    }
+    let mut reader = ProofReaderV1::new(proof_bytes);
+    if reader.take::<4>()? != PROOF_WIRE_MAGIC_V1 {
+        return Err(ZkAceStarkError::MalformedProof);
+    }
+    let version = reader.u16()?;
+    if version != PROOF_VERSION {
+        return Err(ZkAceStarkError::ProfileMismatch);
+    }
+    let trace_root = reader.take()?;
+    let composition_roots = reader.hashes(SECURITY_LANES)?;
+    let mut fri_lanes = exact_vec(SECURITY_LANES)?;
+    for _ in 0..SECURITY_LANES {
+        fri_lanes.push(ZkAceFriLaneProofV1 {
+            roots: reader.hashes(FRI_ROUNDS + 1)?,
+            terminal_values: reader.fields(TERMINAL_SIZE)?,
+        });
+    }
+    let mut queries = exact_vec(QUERY_COUNT)?;
+    for _ in 0..QUERY_COUNT {
+        let index = reader.u32()?;
+        let current_row = reader.fields(TRACE_WIDTH)?;
+        let next_row = reader.fields(TRACE_WIDTH)?;
+        let current_row_path = reader.hashes(LDE_LOG2 as usize)?;
+        let next_row_path = reader.hashes(LDE_LOG2 as usize)?;
+        let composition_values = reader.fields(SECURITY_LANES)?;
+        let mut composition_paths = exact_vec(SECURITY_LANES)?;
+        for _ in 0..SECURITY_LANES {
+            composition_paths.push(reader.hashes(LDE_LOG2 as usize)?);
+        }
+        let mut query_fri_lanes = exact_vec(SECURITY_LANES)?;
+        for _ in 0..SECURITY_LANES {
+            let mut rounds = exact_vec(FRI_ROUNDS)?;
+            for round in 0..FRI_ROUNDS {
+                let depth = LDE_LOG2 as usize - round;
+                rounds.push(ZkAceFriRoundOpeningV1 {
+                    low: reader.u64()?,
+                    high: reader.u64()?,
+                    low_path: reader.hashes(depth)?,
+                    high_path: reader.hashes(depth)?,
+                });
+            }
+            query_fri_lanes.push(ZkAceFriLaneQueryV1 { rounds });
+        }
+        queries.push(ZkAceQueryProofV1 {
+            index,
+            current_row,
+            next_row,
+            current_row_path,
+            next_row_path,
+            composition_values,
+            composition_paths,
+            fri_lanes: query_fri_lanes,
+        });
+    }
+    reader.finish()?;
+    let proof = ZkAceStarkProofV1 {
+        version,
+        trace_root,
+        composition_roots,
+        fri_lanes,
+        queries,
+    };
+    validate_proof_shape(&proof)?;
+    Ok(proof)
 }
 
 fn trace_leaf_hash(row: &[F]) -> [u8; 32] {
@@ -1128,6 +1363,38 @@ fn constraint_quotient_value(
     public_outputs: &[F; 8],
     alphas: &[F],
 ) -> Result<F, ZkAceStarkError> {
+    let (inverse_trace_vanishing, transition_factor) = constraint_quotient_factors(x)?;
+    constraint_quotient_value_with_factors(
+        current,
+        next,
+        fixed,
+        public_outputs,
+        alphas,
+        inverse_trace_vanishing,
+        transition_factor,
+    )
+}
+
+fn constraint_quotient_factors(x: F) -> Result<(F, F), ZkAceStarkError> {
+    let z_h = x.pow(TRACE_SIZE as u128).sub(F::ONE);
+    let inverse_trace_vanishing = z_h.inv().ok_or(ZkAceStarkError::InternalInvariant(
+        "LDE point lies in the trace subgroup",
+    ))?;
+    let trace_root = primitive_root(TRACE_LOG2)?;
+    let last_trace_point = trace_root.pow((TRACE_SIZE - 1) as u128);
+    let transition_factor = x.sub(last_trace_point).mul(inverse_trace_vanishing);
+    Ok((inverse_trace_vanishing, transition_factor))
+}
+
+fn constraint_quotient_value_with_factors(
+    current: &[F],
+    next: &[F],
+    fixed: &[F],
+    public_outputs: &[F; 8],
+    alphas: &[F],
+    inverse_trace_vanishing: F,
+    transition_factor: F,
+) -> Result<F, ZkAceStarkError> {
     if current.len() != TRACE_WIDTH
         || next.len() != TRACE_WIDTH
         || fixed.len() != FIXED_WIDTH
@@ -1137,17 +1404,14 @@ fn constraint_quotient_value(
             "constraint evaluation shape mismatch",
         ));
     }
-    let z_h = x.pow(TRACE_SIZE as u128).sub(F::ONE);
-    let inv_z_h = z_h.inv().ok_or(ZkAceStarkError::InternalInvariant(
-        "LDE point lies in the trace subgroup",
-    ))?;
-    let trace_root = primitive_root(TRACE_LOG2)?;
-    let last_trace_point = trace_root.pow((TRACE_SIZE - 1) as u128);
-    let transition_factor = x.sub(last_trace_point).mul(inv_z_h);
     let mut alpha_index = 0usize;
     let mut result = F::ZERO;
     let mut absorb_local = |residue: F| {
-        result = result.add(alphas[alpha_index].mul(residue).mul(inv_z_h));
+        result = result.add(
+            alphas[alpha_index]
+                .mul(residue)
+                .mul(inverse_trace_vanishing),
+        );
         alpha_index += 1;
     };
 
@@ -1259,31 +1523,65 @@ fn trace_tree(trace_lde: &[Vec<F>]) -> Result<MerkleTree, ZkAceStarkError> {
     MerkleTree::from_leaves(leaves)
 }
 
-fn composition_lane(
+fn composition_lanes(
     trace_lde: &[Vec<F>],
     fixed_lde: &[Vec<F>],
     public_outputs: &[F; 8],
-    alphas: &[F],
-) -> Result<Vec<F>, ZkAceStarkError> {
+    lane_alphas: &[Vec<F>],
+) -> Result<Vec<Vec<F>>, ZkAceStarkError> {
+    if lane_alphas.len() != SECURITY_LANES
+        || lane_alphas
+            .iter()
+            .any(|alphas| alphas.len() != CONSTRAINT_COUNT)
+    {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "composition lane challenge shape mismatch",
+        ));
+    }
     let lde_root = primitive_root(LDE_LOG2)?;
     let coset_shift = F(FIELD_GENERATOR);
+    let trace_root = primitive_root(TRACE_LOG2)?;
+    let last_trace_point = trace_root.pow((TRACE_SIZE - 1) as u128);
+    // `x^TRACE_SIZE` repeats every blow-up factor along the LDE
+    // domain, so only sixteen vanishing-polynomial inversions are needed.
+    let mut inverse_vanishing_by_residue = Vec::with_capacity(TERMINAL_SIZE);
+    let mut residue_point = coset_shift;
+    for _ in 0..TERMINAL_SIZE {
+        inverse_vanishing_by_residue.push(
+            residue_point
+                .pow(TRACE_SIZE as u128)
+                .sub(F::ONE)
+                .inv()
+                .ok_or(ZkAceStarkError::InternalInvariant(
+                    "LDE coset residue lies in the trace subgroup",
+                ))?,
+        );
+        residue_point = residue_point.mul(lde_root);
+    }
     let mut x = coset_shift;
-    let mut values = Vec::with_capacity(LDE_SIZE);
+    let mut lanes = (0..SECURITY_LANES)
+        .map(|_| Vec::with_capacity(LDE_SIZE))
+        .collect::<Vec<_>>();
     for index in 0..LDE_SIZE {
         let current = row_at(trace_lde, index)?;
         let next = row_at(trace_lde, (index + TERMINAL_SIZE) % LDE_SIZE)?;
         let fixed = row_at(fixed_lde, index)?;
-        values.push(constraint_quotient_value(
-            x,
-            &current,
-            &next,
-            &fixed,
-            public_outputs,
-            alphas,
-        )?);
+        let inverse_trace_vanishing = inverse_vanishing_by_residue[index % TERMINAL_SIZE];
+        let transition_factor = x.sub(last_trace_point).mul(inverse_trace_vanishing);
+        for lane in 0..SECURITY_LANES {
+            lanes[lane].push(constraint_quotient_value_with_factors(
+                &current,
+                &next,
+                &fixed,
+                public_outputs,
+                &lane_alphas[lane],
+                inverse_trace_vanishing,
+                transition_factor,
+            )?);
+        }
         x = x.mul(lde_root);
     }
-    Ok(values)
+    Ok(lanes)
 }
 
 fn mix_fri_base(
@@ -1314,14 +1612,23 @@ fn mix_fri_base(
 }
 
 fn fri_fold_pair(low: F, high: F, beta: F, x: F) -> Result<F, ZkAceStarkError> {
+    let inverse_x = x.inv().ok_or(ZkAceStarkError::InternalInvariant(
+        "FRI domain point must be invertible",
+    ))?;
+    fri_fold_pair_with_inverse_x(low, high, beta, inverse_x)
+}
+
+fn fri_fold_pair_with_inverse_x(
+    low: F,
+    high: F,
+    beta: F,
+    inverse_x: F,
+) -> Result<F, ZkAceStarkError> {
     let two_inverse = F(2).inv().ok_or(ZkAceStarkError::InternalInvariant(
         "two must be invertible in Goldilocks",
     ))?;
-    let inverse_two_x = F(2).mul(x).inv().ok_or(ZkAceStarkError::InternalInvariant(
-        "FRI domain point must be invertible",
-    ))?;
     let even = low.add(high).mul(two_inverse);
-    let odd = low.sub(high).mul(inverse_two_x);
+    let odd = low.sub(high).mul(two_inverse).mul(inverse_x);
     Ok(even.add(beta.mul(odd)))
 }
 
@@ -1359,15 +1666,22 @@ fn build_fri_lane(
         let beta = fri_beta(lane_seed, lane, round, &root);
         let half = current.len() / 2;
         let mut next = Vec::with_capacity(half);
-        let mut x = domain_shift;
+        let mut inverse_x = domain_shift
+            .inv()
+            .ok_or(ZkAceStarkError::InternalInvariant(
+                "FRI domain shift must be invertible",
+            ))?;
+        let inverse_root = domain_root.inv().ok_or(ZkAceStarkError::InternalInvariant(
+            "FRI domain root must be invertible",
+        ))?;
         for index in 0..half {
-            next.push(fri_fold_pair(
+            next.push(fri_fold_pair_with_inverse_x(
                 current[index],
                 current[index + half],
                 beta,
-                x,
+                inverse_x,
             )?);
-            x = x.mul(domain_root);
+            inverse_x = inverse_x.mul(inverse_root);
         }
         trees.push(tree);
         roots.push(root);
@@ -1542,20 +1856,20 @@ pub(crate) fn prove_zk_ace_stark_v1_with_rng<R: TryRngCore>(
     let trace_root = trace_tree.root();
     let base_seed = base_transcript_seed(&public_digest, &trace_root);
 
-    let mut compositions = Vec::with_capacity(SECURITY_LANES);
+    let lane_alphas = (0..SECURITY_LANES)
+        .map(|lane| challenge_vector(&base_seed, b"constraint-alpha", lane, CONSTRAINT_COUNT))
+        .collect::<Vec<_>>();
+    let compositions = composition_lanes(
+        &trace_lde,
+        &fixed_lde,
+        &trace_material.public_outputs,
+        &lane_alphas,
+    )?;
     let mut composition_trees = Vec::with_capacity(SECURITY_LANES);
     let mut composition_roots = Vec::with_capacity(SECURITY_LANES);
-    for lane in 0..SECURITY_LANES {
-        let alphas = challenge_vector(&base_seed, b"constraint-alpha", lane, CONSTRAINT_COUNT);
-        let values = composition_lane(
-            &trace_lde,
-            &fixed_lde,
-            &trace_material.public_outputs,
-            &alphas,
-        )?;
-        let tree = composition_tree(lane, &values)?;
+    for (lane, values) in compositions.iter().enumerate() {
+        let tree = composition_tree(lane, values)?;
         composition_roots.push(tree.root());
-        compositions.push(values);
         composition_trees.push(tree);
     }
 
@@ -1605,10 +1919,7 @@ pub(crate) fn prove_zk_ace_stark_v1_with_rng<R: TryRngCore>(
             .collect(),
         queries,
     };
-    let encoded = norito::to_bytes(&proof).map_err(|_| ZkAceStarkError::MalformedProof)?;
-    if encoded.len() > MAX_PROOF_BYTES {
-        return Err(ZkAceStarkError::ProofTooLarge);
-    }
+    let encoded = encode_zk_ace_stark_proof_v1(&proof)?;
     // Never return a prover artifact that the independently reconstructed
     // verifier view rejects.
     verify_zk_ace_stark_v1(public_inputs, &encoded)?;
@@ -1748,13 +2059,7 @@ pub(crate) fn verify_zk_ace_stark_v1(
     let public_outputs = validate_relation_inputs(public_inputs)?;
     let public_digest = derive_zk_ace_air_public_digest(public_inputs)
         .map_err(|_| ZkAceStarkError::PublicInputEncoding)?;
-    let proof: ZkAceStarkProofV1 =
-        norito::decode_from_bytes(proof_bytes).map_err(|_| ZkAceStarkError::MalformedProof)?;
-    let canonical = norito::to_bytes(&proof).map_err(|_| ZkAceStarkError::MalformedProof)?;
-    if canonical.as_slice() != proof_bytes {
-        return Err(ZkAceStarkError::NonCanonicalProof);
-    }
-    validate_proof_shape(&proof)?;
+    let proof = decode_zk_ace_stark_proof_v1(proof_bytes)?;
 
     let base_seed = base_transcript_seed(&public_digest, &proof.trace_root);
     let composition_seed = composition_seed(&base_seed, &proof.composition_roots);
@@ -1952,6 +2257,7 @@ mod tests {
 
     fn fixture() -> &'static (ZkAcePublicInputsV1, ZkAceWitnessV1, Vec<u8>) {
         static FIXTURE: OnceLock<(ZkAcePublicInputsV1, ZkAceWitnessV1, Vec<u8>)> = OnceLock::new();
+        let _guard = proof_test_guard();
         FIXTURE.get_or_init(|| {
             let (public_inputs, witness) = public_inputs_and_witness();
             let mut rng = StdRng::from_seed([0x5A; 32]);
@@ -1962,15 +2268,18 @@ mod tests {
     }
 
     fn decode_fixture() -> ZkAceStarkProofV1 {
-        norito::decode_from_bytes(&fixture().2).expect("decode canonical fixture")
+        decode_zk_ace_stark_proof_v1(&fixture().2).expect("decode canonical fixture")
     }
 
     fn assert_rejected(proof: &ZkAceStarkProofV1) {
-        let bytes = norito::to_bytes(proof).expect("encode adversarial proof");
-        assert!(
-            verify_zk_ace_stark_v1(&fixture().0, &bytes).is_err(),
-            "adversarial proof must be rejected"
-        );
+        match encode_zk_ace_stark_proof_v1(proof) {
+            Ok(bytes) => assert!(
+                verify_zk_ace_stark_v1(&fixture().0, &bytes).is_err(),
+                "adversarial proof must be rejected"
+            ),
+            Err(ZkAceStarkError::ProfileMismatch) => {}
+            Err(error) => panic!("unexpected adversarial encoding failure: {error}"),
+        }
     }
 
     #[test]
@@ -2073,9 +2382,12 @@ mod tests {
     fn proof_roundtrips_under_exact_shape_and_byte_ceiling() {
         let (public_inputs, _, proof) = fixture();
         verify_zk_ace_stark_v1(public_inputs, proof).expect("proof verifies");
-        assert!(!proof.is_empty());
-        assert!(proof.len() <= MAX_PROOF_BYTES);
+        assert_eq!(proof.len(), CANONICAL_PROOF_BYTES_V1);
+        assert_eq!(proof.len(), MAX_PROOF_BYTES);
+        assert_eq!(&proof[..PROOF_WIRE_MAGIC_V1.len()], &PROOF_WIRE_MAGIC_V1);
         let decoded = decode_fixture();
+        let reencoded = encode_zk_ace_stark_proof_v1(&decoded).expect("canonical re-encode");
+        assert_eq!(reencoded.as_slice(), proof.as_slice());
         assert_eq!(decoded.composition_roots.len(), SECURITY_LANES);
         assert_eq!(decoded.queries.len(), QUERY_COUNT);
         assert!(
@@ -2089,6 +2401,7 @@ mod tests {
     #[test]
     fn trace_masking_is_randomized_and_does_not_embed_raw_witness_bytes() {
         let (public_inputs, witness, first) = fixture();
+        let _guard = proof_test_guard();
         let mut rng = StdRng::from_seed([0xA5; 32]);
         let second = prove_zk_ace_stark_v1_with_rng(public_inputs, witness, &mut rng)
             .expect("second masked proof");
@@ -2167,7 +2480,30 @@ mod tests {
         }
         let mut trailing = proof.clone();
         trailing.push(0);
-        assert!(verify_zk_ace_stark_v1(public_inputs, &trailing).is_err());
+        assert!(matches!(
+            verify_zk_ace_stark_v1(public_inputs, &trailing),
+            Err(ZkAceStarkError::ProofTooLarge)
+        ));
+
+        let mut wrong_magic = proof.clone();
+        wrong_magic[0] ^= 1;
+        assert!(matches!(
+            verify_zk_ace_stark_v1(public_inputs, &wrong_magic),
+            Err(ZkAceStarkError::MalformedProof)
+        ));
+
+        let mut wrong_version = proof.clone();
+        wrong_version[PROOF_WIRE_MAGIC_V1.len() + 1] ^= 1;
+        assert!(matches!(
+            verify_zk_ace_stark_v1(public_inputs, &wrong_version),
+            Err(ZkAceStarkError::ProfileMismatch)
+        ));
+
+        let exact_length_garbage = vec![0; CANONICAL_PROOF_BYTES_V1];
+        assert!(matches!(
+            verify_zk_ace_stark_v1(public_inputs, &exact_length_garbage),
+            Err(ZkAceStarkError::MalformedProof)
+        ));
     }
 
     #[test]
@@ -2185,8 +2521,16 @@ mod tests {
         assert_rejected(&changed);
 
         changed = decode_fixture();
+        changed.queries[0].current_row.push(0);
+        assert!(matches!(
+            encode_zk_ace_stark_proof_v1(&changed),
+            Err(ZkAceStarkError::ProfileMismatch)
+        ));
+
+        changed = decode_fixture();
         changed.queries[0].current_row[0] = FIELD_MODULUS;
-        let bytes = norito::to_bytes(&changed).expect("encode non-canonical field");
+        let bytes =
+            encode_zk_ace_stark_proof_v1(&changed).expect("encode non-canonical field value");
         assert!(matches!(
             verify_zk_ace_stark_v1(&fixture().0, &bytes),
             Err(ZkAceStarkError::NonCanonicalField)
@@ -2245,7 +2589,7 @@ mod tests {
         )
         .expect("terminal tree");
         changed.fri_lanes[0].roots[FRI_ROUNDS] = tree.root();
-        let bytes = norito::to_bytes(&changed).expect("encode high-degree terminal");
+        let bytes = encode_zk_ace_stark_proof_v1(&changed).expect("encode high-degree terminal");
         assert!(matches!(
             verify_zk_ace_stark_v1(&fixture().0, &bytes),
             Err(ZkAceStarkError::FriDegree)

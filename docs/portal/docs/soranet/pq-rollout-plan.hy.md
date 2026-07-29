@@ -99,11 +99,11 @@ rollout_phase = "default"
 
 | Մակերեւութային | Կանարյան (Ա փուլ) | Թեքահարթակ (Բ փուլ) | Կանխադրված (Փուլ Գ) |
 |---------|-----------------|------------------------------------|
-| `sorafs_cli` բերման | `--anonymity-policy stage-a` կամ ապավինել փուլին | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` բերման | `--anonymity-policy anon-guard-pq` կամ ապավինել փուլին | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Նվագախմբի կազմաձևում JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust client config (`iroha.toml`) | `rollout_phase = "canary"` (լռելյայն) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` ստորագրված հրամաններ | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, ընտրովի `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, ընտրովի `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, ընտրովի `.ANON_STRICT_PQ` |
+| `iroha_cli` ստորագրված հրամաններ | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, ընտրովի `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, ընտրովի `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, ընտրովի `.ANON_STRICT_PQ` |
 | JavaScript նվագախմբի օգնականներ | `rolloutPhase: "canary"` կամ `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ rollout_phase = "default"
 
 3. **Հաճախորդ/SDK դեղձանիկ (T գումարած 1 շաբաթ)**
 
-   - Շրջեք `rollout_phase = "ramp"`-ը հաճախորդի կոնֆիգուրացիաներում կամ անցեք `stage-b` վերագրանցումներ՝ նշանակված SDK խմբերի համար:
+   - Շրջեք `rollout_phase = "ramp"`-ը հաճախորդի կոնֆիգուրացիաներում կամ անցեք `anon-majority-pq` վերագրանցումներ՝ նշանակված SDK խմբերի համար:
    - Ձեռք բերեք հեռաչափության տարբերությունները (`sorafs_orchestrator_policy_events_total` խմբավորված ըստ `client_id`-ի և `region`-ի) և կցեք դրանք տեղադրման միջադեպերի մատյանին:
 
 4. **Լռելյայն առաջխաղացում (T գումարած 3 շաբաթ)**
@@ -162,7 +162,7 @@ rollout_phase = "default"
 ### թեքահարթակ → Կանարի (Փուլ B → Փուլ Ա)
 
 1. Ներմուծեք `sorafs_cli guard-directory import --guard-directory guards.json`-ով նկարահանված պահակային գրացուցակի լուսանկարը, որը նկարահանվել է առաջխաղացումից առաջ և կրկնել `sorafs_cli guard-directory verify`, որպեսզի իջեցման փաթեթը ներառի հեշեր:
-2. Տեղադրեք `rollout_phase = "canary"` (կամ փոխարինեք `anonymity_policy stage-a`-ով) նվագախմբի և հաճախորդի կոնֆիգուրացիաների վրա, այնուհետև վերարտադրեք PQ ցողունային հորատումը [PQ ratchet runbook]-ից (./pq-ratchet-runbook.md)՝ ապացուցելու նվազման խողովակաշարը:
+2. Տեղադրեք `rollout_phase = "canary"` (կամ փոխարինեք `anonymity_policy anon-guard-pq`-ով) նվագախմբի և հաճախորդի կոնֆիգուրացիաների վրա, այնուհետև վերարտադրեք PQ ցողունային հորատումը [PQ ratchet runbook]-ից (./pq-ratchet-runbook.md)՝ ապացուցելու նվազման խողովակաշարը:
 3. Կցեք PQ Ratchet-ի և SN16 հեռաչափության թարմացված սքրինշոթները, գումարած ահազանգերի արդյունքները միջադեպերի մատյանում, նախքան ղեկավարությանը ծանուցելը:
 
 ### Պաշտպանիչի հիշեցումներ- Տեղեկացրեք `docs/source/ops/soranet_transport_rollback.md`-ին, երբ տեղի է ունենում իջեցում և գրանցեք ցանկացած ժամանակավոր մեղմացում որպես `TODO:` տարր՝ գործարկման հետագծում հետագա աշխատանքների համար:

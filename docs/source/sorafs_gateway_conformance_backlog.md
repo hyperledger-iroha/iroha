@@ -31,6 +31,9 @@ generation, and dashboard assets are implemented in this checkout.
   - Build seeded workload generator sustaining ≥1 000 concurrent range streams.
   - Capture per-request telemetry (latency histograms, proof results) and export via Prometheus.
   - Support failure injection (timeouts, PoR corruption) toggled via CLI flags.
+  - Qualify the live deployment with one ≥86,400-second run across cold, warm,
+    and mixed caches, at least two providers, exactly 1% corruption, revocation,
+    malformed-flood, denylist/rate-limit pressure, and failover.
 - **Dependencies**
   - Replay harness libraries (reuse HTTP adapter + proof pipeline).
   - Metrics export pipeline (`sorafs_telemetry`).

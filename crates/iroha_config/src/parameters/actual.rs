@@ -66,7 +66,10 @@ use iroha_data_model::{
     oracle::KeyedHash,
     peer::{Peer, PeerId},
     sorafs::{
-        capacity::ProviderId, pin_registry::StorageClass as SorafsStorageClass,
+        capacity::ProviderId,
+        pin_registry::{
+            ProviderIngestCompletionSignerPolicyV1, StorageClass as SorafsStorageClass,
+        },
         pricing::PricingScheduleRecord,
     },
     taikai::TaikaiAvailabilityClass,
@@ -8835,6 +8838,40 @@ pub struct SorafsModerationQuarantineKeyProviderBinding {
     pub policy_digest: [u8; 32],
 }
 
+/// Exact public identity and qualification of one native SoraFS transaction signer.
+///
+/// The handle is resolved through deployment-owned runtime injection. Private
+/// keys, credentials, tokens, and vendor-specific connection material are not
+/// part of this configuration boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsNativeTransactionSignerBinding {
+    /// Stable opaque production provider handle.
+    pub handle: String,
+    /// Canonical transaction authority derived from `public_key`.
+    pub authority: AccountId,
+    /// Exact signature algorithm exposed by the runtime provider.
+    pub algorithm: Algorithm,
+    /// Exact public key exposed by the runtime provider.
+    pub public_key: PublicKey,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
+}
+
+/// Role-separated public bindings for native SoraFS transaction signers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SorafsNativeTransactionSignerBindings {
+    /// Proof-outcome transaction signer binding.
+    pub proof_outcome: Option<SorafsNativeTransactionSignerBinding>,
+    /// Repair transaction signer binding.
+    pub repair: Option<SorafsNativeTransactionSignerBinding>,
+    /// Reserve/rent transaction signer binding.
+    pub reserve: Option<SorafsNativeTransactionSignerBinding>,
+    /// Orderbook transaction signer binding.
+    pub orderbook: Option<SorafsNativeTransactionSignerBinding>,
+}
+
 /// Embedded SoraFS storage configuration (Torii-owned).
 #[derive(Debug, Clone)]
 pub struct SorafsStorage {
@@ -8879,6 +8916,13 @@ pub struct SorafsStorage {
     /// Finalized queries, threshold signing, Governance DAG publication, and
     /// native journal transaction submission remain runtime-injected.
     pub reputation_runtime: Option<SorafsReputationRuntime>,
+    /// Authenticated immutable archive used to retain compacted finalized PoR
+    /// replay records.
+    ///
+    /// The archive implementation and its Ed25519 signing key remain
+    /// deployment-owned runtime dependencies. Configuration contains only the
+    /// exact public identity, revision, policy digest, and verification key.
+    pub por_replay_archive: Option<SorafsPorReplayArchive>,
     /// Finalized-ledger billing projection, statement delivery, and
     /// hedge-intent generation policy.
     ///
@@ -8904,6 +8948,8 @@ pub struct SorafsStorage {
     pub metering_smoothing: SorafsMeteringSmoothing,
     /// Stream-token issuance configuration for chunk-range gateways.
     pub stream_tokens: SorafsTokenConfig,
+    /// Role-separated public bindings for native transaction signer providers.
+    pub native_transaction_signers: SorafsNativeTransactionSignerBindings,
     /// Durable native orderbook transaction worker policy.
     pub orderbook_worker: SorafsOrderbookWorker,
     /// Durable native reserve/rent transaction worker policy.
@@ -8922,13 +8968,40 @@ pub struct SorafsStorage {
     pub governance_dag_publisher_peer_id: Option<String>,
     /// Opaque runtime HSM/KMS signer handle used for signed Governance DAG blocks.
     pub governance_dag_signer_handle: Option<String>,
-    /// Canonical lowercase Ed25519 public key bound to the runtime signer.
+    /// Exact non-zero public-policy revision required from the runtime signer.
+    pub governance_dag_signer_revision: Option<u64>,
+    /// Exact non-zero public-policy digest required from the runtime signer.
+    pub governance_dag_signer_policy_digest: Option<[u8; 32]>,
+    /// Canonical lowercase strong Ed25519 public key bound to the runtime signer.
     pub governance_dag_publisher_public_key_hex: Option<String>,
-    /// Always-on Governance DAG public publisher and mirror service.
+    /// Governance DAG public service and shared sealed producer-state binding.
     pub governance_dag_service: SorafsGovernanceDagService,
 }
 
-/// Always-on Governance DAG public publisher and bounded mirror configuration.
+/// Non-secret qualification and worker policy for finalized PoR replay archival.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPorReplayArchive {
+    /// Stable deployment-owned runtime-provider handle.
+    pub handle: String,
+    /// Exact non-zero immutable archive identity.
+    pub archive_id: [u8; 32],
+    /// Exact non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the archive's public policy.
+    pub policy_digest: [u8; 32],
+    /// Canonical strong Ed25519 key authenticating archive receipts.
+    pub signing_public_key: [u8; 32],
+    /// Supervised reconciliation and compaction cadence.
+    pub poll_interval: Duration,
+    /// Maximum records reconciled and compacted in one worker tick.
+    pub max_records_per_tick: u32,
+    /// Exact maximum signed successor receipts accepted in one lookup proof.
+    pub max_successor_receipts: u32,
+    /// Exact maximum canonical bytes accepted for one lookup proof.
+    pub max_successor_proof_bytes: u64,
+}
+
+/// Governance DAG public-service configuration and shared sealed producer state.
 #[derive(Debug, Clone)]
 pub struct SorafsGovernanceDagService {
     /// Whether filesystem feeds are reconciled to the public endpoint continuously.
@@ -8951,19 +9024,27 @@ pub struct SorafsGovernanceDagService {
     pub ipfs_authenticator_revision: Option<u64>,
     /// Exact non-zero digest of the IPFS authenticator public policy.
     pub ipfs_authenticator_policy_digest: Option<[u8; 32]>,
+    /// Exact strong Ed25519 key verifying IPFS request-auth envelopes.
+    pub ipfs_request_auth_public_key: Option<[u8; 32]>,
     /// Opaque runtime authenticator handle for the signed-head endpoint.
     pub head_authenticator_handle: Option<String>,
     /// Exact non-zero signed-head authenticator provider revision.
     pub head_authenticator_revision: Option<u64>,
     /// Exact non-zero digest of the signed-head authenticator public policy.
     pub head_authenticator_policy_digest: Option<[u8; 32]>,
-    /// Opaque runtime sealed-checkpoint store handle.
+    /// Exact strong Ed25519 key verifying signed-head request-auth envelopes.
+    pub head_request_auth_public_key: Option<[u8; 32]>,
+    /// Maximum lifetime accepted for one signed outbound request envelope.
+    pub request_auth_max_envelope_lifetime_secs: u64,
+    /// Maximum future clock skew accepted for an outbound request envelope.
+    pub request_auth_max_future_skew_secs: u64,
+    /// Opaque runtime sealed-state store handle shared with the signed local producer.
     pub checkpoint_store_handle: Option<String>,
-    /// Exact non-zero sealed-checkpoint store provider revision.
+    /// Exact non-zero sealed-state store provider revision.
     pub checkpoint_store_revision: Option<u64>,
-    /// Exact non-zero digest of the sealed-checkpoint store public policy.
+    /// Exact non-zero digest of the sealed-state store public policy.
     pub checkpoint_store_policy_digest: Option<[u8; 32]>,
-    /// Canonical lowercase Ed25519 public key expected on every block, node, and head.
+    /// Canonical lowercase strong Ed25519 public key expected on every block, node, and head.
     pub publisher_public_key_hex: Option<String>,
     /// Filesystem feed reconciliation interval.
     pub poll_interval: Duration,
@@ -9005,6 +9086,16 @@ pub struct SorafsGovernanceDagService {
 pub struct SorafsGovernanceDagServiceView {
     /// Verified filesystem publisher root consumed by the service.
     pub source_dir: Option<PathBuf>,
+    /// Publisher peer identifier bound to the signed local producer.
+    pub producer_publisher_peer_id: Option<String>,
+    /// Opaque runtime HSM/KMS signer handle bound to the signed local producer.
+    pub producer_signer_handle: Option<String>,
+    /// Exact non-zero public-policy revision required from the producer signer.
+    pub producer_signer_revision: Option<u64>,
+    /// Exact non-zero public-policy digest required from the producer signer.
+    pub producer_signer_policy_digest: Option<[u8; 32]>,
+    /// Canonical lowercase strong Ed25519 public key bound to the producer signer.
+    pub producer_publisher_public_key_hex: Option<String>,
     /// Validated public publisher/mirror settings.
     pub service: SorafsGovernanceDagService,
 }
@@ -9018,6 +9109,11 @@ impl SorafsGovernanceDagServiceView {
     /// or its conditional service requirements are invalid.
     pub fn from_toml_source(mut src: TomlSource) -> Result<Self, FromTomlSourceError> {
         let root = src.table_mut();
+        if root.contains_key("extends") {
+            return Err(Report::new(FromTomlSourceError).attach(
+                "the standalone Governance DAG service requires a self-contained TOML file; `extends` is not supported",
+            ));
+        }
         if let Some(storage) = root
             .get("sorafs")
             .and_then(|value| value.as_table())
@@ -9027,6 +9123,24 @@ impl SorafsGovernanceDagServiceView {
             if storage.contains_key("governance_dag_signing_key_path") {
                 return Err(Report::new(FromTomlSourceError)
                     .attach("sorafs.storage.governance_dag_signing_key_path is forbidden in V1"));
+            }
+            for key in storage.keys() {
+                if key.starts_with("governance_dag_")
+                    && !matches!(
+                        key.as_str(),
+                        "governance_dag_dir"
+                            | "governance_dag_publisher_peer_id"
+                            | "governance_dag_signer_handle"
+                            | "governance_dag_signer_revision"
+                            | "governance_dag_signer_policy_digest_hex"
+                            | "governance_dag_publisher_public_key_hex"
+                            | "governance_dag_service"
+                    )
+                {
+                    return Err(Report::new(FromTomlSourceError).attach(format!(
+                        "sorafs.storage.{key} is not a supported Governance DAG V1 field"
+                    )));
+                }
             }
             if let Some(service) = storage
                 .get("governance_dag_service")
@@ -9056,7 +9170,16 @@ impl SorafsGovernanceDagServiceView {
                 .and_then(|value| value.as_table_mut())
             {
                 storage.retain(|key, _| {
-                    matches!(key, "governance_dag_dir" | "governance_dag_service")
+                    matches!(
+                        key,
+                        "governance_dag_dir"
+                            | "governance_dag_publisher_peer_id"
+                            | "governance_dag_signer_handle"
+                            | "governance_dag_signer_revision"
+                            | "governance_dag_signer_policy_digest_hex"
+                            | "governance_dag_publisher_public_key_hex"
+                            | "governance_dag_service"
+                    )
                 });
             }
         }
@@ -9166,7 +9289,7 @@ pub struct SorafsPopCredentialService {
 /// Non-secret production policy for finalized-chain moderation orchestration.
 #[derive(Debug, Clone)]
 pub struct SorafsModerationOrchestrator {
-    /// Private canonical checkpoint path.
+    /// Private local checkpoint-cache path.
     pub checkpoint_path: PathBuf,
     /// Governance authority used only for deterministic deadline maintenance.
     pub maintenance_authority: AccountId,
@@ -9227,6 +9350,12 @@ pub struct SorafsEvidenceViewer {
     pub checkpoint_path: PathBuf,
     /// Maximum canonical checkpoint size.
     pub checkpoint_max_bytes: Bytes<u64>,
+    /// Identity-pinned authoritative checkpoint-store runtime handle.
+    pub checkpoint_store_handle: String,
+    /// Exact non-zero checkpoint-store adapter and public-policy revision.
+    pub checkpoint_store_revision: u64,
+    /// Exact checkpoint-store adapter public-policy digest.
+    pub checkpoint_store_policy_digest: [u8; 32],
     /// Maximum session lifetime.
     pub session_ttl: Duration,
     /// Rotating grant lifetime.
@@ -9267,6 +9396,20 @@ pub struct SorafsEvidenceViewer {
     pub erasure_revision: u64,
     /// Exact irreversible-erasure adapter public-policy digest.
     pub erasure_policy_digest: [u8; 32],
+    /// Identity-pinned immutable compaction-archive runtime handle.
+    pub compaction_archive_handle: String,
+    /// Stable non-secret immutable archive namespace.
+    pub compaction_archive_id: [u8; 32],
+    /// Exact non-zero compaction-archive adapter and public-policy revision.
+    pub compaction_archive_revision: u64,
+    /// Exact compaction-archive adapter public-policy digest.
+    pub compaction_archive_policy_digest: [u8; 32],
+    /// Exact Ed25519 archive receipt-verification key.
+    pub compaction_archive_public_key: [u8; 32],
+    /// Supervised immutable-archive compaction cadence.
+    pub compaction_interval: Duration,
+    /// Maximum expired records archived by one supervised tick.
+    pub compaction_max_records: u32,
     /// Identity-pinned Ed25519 receipt signer handle.
     pub receipt_signer_handle: String,
     /// Exact non-zero receipt-signer adapter and public-policy revision.
@@ -9277,11 +9420,35 @@ pub struct SorafsEvidenceViewer {
     pub receipt_signer_public_key: [u8; 32],
 }
 
+/// Public binding for the reputation finalized-archive retention authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsReputationFinalizedArchiveRetentionAuthority {
+    /// Identity-pinned credential-free sealed-CAS provider handle.
+    pub handle: String,
+    /// Exact non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the authority's public policy.
+    pub policy_digest: [u8; 32],
+}
+
 /// Non-secret production policy for the committed SoraFS reputation runtime.
 #[derive(Debug, Clone)]
 pub struct SorafsReputationRuntime {
     /// Private directory containing canonical projector/publication checkpoints.
     pub state_dir: PathBuf,
+    /// Deterministic private root for the immutable finalized reputation archive.
+    pub finalized_archive_root: PathBuf,
+    /// Maximum bytes accepted for one canonical finalized archive record.
+    pub finalized_archive_max_record_bytes: u64,
+    /// Maximum immutable records admitted in each finalized archive namespace.
+    pub finalized_archive_max_entries: usize,
+    /// Maximum aggregate canonical anchor and policy bytes admitted.
+    pub finalized_archive_max_total_bytes: u64,
+    /// Maximum admitted lag between the Kura tip and the finalized archive head.
+    pub finalized_archive_max_kura_tip_lag_blocks: u64,
+    /// External authority required before any finalized-prefix retention.
+    pub finalized_archive_retention_authority:
+        Option<SorafsReputationFinalizedArchiveRetentionAuthority>,
     /// Inclusive first finalized block in the governed scoring window.
     pub window_start_height: u64,
     /// Inclusive final block and mandatory signing-material target.
@@ -9290,10 +9457,22 @@ pub struct SorafsReputationRuntime {
     pub finalized_query_handle: String,
     /// Identity-pinned runtime-only journal transaction submitter handle.
     pub journal_transaction_submitter_handle: String,
+    /// Exact non-zero journal transaction submitter adapter and public-policy revision.
+    pub journal_transaction_submitter_revision: u64,
+    /// Exact journal transaction submitter public-policy digest.
+    pub journal_transaction_submitter_policy_digest: [u8; 32],
     /// Identity-pinned external threshold-signer adapter handle.
     pub threshold_signer_handle: String,
+    /// Exact non-zero threshold-signer adapter and public-policy revision.
+    pub threshold_signer_revision: u64,
+    /// Exact threshold-signer public-policy digest.
+    pub threshold_signer_policy_digest: [u8; 32],
     /// Identity-pinned Governance DAG publication/readback adapter handle.
     pub governance_dag_handle: String,
+    /// Exact non-zero Governance DAG adapter and public-policy revision.
+    pub governance_dag_revision: u64,
+    /// Exact Governance DAG public-policy digest.
+    pub governance_dag_policy_digest: [u8; 32],
     /// Exact governed Governance DAG publisher peer identity.
     pub governance_publisher_peer_id: Vec<u8>,
     /// Exact governed Ed25519 Governance DAG publisher public key.
@@ -9400,6 +9579,8 @@ pub struct SorafsProviderIngestOutbox {
     pub max_attempts: u32,
     /// Maximum canonical checkpoint size.
     pub checkpoint_max_bytes: Bytes<u64>,
+    /// Deadline for one external sealed-checkpoint operation, in milliseconds.
+    pub checkpoint_operation_timeout_ms: u64,
     /// Source-claim lease duration in milliseconds.
     pub source_lease_ttl_ms: u64,
     /// Initial retry delay in milliseconds.
@@ -9414,6 +9595,42 @@ pub struct SorafsProviderIngestOutbox {
     pub max_status_page_size: usize,
 }
 
+/// Public binding for the external finalized-archive retention authority.
+#[derive(Debug, Clone)]
+pub struct SorafsProviderIngestFinalizedArchiveRetentionAuthority {
+    /// Identity-pinned credential-free sealed-CAS provider handle.
+    pub handle: String,
+    /// Exact non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the authority's public policy.
+    pub policy_digest: [u8; 32],
+}
+
+/// Non-secret bounds for the daemon-owned finalized provider-ingest archive.
+#[derive(Debug, Clone)]
+pub struct SorafsProviderIngestFinalizedArchive {
+    /// Normalized relative namespace resolved below the daemon's Kura root.
+    pub relative_root: PathBuf,
+    /// Maximum canonical bytes admitted for one immutable anchor record.
+    pub max_record_bytes: u64,
+    /// Maximum immutable anchor records admitted by one archive namespace.
+    pub max_archive_entries: usize,
+    /// Maximum aggregate canonical bytes admitted by one archive namespace.
+    pub max_total_bytes: u64,
+    /// Maximum provider projections admitted at one finalized anchor.
+    pub max_providers_per_anchor: usize,
+    /// Maximum assigned orders admitted for one provider at one anchor.
+    pub max_orders_per_provider: usize,
+    /// Maximum aggregate provider/order rows admitted at one finalized anchor.
+    pub max_total_orders_per_anchor: usize,
+    /// Maximum rows returned by one provider-indexed archive page.
+    pub max_page_rows: usize,
+    /// Maximum authenticated lag between the Kura and archive tips.
+    pub max_kura_tip_lag_blocks: u64,
+    /// External authority required before any retention checkpoint is installed.
+    pub retention_authority: Option<SorafsProviderIngestFinalizedArchiveRetentionAuthority>,
+}
+
 /// Non-secret production policy for supervised SoraFS provider ingest.
 ///
 /// The opaque handles identify runtime-registered providers. Credentials,
@@ -9423,8 +9640,26 @@ pub struct SorafsProviderIngestOutbox {
 pub struct SorafsProviderIngestRuntime {
     /// Identity-pinned authenticated source-fetch provider handle.
     pub authenticated_source_fetch_handle: String,
+    /// Exact non-zero authenticated source-pool adapter/public-policy revision.
+    pub authenticated_source_fetch_revision: u64,
+    /// Exact non-zero digest of the authenticated source-pool public policy.
+    pub authenticated_source_fetch_policy_digest: [u8; 32],
     /// Identity-pinned completion HSM/KMS signer-resolver handle.
     pub completion_signer_resolver_handle: String,
+    /// Exact non-zero governed signer-resolver adapter/public-policy revision.
+    pub completion_signer_resolver_revision: u64,
+    /// Exact non-zero digest of the governed signer-resolver public policy.
+    pub completion_signer_resolver_policy_digest: [u8; 32],
+    /// Stable public HSM/KMS completion-signer or key handle.
+    pub completion_signer_handle: String,
+    /// Exact non-zero completion-signer adapter and public-policy revision.
+    pub completion_signer_adapter_revision: u64,
+    /// Exact chain-authoritative completion-signer policy identity and digest lineage.
+    pub completion_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    /// Exact admitted completion-signature algorithm.
+    pub completion_signer_algorithm: Algorithm,
+    /// Exact public key controlled by the external completion signer.
+    pub completion_signer_public_key: PublicKey,
     /// Identity-pinned sealed monotonic checkpoint-store handle.
     pub checkpoint_store_handle: String,
     /// Exact non-zero checkpoint-store adapter and public-policy revision.
@@ -9451,12 +9686,8 @@ pub struct SorafsProviderIngestRuntime {
     pub ingress_timeout_ms: u64,
     /// Time-to-live assigned to one completion transaction.
     pub completion_transaction_ttl_ms: u64,
-    /// Maximum rows retained by one immutable finalized snapshot.
-    pub max_snapshot_rows: usize,
-    /// Maximum canonical bytes retained by one immutable finalized snapshot.
-    pub max_snapshot_bytes: Bytes<u64>,
-    /// Maximum authenticated finalized-head lag admitted by readiness.
-    pub max_finalized_lag_blocks: u64,
+    /// Daemon-owned immutable finalized-assignment archive policy.
+    pub finalized_archive: SorafsProviderIngestFinalizedArchive,
     /// Durable payload-free completion-outbox policy.
     pub outbox: SorafsProviderIngestOutbox,
 }
@@ -9572,6 +9803,13 @@ pub struct SorafsPrivacyAggregateSchedule {
     pub cycle_prf_provider: Option<SorafsTransparencyRuntimeProviderBinding>,
     /// Exact production finalized release-anchor binding.
     pub release_anchor_provider: Option<SorafsTransparencyRuntimeProviderBinding>,
+    /// Exact production external leader-lease binding.
+    pub leader_lease_provider: Option<SorafsTransparencyRuntimeProviderBinding>,
+    /// Exact production fused privacy Governance publisher binding.
+    ///
+    /// The stable handle is the provider identity exposed by the V1 runtime
+    /// boundary. The runtime provider owns all credentials and private state.
+    pub fenced_privacy_publisher: Option<SorafsTransparencyRuntimeProviderBinding>,
     /// Reduced composed-epsilon budget numerator.
     pub composition_budget_epsilon_numerator: u64,
     /// Reduced composed-epsilon budget denominator.
@@ -9611,6 +9849,7 @@ impl Default for SorafsStorage {
             moderation_orchestrator: None,
             evidence_viewer: None,
             reputation_runtime: None,
+            por_replay_archive: None,
             hedging_billing_runtime: None,
             provider_ingest_runtime: None,
             pdp_provider: SorafsPdpProviderPolicy::default(),
@@ -9619,6 +9858,7 @@ impl Default for SorafsStorage {
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsTokenConfig::default(),
+            native_transaction_signers: SorafsNativeTransactionSignerBindings::default(),
             orderbook_worker: SorafsOrderbookWorker::default(),
             reserve_worker: SorafsReserveWorker::default(),
             reputation_trust_policy_path: None,
@@ -9629,6 +9869,8 @@ impl Default for SorafsStorage {
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
             governance_dag_signer_handle: None,
+            governance_dag_signer_revision: None,
+            governance_dag_signer_policy_digest: None,
             governance_dag_publisher_public_key_hex: None,
             governance_dag_service: SorafsGovernanceDagService::default(),
         }
@@ -9650,9 +9892,14 @@ impl Default for SorafsGovernanceDagService {
             ipfs_authenticator_handle: None,
             ipfs_authenticator_revision: None,
             ipfs_authenticator_policy_digest: None,
+            ipfs_request_auth_public_key: None,
             head_authenticator_handle: None,
             head_authenticator_revision: None,
             head_authenticator_policy_digest: None,
+            head_request_auth_public_key: None,
+            request_auth_max_envelope_lifetime_secs:
+                service::REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS,
+            request_auth_max_future_skew_secs: service::REQUEST_AUTH_MAX_FUTURE_SKEW_SECS,
             checkpoint_store_handle: None,
             checkpoint_store_revision: None,
             checkpoint_store_policy_digest: None,
@@ -9771,6 +10018,8 @@ impl Default for SorafsPrivacyAggregateSchedule {
             policy_digest: None,
             cycle_prf_provider: None,
             release_anchor_provider: None,
+            leader_lease_provider: None,
+            fenced_privacy_publisher: None,
             composition_budget_epsilon_numerator:
                 defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_NUMERATOR,
             composition_budget_epsilon_denominator:
@@ -10048,20 +10297,13 @@ pub enum SorafsAnonymityStage {
 }
 
 impl SorafsAnonymityStage {
-    /// Parses a policy label into the corresponding stage.
+    /// Parses one exact canonical V1 policy label.
     #[must_use]
     pub fn parse(label: &str) -> Option<Self> {
-        let normalised = label.trim().to_ascii_lowercase();
-        match normalised.as_str() {
-            "anon_guard_pq" | "anon-guard-pq" | "stage_a" | "stage-a" | "stagea" => {
-                Some(Self::GuardPq)
-            }
-            "anon_majority_pq" | "anon-majority-pq" | "stage_b" | "stage-b" | "stageb" => {
-                Some(Self::MajorityPq)
-            }
-            "anon_strict_pq" | "anon-strict-pq" | "stage_c" | "stage-c" | "stagec" => {
-                Some(Self::StrictPq)
-            }
+        match label {
+            "anon-guard-pq" => Some(Self::GuardPq),
+            "anon-majority-pq" => Some(Self::MajorityPq),
+            "anon-strict-pq" => Some(Self::StrictPq),
             _ => None,
         }
     }
@@ -10090,14 +10332,13 @@ pub enum SorafsRolloutPhase {
 }
 
 impl SorafsRolloutPhase {
-    /// Parses a rollout phase label into the corresponding variant.
+    /// Parses one exact canonical V1 rollout phase label.
     #[must_use]
     pub fn parse(label: &str) -> Option<Self> {
-        let normalised = label.trim().to_ascii_lowercase();
-        match normalised.as_str() {
-            "canary" | "stage_a" | "stage-a" | "stagea" => Some(Self::Canary),
-            "ramp" | "stage_b" | "stage-b" | "stageb" | "majority" => Some(Self::Ramp),
-            "default" | "stable" | "ga" | "stage_c" | "stage-c" | "stagec" => Some(Self::Default),
+        match label {
+            "canary" => Some(Self::Canary),
+            "ramp" => Some(Self::Ramp),
+            "default" => Some(Self::Default),
             _ => None,
         }
     }
@@ -11800,23 +12041,39 @@ mod tests_npos_timeouts {
     }
 
     #[test]
-    fn sorafs_anonymity_stage_parses_aliases() {
-        assert_eq!(
-            SorafsAnonymityStage::parse("stage_a"),
-            Some(SorafsAnonymityStage::GuardPq)
-        );
-        assert_eq!(
-            SorafsAnonymityStage::parse("anon-majority-pq"),
-            Some(SorafsAnonymityStage::MajorityPq)
-        );
-        assert_eq!(
-            SorafsAnonymityStage::parse("Stage-C"),
-            Some(SorafsAnonymityStage::StrictPq)
-        );
-        assert_eq!(SorafsAnonymityStage::parse("anon-unknown"), None);
-        assert_eq!(SorafsAnonymityStage::parse("stage_0"), None);
-        assert_eq!(SorafsAnonymityStage::parse("anon_compatible"), None);
-        assert_eq!(SorafsAnonymityStage::parse("unknown-stage"), None);
+    fn sorafs_anonymity_stage_accepts_only_exact_v1_labels() {
+        for (label, expected) in [
+            ("anon-guard-pq", SorafsAnonymityStage::GuardPq),
+            ("anon-majority-pq", SorafsAnonymityStage::MajorityPq),
+            ("anon-strict-pq", SorafsAnonymityStage::StrictPq),
+        ] {
+            assert_eq!(SorafsAnonymityStage::parse(label), Some(expected));
+        }
+        for rejected in [
+            "",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+            "ANON-GUARD-PQ",
+            "anon_guard_pq",
+            "anon_majority_pq",
+            "anon_strict_pq",
+            "stage_a",
+            "stage-a",
+            "stagea",
+            "stage_b",
+            "stage-b",
+            "stageb",
+            "stage_c",
+            "stage-c",
+            "stagec",
+            "anon-unknown",
+        ] {
+            assert_eq!(
+                SorafsAnonymityStage::parse(rejected),
+                None,
+                "retired or noncanonical label `{rejected}` must fail"
+            );
+        }
     }
 
     #[test]
@@ -11827,20 +12084,39 @@ mod tests_npos_timeouts {
     }
 
     #[test]
-    fn sorafs_rollout_phase_parses_aliases() {
-        assert_eq!(
-            SorafsRolloutPhase::parse("stage-a"),
-            Some(SorafsRolloutPhase::Canary)
-        );
-        assert_eq!(
-            SorafsRolloutPhase::parse("majority"),
-            Some(SorafsRolloutPhase::Ramp)
-        );
-        assert_eq!(
-            SorafsRolloutPhase::parse("GA"),
-            Some(SorafsRolloutPhase::Default)
-        );
-        assert_eq!(SorafsRolloutPhase::parse("unknown-rollout"), None);
+    fn sorafs_rollout_phase_accepts_only_exact_v1_labels() {
+        for (label, expected) in [
+            ("canary", SorafsRolloutPhase::Canary),
+            ("ramp", SorafsRolloutPhase::Ramp),
+            ("default", SorafsRolloutPhase::Default),
+        ] {
+            assert_eq!(SorafsRolloutPhase::parse(label), Some(expected));
+        }
+        for rejected in [
+            "",
+            " canary",
+            "canary ",
+            "CANARY",
+            "stage_a",
+            "stage-a",
+            "stagea",
+            "stage_b",
+            "stage-b",
+            "stageb",
+            "stage_c",
+            "stage-c",
+            "stagec",
+            "majority",
+            "stable",
+            "ga",
+            "unknown-rollout",
+        ] {
+            assert_eq!(
+                SorafsRolloutPhase::parse(rejected),
+                None,
+                "retired or noncanonical label `{rejected}` must fail"
+            );
+        }
     }
 
     #[test]

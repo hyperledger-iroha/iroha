@@ -467,11 +467,7 @@ fn build_artefacts(
             .as_object()
             .ok_or_else(|| format!("chunker_commitments[{idx}] must be an object"))?;
         let handle = require_string(entry_obj, "profile_handle")?;
-        let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
-            format!(
-                "unknown chunker profile handle `{handle}`; see docs/source/sorafs/chunker_registry.md"
-            )
-        })?;
+        let descriptor = lookup_canonical_profile(handle)?;
         let canonical_handle = format!(
             "{}.{}@{}",
             descriptor.namespace, descriptor.name, descriptor.semver
@@ -610,7 +606,7 @@ fn parse_capability_array(value: &Value) -> Result<Vec<CapabilityType>, String> 
         let capability = parse_capability_name(name).ok_or_else(|| {
             format!(
                 "unknown capability name `{name}`; expected one of \
-                 torii_gateway, quic_noise, soranet, soranet_pq, chunk_range_fetch, vendor_reserved"
+                 torii_gateway, quic_noise, chunk_range_fetch, soranet_pq, potr_mldsa, vendor_reserved"
             )
         })?;
         out.push(capability);
@@ -618,16 +614,34 @@ fn parse_capability_array(value: &Value) -> Result<Vec<CapabilityType>, String> 
     Ok(out)
 }
 
+fn lookup_canonical_profile(
+    handle: &str,
+) -> Result<&'static chunker_registry::ChunkerProfileDescriptor, String> {
+    let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
+        format!(
+            "unknown chunker profile handle `{handle}`; see docs/source/sorafs/chunker_registry.md"
+        )
+    })?;
+    let canonical = format!(
+        "{}.{}@{}",
+        descriptor.namespace, descriptor.name, descriptor.semver
+    );
+    if handle != canonical {
+        return Err(format!(
+            "chunker profile handle `{handle}` is not canonical; expected `{canonical}`"
+        ));
+    }
+    Ok(descriptor)
+}
+
 fn parse_capability_name(name: &str) -> Option<CapabilityType> {
     match name {
-        "torii" | "torii_gateway" => Some(CapabilityType::ToriiGateway),
-        "quic" | "quic_noise" => Some(CapabilityType::QuicNoise),
-        "soranet" | "soranet_pq" | "soranet-pq" | "soranet_hybrid_pq" => {
-            Some(CapabilityType::SoraNetHybridPq)
-        }
-        "range" | "chunk_range_fetch" => Some(CapabilityType::ChunkRangeFetch),
-        "potr_mldsa" | "potr-mldsa" => Some(CapabilityType::PotrMlDsa),
-        "vendor" | "vendor_reserved" => Some(CapabilityType::VendorReserved),
+        "torii_gateway" => Some(CapabilityType::ToriiGateway),
+        "quic_noise" => Some(CapabilityType::QuicNoise),
+        "chunk_range_fetch" => Some(CapabilityType::ChunkRangeFetch),
+        "soranet_pq" => Some(CapabilityType::SoraNetHybridPq),
+        "potr_mldsa" => Some(CapabilityType::PotrMlDsa),
+        "vendor_reserved" => Some(CapabilityType::VendorReserved),
         _ => None,
     }
 }
@@ -1353,7 +1367,7 @@ fn capability_label(cap: &CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii_gateway",
         CapabilityType::QuicNoise => "quic_noise",
-        CapabilityType::SoraNetHybridPq => "soranet_hybrid_pq",
+        CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::PotrMlDsa => "potr_mldsa",
         CapabilityType::VendorReserved => "vendor_reserved",
@@ -1594,6 +1608,56 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
+    }
+
+    #[test]
+    fn capability_names_round_trip_only_the_v1_canonical_labels() {
+        let canonical = [
+            ("torii_gateway", CapabilityType::ToriiGateway),
+            ("quic_noise", CapabilityType::QuicNoise),
+            ("chunk_range_fetch", CapabilityType::ChunkRangeFetch),
+            ("soranet_pq", CapabilityType::SoraNetHybridPq),
+            ("potr_mldsa", CapabilityType::PotrMlDsa),
+            ("vendor_reserved", CapabilityType::VendorReserved),
+        ];
+        for (name, capability) in canonical {
+            assert_eq!(parse_capability_name(name), Some(capability));
+            assert_eq!(capability_label(&capability), name);
+        }
+
+        for alias in [
+            "torii",
+            "quic",
+            "range",
+            "soranet",
+            "soranet-pq",
+            "soranet_hybrid_pq",
+            "potr-mldsa",
+            "vendor",
+            "TORII_GATEWAY",
+            " torii_gateway",
+            "torii_gateway ",
+        ] {
+            assert_eq!(
+                parse_capability_name(alias),
+                None,
+                "alias {alias:?} must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_lookup_requires_the_exact_canonical_handle() {
+        lookup_canonical_profile("sorafs.sf1@1.0.0").expect("canonical profile");
+        for alias in [
+            "sorafs/sf1@1.0.0",
+            "sorafs-sf1",
+            "1",
+            "SORAFS.SF1@1.0.0",
+            " sorafs.sf1@1.0.0",
+        ] {
+            lookup_canonical_profile(alias).expect_err("profile alias must fail");
+        }
     }
 
     #[test]

@@ -12,11 +12,6 @@ build = "build.rs"
 [lib]
 crate-type = ["cdylib"]
 
-[features]
-compact-len = []
-packed-struct = []
-schema-structural = []
-
 [lints]
 workspace = true
 

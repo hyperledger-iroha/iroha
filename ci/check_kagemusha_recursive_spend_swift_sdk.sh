@@ -40,6 +40,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/OfflineDeviceAttestationABI21ParityTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ConnectCryptoTests.swift \
@@ -107,6 +108,11 @@ cd "${ROOT_DIR}"
 (
   cd IrohaSwift
   run_swift_test --filter KagemushaScaledAmountTests
+)
+
+(
+  cd IrohaSwift
+  run_swift_test --filter OfflineDeviceAttestationABI21ParityTests
 )
 
 (

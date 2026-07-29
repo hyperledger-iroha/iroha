@@ -10,7 +10,13 @@ use std::{
     fmt,
     fs::{self, File},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, SyncSender, TrySendError},
+    },
+    thread,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -18,6 +24,7 @@ use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 
+use iroha_config::parameters::is_production_runtime_handle;
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -55,8 +62,8 @@ const PROVIDER_INGEST_SEALED_CHECKPOINT_NAMESPACE_V1: [u8; 32] =
 const PROVIDER_INGEST_SEALED_CHECKPOINT_REVISION_DOMAIN_V1: &[u8] =
     b"sorafs.provider.ingest.sealed-checkpoint.revision.v1\0";
 const PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 1_024;
-const PROVIDER_INGEST_CHECKPOINT_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
-
+const PROVIDER_INGEST_CHECKPOINT_REQUEST_CAPACITY_V1: usize = 1;
+const PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
 const MAX_MANIFEST_CID_BYTES_V1: usize = 256;
 const MAX_CHUNKER_HANDLE_BYTES_V1: usize = 128;
 const MAX_MANIFEST_ID_BYTES_V1: usize = 128;
@@ -91,7 +98,12 @@ impl ProviderIngestCheckpointProviderBindingV1 {
         ProviderIngestCheckpointProviderQualificationV1::new(self.revision, self.policy_digest)
     }
 
-    fn validate(&self) -> Result<(), ProviderIngestOutboxError> {
+    /// Validate the complete canonical finalized authorization binding.
+    ///
+    /// This is exposed for authenticated runtime boundaries that decode the
+    /// authorization outside the outbox crate and must reject substituted or
+    /// noncanonical job identities before performing I/O.
+    pub fn validate(&self) -> Result<(), ProviderIngestOutboxError> {
         validate_provider_ingest_runtime_handle(&self.handle)?;
         self.qualification().validate()
     }
@@ -347,6 +359,8 @@ pub struct ProviderIngestOutboxPolicyV1 {
     pub max_attempts: u32,
     /// Maximum canonical checkpoint bytes.
     pub checkpoint_max_bytes: u64,
+    /// Deadline for one external sealed-checkpoint operation, in milliseconds.
+    pub checkpoint_operation_timeout_ms: u64,
     /// Source-claim lease duration in milliseconds.
     pub source_lease_ttl_ms: u64,
     /// Initial retry delay in milliseconds.
@@ -368,6 +382,7 @@ impl Default for ProviderIngestOutboxPolicyV1 {
             max_terminal_entries: 4_096,
             max_attempts: 8,
             checkpoint_max_bytes: 64 * 1024 * 1024,
+            checkpoint_operation_timeout_ms: 30_000,
             source_lease_ttl_ms: 60_000,
             retry_base_delay_ms: 1_000,
             retry_max_delay_ms: 5 * 60_000,
@@ -406,6 +421,9 @@ impl ProviderIngestOutboxPolicyV1 {
             || self.max_terminal_entries == 0
             || self.max_attempts == 0
             || self.checkpoint_max_bytes == 0
+            || self.checkpoint_operation_timeout_ms == 0
+            || self.checkpoint_operation_timeout_ms
+                > PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1
             || self.source_lease_ttl_ms == 0
             || self.source_lease_ttl_ms.checked_mul(2).is_none()
             || self.retry_base_delay_ms == 0
@@ -524,7 +542,18 @@ pub struct FinalizedProviderIngestAuthorizationV1 {
 
 impl FinalizedProviderIngestAuthorizationV1 {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_finalized_state(
+    /// Construct and validate the immutable authorization captured from one
+    /// exact finalized ledger view.
+    ///
+    /// Callers remain responsible for obtaining these values from an
+    /// authoritative finalized query; the value itself contains no capability,
+    /// credential, or mutable authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any finalized field is zero, malformed, out of
+    /// bounds, or inconsistent with the deterministically derived job ID.
+    pub fn from_finalized_state(
         finalized_height: u64,
         finalized_block_hash: [u8; 32],
         provider_id: [u8; 32],
@@ -562,12 +591,6 @@ impl FinalizedProviderIngestAuthorizationV1 {
     /// assignment remains replayable after the finalized head advances.
     #[must_use]
     pub const fn job_id(&self) -> [u8; 32] {
-        self.job_id
-    }
-
-    /// Compatibility name for the stable job identity.
-    #[must_use]
-    pub const fn idempotency_key(&self) -> [u8; 32] {
         self.job_id
     }
 
@@ -662,7 +685,16 @@ impl FinalizedProviderIngestAuthorizationV1 {
             && self.content_length == other.content_length
     }
 
-    fn validate(&self) -> Result<(), ProviderIngestOutboxError> {
+    /// Validate the complete canonical finalized authorization binding.
+    ///
+    /// This is exposed for authenticated runtime boundaries that decode the
+    /// authorization outside the outbox crate and must reject substituted or
+    /// noncanonical job identities before performing I/O.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any field or the derived job identity is invalid.
+    pub fn validate(&self) -> Result<(), ProviderIngestOutboxError> {
         self.admission_finalized_cursor.validate()?;
         if self.provider_id == [0; 32]
             || self.order_id == [0; 32]
@@ -914,12 +946,6 @@ impl ProviderIngestEnqueueResultV1 {
             | Self::ExistingTerminal { job_id } => job_id,
         }
     }
-
-    /// Compatibility name for the stable job identity.
-    #[must_use]
-    pub const fn idempotency_key(self) -> [u8; 32] {
-        self.job_id()
-    }
 }
 
 /// Outcome of a bounded retry transition.
@@ -954,6 +980,25 @@ pub(crate) enum ProviderIngestSignerPolicyObservationV1 {
     Missing,
     /// Exact active finalized signer policy.
     Active(ProviderIngestCompletionSignerPolicyV1),
+}
+
+/// Exact evidence and timing inputs required to expire one exposed completion.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProviderIngestExposedCompletionExpiryV1<'a> {
+    /// Durable provider-ingest job identity.
+    pub(crate) job_id: [u8; 32],
+    /// Hash of the exact signed transaction retained by the outbox.
+    pub(crate) expected_transaction_hash: [u8; 32],
+    /// Current finalized owner of the configured provider identity.
+    pub(crate) current_provider_owner: Option<&'a AccountId>,
+    /// Current finalized signer-policy observation for that owner.
+    pub(crate) current_signer_policy: ProviderIngestSignerPolicyObservationV1,
+    /// Runtime clock used only to schedule a bounded retry.
+    pub(crate) runtime_now_ms: u64,
+    /// Finalized block time proving the retained transaction has expired.
+    pub(crate) finalized_block_time_ms: u64,
+    /// Finalized cursor at which absence and authority were observed.
+    pub(crate) observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -1183,6 +1228,78 @@ impl DeliveryRecord for StoredCompletionDeliveryV1 {
     }
 }
 
+/// Pointer-sized completion storage that preserves the prior canonical codec.
+///
+/// Norito's generic `Box<T>` codec adds owned-value framing, so forwarding the
+/// inner codec explicitly keeps the durable checkpoint bytes unchanged.
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoxedStoredCompletionDeliveryV1(Box<StoredCompletionDeliveryV1>);
+
+impl BoxedStoredCompletionDeliveryV1 {
+    fn new(completion: StoredCompletionDeliveryV1) -> Self {
+        Self(Box::new(completion))
+    }
+}
+
+impl AsRef<StoredCompletionDeliveryV1> for BoxedStoredCompletionDeliveryV1 {
+    fn as_ref(&self) -> &StoredCompletionDeliveryV1 {
+        self.0.as_ref()
+    }
+}
+
+impl std::ops::Deref for BoxedStoredCompletionDeliveryV1 {
+    type Target = StoredCompletionDeliveryV1;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl std::ops::DerefMut for BoxedStoredCompletionDeliveryV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut()
+    }
+}
+
+impl norito::core::NoritoSerialize for BoxedStoredCompletionDeliveryV1 {
+    fn schema_hash() -> [u8; 16] {
+        <StoredCompletionDeliveryV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(self.0.as_ref(), writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_hint(self.0.as_ref())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_exact(self.0.as_ref())
+    }
+}
+
+impl<'a> norito::core::NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1 {
+    fn schema_hash() -> [u8; 16] {
+        <StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::schema_hash()
+    }
+
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("boxed provider-ingest completion decode")
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let completion =
+            <StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::try_deserialize(
+                archived.cast::<StoredCompletionDeliveryV1>(),
+            )?;
+        Ok(Self::new(completion))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredProviderIngestStateV1 {
     PendingSource,
@@ -1198,7 +1315,7 @@ enum StoredProviderIngestStateV1 {
     },
     LocalStored {
         manifest_id: String,
-        completion: StoredCompletionDeliveryV1,
+        completion: BoxedStoredCompletionDeliveryV1,
     },
 }
 
@@ -1272,10 +1389,294 @@ struct ProviderIngestOutboxState {
     durability_failure: Option<String>,
 }
 
+enum ProviderIngestCheckpointWorkerOperation {
+    Qualification,
+    LoadLatest,
+    CompareAndSwap {
+        expected_revision: Option<[u8; 32]>,
+        next: Box<ProviderIngestSealedCheckpointRecordV1>,
+    },
+}
+
+struct ProviderIngestCheckpointIdentityResponse {
+    handle_before: String,
+    qualification: ProviderIngestCheckpointProviderQualificationV1,
+    handle_after: String,
+}
+
+enum ProviderIngestCheckpointWorkerResponse {
+    Qualification(
+        Result<ProviderIngestCheckpointIdentityResponse, ProviderIngestCheckpointExternalErrorV1>,
+    ),
+    LoadLatest(
+        Box<
+            Result<
+                Option<ProviderIngestSealedCheckpointRecordV1>,
+                ProviderIngestCheckpointExternalErrorV1,
+            >,
+        >,
+    ),
+    CompareAndSwap(Result<(), ProviderIngestCheckpointExternalErrorV1>),
+    Panicked,
+    TimedOut,
+}
+
+struct ProviderIngestCheckpointWorkerCall {
+    operation: ProviderIngestCheckpointWorkerOperation,
+    deadline: Instant,
+    cancelled: Arc<AtomicBool>,
+    response: SyncSender<ProviderIngestCheckpointWorkerResponse>,
+}
+
+enum ProviderIngestCheckpointWorkerRequest {
+    Call(ProviderIngestCheckpointWorkerCall),
+    Shutdown(SyncSender<()>),
+}
+
+struct ProviderIngestCheckpointWorker {
+    requests: SyncSender<ProviderIngestCheckpointWorkerRequest>,
+    operation_timeout: Duration,
+    timed_out: Arc<AtomicBool>,
+    call_active: Mutex<bool>,
+    call_available: Condvar,
+}
+
+struct ProviderIngestCheckpointCallAdmission<'worker> {
+    worker: &'worker ProviderIngestCheckpointWorker,
+}
+
+impl ProviderIngestCheckpointWorker {
+    fn try_new(
+        runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+        operation_timeout: Duration,
+        writer_lock_lease: Arc<ProviderIngestWriterLock>,
+    ) -> Result<Self, ProviderIngestOutboxError> {
+        if operation_timeout.is_zero() {
+            return Err(ProviderIngestOutboxError::InvalidPolicy);
+        }
+        let (requests, receiver) =
+            mpsc::sync_channel(PROVIDER_INGEST_CHECKPOINT_REQUEST_CAPACITY_V1);
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let worker_timed_out = Arc::clone(&timed_out);
+        // Detach deliberately: shutdown must never join a provider call that
+        // exceeded its deadline and may remain blocked inside vendor code.
+        let _worker_thread = thread::Builder::new()
+            .name("sorafs-provider-ingest-checkpoint-v1".to_owned())
+            .spawn(move || {
+                provider_ingest_checkpoint_worker(
+                    runtime,
+                    receiver,
+                    worker_timed_out,
+                    writer_lock_lease,
+                );
+            })
+            .map_err(|_| ProviderIngestOutboxError::CheckpointProviderUnavailable)?;
+        Ok(Self {
+            requests,
+            operation_timeout,
+            timed_out,
+            call_active: Mutex::new(false),
+            call_available: Condvar::new(),
+        })
+    }
+
+    fn acquire_call(
+        &self,
+        deadline: Instant,
+    ) -> Result<ProviderIngestCheckpointCallAdmission<'_>, ProviderIngestOutboxError> {
+        let mut call_active = self
+            .call_active
+            .lock()
+            .map_err(|_| ProviderIngestOutboxError::CheckpointProviderUnavailable)?;
+        loop {
+            if self.timed_out.load(Ordering::Acquire) {
+                return Err(ProviderIngestOutboxError::CheckpointProviderTimeout);
+            }
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(ProviderIngestOutboxError::CheckpointProviderBusy);
+            };
+            if !*call_active {
+                *call_active = true;
+                drop(call_active);
+                return Ok(ProviderIngestCheckpointCallAdmission { worker: self });
+            }
+            let (next, wait) = self
+                .call_available
+                .wait_timeout(call_active, remaining)
+                .map_err(|_| ProviderIngestOutboxError::CheckpointProviderUnavailable)?;
+            call_active = next;
+            if wait.timed_out() && *call_active {
+                return Err(ProviderIngestOutboxError::CheckpointProviderBusy);
+            }
+        }
+    }
+
+    fn call(
+        &self,
+        operation: ProviderIngestCheckpointWorkerOperation,
+    ) -> Result<ProviderIngestCheckpointWorkerResponse, ProviderIngestOutboxError> {
+        if self.timed_out.load(Ordering::Acquire) {
+            return Err(ProviderIngestOutboxError::CheckpointProviderTimeout);
+        }
+        let deadline = Instant::now()
+            .checked_add(self.operation_timeout)
+            .ok_or(ProviderIngestOutboxError::InvalidPolicy)?;
+        let _admission = self.acquire_call(deadline)?;
+        if Instant::now() >= deadline {
+            return Err(ProviderIngestOutboxError::CheckpointProviderBusy);
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (response, response_receiver) = mpsc::sync_channel(1);
+        let request =
+            ProviderIngestCheckpointWorkerRequest::Call(ProviderIngestCheckpointWorkerCall {
+                operation,
+                deadline,
+                cancelled: Arc::clone(&cancelled),
+                response,
+            });
+        match self.requests.try_send(request) {
+            Ok(()) => {}
+            Err(TrySendError::Full(ProviderIngestCheckpointWorkerRequest::Call(call))) => {
+                call.cancelled.store(true, Ordering::Release);
+                return Err(ProviderIngestOutboxError::CheckpointProviderUnavailable);
+            }
+            Err(TrySendError::Disconnected(ProviderIngestCheckpointWorkerRequest::Call(call))) => {
+                call.cancelled.store(true, Ordering::Release);
+                return Err(ProviderIngestOutboxError::CheckpointProviderUnavailable);
+            }
+            Err(TrySendError::Full(ProviderIngestCheckpointWorkerRequest::Shutdown(_)))
+            | Err(TrySendError::Disconnected(ProviderIngestCheckpointWorkerRequest::Shutdown(_))) =>
+            {
+                return Err(ProviderIngestOutboxError::CheckpointProviderUnavailable);
+            }
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            cancelled.store(true, Ordering::Release);
+            self.timed_out.store(true, Ordering::Release);
+            return Err(ProviderIngestOutboxError::CheckpointProviderTimeout);
+        };
+        match response_receiver.recv_timeout(remaining) {
+            Ok(ProviderIngestCheckpointWorkerResponse::TimedOut) => {
+                cancelled.store(true, Ordering::Release);
+                Err(ProviderIngestOutboxError::CheckpointProviderBusy)
+            }
+            Ok(ProviderIngestCheckpointWorkerResponse::Panicked) => {
+                Err(ProviderIngestOutboxError::CheckpointProviderResponseLost)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                cancelled.store(true, Ordering::Release);
+                self.timed_out.store(true, Ordering::Release);
+                Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
+            }
+            Ok(response)
+                if !self.timed_out.load(Ordering::Acquire) && Instant::now() < deadline =>
+            {
+                Ok(response)
+            }
+            Ok(_) => {
+                cancelled.store(true, Ordering::Release);
+                self.timed_out.store(true, Ordering::Release);
+                Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(ProviderIngestOutboxError::CheckpointProviderResponseLost)
+            }
+        }
+    }
+}
+
+impl Drop for ProviderIngestCheckpointCallAdmission<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut call_active) = self.worker.call_active.lock() {
+            *call_active = false;
+        }
+        self.worker.call_available.notify_one();
+    }
+}
+
+impl Drop for ProviderIngestCheckpointWorker {
+    fn drop(&mut self) {
+        let timed_out = self.timed_out.swap(true, Ordering::AcqRel);
+        let (acknowledge, acknowledged) = mpsc::sync_channel(1);
+        if self
+            .requests
+            .try_send(ProviderIngestCheckpointWorkerRequest::Shutdown(acknowledge))
+            .is_ok()
+            && !timed_out
+        {
+            let _ = acknowledged.recv_timeout(self.operation_timeout.min(Duration::from_secs(1)));
+        }
+    }
+}
+
+fn provider_ingest_checkpoint_worker(
+    runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    receiver: mpsc::Receiver<ProviderIngestCheckpointWorkerRequest>,
+    timed_out: Arc<AtomicBool>,
+    writer_lock_lease: Arc<ProviderIngestWriterLock>,
+) {
+    while let Ok(request) = receiver.recv() {
+        let call = match request {
+            ProviderIngestCheckpointWorkerRequest::Call(call) => call,
+            ProviderIngestCheckpointWorkerRequest::Shutdown(acknowledge) => {
+                drop(writer_lock_lease);
+                let _ = acknowledge.send(());
+                return;
+            }
+        };
+        if timed_out.load(Ordering::Acquire)
+            || call.cancelled.load(Ordering::Acquire)
+            || Instant::now() >= call.deadline
+        {
+            let _ = call
+                .response
+                .send(ProviderIngestCheckpointWorkerResponse::TimedOut);
+            continue;
+        }
+        let response =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match call.operation {
+                ProviderIngestCheckpointWorkerOperation::Qualification => {
+                    let handle_before = runtime.handle().to_owned();
+                    let qualification = runtime.qualification();
+                    let handle_after = runtime.handle().to_owned();
+                    ProviderIngestCheckpointWorkerResponse::Qualification(qualification.map(
+                        |qualification| ProviderIngestCheckpointIdentityResponse {
+                            handle_before,
+                            qualification,
+                            handle_after,
+                        },
+                    ))
+                }
+                ProviderIngestCheckpointWorkerOperation::LoadLatest => {
+                    ProviderIngestCheckpointWorkerResponse::LoadLatest(Box::new(
+                        runtime.load_latest(),
+                    ))
+                }
+                ProviderIngestCheckpointWorkerOperation::CompareAndSwap {
+                    expected_revision,
+                    next,
+                } => ProviderIngestCheckpointWorkerResponse::CompareAndSwap(
+                    runtime.compare_and_swap_latest(expected_revision, &next),
+                ),
+            }));
+        match response {
+            Ok(response) => {
+                let _ = call.response.send(response);
+            }
+            Err(_) => {
+                let _ = call
+                    .response
+                    .send(ProviderIngestCheckpointWorkerResponse::Panicked);
+                return;
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ProviderIngestCheckpointAuthority {
     binding: ProviderIngestCheckpointProviderBindingV1,
-    runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    worker: Arc<ProviderIngestCheckpointWorker>,
 }
 
 impl fmt::Debug for ProviderIngestCheckpointAuthority {
@@ -1584,25 +1985,7 @@ fn validate_provider_ingest_lock_metadata(
 }
 
 fn validate_provider_ingest_runtime_handle(value: &str) -> Result<(), ProviderIngestOutboxError> {
-    if value.is_empty()
-        || value.len() > PROVIDER_INGEST_CHECKPOINT_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !value.is_ascii()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding);
-    }
-    let lowercase = value.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
+    if !is_production_runtime_handle(value) {
         return Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding);
     }
     Ok(())
@@ -1695,9 +2078,16 @@ impl ProviderIngestCheckpointAuthority {
     fn try_new(
         binding: ProviderIngestCheckpointProviderBindingV1,
         runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+        operation_timeout: Duration,
+        writer_lock_lease: Arc<ProviderIngestWriterLock>,
     ) -> Result<Self, ProviderIngestOutboxError> {
         binding.validate()?;
-        let authority = Self { binding, runtime };
+        let worker = Arc::new(ProviderIngestCheckpointWorker::try_new(
+            runtime,
+            operation_timeout,
+            writer_lock_lease,
+        )?);
+        let authority = Self { binding, worker };
         authority.assert_identity()?;
         authority.assert_identity()?;
         Ok(authority)
@@ -1705,17 +2095,25 @@ impl ProviderIngestCheckpointAuthority {
 
     fn assert_identity(&self) -> Result<(), ProviderIngestOutboxError> {
         self.binding.validate()?;
-        validate_provider_ingest_runtime_handle(self.runtime.handle())
+        let response = self
+            .worker
+            .call(ProviderIngestCheckpointWorkerOperation::Qualification)?;
+        let ProviderIngestCheckpointWorkerResponse::Qualification(qualification) = response else {
+            return Err(ProviderIngestOutboxError::CheckpointProviderUnavailable);
+        };
+        let identity = qualification?;
+        validate_provider_ingest_runtime_handle(&identity.handle_before)
             .map_err(|_| ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)?;
-        if self.runtime.handle() != self.binding.handle {
-            return Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch);
-        }
-        let qualification = self.runtime.qualification()?;
-        qualification
+        validate_provider_ingest_runtime_handle(&identity.handle_after)
+            .map_err(|_| ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)?;
+        identity
+            .qualification
             .validate()
             .map_err(|_| ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)?;
-        if self.runtime.handle() != self.binding.handle
-            || qualification != self.binding.qualification()
+        if identity.handle_before != self.binding.handle
+            || identity.handle_after != self.binding.handle
+            || identity.handle_before != identity.handle_after
+            || identity.qualification != self.binding.qualification()
         {
             return Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch);
         }
@@ -1727,9 +2125,14 @@ impl ProviderIngestCheckpointAuthority {
         checkpoint_max_bytes: u64,
     ) -> Result<Option<ProviderIngestSealedCheckpointRecordV1>, ProviderIngestOutboxError> {
         self.assert_identity()?;
-        let result = self.runtime.load_latest();
+        let response = self
+            .worker
+            .call(ProviderIngestCheckpointWorkerOperation::LoadLatest)?;
         self.assert_identity()?;
-        let record = result?;
+        let ProviderIngestCheckpointWorkerResponse::LoadLatest(result) = response else {
+            return Err(ProviderIngestOutboxError::CheckpointProviderUnavailable);
+        };
+        let record = (*result)?;
         if let Some(record) = &record {
             let canonical = record.to_canonical_bytes(checkpoint_max_bytes)?;
             if ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
@@ -1757,9 +2160,23 @@ impl ProviderIngestCheckpointAuthority {
         }
         let expected_revision = expected.map(|record| record.revision);
         let result = self
-            .runtime
-            .compare_and_swap_latest(expected_revision, next);
+            .worker
+            .call(ProviderIngestCheckpointWorkerOperation::CompareAndSwap {
+                expected_revision,
+                next: Box::new(next.clone()),
+            });
+        let result = match result {
+            Ok(ProviderIngestCheckpointWorkerResponse::CompareAndSwap(result)) => result,
+            Ok(_) => return Err(ProviderIngestOutboxError::CheckpointProviderUnavailable),
+            Err(ProviderIngestOutboxError::CheckpointProviderResponseLost) => {
+                return Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous);
+            }
+            Err(error) => return Err(error),
+        };
         if let Err(identity_error) = self.assert_identity() {
+            if identity_error == ProviderIngestOutboxError::CheckpointProviderTimeout {
+                return Err(identity_error);
+            }
             return Err(
                 if matches!(
                     result,
@@ -1780,9 +2197,13 @@ impl ProviderIngestCheckpointAuthority {
             }
             Ok(()) | Err(ProviderIngestCheckpointExternalErrorV1::Ambiguous) => {}
         }
-        let readback = self
-            .load_latest(checkpoint_max_bytes)
-            .map_err(|_| ProviderIngestOutboxError::CheckpointAuthorityAmbiguous)?;
+        let readback = match self.load_latest(checkpoint_max_bytes) {
+            Ok(readback) => readback,
+            Err(ProviderIngestOutboxError::CheckpointProviderTimeout) => {
+                return Err(ProviderIngestOutboxError::CheckpointProviderTimeout);
+            }
+            Err(_) => return Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous),
+        };
         if readback.as_ref() == Some(next) {
             return Ok(());
         }
@@ -1864,9 +2285,14 @@ impl ProviderIngestOutbox {
         runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
     ) -> Result<Self, ProviderIngestOutboxError> {
         policy.validate()?;
-        let authority = ProviderIngestCheckpointAuthority::try_new(binding, runtime)?;
         let path = prepare_provider_ingest_checkpoint_path(path.into())?;
         let writer_lock = Arc::new(ProviderIngestWriterLock::acquire(&path)?);
+        let authority = ProviderIngestCheckpointAuthority::try_new(
+            binding,
+            runtime,
+            Duration::from_millis(policy.checkpoint_operation_timeout_ms),
+            Arc::clone(&writer_lock),
+        )?;
         let record_max_bytes =
             provider_ingest_sealed_checkpoint_record_max_bytes(policy.checkpoint_max_bytes)?;
         let local_record = read_local_checkpoint_bounded(&path, record_max_bytes)
@@ -2381,7 +2807,7 @@ impl ProviderIngestOutbox {
         validate_live_claim(&candidate.active[position], claim, now_ms)?;
         candidate.active[position].state = StoredProviderIngestStateV1::LocalStored {
             manifest_id,
-            completion: StoredCompletionDeliveryV1::default(),
+            completion: BoxedStoredCompletionDeliveryV1::new(StoredCompletionDeliveryV1::default()),
         };
         self.persist_candidate(&mut state, candidate)
     }
@@ -3402,14 +3828,17 @@ impl ProviderIngestOutbox {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn expire_absent_exposed_completion(
         &self,
-        job_id: [u8; 32],
-        expected_transaction_hash: [u8; 32],
-        current_provider_owner: Option<&AccountId>,
-        current_signer_policy: ProviderIngestSignerPolicyObservationV1,
-        runtime_now_ms: u64,
-        finalized_block_time_ms: u64,
-        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+        request: ProviderIngestExposedCompletionExpiryV1<'_>,
     ) -> Result<Option<ProviderIngestRetryOutcomeV1>, ProviderIngestOutboxError> {
+        let ProviderIngestExposedCompletionExpiryV1 {
+            job_id,
+            expected_transaction_hash,
+            current_provider_owner,
+            current_signer_policy,
+            runtime_now_ms,
+            finalized_block_time_ms,
+            observed_finalized_cursor,
+        } = request;
         if runtime_now_ms == 0 || finalized_block_time_ms == 0 {
             return Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp);
         }
@@ -3672,10 +4101,10 @@ impl ProviderIngestOutbox {
         let attempts = {
             let completion = local_completion_mut(&mut candidate.active[position])?;
             require_transaction_hash(completion, expected_transaction_hash)?;
-            if !matches!(
+            if !(matches!(
                 completion.state,
                 StoredDeliveryStateV1::Ambiguous | StoredDeliveryStateV1::Submitted
-            ) && !(completion.state == StoredDeliveryStateV1::Signed && completion.ever_exposed)
+            ) || completion.state == StoredDeliveryStateV1::Signed && completion.ever_exposed)
             {
                 return Err(ProviderIngestOutboxError::InvalidTransition);
             }
@@ -4183,27 +4612,18 @@ impl ProviderIngestOutbox {
         })
     }
 
-    /// Compatibility helper that refuses to return an unbounded inventory.
-    pub fn statuses(&self) -> Result<Vec<ProviderIngestStatusV1>, ProviderIngestOutboxError> {
-        let page = self.statuses_page(None, self.policy.max_status_page_size)?;
-        if page.next_after_job_id.is_some() {
-            return Err(ProviderIngestOutboxError::StatusPageRequired);
-        }
-        Ok(page.rows)
-    }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, ProviderIngestOutboxState>, ProviderIngestOutboxError>
     {
-        let authoritative_record = self
-            .checkpoint_authority
-            .as_ref()
-            .map(|authority| authority.load_latest(self.policy.checkpoint_max_bytes))
-            .transpose()?;
-        if authoritative_record.as_ref().is_some_and(Option::is_none) {
-            return Err(ProviderIngestOutboxError::CheckpointRollback);
-        }
+        self.lock_state_after_authoritative_load(|| {})
+    }
+
+    fn lock_state_after_authoritative_load(
+        &self,
+        authoritative_loaded: impl FnOnce(),
+    ) -> Result<std::sync::MutexGuard<'_, ProviderIngestOutboxState>, ProviderIngestOutboxError>
+    {
         match (&self.path, &self.writer_lock) {
             (Some(path), Some(writer_lock)) => writer_lock.validate_live(path.as_path())?,
             (None, None) => {}
@@ -4211,12 +4631,23 @@ impl ProviderIngestOutbox {
                 return Err(ProviderIngestOutboxError::InvalidCheckpoint);
             }
         }
+        // Retain the local mutex across the authoritative read and comparison:
+        // every local persist advances `sealed_record` under this same lock.
         let state = self
             .state
             .lock()
             .map_err(|_| ProviderIngestOutboxError::StateUnavailable)?;
         if state.durability_failure.is_some() {
             return Err(ProviderIngestOutboxError::DurabilityPoisoned);
+        }
+        let authoritative_record = self
+            .checkpoint_authority
+            .as_ref()
+            .map(|authority| authority.load_latest(self.policy.checkpoint_max_bytes))
+            .transpose()?;
+        authoritative_loaded();
+        if authoritative_record.as_ref().is_some_and(Option::is_none) {
+            return Err(ProviderIngestOutboxError::CheckpointRollback);
         }
         if let Some(authoritative_record) = authoritative_record.flatten()
             && state.sealed_record.as_ref() != Some(&authoritative_record)
@@ -4286,7 +4717,11 @@ impl ProviderIngestOutbox {
             if let Err(error) =
                 authority.compare_and_swap(self.policy.checkpoint_max_bytes, Some(current), &next)
             {
-                if error == ProviderIngestOutboxError::CheckpointAuthorityAmbiguous {
+                if matches!(
+                    error,
+                    ProviderIngestOutboxError::CheckpointAuthorityAmbiguous
+                        | ProviderIngestOutboxError::CheckpointProviderTimeout
+                ) {
                     live.durability_failure =
                         Some("sealed provider-ingest commit outcome is ambiguous".to_owned());
                 }
@@ -5688,6 +6123,15 @@ pub enum ProviderIngestOutboxError {
     /// External sealed checkpoint provider rejected the exact operation.
     #[error("provider-ingest checkpoint provider rejected the operation")]
     CheckpointProviderRejected,
+    /// The bounded checkpoint worker could not admit an operation before its deadline.
+    #[error("provider-ingest checkpoint provider worker is busy")]
+    CheckpointProviderBusy,
+    /// A dispatched checkpoint operation lost its worker response.
+    #[error("provider-ingest checkpoint provider response was lost")]
+    CheckpointProviderResponseLost,
+    /// External sealed checkpoint operation exceeded its configured deadline.
+    #[error("provider-ingest checkpoint provider operation timed out")]
+    CheckpointProviderTimeout,
     /// CAS readback proves that the exact predecessor remains authoritative.
     #[error("provider-ingest sealed checkpoint compare-and-swap left the predecessor unchanged")]
     CheckpointCasUnchanged,
@@ -5814,9 +6258,6 @@ pub enum ProviderIngestOutboxError {
     /// Status page limit is outside the governed bound.
     #[error("provider-ingest status page limit is invalid")]
     InvalidPageLimit,
-    /// Inventory exceeds the compatibility helper; use paginated status.
-    #[error("provider-ingest status inventory requires pagination")]
-    StatusPageRequired,
     /// Runtime mutex was poisoned.
     #[error("provider-ingest outbox state is unavailable")]
     StateUnavailable,
@@ -5857,8 +6298,11 @@ impl From<ProviderIngestCheckpointExternalErrorV1> for ProviderIngestOutboxError
 mod tests {
     use std::{
         fs,
-        sync::{Arc, Mutex},
-        time::Duration,
+        sync::{
+            Arc, Condvar, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::{Duration, Instant},
     };
 
     use iroha_crypto::{Algorithm, KeyPair};
@@ -5882,6 +6326,7 @@ mod tests {
             max_terminal_entries: 4,
             max_attempts: 4,
             checkpoint_max_bytes: 4 * 1024 * 1024,
+            checkpoint_operation_timeout_ms: 250,
             source_lease_ttl_ms: 10,
             retry_base_delay_ms: 10,
             retry_max_delay_ms: 25,
@@ -5889,6 +6334,19 @@ mod tests {
             max_signed_transaction_bytes: 128 * 1024,
             max_status_page_size: 4,
         }
+    }
+
+    #[test]
+    fn boxed_completion_codec_preserves_prior_bytes() {
+        let completion = StoredCompletionDeliveryV1::default();
+        let boxed = BoxedStoredCompletionDeliveryV1::new(completion.clone());
+        let expected = norito::to_bytes(&completion).expect("encode prior completion layout");
+        let actual = norito::to_bytes(&boxed).expect("encode boxed completion layout");
+
+        assert_eq!(actual, expected);
+        let decoded: BoxedStoredCompletionDeliveryV1 =
+            norito::decode_from_bytes(&actual).expect("decode boxed completion layout");
+        assert_eq!(decoded.as_ref(), &completion);
     }
 
     fn checkpoint_path(directory: &TempDir) -> PathBuf {
@@ -5921,8 +6379,21 @@ mod tests {
     enum TestCheckpointCasBehavior {
         Normal,
         CommitAmbiguous,
+        CommitThenPanic,
         UnchangedOk,
         UnchangedAmbiguous,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TestCheckpointOperation {
+        Qualification,
+        LoadLatest,
+        CompareAndSwap,
+    }
+
+    #[derive(Debug, Default)]
+    struct TestCheckpointBlockState {
+        operation: Option<TestCheckpointOperation>,
     }
 
     #[derive(Debug)]
@@ -5933,6 +6404,12 @@ mod tests {
         next_cas_behavior: Mutex<TestCheckpointCasBehavior>,
         qualification_after_next_cas:
             Mutex<Option<ProviderIngestCheckpointProviderQualificationV1>>,
+        blocked: Mutex<TestCheckpointBlockState>,
+        blocked_changed: Condvar,
+        block_load_after_next_cas: AtomicBool,
+        qualification_calls: AtomicUsize,
+        load_latest_calls: AtomicUsize,
+        compare_and_swap_calls: AtomicUsize,
     }
 
     impl TestCheckpointRuntime {
@@ -5945,6 +6422,12 @@ mod tests {
                 latest: Mutex::new(None),
                 next_cas_behavior: Mutex::new(TestCheckpointCasBehavior::Normal),
                 qualification_after_next_cas: Mutex::new(None),
+                blocked: Mutex::new(TestCheckpointBlockState::default()),
+                blocked_changed: Condvar::new(),
+                block_load_after_next_cas: AtomicBool::new(false),
+                qualification_calls: AtomicUsize::new(0),
+                load_latest_calls: AtomicUsize::new(0),
+                compare_and_swap_calls: AtomicUsize::new(0),
             }
         }
 
@@ -5994,6 +6477,50 @@ mod tests {
                 .lock()
                 .expect("test post-CAS checkpoint qualification") = Some(qualification);
         }
+
+        fn block_operation(&self, operation: TestCheckpointOperation) {
+            self.blocked
+                .lock()
+                .expect("test checkpoint block state")
+                .operation = Some(operation);
+        }
+
+        fn block_load_after_next_cas(&self) {
+            self.block_load_after_next_cas
+                .store(true, Ordering::Release);
+        }
+
+        fn release_blocked_operation(&self) {
+            self.blocked
+                .lock()
+                .expect("test checkpoint block state")
+                .operation = None;
+            self.blocked_changed.notify_all();
+        }
+
+        fn wait_if_blocked(&self, operation: TestCheckpointOperation) {
+            let mut blocked = self.blocked.lock().expect("test checkpoint block state");
+            while blocked.operation == Some(operation) {
+                blocked = self
+                    .blocked_changed
+                    .wait(blocked)
+                    .expect("test checkpoint block state");
+            }
+        }
+
+        fn operation_calls(&self, operation: TestCheckpointOperation) -> usize {
+            match operation {
+                TestCheckpointOperation::Qualification => {
+                    self.qualification_calls.load(Ordering::Acquire)
+                }
+                TestCheckpointOperation::LoadLatest => {
+                    self.load_latest_calls.load(Ordering::Acquire)
+                }
+                TestCheckpointOperation::CompareAndSwap => {
+                    self.compare_and_swap_calls.load(Ordering::Acquire)
+                }
+            }
+        }
     }
 
     impl ProviderIngestCheckpointRuntimeV1 for TestCheckpointRuntime {
@@ -6007,6 +6534,8 @@ mod tests {
             ProviderIngestCheckpointProviderQualificationV1,
             ProviderIngestCheckpointExternalErrorV1,
         > {
+            self.qualification_calls.fetch_add(1, Ordering::AcqRel);
+            self.wait_if_blocked(TestCheckpointOperation::Qualification);
             self.qualification
                 .lock()
                 .map(|qualification| *qualification)
@@ -6019,6 +6548,8 @@ mod tests {
             Option<ProviderIngestSealedCheckpointRecordV1>,
             ProviderIngestCheckpointExternalErrorV1,
         > {
+            self.load_latest_calls.fetch_add(1, Ordering::AcqRel);
+            self.wait_if_blocked(TestCheckpointOperation::LoadLatest);
             self.latest
                 .lock()
                 .map(|latest| latest.clone())
@@ -6030,6 +6561,8 @@ mod tests {
             expected_revision: Option<[u8; 32]>,
             next: &ProviderIngestSealedCheckpointRecordV1,
         ) -> Result<(), ProviderIngestCheckpointExternalErrorV1> {
+            self.compare_and_swap_calls.fetch_add(1, Ordering::AcqRel);
+            self.wait_if_blocked(TestCheckpointOperation::CompareAndSwap);
             let mut latest = self
                 .latest
                 .lock()
@@ -6052,6 +6585,7 @@ mod tests {
                     .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?,
                 TestCheckpointCasBehavior::Normal,
             );
+            let panic_after_commit = behavior == TestCheckpointCasBehavior::CommitThenPanic;
             let outcome = match behavior {
                 TestCheckpointCasBehavior::Normal => {
                     *latest = Some(next.clone());
@@ -6060,6 +6594,10 @@ mod tests {
                 TestCheckpointCasBehavior::CommitAmbiguous => {
                     *latest = Some(next.clone());
                     Err(ProviderIngestCheckpointExternalErrorV1::Ambiguous)
+                }
+                TestCheckpointCasBehavior::CommitThenPanic => {
+                    *latest = Some(next.clone());
+                    Ok(())
                 }
                 TestCheckpointCasBehavior::UnchangedOk => Ok(()),
                 TestCheckpointCasBehavior::UnchangedAmbiguous => {
@@ -6075,6 +6613,10 @@ mod tests {
             {
                 self.set_qualification(qualification);
             }
+            if self.block_load_after_next_cas.swap(false, Ordering::AcqRel) {
+                self.block_operation(TestCheckpointOperation::LoadLatest);
+            }
+            assert!(!panic_after_commit, "test checkpoint CAS response panic");
             outcome
         }
     }
@@ -6089,6 +6631,376 @@ mod tests {
             runtime.binding(),
             runtime,
         )
+    }
+
+    fn deadline_policy() -> ProviderIngestOutboxPolicyV1 {
+        ProviderIngestOutboxPolicyV1 {
+            checkpoint_operation_timeout_ms: 750,
+            ..policy()
+        }
+    }
+
+    fn open_sealed_with_deadline(
+        directory: &TempDir,
+        runtime: Arc<TestCheckpointRuntime>,
+    ) -> Result<ProviderIngestOutbox, ProviderIngestOutboxError> {
+        ProviderIngestOutbox::open_with_checkpoint_authority(
+            checkpoint_path(directory),
+            deadline_policy(),
+            runtime.binding(),
+            runtime,
+        )
+    }
+
+    fn reopen_sealed_after_worker_release(
+        directory: &TempDir,
+        runtime: Arc<TestCheckpointRuntime>,
+    ) -> Result<ProviderIngestOutbox, ProviderIngestOutboxError> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match open_sealed_with_deadline(directory, Arc::clone(&runtime)) {
+                Err(ProviderIngestOutboxError::CheckpointBusy) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn wait_for_checkpoint_sequence(runtime: &TestCheckpointRuntime, expected_sequence: u64) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if runtime
+                .latest()
+                .is_some_and(|record| record.checkpoint_sequence == expected_sequence)
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "checkpoint worker did not finish the released operation"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn wait_for_operation_calls(
+        runtime: &TestCheckpointRuntime,
+        operation: TestCheckpointOperation,
+        minimum_calls: usize,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runtime.operation_calls(operation) < minimum_calls {
+            assert!(
+                Instant::now() < deadline,
+                "checkpoint worker did not enter the expected operation"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn sealed_checkpoint_qualification_timeout_is_typed_and_bounded() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x61));
+        runtime.block_operation(TestCheckpointOperation::Qualification);
+
+        let started = Instant::now();
+        assert!(matches!(
+            open_sealed_with_deadline(&directory, Arc::clone(&runtime)),
+            Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            runtime.operation_calls(TestCheckpointOperation::Qualification),
+            1
+        );
+        let second_started = Instant::now();
+        assert!(matches!(
+            open_sealed_with_deadline(&directory, Arc::clone(&runtime)),
+            Err(ProviderIngestOutboxError::CheckpointBusy)
+        ));
+        assert!(second_started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            runtime.operation_calls(TestCheckpointOperation::Qualification),
+            1,
+            "a hung provider boundary must retain the writer lease and reject another worker"
+        );
+        runtime.release_blocked_operation();
+        let reopened = reopen_sealed_after_worker_release(&directory, runtime)
+            .expect("reopen after the timed-out worker exits");
+        assert_eq!(
+            reopened.finalized_cursor_high_water().expect("sealed head"),
+            None
+        );
+    }
+
+    #[test]
+    fn sealed_checkpoint_load_timeout_is_typed_and_bounded() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x62));
+        runtime.block_operation(TestCheckpointOperation::LoadLatest);
+
+        let started = Instant::now();
+        assert!(matches!(
+            open_sealed_with_deadline(&directory, Arc::clone(&runtime)),
+            Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            runtime.operation_calls(TestCheckpointOperation::LoadLatest),
+            1
+        );
+        assert!(runtime.latest().is_none());
+        runtime.release_blocked_operation();
+        let reopened = reopen_sealed_after_worker_release(&directory, runtime)
+            .expect("reopen after timed-out load");
+        assert_eq!(
+            reopened.finalized_cursor_high_water().expect("sealed head"),
+            None
+        );
+    }
+
+    #[test]
+    fn sealed_checkpoint_cas_timeout_does_not_block_shutdown_and_reopens() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x63));
+        runtime.block_operation(TestCheckpointOperation::CompareAndSwap);
+
+        let started = Instant::now();
+        assert!(matches!(
+            open_sealed_with_deadline(&directory, Arc::clone(&runtime)),
+            Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            runtime.operation_calls(TestCheckpointOperation::CompareAndSwap),
+            1
+        );
+
+        runtime.release_blocked_operation();
+        wait_for_checkpoint_sequence(&runtime, 1);
+        let reopened = reopen_sealed_after_worker_release(&directory, runtime)
+            .expect("reopen after timed-out CAS");
+        assert_eq!(
+            reopened.finalized_cursor_high_water().expect("sealed head"),
+            None
+        );
+    }
+
+    #[test]
+    fn sealed_checkpoint_readback_timeout_is_sticky_and_recoverable_on_reopen() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x64));
+        let outbox =
+            open_sealed_with_deadline(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        runtime.block_load_after_next_cas();
+
+        assert_eq!(
+            outbox.observe_finalized_snapshot(cursor(11), finalized_block_time_ms(cursor(11))),
+            Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
+        );
+        let load_calls_after_timeout = runtime.operation_calls(TestCheckpointOperation::LoadLatest);
+        assert_eq!(
+            outbox.aggregate_counts(),
+            Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
+        );
+        assert_eq!(
+            runtime.operation_calls(TestCheckpointOperation::LoadLatest),
+            load_calls_after_timeout,
+            "a timed-out worker must reject later requests without spawning or queuing work"
+        );
+
+        let shutdown_started = Instant::now();
+        drop(outbox);
+        assert!(shutdown_started.elapsed() < Duration::from_secs(5));
+        runtime.release_blocked_operation();
+        wait_for_checkpoint_sequence(&runtime, 2);
+
+        let reopened = reopen_sealed_after_worker_release(&directory, runtime)
+            .expect("reopen from sealed successor");
+        assert_eq!(
+            reopened.finalized_cursor_high_water().expect("sealed head"),
+            Some(cursor(11))
+        );
+    }
+
+    #[test]
+    fn sealed_checkpoint_commit_then_worker_panic_is_ambiguous_and_recoverable() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x66));
+        let outbox =
+            open_sealed_with_deadline(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        runtime.set_next_cas_behavior(TestCheckpointCasBehavior::CommitThenPanic);
+
+        assert_eq!(
+            outbox.observe_finalized_snapshot(cursor(12), finalized_block_time_ms(cursor(12))),
+            Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous)
+        );
+        assert_eq!(
+            runtime
+                .latest()
+                .expect("committed authoritative successor")
+                .checkpoint_sequence,
+            2
+        );
+        assert!(
+            outbox
+                .state
+                .lock()
+                .expect("outbox state")
+                .durability_failure
+                .is_some()
+        );
+        drop(outbox);
+
+        let reopened = reopen_sealed_after_worker_release(&directory, runtime)
+            .expect("reopen after committed CAS response loss");
+        assert_eq!(
+            reopened.finalized_cursor_high_water().expect("sealed head"),
+            Some(cursor(12))
+        );
+    }
+
+    #[test]
+    fn bounded_checkpoint_admission_serializes_healthy_concurrent_reads() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x65));
+        let outbox =
+            open_sealed_with_deadline(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        let baseline_load_calls = runtime.operation_calls(TestCheckpointOperation::LoadLatest);
+        runtime.block_operation(TestCheckpointOperation::LoadLatest);
+
+        let first_outbox = outbox.clone();
+        let first = std::thread::spawn(move || first_outbox.aggregate_counts());
+        wait_for_operation_calls(
+            &runtime,
+            TestCheckpointOperation::LoadLatest,
+            baseline_load_calls + 1,
+        );
+        let second_outbox = outbox.clone();
+        let second = std::thread::spawn(move || second_outbox.aggregate_counts());
+        let third_outbox = outbox.clone();
+        let third = std::thread::spawn(move || third_outbox.aggregate_counts());
+        std::thread::sleep(Duration::from_millis(10));
+        runtime.release_blocked_operation();
+
+        for operation in [first, second, third] {
+            operation
+                .join()
+                .expect("checkpoint caller thread")
+                .expect("healthy concurrent checkpoint read");
+        }
+        outbox
+            .aggregate_counts()
+            .expect("checkpoint worker remains qualified after bounded contention");
+    }
+
+    #[test]
+    fn authoritative_head_read_is_serialized_with_local_checkpoint_persistence() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x68));
+        let outbox =
+            open_sealed_with_deadline(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        let (reader_loaded, reader_loaded_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_reader, release_reader_rx) = std::sync::mpsc::sync_channel(0);
+        let reader_outbox = outbox.clone();
+        let reader = std::thread::spawn(move || {
+            let state = reader_outbox.lock_state_after_authoritative_load(|| {
+                reader_loaded.send(()).expect("signal authoritative read");
+                release_reader_rx
+                    .recv()
+                    .expect("release authoritative reader");
+            })?;
+            Ok::<_, ProviderIngestOutboxError>(state.aggregate_counts)
+        });
+        reader_loaded_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("reader observed authoritative predecessor");
+
+        let (writer_lock_attempted, writer_lock_attempted_rx) = std::sync::mpsc::sync_channel(0);
+        let writer_outbox = outbox.clone();
+        let writer = std::thread::spawn(move || match writer_outbox.state.try_lock() {
+            Ok(mut state) => {
+                writer_lock_attempted
+                    .send(true)
+                    .expect("signal early writer lock");
+                let mut candidate = state.checkpoint.clone();
+                candidate.finalized_cursor_high_water = Some(cursor(13));
+                candidate.finalized_block_time_ms_high_water =
+                    Some(finalized_block_time_ms(cursor(13)));
+                writer_outbox.persist_candidate(&mut state, candidate)
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                writer_lock_attempted
+                    .send(false)
+                    .expect("signal serialized writer lock");
+                writer_outbox
+                    .observe_finalized_snapshot(cursor(13), finalized_block_time_ms(cursor(13)))
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                Err(ProviderIngestOutboxError::StateUnavailable)
+            }
+        });
+        let writer_acquired_before_reader_release = writer_lock_attempted_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writer attempted local state lock");
+
+        let (reader_result, writer_result) = if writer_acquired_before_reader_release {
+            let writer_result = writer.join().expect("writer thread");
+            release_reader.send(()).expect("release stale reader");
+            let reader_result = reader.join().expect("reader thread");
+            (reader_result, writer_result)
+        } else {
+            release_reader.send(()).expect("release serialized reader");
+            let reader_result = reader.join().expect("reader thread");
+            let writer_result = writer.join().expect("writer thread");
+            (reader_result, writer_result)
+        };
+
+        assert!(
+            !writer_acquired_before_reader_release,
+            "a local persist acquired state after an authoritative read but before comparison"
+        );
+        reader_result.expect("authoritative read remains consistent with local state");
+        writer_result.expect("serialized local persistence advances the sealed head");
+        assert_eq!(
+            runtime
+                .latest()
+                .expect("authoritative successor")
+                .checkpoint_sequence,
+            2
+        );
+        assert_eq!(
+            outbox
+                .finalized_cursor_high_water()
+                .expect("advanced finalized cursor"),
+            Some(cursor(13))
+        );
+    }
+
+    #[test]
+    fn expired_checkpoint_admission_is_busy_without_poisoning_the_worker() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x67));
+        let outbox = open_sealed_with_deadline(&directory, runtime).expect("sealed outbox");
+        let worker = &outbox
+            .checkpoint_authority
+            .as_ref()
+            .expect("checkpoint authority")
+            .worker;
+        let expired = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .expect("past instant");
+
+        assert!(matches!(
+            worker.acquire_call(expired),
+            Err(ProviderIngestOutboxError::CheckpointProviderBusy)
+        ));
+        assert!(!worker.timed_out.load(Ordering::Acquire));
+        outbox
+            .aggregate_counts()
+            .expect("expired admission must not poison later checkpoint reads");
     }
 
     #[test]
@@ -6419,6 +7331,24 @@ mod tests {
         finalized_cursor: ProviderIngestFinalizedCursorV1,
         seed: u8,
     ) -> SignedTransaction {
+        signed_completion_for_at_with_policy(
+            provider_id,
+            order_id,
+            completion_epoch,
+            finalized_cursor,
+            seed,
+            signer_policy(1),
+        )
+    }
+
+    fn signed_completion_for_at_with_policy(
+        provider_id: [u8; 32],
+        order_id: [u8; 32],
+        completion_epoch: u64,
+        finalized_cursor: ProviderIngestFinalizedCursorV1,
+        seed: u8,
+        completion_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    ) -> SignedTransaction {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
         let provider_owner = AccountId::new(key.public_key().clone());
         let mut builder = TransactionBuilder::new(
@@ -6432,7 +7362,7 @@ mod tests {
             completion_epoch,
             expected_authority: ProviderIngestCompletionAuthorityV1::new(
                 provider_owner,
-                signer_policy(1),
+                completion_signer_policy,
             ),
             expected_assignment_revision: 1,
             finalized_anchor: ProviderIngestFinalizedAnchorV1 {
@@ -6470,6 +7400,23 @@ mod tests {
             completion_epoch,
             finalized_cursor,
             seed,
+        )
+    }
+
+    fn signed_completion_with_policy_at(
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        completion_epoch: u64,
+        finalized_cursor: ProviderIngestFinalizedCursorV1,
+        seed: u8,
+        completion_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    ) -> SignedTransaction {
+        signed_completion_for_at_with_policy(
+            authorization.provider_id(),
+            authorization.order_id(),
+            completion_epoch,
+            finalized_cursor,
+            seed,
+            completion_signer_policy,
         )
     }
 
@@ -6542,7 +7489,7 @@ mod tests {
         let StoredProviderIngestStateV1::LocalStored { completion, .. } = &entry.state else {
             panic!("job must be locally stored");
         };
-        completion.clone()
+        completion.as_ref().clone()
     }
 
     fn begin_submission(
@@ -6657,13 +7604,13 @@ mod tests {
         }
         .is_valid();
 
-        assert!(VALID);
-        assert!(!ZERO_POLICY_ID);
-        assert!(!ZERO_REVISION);
-        assert!(!ZERO_POLICY_DIGEST);
-        assert!(!REVISION_ONE_WITH_PREDECESSOR);
-        assert!(!SUCCESSOR_WITHOUT_PREDECESSOR);
-        assert!(!SUCCESSOR_WITH_ZERO_PREDECESSOR);
+        const _: [(); 7] = [(); VALID as usize
+            + (!ZERO_POLICY_ID) as usize
+            + (!ZERO_REVISION) as usize
+            + (!ZERO_POLICY_DIGEST) as usize
+            + (!REVISION_ONE_WITH_PREDECESSOR) as usize
+            + (!SUCCESSOR_WITHOUT_PREDECESSOR) as usize
+            + (!SUCCESSOR_WITH_ZERO_PREDECESSOR) as usize];
 
         let mut sparse_policy = ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0; 32],
@@ -6741,7 +7688,21 @@ mod tests {
     fn policy_bounds_worst_case_checkpoint_capacity() {
         let defaults = ProviderIngestOutboxPolicyV1::default();
         assert_eq!(defaults.max_active_entries, 128);
+        assert_eq!(defaults.checkpoint_operation_timeout_ms, 30_000);
         defaults.validate().expect("default capacity fits");
+
+        let mut invalid_checkpoint_deadline = policy();
+        invalid_checkpoint_deadline.checkpoint_operation_timeout_ms = 0;
+        assert_eq!(
+            invalid_checkpoint_deadline.validate(),
+            Err(ProviderIngestOutboxError::InvalidPolicy)
+        );
+        invalid_checkpoint_deadline.checkpoint_operation_timeout_ms =
+            PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1 + 1;
+        assert_eq!(
+            invalid_checkpoint_deadline.validate(),
+            Err(ProviderIngestOutboxError::InvalidPolicy)
+        );
 
         let mut exact = policy();
         exact.max_active_entries = 1;
@@ -7633,12 +8594,9 @@ mod tests {
         for order in 1..=3 {
             outbox.enqueue(authorization(order, 7)).unwrap();
         }
-        assert_eq!(
-            outbox.statuses(),
-            Err(ProviderIngestOutboxError::StatusPageRequired)
-        );
         let first = outbox.statuses_page(None, 2).unwrap();
         assert_eq!(first.rows.len(), 2);
+        assert!(first.next_after_job_id.is_some());
         let second = outbox.statuses_page(first.next_after_job_id, 2).unwrap();
         assert_eq!(second.rows.len(), 1);
         assert!(second.next_after_job_id.is_none());
@@ -7855,7 +8813,7 @@ mod tests {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
         outbox.state.lock().unwrap().durability_failure = Some("uncertain".to_owned());
         assert_eq!(
-            outbox.statuses(),
+            outbox.statuses_page(None, 1),
             Err(ProviderIngestOutboxError::DurabilityPoisoned)
         );
         assert_eq!(
@@ -8057,7 +9015,8 @@ mod tests {
         let job_id = authorization.job_id();
         enqueue_and_store_local(&outbox, &authorization, 100);
         observe_finalized(&outbox, cursor(8));
-        let transaction = signed_completion(&authorization, 8, 8);
+        let transaction =
+            signed_completion_with_policy_at(&authorization, 8, cursor(8), 8, signer_policy(2));
         let mut revision_two = completion_context(&transaction, 8, cursor(8));
         revision_two.signer_policy = signer_policy(2);
         let claim = outbox
@@ -8067,32 +9026,34 @@ mod tests {
             .release_completion_signing(&claim, 103, cursor(8))
             .expect("release revision two");
         observe_finalized(&outbox, cursor(9));
-        revision_two.baseline_finalized_cursor = cursor(9);
+        let mut identity_substitution_policy = signer_policy(3);
+        identity_substitution_policy.policy_id = [0xB1; 32];
+        let revision_rollback_policy = signer_policy(1);
+        let mut digest_equivocation_policy = signer_policy(2);
+        digest_equivocation_policy.policy_digest = [0xEE; 32];
+        let mut unchanged_digest_policy = signer_policy(3);
+        unchanged_digest_policy.policy_digest = signer_policy(2).policy_digest;
 
-        let mut identity_substitution = revision_two.clone();
-        identity_substitution.signer_policy.policy_id = [0xB1; 32];
-        identity_substitution.signer_policy.revision = 3;
-        identity_substitution.signer_policy.policy_digest = [3; 32];
-        let mut revision_rollback = revision_two.clone();
-        revision_rollback.signer_policy = signer_policy(1);
-        let mut digest_equivocation = revision_two.clone();
-        digest_equivocation.signer_policy.policy_digest = [0xEE; 32];
-        let mut unchanged_digest = revision_two.clone();
-        unchanged_digest.signer_policy.revision = 3;
-
-        for invalid in [
-            identity_substitution,
-            revision_rollback,
-            digest_equivocation,
-            unchanged_digest,
+        for invalid_policy in [
+            identity_substitution_policy,
+            revision_rollback_policy,
+            digest_equivocation_policy,
+            unchanged_digest_policy,
         ] {
+            let transaction =
+                signed_completion_with_policy_at(&authorization, 8, cursor(9), 8, invalid_policy);
+            let mut invalid = completion_context(&transaction, 8, cursor(9));
+            invalid.signer_policy = invalid_policy;
             assert_eq!(
                 outbox.claim_completion_signing(job_id, invalid, 113),
                 Err(ProviderIngestOutboxError::SignerPolicyRollback)
             );
         }
-        let mut canonical_successor = revision_two;
-        canonical_successor.signer_policy = signer_policy(3);
+        let successor_policy = signer_policy(3);
+        let successor_transaction =
+            signed_completion_with_policy_at(&authorization, 8, cursor(9), 8, successor_policy);
+        let mut canonical_successor = completion_context(&successor_transaction, 8, cursor(9));
+        canonical_successor.signer_policy = successor_policy;
         outbox
             .claim_completion_signing(job_id, canonical_successor, 113)
             .expect("claim canonical strict policy successor");
@@ -8549,15 +9510,24 @@ mod tests {
             );
             if changed_policy == ProviderIngestSignerPolicyObservationV1::Missing {
                 observe_finalized(&outbox, cursor(11));
-                let successor_transaction = signed_completion(&authorization, 11, 8);
-                let same_policy = completion_context(&successor_transaction, 11, cursor(11));
+                let same_policy_transaction = signed_completion(&authorization, 11, 8);
+                let same_policy = completion_context(&same_policy_transaction, 11, cursor(11));
                 assert_eq!(
                     outbox.claim_completion_signing(job_id, same_policy.clone(), 114),
                     Err(ProviderIngestOutboxError::SignerPolicyRollback),
                     "revocation requires a strict policy successor"
                 );
-                let mut strict_successor = same_policy;
-                strict_successor.signer_policy = signer_policy(2);
+                let successor_policy = signer_policy(2);
+                let successor_transaction = signed_completion_with_policy_at(
+                    &authorization,
+                    11,
+                    cursor(11),
+                    8,
+                    successor_policy,
+                );
+                let mut strict_successor =
+                    completion_context(&successor_transaction, 11, cursor(11));
+                strict_successor.signer_policy = successor_policy;
                 outbox
                     .claim_completion_signing(job_id, strict_successor, 114)
                     .expect("strict successor may resume after revocation");
@@ -8732,29 +9702,29 @@ mod tests {
         outbox = ProviderIngestOutbox::open(&path, policy()).expect("restart");
         assert_eq!(stored_completion(&outbox, job_id), quarantined);
         assert_eq!(
-            outbox.expire_absent_exposed_completion(
+            outbox.expire_absent_exposed_completion(ProviderIngestExposedCompletionExpiryV1 {
                 job_id,
-                transaction_hash,
-                Some(&owner),
-                ProviderIngestSignerPolicyObservationV1::Missing,
-                1_000_000,
-                40_000,
-                cursor(10),
-            ),
+                expected_transaction_hash: transaction_hash,
+                current_provider_owner: Some(&owner),
+                current_signer_policy: ProviderIngestSignerPolicyObservationV1::Missing,
+                runtime_now_ms: 1_000_000,
+                finalized_block_time_ms: 40_000,
+                observed_finalized_cursor: cursor(10),
+            }),
             Err(ProviderIngestOutboxError::FinalizedSnapshotConflict)
         );
         assert_eq!(stored_completion(&outbox, job_id), quarantined);
         assert_eq!(
             outbox
-                .expire_absent_exposed_completion(
+                .expire_absent_exposed_completion(ProviderIngestExposedCompletionExpiryV1 {
                     job_id,
-                    transaction_hash,
-                    Some(&owner),
-                    ProviderIngestSignerPolicyObservationV1::Missing,
-                    1_000_000,
-                    20_000,
-                    cursor(10),
-                )
+                    expected_transaction_hash: transaction_hash,
+                    current_provider_owner: Some(&owner),
+                    current_signer_policy: ProviderIngestSignerPolicyObservationV1::Missing,
+                    runtime_now_ms: 1_000_000,
+                    finalized_block_time_ms: 20_000,
+                    observed_finalized_cursor: cursor(10),
+                })
                 .expect("runtime time alone cannot expire"),
             None
         );
@@ -8784,15 +9754,15 @@ mod tests {
             .expect("retain revocation at exact expiry");
         assert_eq!(
             outbox
-                .expire_absent_exposed_completion(
+                .expire_absent_exposed_completion(ProviderIngestExposedCompletionExpiryV1 {
                     job_id,
-                    transaction_hash,
-                    Some(&owner),
-                    ProviderIngestSignerPolicyObservationV1::Missing,
-                    1_000_000,
-                    39_000,
-                    cursor(11),
-                )
+                    expected_transaction_hash: transaction_hash,
+                    current_provider_owner: Some(&owner),
+                    current_signer_policy: ProviderIngestSignerPolicyObservationV1::Missing,
+                    runtime_now_ms: 1_000_000,
+                    finalized_block_time_ms: 39_000,
+                    observed_finalized_cursor: cursor(11),
+                })
                 .expect("exact expiry remains live"),
             None
         );
@@ -8811,15 +9781,15 @@ mod tests {
             .expect("retain revocation beyond expiry");
         assert!(matches!(
             outbox
-                .expire_absent_exposed_completion(
+                .expire_absent_exposed_completion(ProviderIngestExposedCompletionExpiryV1 {
                     job_id,
-                    transaction_hash,
-                    Some(&owner),
-                    ProviderIngestSignerPolicyObservationV1::Missing,
-                    500,
-                    39_001,
-                    cursor(12),
-                )
+                    expected_transaction_hash: transaction_hash,
+                    current_provider_owner: Some(&owner),
+                    current_signer_policy: ProviderIngestSignerPolicyObservationV1::Missing,
+                    runtime_now_ms: 500,
+                    finalized_block_time_ms: 39_001,
+                    observed_finalized_cursor: cursor(12),
+                })
                 .expect("expire quarantined bytes"),
             Some(ProviderIngestRetryOutcomeV1::RetryScheduled { .. })
         ));
@@ -8844,8 +9814,11 @@ mod tests {
             outbox.claim_completion_signing(job_id, same_policy.clone(), 1_000_001),
             Err(ProviderIngestOutboxError::SignerPolicyRollback)
         );
-        let mut successor = same_policy;
-        successor.signer_policy = signer_policy(2);
+        let successor_policy = signer_policy(2);
+        let successor_transaction =
+            signed_completion_with_policy_at(&authorization, 13, cursor(13), 8, successor_policy);
+        let mut successor = completion_context(&successor_transaction, 13, cursor(13));
+        successor.signer_policy = successor_policy;
         outbox
             .claim_completion_signing(job_id, successor, 1_000_001)
             .expect("strict successor resumes after chain-proven expiry");

@@ -18,7 +18,7 @@ use parking_lot::RwLock;
 use tokio::task;
 
 #[derive(Clone)]
-pub(crate) struct SoracloudRuntimeManagerConfig {
+pub struct SoracloudRuntimeManagerConfig {
     pub production_mode: bool,
     pub state_dir: PathBuf,
     pub local_peer_id: Option<String>,
@@ -52,7 +52,7 @@ impl SoracloudRuntimeManagerConfig {
 }
 
 #[derive(Clone)]
-pub(crate) struct QueuedSoracloudRuntimeMutationSink;
+pub struct QueuedSoracloudRuntimeMutationSink;
 
 impl QueuedSoracloudRuntimeMutationSink {
     #[must_use]

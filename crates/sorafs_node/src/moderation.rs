@@ -6,6 +6,7 @@ use std::{
     path::{Component, Path},
 };
 
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::{
     PublicKey,
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
@@ -57,7 +58,6 @@ pub(crate) const MODERATION_QUARANTINE_OBJECT_MAX_PAYLOAD_BYTES_V1: u64 = 32 * 1
 const MODERATION_QUARANTINE_OBJECT_MAX_CHUNKS_V1: usize = 512;
 const MODERATION_QUARANTINE_OBJECT_MAX_CONTENT_TYPE_BYTES_V1: usize = 256;
 const MODERATION_QUARANTINE_OBJECT_MAX_KEY_HANDLE_BYTES_V1: usize = 512;
-const MODERATION_QUARANTINE_KEY_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 const MODERATION_QUARANTINE_OBJECT_MAX_WRAPPED_DEK_BYTES_V1: usize = 64 * 1024;
 const MODERATION_QUARANTINE_OBJECT_AEAD_TAG_BYTES_V1: usize = 16;
 
@@ -1268,10 +1268,12 @@ pub enum ModerationQuarantineObjectError {
     #[error("moderation quarantine object key wrapper qualification failed")]
     KeyWrapperUnqualified,
     /// The configured PKCS#11/KMS wrapping operation failed closed.
-    #[error("moderation quarantine object key operation failed for `{key_id}`")]
+    #[error("moderation quarantine object key operation failed for `{key_id}`: {failure}")]
     KeyWrapping {
         /// Opaque, non-secret PKCS#11/KMS key handle.
         key_id: String,
+        /// Stable payload-free provider failure class.
+        failure: ModerationQuarantineKeyOperationErrorV1,
     },
     /// The requested authenticated plaintext range is invalid.
     #[error(
@@ -1312,14 +1314,12 @@ pub enum ModerationQuarantineObjectError {
 
 impl ModerationQuarantineObjectError {
     /// Construct a stable payload-free key-operation failure.
-    ///
-    /// Runtime PKCS#11/KMS diagnostics are an untrusted redaction boundary.
-    /// The provider detail is therefore scrubbed and discarded before the
-    /// error can reach Debug, Display, persistence, logs, or an HTTP response.
     #[must_use]
-    pub fn redacted_key_operation_failure(key_id: String, provider_detail: String) -> Self {
-        scrub_owned_quarantine_text(provider_detail);
-        Self::KeyWrapping { key_id }
+    pub fn key_operation_failure(
+        key_id: String,
+        failure: ModerationQuarantineKeyOperationErrorV1,
+    ) -> Self {
+        Self::KeyWrapping { key_id, failure }
     }
 }
 
@@ -2977,6 +2977,44 @@ pub enum ModerationQuarantineKeyProviderReadinessErrorV1 {
     Rejected,
 }
 
+/// Stable, payload-free failure classes for quarantine-key operations.
+///
+/// An adapter must classify protected provider diagnostics at its own boundary,
+/// scrub the diagnostic with
+/// [`Self::after_scrubbing_provider_diagnostic`], and expose only one of these
+/// variants. `Unavailable`, `Rejected`, and `StaleOrRevoked` are definitive:
+/// the adapter knows that the requested wrap did not complete.
+/// `Ambiguous` is reserved for a wrap request that may have reached the
+/// provider before transport was lost. The caller must not replay that request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ModerationQuarantineKeyOperationErrorV1 {
+    /// The provider was unreachable before it could accept the operation.
+    #[error("moderation quarantine key operation unavailable")]
+    Unavailable,
+    /// The provider definitively rejected the operation.
+    #[error("moderation quarantine key operation rejected")]
+    Rejected,
+    /// The referenced key or governing provider policy is stale or revoked.
+    #[error("moderation quarantine key or policy is stale or revoked")]
+    StaleOrRevoked,
+    /// A wrap may have completed after dispatch, so replay is unsafe.
+    #[error("moderation quarantine key wrap outcome is ambiguous")]
+    Ambiguous,
+}
+
+impl ModerationQuarantineKeyOperationErrorV1 {
+    /// Scrub one protected provider diagnostic and return this fixed class.
+    ///
+    /// Provider diagnostics may contain credentials, key material, tenant
+    /// identifiers, or private policy detail. This method consumes and
+    /// overwrites that text before it can cross the runtime adapter boundary.
+    #[must_use]
+    pub fn after_scrubbing_provider_diagnostic(self, provider_detail: String) -> Self {
+        scrub_owned_quarantine_text(provider_detail);
+        self
+    }
+}
+
 /// Stable, payload-free quarantine-key provider qualification failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ModerationQuarantineKeyProviderQualificationErrorV1 {
@@ -3125,6 +3163,21 @@ impl ModerationQuarantineKeyProviderBindingV1 {
 /// `qualification` must fail for unavailable, revoked, stale, substituted, or
 /// test-marked adapters, and its revision or digest must change whenever the
 /// public adapter/key policy changes.
+///
+/// Wrapping is treated as mutating for retry purposes. An implementation must
+/// not retry after dispatch when it cannot prove whether the provider completed
+/// the request; it returns
+/// [`ModerationQuarantineKeyOperationErrorV1::Ambiguous`] instead. The object
+/// runtime never retries a wrap. Failed sealing discards its fresh DEK; failed
+/// rewrapping leaves the authoritative envelope unchanged and requires external
+/// reconciliation before another attempt. No ambiguous provider result is
+/// persisted as a completed envelope.
+///
+/// Unwrapping is read-only and idempotent for an exact key id, context digest,
+/// and wrapped DEK. Implementations must not return `Ambiguous` from
+/// [`Self::unwrap_dek`]; transport uncertainty is `Unavailable` and may be
+/// retried safely at a higher read boundary. The object runtime itself performs
+/// each unwrap at most once per invocation.
 pub trait ModerationQuarantineKeyWrapper: Send + Sync + std::fmt::Debug {
     /// Return the stable, non-secret deployment handle for this provider.
     fn provider_handle(&self) -> &str;
@@ -3141,7 +3194,11 @@ pub trait ModerationQuarantineKeyWrapper: Send + Sync + std::fmt::Debug {
     fn active_key_id(&self) -> &str;
 
     /// Wrap one freshly generated 256-bit DEK for durable storage.
-    fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String>;
+    fn wrap_dek(
+        &self,
+        context_digest: [u8; 32],
+        dek: &[u8; 32],
+    ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1>;
 
     /// Unwrap one DEK using the exact key handle persisted in its envelope.
     fn unwrap_dek(
@@ -3149,43 +3206,27 @@ pub trait ModerationQuarantineKeyWrapper: Send + Sync + std::fmt::Debug {
         key_id: &str,
         context_digest: [u8; 32],
         wrapped_dek: &[u8],
-    ) -> Result<[u8; 32], String>;
+    ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1>;
 }
 
 fn validate_moderation_quarantine_key_provider_handle(
     handle: &str,
     configured: bool,
 ) -> Result<(), ModerationQuarantineKeyProviderQualificationErrorV1> {
-    if handle.is_empty()
-        || handle.len() > MODERATION_QUARANTINE_KEY_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(if configured {
+    validate_production_runtime_handle(handle).map_err(|error| match (configured, error) {
+        (true, ProductionRuntimeHandleError::InvalidSyntax) => {
             ModerationQuarantineKeyProviderQualificationErrorV1::InvalidConfiguredHandle
-        } else {
+        }
+        (false, ProductionRuntimeHandleError::InvalidSyntax) => {
             ModerationQuarantineKeyProviderQualificationErrorV1::InvalidProviderHandle
-        });
-    }
-    let lowercase = handle.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
-        return Err(if configured {
+        }
+        (true, ProductionRuntimeHandleError::TestMarked) => {
             ModerationQuarantineKeyProviderQualificationErrorV1::TestMarkedConfiguredHandle
-        } else {
+        }
+        (false, ProductionRuntimeHandleError::TestMarked) => {
             ModerationQuarantineKeyProviderQualificationErrorV1::TestMarkedProviderHandle
-        });
-    }
-    Ok(())
+        }
+    })
 }
 
 fn map_moderation_quarantine_key_provider_qualification_error(
@@ -3376,12 +3417,9 @@ pub(crate) fn seal_moderation_quarantine_object(
     let wrapped_dek = key_wrapper
         .wrap_dek(moderation_quarantine_wrap_context_digest(&header)?, &dek.0)
         .map(ModerationQuarantineWrappedDek)
-        .map_err(|message| {
-            ModerationQuarantineObjectError::redacted_key_operation_failure(
-                wrapping_key_id.clone(),
-                message,
-            )
-        });
+        .map_err(|failure| {
+            ModerationQuarantineObjectError::key_operation_failure(wrapping_key_id.clone(), failure)
+        })?;
     key_provider_binding
         .revalidate(key_wrapper)
         .map_err(map_moderation_quarantine_key_provider_qualification_error)?;
@@ -3390,7 +3428,6 @@ pub(crate) fn seal_moderation_quarantine_object(
     if revalidated_key_id != wrapping_key_id {
         return Err(ModerationQuarantineObjectError::KeyWrapperUnqualified);
     }
-    let wrapped_dek = wrapped_dek?;
     validate_wrapped_dek(&wrapped_dek.0)?;
     let wrapped_dek = wrapped_dek.into_vec();
     let encryptor =
@@ -3530,16 +3567,15 @@ pub(crate) fn open_moderation_quarantine_object_range(
             &envelope.wrapped_dek,
         )
         .map(ModerationQuarantineDek)
-        .map_err(|message| {
-            ModerationQuarantineObjectError::redacted_key_operation_failure(
+        .map_err(|failure| {
+            ModerationQuarantineObjectError::key_operation_failure(
                 envelope.wrapping_key_id.clone(),
-                message,
+                failure,
             )
-        });
+        })?;
     key_provider_binding
         .revalidate(key_wrapper)
         .map_err(map_moderation_quarantine_key_provider_qualification_error)?;
-    let dek = dek?;
     let decryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&dek.0)
         .map_err(|_| authentication_failed(envelope.quarantine_id))?;
     let output_len = usize::try_from(range.end - range.start).map_err(|_| {
@@ -3629,16 +3665,15 @@ pub(crate) fn rewrap_moderation_quarantine_object(
     let dek = current_wrapper
         .unwrap_dek(&envelope.wrapping_key_id, context, &envelope.wrapped_dek)
         .map(ModerationQuarantineDek)
-        .map_err(|message| {
-            ModerationQuarantineObjectError::redacted_key_operation_failure(
+        .map_err(|failure| {
+            ModerationQuarantineObjectError::key_operation_failure(
                 envelope.wrapping_key_id.clone(),
-                message,
+                failure,
             )
-        });
+        })?;
     current_key_provider_binding
         .revalidate(current_wrapper)
         .map_err(map_moderation_quarantine_key_provider_qualification_error)?;
-    let dek = dek?;
     authenticate_moderation_quarantine_ciphertext(envelope, &dek.0)?;
     replacement_key_provider_binding
         .revalidate(replacement_wrapper)
@@ -3647,12 +3682,12 @@ pub(crate) fn rewrap_moderation_quarantine_object(
     let replacement_wrapped_dek = replacement_wrapper
         .wrap_dek(context, &dek.0)
         .map(ModerationQuarantineWrappedDek)
-        .map_err(|message| {
-            ModerationQuarantineObjectError::redacted_key_operation_failure(
+        .map_err(|failure| {
+            ModerationQuarantineObjectError::key_operation_failure(
                 replacement_key_id.clone(),
-                message,
+                failure,
             )
-        });
+        })?;
     replacement_key_provider_binding
         .revalidate(replacement_wrapper)
         .map_err(map_moderation_quarantine_key_provider_qualification_error)?;
@@ -3661,7 +3696,6 @@ pub(crate) fn rewrap_moderation_quarantine_object(
     if revalidated_replacement_key_id != replacement_key_id {
         return Err(ModerationQuarantineObjectError::KeyWrapperUnqualified);
     }
-    let replacement_wrapped_dek = replacement_wrapped_dek?;
     validate_wrapped_dek(&replacement_wrapped_dek.0)?;
     let replacement_wrapped_dek = replacement_wrapped_dek.into_vec();
     let mut replacement = envelope.clone();
@@ -5206,7 +5240,11 @@ mod tests {
             &self.key_id
         }
 
-        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+        fn wrap_dek(
+            &self,
+            context_digest: [u8; 32],
+            dek: &[u8; 32],
+        ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             let mut nonce_hasher = blake3::Hasher::new_keyed(&self.wrapping_key);
             nonce_hasher.update(b"sorafs.moderation.test-key-wrapper.nonce.v1");
             nonce_hasher.update(self.key_id.as_bytes());
@@ -5214,9 +5252,15 @@ mod tests {
             let digest = nonce_hasher.finalize();
             let nonce = &digest.as_bytes()[..12];
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.wrapping_key)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .encrypt(nonce, context_digest.as_slice(), dek.as_slice())
-                .map_err(|error| error.to_string())
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })
         }
 
         fn unwrap_dek(
@@ -5224,9 +5268,9 @@ mod tests {
             key_id: &str,
             context_digest: [u8; 32],
             wrapped_dek: &[u8],
-        ) -> Result<[u8; 32], String> {
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             if key_id != self.key_id {
-                return Err("unknown wrapping key handle".to_owned());
+                return Err(ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked);
             }
             let mut nonce_hasher = blake3::Hasher::new_keyed(&self.wrapping_key);
             nonce_hasher.update(b"sorafs.moderation.test-key-wrapper.nonce.v1");
@@ -5235,12 +5279,18 @@ mod tests {
             let digest = nonce_hasher.finalize();
             let nonce = &digest.as_bytes()[..12];
             let plaintext = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.wrapping_key)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .decrypt(nonce, context_digest.as_slice(), wrapped_dek)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?;
             plaintext
                 .try_into()
-                .map_err(|_| "unwrapped DEK is not 32 bytes".to_owned())
+                .map_err(|_| ModerationQuarantineKeyOperationErrorV1::Rejected)
         }
     }
 
@@ -5333,7 +5383,11 @@ mod tests {
             self.inner.active_key_id()
         }
 
-        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+        fn wrap_dek(
+            &self,
+            context_digest: [u8; 32],
+            dek: &[u8; 32],
+        ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             let output = self.inner.wrap_dek(context_digest, dek);
             if self.trigger == QualificationDriftTrigger::Wrap {
                 self.drift_qualification();
@@ -5346,7 +5400,7 @@ mod tests {
             key_id: &str,
             context_digest: [u8; 32],
             wrapped_dek: &[u8],
-        ) -> Result<[u8; 32], String> {
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             let output = self.inner.unwrap_dek(key_id, context_digest, wrapped_dek);
             if self.trigger == QualificationDriftTrigger::Unwrap {
                 self.drift_qualification();
@@ -5399,7 +5453,11 @@ mod tests {
             }
         }
 
-        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+        fn wrap_dek(
+            &self,
+            context_digest: [u8; 32],
+            dek: &[u8; 32],
+        ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             self.use_replacement
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             self.replacement.wrap_dek(context_digest, dek)
@@ -5410,7 +5468,7 @@ mod tests {
             key_id: &str,
             context_digest: [u8; 32],
             wrapped_dek: &[u8],
-        ) -> Result<[u8; 32], String> {
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             if key_id == self.original.active_key_id() {
                 self.original
                     .unwrap_dek(key_id, context_digest, wrapped_dek)
@@ -5444,8 +5502,13 @@ mod tests {
             "pkcs11:test/redacted-provider-error"
         }
 
-        fn wrap_dek(&self, _context_digest: [u8; 32], _dek: &[u8; 32]) -> Result<Vec<u8>, String> {
-            Err(SECRET_PROVIDER_ERROR_SENTINEL.to_owned())
+        fn wrap_dek(
+            &self,
+            _context_digest: [u8; 32],
+            _dek: &[u8; 32],
+        ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
+            Err(ModerationQuarantineKeyOperationErrorV1::Ambiguous
+                .after_scrubbing_provider_diagnostic(SECRET_PROVIDER_ERROR_SENTINEL.to_owned()))
         }
 
         fn unwrap_dek(
@@ -5453,8 +5516,68 @@ mod tests {
             _key_id: &str,
             _context_digest: [u8; 32],
             _wrapped_dek: &[u8],
-        ) -> Result<[u8; 32], String> {
-            Err(SECRET_PROVIDER_ERROR_SENTINEL.to_owned())
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
+            Err(ModerationQuarantineKeyOperationErrorV1::Rejected
+                .after_scrubbing_provider_diagnostic(SECRET_PROVIDER_ERROR_SENTINEL.to_owned()))
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingOperationThenStaleWrapper {
+        qualification_calls: std::sync::atomic::AtomicU64,
+        failure: ModerationQuarantineKeyOperationErrorV1,
+    }
+
+    impl FailingOperationThenStaleWrapper {
+        fn new(failure: ModerationQuarantineKeyOperationErrorV1) -> Self {
+            Self {
+                qualification_calls: std::sync::atomic::AtomicU64::new(0),
+                failure,
+            }
+        }
+    }
+
+    impl ModerationQuarantineKeyWrapper for FailingOperationThenStaleWrapper {
+        fn provider_handle(&self) -> &str {
+            TEST_QUARANTINE_KEY_PROVIDER_HANDLE
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationQuarantineKeyProviderQualificationV1,
+            ModerationQuarantineKeyProviderReadinessErrorV1,
+        > {
+            if self
+                .qualification_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                Ok(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION)
+            } else {
+                Err(ModerationQuarantineKeyProviderReadinessErrorV1::Rejected)
+            }
+        }
+
+        fn active_key_id(&self) -> &str {
+            "pkcs11:test/failure-before-requalification"
+        }
+
+        fn wrap_dek(
+            &self,
+            _context_digest: [u8; 32],
+            _dek: &[u8; 32],
+        ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
+            Err(self.failure)
+        }
+
+        fn unwrap_dek(
+            &self,
+            _key_id: &str,
+            _context_digest: [u8; 32],
+            _wrapped_dek: &[u8],
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
+            Err(self.failure)
         }
     }
 
@@ -5836,6 +5959,35 @@ mod tests {
     }
 
     #[test]
+    fn moderation_quarantine_provider_handles_use_canonical_production_grammar() {
+        for handle in [
+            "kms://sorafs/moderation/quarantine-primary",
+            "hsm://sorafs/moderation/quarantine-primary",
+        ] {
+            assert_eq!(
+                validate_moderation_quarantine_key_provider_handle(handle, true),
+                Ok(())
+            );
+        }
+        for handle in [
+            "kms://sorafs/moderation/operator@quarantine",
+            "kms://sorafs/moderation/quarantine?token",
+            "kms://sorafs/moderation/quarantine#fragment",
+            "kms://sorafs/moderation/%71uarantine",
+            "kms://sorafs/moderation/quarantine\\primary",
+        ] {
+            assert_eq!(
+                validate_moderation_quarantine_key_provider_handle(handle, true),
+                Err(ModerationQuarantineKeyProviderQualificationErrorV1::InvalidConfiguredHandle)
+            );
+            assert_eq!(
+                validate_moderation_quarantine_key_provider_handle(handle, false),
+                Err(ModerationQuarantineKeyProviderQualificationErrorV1::InvalidProviderHandle)
+            );
+        }
+    }
+
+    #[test]
     fn moderation_quarantine_key_provider_rejects_test_markers_and_zero_qualification() {
         assert_eq!(
             ModerationQuarantineKeyProviderBindingV1::try_new(
@@ -6087,6 +6239,116 @@ mod tests {
     }
 
     #[test]
+    fn moderation_quarantine_key_operation_errors_are_stable_and_payload_free() {
+        let cases = [
+            (
+                ModerationQuarantineKeyOperationErrorV1::Unavailable,
+                "moderation quarantine key operation unavailable",
+            ),
+            (
+                ModerationQuarantineKeyOperationErrorV1::Rejected,
+                "moderation quarantine key operation rejected",
+            ),
+            (
+                ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked,
+                "moderation quarantine key or policy is stale or revoked",
+            ),
+            (
+                ModerationQuarantineKeyOperationErrorV1::Ambiguous,
+                "moderation quarantine key wrap outcome is ambiguous",
+            ),
+        ];
+
+        for (failure, expected_display) in cases {
+            let failure = failure
+                .after_scrubbing_provider_diagnostic(SECRET_PROVIDER_ERROR_SENTINEL.to_owned());
+            assert_eq!(failure.to_string(), expected_display);
+            for rendered in [failure.to_string(), format!("{failure:?}")] {
+                assert!(!rendered.contains(SECRET_PROVIDER_ERROR_SENTINEL));
+                assert!(!rendered.contains("PIN"));
+            }
+            assert!(matches!(
+                ModerationQuarantineObjectError::key_operation_failure(
+                    "kms:production/moderation/quarantine".to_owned(),
+                    failure,
+                ),
+                ModerationQuarantineObjectError::KeyWrapping {
+                    failure: mapped,
+                    ..
+                } if mapped == failure
+            ));
+        }
+    }
+
+    #[test]
+    fn key_operation_failure_is_not_masked_by_post_call_requalification() {
+        let binding = test_key_provider_binding();
+        let wrap_failure = FailingOperationThenStaleWrapper::new(
+            ModerationQuarantineKeyOperationErrorV1::Ambiguous,
+        );
+        let error = seal_moderation_quarantine_object(
+            ModerationQuarantineObjectInput {
+                quarantine_id: [0x4F; 16],
+                payload: b"operation-error-ordering".to_vec(),
+                captured_at_unix: 1_800_000_499,
+                content_type: None,
+                notes: None,
+            },
+            &binding,
+            &wrap_failure,
+        )
+        .expect_err("ambiguous wrap must fail before a second qualification");
+        assert!(matches!(
+            error,
+            ModerationQuarantineObjectError::KeyWrapping {
+                failure: ModerationQuarantineKeyOperationErrorV1::Ambiguous,
+                ..
+            }
+        ));
+        assert_eq!(
+            wrap_failure
+                .qualification_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+
+        let working_wrapper = test_key_wrapper(0x6F, "kms:test/error-ordering-source");
+        let (record, bytes) = seal_moderation_quarantine_object(
+            ModerationQuarantineObjectInput {
+                quarantine_id: [0x4E; 16],
+                payload: b"operation-error-ordering".to_vec(),
+                captured_at_unix: 1_800_000_498,
+                content_type: None,
+                notes: None,
+            },
+            &binding,
+            &working_wrapper,
+        )
+        .expect("seal ordering fixture");
+        let envelope: ModerationQuarantineObjectEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode ordering fixture");
+        let unwrap_failure = FailingOperationThenStaleWrapper::new(
+            ModerationQuarantineKeyOperationErrorV1::Unavailable,
+        );
+        let error =
+            open_moderation_quarantine_object(&envelope, &record, &binding, &unwrap_failure)
+                .expect_err("unavailable unwrap must fail before a second qualification");
+        assert!(matches!(
+            error,
+            ModerationQuarantineObjectError::KeyWrapping {
+                failure: ModerationQuarantineKeyOperationErrorV1::Unavailable,
+                ..
+            }
+        ));
+        assert_eq!(
+            unwrap_failure
+                .qualification_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[test]
     fn moderation_quarantine_plaintext_and_provider_errors_are_redacted() {
         let binding = test_key_provider_binding();
         let secret_payload = b"SECRET-QUARANTINE-PLAINTEXT-DO-NOT-EMIT";
@@ -6139,7 +6401,10 @@ mod tests {
         .expect_err("provider failure must fail closed");
         assert!(matches!(
             &error,
-            ModerationQuarantineObjectError::KeyWrapping { .. }
+            ModerationQuarantineObjectError::KeyWrapping {
+                failure: ModerationQuarantineKeyOperationErrorV1::Ambiguous,
+                ..
+            }
         ));
         for rendered in [error.to_string(), format!("{error:?}")] {
             assert!(!rendered.contains(SECRET_PROVIDER_ERROR_SENTINEL));
@@ -6168,6 +6433,13 @@ mod tests {
             &FailingQuarantineKeyWrapper,
         )
         .expect_err("unwrap provider failure must fail closed");
+        assert!(matches!(
+            &error,
+            ModerationQuarantineObjectError::KeyWrapping {
+                failure: ModerationQuarantineKeyOperationErrorV1::Rejected,
+                ..
+            }
+        ));
         for rendered in [error.to_string(), format!("{error:?}")] {
             assert!(!rendered.contains(SECRET_PROVIDER_ERROR_SENTINEL));
             assert!(!rendered.contains("PIN"));

@@ -46,7 +46,7 @@ final class AccountAddressFixtureTests: XCTestCase {
         if let info = try address.multisigPolicyInfo(), vector.category == "multisig" {
             try assertMultisig(vector, info: info)
         } else if vector.category == "multisig" {
-            throw XCTSkip("\(vector.caseId): multisig controller unavailable in this environment")
+            XCTFail("\(vector.caseId): multisig controller unavailable in this environment")
         }
     }
 

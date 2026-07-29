@@ -778,6 +778,10 @@ pub(crate) struct V2ApplyService {
     state: Arc<State>,
     queue: Arc<Queue>,
     kura: Arc<Kura>,
+    provider_ingest_finalized_archive:
+        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
+    reputation_finalized_archive:
+        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     chain_id: ChainId,
     block_cadence: Duration,
     genesis_account: AccountId,
@@ -787,6 +791,10 @@ pub(crate) struct V2ApplyService {
     fail_after_kura_store: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     fail_after_wsv_checkpoint: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_after_provider_ingest_archive_capture: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_after_reputation_archive_capture: std::sync::atomic::AtomicBool,
 }
 
 impl V2ApplyService {
@@ -901,6 +909,12 @@ impl V2ApplyService {
         state: Arc<State>,
         queue: Arc<Queue>,
         kura: Arc<Kura>,
+        provider_ingest_finalized_archive: Option<
+            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
+        >,
+        reputation_finalized_archive: Option<
+            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
+        >,
         chain_id: ChainId,
         block_cadence: Duration,
         genesis_account: AccountId,
@@ -911,6 +925,8 @@ impl V2ApplyService {
             state,
             queue,
             kura,
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
             chain_id,
             block_cadence,
             genesis_account,
@@ -920,6 +936,10 @@ impl V2ApplyService {
             fail_after_kura_store: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             fail_after_wsv_checkpoint: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_after_provider_ingest_archive_capture: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_after_reputation_archive_capture: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1342,7 +1362,7 @@ impl V2ApplyService {
         // Kura owns the first irreversible commit point. This call is also the
         // idempotent repair boundary for a durable block whose merge
         // association was interrupted after its block fsync.
-        if store_block {
+        let pre_wsv_finality_receipt = if store_block {
             self.kura.store_block(committed_block.clone())?;
             #[cfg(test)]
             if self
@@ -1351,7 +1371,7 @@ impl V2ApplyService {
             {
                 return Err(V2ApplyError::InjectedCrashAfterKuraStore);
             }
-            let _ = self
+            let receipt = self
                 .kura
                 .store_v2_finality_artifact(artifact)
                 .map_err(|error| {
@@ -1360,7 +1380,10 @@ impl V2ApplyService {
                         &error,
                     )
                 })?;
-        }
+            Some(receipt)
+        } else {
+            None
+        };
         let commit_topology = context
             .roster
             .iter()
@@ -1382,6 +1405,9 @@ impl V2ApplyService {
         // manifest. A crash before State commit replays the overlay and must
         // reproduce this byte-identical hash; a crash after State commit can
         // authenticate the already-applied tip directly.
+        #[cfg(test)]
+        let staged_snapshot_bytes_for_test = store_block
+            .then(|| crate::snapshot::canonical_staged_state_snapshot_bytes(&state_block));
         if store_block {
             let staged_checkpoint =
                 crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
@@ -1398,9 +1424,69 @@ impl V2ApplyService {
         {
             return Err(V2ApplyError::InjectedCrashAfterWsvCheckpoint);
         }
+        // TODO: Add authenticated prefix compaction/retention before treating
+        // this bounded append-only archive as suitable for indefinite node
+        // operation. Reaching either configured archive ceiling intentionally
+        // remains a fail-stop committed-recovery condition.
+        if let Some(archive) = self.provider_ingest_finalized_archive.as_ref() {
+            let receipt = pre_wsv_finality_receipt.as_ref().ok_or_else(|| {
+                V2ApplyError::CommittedRecoveryRequired {
+                    stage: "provider-ingest finalized archive capture",
+                    detail: "the exact pre-WSV Kura finality receipt is unavailable".to_owned(),
+                }
+            })?;
+            archive
+                .capture_kura_authenticated_view(&state_block, self.kura.as_ref(), receipt)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "provider-ingest finalized archive capture",
+                        &error,
+                    )
+                })?;
+            #[cfg(test)]
+            if self
+                .fail_after_provider_ingest_archive_capture
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(V2ApplyError::InjectedCrashAfterProviderIngestArchiveCapture);
+            }
+        }
+        if let Some(archive) = self.reputation_finalized_archive.as_ref() {
+            let receipt = pre_wsv_finality_receipt.as_ref().ok_or_else(|| {
+                V2ApplyError::CommittedRecoveryRequired {
+                    stage: "reputation finalized archive capture",
+                    detail: "the exact pre-WSV Kura finality receipt is unavailable".to_owned(),
+                }
+            })?;
+            archive
+                .capture_kura_authenticated_view(&state_block, self.kura.as_ref(), receipt)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "reputation finalized archive capture",
+                        &error,
+                    )
+                })?;
+            #[cfg(test)]
+            if self
+                .fail_after_reputation_archive_capture
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(V2ApplyError::InjectedCrashAfterReputationArchiveCapture);
+            }
+        }
         state_block.commit().map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
+        #[cfg(test)]
+        if let Some(staged) = staged_snapshot_bytes_for_test {
+            let committed = crate::snapshot::canonical_state_snapshot_bytes(self.state.as_ref());
+            if staged != committed {
+                panic!(
+                    "staged/committed WSV snapshot mismatch after block commit: {}",
+                    snapshot_mismatch_context(&staged, &committed),
+                );
+            }
+        }
 
         self.queue.remove_committed_hashes(
             committed_block
@@ -1449,6 +1535,18 @@ impl V2ApplyService {
     #[cfg(test)]
     fn fail_after_wsv_checkpoint_for_test(&self) {
         self.fail_after_wsv_checkpoint
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn fail_after_provider_ingest_archive_capture_for_test(&self) {
+        self.fail_after_provider_ingest_archive_capture
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn fail_after_reputation_archive_capture_for_test(&self) {
+        self.fail_after_reputation_archive_capture
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -1544,6 +1642,16 @@ pub(crate) enum V2ApplyError {
     #[cfg(test)]
     #[error("injected crash after staged WSV checkpoint and before WSV commit")]
     InjectedCrashAfterWsvCheckpoint,
+    /// Test-only crash boundary after the immutable provider-ingest
+    /// projection is durable and before live State publication.
+    #[cfg(test)]
+    #[error("injected crash after provider-ingest archive capture and before WSV commit")]
+    InjectedCrashAfterProviderIngestArchiveCapture,
+    /// Test-only crash boundary after the immutable reputation projection is
+    /// durable and before live State publication.
+    #[cfg(test)]
+    #[error("injected crash after reputation archive capture and before WSV commit")]
+    InjectedCrashAfterReputationArchiveCapture,
 }
 
 impl V2ApplyError {
@@ -1561,7 +1669,10 @@ impl V2ApplyError {
             Self::Kura(error) => error.requires_restart_recovery(),
             Self::CommittedRecoveryRequired { .. } => true,
             #[cfg(test)]
-            Self::InjectedCrashAfterKuraStore | Self::InjectedCrashAfterWsvCheckpoint => true,
+            Self::InjectedCrashAfterKuraStore
+            | Self::InjectedCrashAfterWsvCheckpoint
+            | Self::InjectedCrashAfterProviderIngestArchiveCapture
+            | Self::InjectedCrashAfterReputationArchiveCapture => true,
             _ => false,
         }
     }
@@ -1577,12 +1688,32 @@ impl BodyValidationError for V2ApplyError {
 }
 
 #[cfg(test)]
+fn snapshot_mismatch_context(staged: &[u8], committed: &[u8]) -> String {
+    let first_difference = staged
+        .iter()
+        .zip(committed)
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| staged.len().min(committed.len()));
+    let context_start = first_difference.saturating_sub(256);
+    let staged_end = first_difference.saturating_add(768).min(staged.len());
+    let committed_end = first_difference.saturating_add(768).min(committed.len());
+    format!(
+        "first_difference={first_difference}, staged_len={}, committed_len={}, \
+         staged_context={:?}, committed_context={:?}",
+        staged.len(),
+        committed.len(),
+        String::from_utf8_lossy(&staged[context_start..staged_end]),
+        String::from_utf8_lossy(&committed[context_start..committed_end]),
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use std::{
         borrow::Cow,
         collections::BTreeMap,
         num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
+        sync::{Arc, Mutex},
     };
 
     use crate::sumeragi::v2_core::{EventTag, Generation};
@@ -1591,6 +1722,7 @@ mod tests {
     use iroha_data_model::{
         Level, Registrable, ValidationFail,
         account::Account,
+        asset::{AssetDefinition, AssetDefinitionId},
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
             consensus::{
@@ -1600,13 +1732,31 @@ mod tests {
             consensus_v2 as wire,
         },
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
-        isi::{Log, SetParameter},
+        domain::{Domain, DomainId},
+        isi::{
+            InstructionBox, Log, SetParameter,
+            sorafs::{
+                SetSorafsOrderbookPolicy, SetSorafsReputationJournalAuthorityPolicy,
+                SetSorafsReservePolicy,
+            },
+        },
         merge::{
             MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
         },
         nexus::{DataSpaceId, LaneId, LaneStorageProfile, LaneVisibility},
         parameter::{Parameter, system::SumeragiParameter},
         peer::PeerId,
+        permission::{Permission, Permissions},
+        sorafs::{
+            orderbook::{ORDERBOOK_ADMISSION_POLICY_VERSION_V1, OrderbookAdmissionPolicyV1},
+            reputation::{
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+                REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1, ReputationJournalAuthorityPolicyV1,
+            },
+            reserve::{
+                RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyV1, ReservePolicyV1,
+            },
+        },
         transaction::{
             TransactionBuilder, TransactionEntrypoint,
             error::TransactionRejectionReason,
@@ -1614,8 +1764,12 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
+    use iroha_executor_data_model::permission::sorafs::{
+        CanManageSorafsReputationJournalPolicy, CanSetSorafsPricing, CanSetSorafsReservePolicy,
+    };
     use mv::storage::StorageReadOnly;
     use norito::codec::Encode as _;
+    use sorafs_manifest::XorQuantity;
 
     use super::*;
     use crate::{
@@ -1624,7 +1778,22 @@ mod tests {
             GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
         },
         lane_consensus::LaneExecutablePayloadV1,
-        query::store::LiveQueryStore,
+        query::{
+            provider_ingest_finalized::{
+                ProviderIngestFinalizedArchiveBoundsV1,
+                ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveV1,
+            },
+            reputation_finalized::{
+                ReputationFinalizedArchive, ReputationFinalizedArchiveBounds,
+                ReputationFinalizedArchiveError, ReputationFinalizedArchiveInsertOutcome,
+                ReputationFinalizedArchiveRetentionApprovalRecordV1,
+                ReputationFinalizedArchiveRetentionAuthorityBindingV1,
+                ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
+                ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
+                ReputationFinalizedArchiveRetentionAuthorityV1,
+            },
+            store::LiveQueryStore,
+        },
         queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
         state::{World, WorldReadOnly},
         sumeragi::{
@@ -1635,6 +1804,110 @@ mod tests {
         },
         tx::AcceptedTransaction,
     };
+
+    #[derive(Debug)]
+    struct ReputationRetentionAuthorityForTest {
+        qualification: ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
+        latest: Mutex<Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>>,
+        armed_load_failure_after_cas: Mutex<Option<usize>>,
+        load_failure_countdown: Mutex<Option<usize>>,
+    }
+
+    impl ReputationRetentionAuthorityForTest {
+        fn new() -> Self {
+            Self {
+                qualification: ReputationFinalizedArchiveRetentionAuthorityQualificationV1::new(
+                    7, [0xA7; 32],
+                ),
+                latest: Mutex::new(None),
+                armed_load_failure_after_cas: Mutex::new(None),
+                load_failure_countdown: Mutex::new(None),
+            }
+        }
+
+        fn binding(&self) -> ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
+            ReputationFinalizedArchiveRetentionAuthorityBindingV1::try_new(
+                self.handle().to_owned(),
+                self.qualification.revision(),
+                self.qualification.policy_digest(),
+            )
+            .expect("valid reputation retention authority binding")
+        }
+
+        fn fail_nth_load_after_next_cas(&self, load_number: usize) {
+            assert!(load_number != 0);
+            *self
+                .armed_load_failure_after_cas
+                .lock()
+                .expect("lock armed retention failure") = Some(load_number);
+        }
+    }
+
+    impl ReputationFinalizedArchiveRetentionAuthorityV1 for ReputationRetentionAuthorityForTest {
+        fn handle(&self) -> &str {
+            "sealed.reputation.archive.v2-apply"
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
+            ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
+        > {
+            Ok(self.qualification)
+        }
+
+        fn load_latest(
+            &self,
+            _chain_id: &ChainId,
+        ) -> Result<
+            Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
+            ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
+        > {
+            let mut countdown = self
+                .load_failure_countdown
+                .lock()
+                .expect("lock retention load failure");
+            if let Some(remaining) = *countdown {
+                if remaining == 1 {
+                    *countdown = None;
+                    return Err(
+                        ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::Unavailable,
+                    );
+                }
+                *countdown = Some(remaining - 1);
+            }
+            drop(countdown);
+            Ok(self.latest.lock().expect("lock retention approval").clone())
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            _chain_id: &ChainId,
+            expected_revision: Option<[u8; 32]>,
+            next: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
+        ) -> Result<(), ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1> {
+            let mut latest = self.latest.lock().expect("lock retention approval");
+            if latest
+                .as_ref()
+                .map(ReputationFinalizedArchiveRetentionApprovalRecordV1::revision)
+                != expected_revision
+            {
+                return Err(ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::Rejected);
+            }
+            *latest = Some(next.clone());
+            let armed = self
+                .armed_load_failure_after_cas
+                .lock()
+                .expect("lock armed retention failure")
+                .take();
+            *self
+                .load_failure_countdown
+                .lock()
+                .expect("lock retention load failure") = armed;
+            Ok(())
+        }
+    }
 
     #[test]
     fn restart_recovery_classification_distinguishes_commit_boundaries() {
@@ -1678,6 +1951,118 @@ mod tests {
         kura: Arc<Kura>,
         body_root: tempfile::TempDir,
         genesis_key: KeyPair,
+        custody_account: AccountId,
+        treasury_account: AccountId,
+        include_projection_policies: bool,
+    }
+
+    fn direct_archive_tempdir() -> tempfile::TempDir {
+        let root = std::env::current_dir().expect("resolve direct archive test root");
+        tempfile::tempdir_in(root).expect("create direct archive test directory")
+    }
+
+    fn provider_ingest_archive_bounds(
+        max_record_bytes: u64,
+        max_total_bytes: u64,
+    ) -> ProviderIngestFinalizedArchiveBoundsV1 {
+        ProviderIngestFinalizedArchiveBoundsV1::try_new(
+            max_record_bytes,
+            16,
+            max_total_bytes,
+            16,
+            16,
+            64,
+            16,
+        )
+        .expect("valid provider-ingest archive bounds")
+    }
+
+    fn fixture_reserve_asset_definition() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("sorafs", "universal").expect("valid fixture settlement domain"),
+            "xor".parse().expect("valid fixture settlement asset name"),
+        )
+    }
+
+    fn fixture_orderbook_policy(authority: &AccountId) -> OrderbookAdmissionPolicyV1 {
+        OrderbookAdmissionPolicyV1 {
+            version: ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            market_id: [0xA5; 32],
+            matcher_authority: authority.clone(),
+            settlement_authority: authority.clone(),
+            paused: false,
+            min_order_gib: 2,
+            max_order_gib: 1_024,
+            price_tick_micro_xor: 10,
+            max_maker_fee_bps: 100,
+            max_taker_fee_bps: 200,
+            max_order_lifetime_secs: 3_600,
+            max_receipt_age_secs: 300,
+            max_clock_skew_secs: 5,
+            max_receipt_bytes: 1_024,
+            max_receipts_per_channel: 2,
+        }
+    }
+
+    fn fixture_reserve_policy(
+        authority: &AccountId,
+        custody_account: AccountId,
+        treasury_account: AccountId,
+    ) -> ReserveAuthorityPolicyV1 {
+        ReserveAuthorityPolicyV1 {
+            version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            economics: ReservePolicyV1::default(),
+            asset_definition: fixture_reserve_asset_definition(),
+            custody_account,
+            treasury_account,
+            operations_authority: authority.clone(),
+            decision_authority: authority.clone(),
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: XorQuantity::try_from_micro(1_000_000_000)
+                .expect("valid fixture debt ceiling"),
+            max_pending_movements_per_provider: 4,
+            max_open_appeals_per_provider: 2,
+        }
+    }
+
+    fn fixture_world(
+        transaction_authority: &AccountId,
+        custody_account: &AccountId,
+        treasury_account: &AccountId,
+        include_projection_policies: bool,
+    ) -> World {
+        let reserve_asset_definition = fixture_reserve_asset_definition();
+        let reserve_domain =
+            Domain::new(reserve_asset_definition.domain().clone()).build(transaction_authority);
+        let reserve_asset = AssetDefinition::numeric(reserve_asset_definition)
+            .with_name("XOR".to_owned())
+            .build(transaction_authority);
+        let mut world = World::with_assets(
+            [reserve_domain],
+            [
+                Account::new(transaction_authority.clone()).build(transaction_authority),
+                Account::new(custody_account.clone()).build(custody_account),
+                Account::new(treasury_account.clone()).build(treasury_account),
+            ],
+            [reserve_asset],
+            [],
+            [],
+        );
+        if include_projection_policies {
+            let mut authority_permissions = Permissions::new();
+            authority_permissions.insert(Permission::from(CanManageSorafsReputationJournalPolicy));
+            authority_permissions.insert(Permission::from(CanSetSorafsPricing));
+            authority_permissions.insert(Permission::from(CanSetSorafsReservePolicy));
+            world
+                .account_permissions
+                .insert(transaction_authority.clone(), authority_permissions);
+        }
+        world
     }
 
     fn install_fixture_validator_authority(
@@ -1779,6 +2164,14 @@ mod tests {
         }
 
         fn new_with_lane_payload(include_lane_payload: bool) -> Self {
+            Self::new_with_options(include_lane_payload, false)
+        }
+
+        fn new_with_reputation_archive() -> Self {
+            Self::new_with_options(false, true)
+        }
+
+        fn new_with_options(include_lane_payload: bool, include_projection_policies: bool) -> Self {
             let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
             let mut keys = (1_u8..=4)
                 .map(|seed| {
@@ -1789,6 +2182,10 @@ mod tests {
             keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let transaction_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
                 .expect("deterministic transaction key");
+            let custody_key = KeyPair::try_from_seed(vec![0xE8; 32], Algorithm::Ed25519)
+                .expect("deterministic custody key");
+            let treasury_key = KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::Ed25519)
+                .expect("deterministic treasury key");
             let roster = keys
                 .iter()
                 .map(|key| wire::ValidatorPower {
@@ -1823,10 +2220,13 @@ mod tests {
 
             let kura = Kura::blank_kura_for_testing();
             let transaction_authority = AccountId::new(transaction_key.public_key().clone());
-            let world = World::with(
-                [],
-                [Account::new(transaction_authority.clone()).build(&transaction_authority)],
-                [],
+            let custody_account = AccountId::new(custody_key.public_key().clone());
+            let treasury_account = AccountId::new(treasury_key.public_key().clone());
+            let world = fixture_world(
+                &transaction_authority,
+                &custody_account,
+                &treasury_account,
+                include_projection_policies,
             );
             let state = Arc::new(State::new_with_chain_for_testing(
                 world,
@@ -1857,6 +2257,8 @@ mod tests {
                 Arc::clone(&state),
                 Arc::clone(&queue),
                 Arc::clone(&kura),
+                None,
+                None,
                 chain_id.clone(),
                 Duration::from_secs(1),
                 transaction_authority.clone(),
@@ -1909,15 +2311,43 @@ mod tests {
                         .expect("sign valid genesis fixture body")
                         .canonical_resultless_proposal()
                 };
+            let reputation_policy = ReputationJournalAuthorityPolicyV1 {
+                version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+                revision: 1,
+                predecessor_policy_digest: None,
+                por_recorder_authority: transaction_authority.clone(),
+                dispute_recorder_authority: transaction_authority.clone(),
+                token_recorder_authority: transaction_authority.clone(),
+                max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
+            };
+            let transaction_instructions = || {
+                let mut instructions = vec![InstructionBox::from(SetParameter::new(
+                    Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)),
+                ))];
+                if include_projection_policies {
+                    instructions.push(InstructionBox::from(
+                        SetSorafsReputationJournalAuthorityPolicy::new(reputation_policy.clone()),
+                    ));
+                    instructions.push(InstructionBox::from(SetSorafsOrderbookPolicy::new(
+                        fixture_orderbook_policy(&transaction_authority),
+                    )));
+                    instructions.push(InstructionBox::from(SetSorafsReservePolicy::new(
+                        fixture_reserve_policy(
+                            &transaction_authority,
+                            custody_account.clone(),
+                            treasury_account.clone(),
+                        ),
+                    )));
+                }
+                instructions
+            };
             let body = if include_lane_payload {
                 let transaction = TransactionBuilder::new(
                     chain_id.clone(),
-                    transaction_authority,
+                    transaction_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
-                .with_instructions([SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::MaxClockDriftMs(100),
-                ))])
+                .with_instructions(transaction_instructions())
                 .sign(transaction_key.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
                 let routing_plan = queue
@@ -1947,12 +2377,10 @@ mod tests {
             } else {
                 let transaction = TransactionBuilder::new(
                     chain_id.clone(),
-                    transaction_authority,
+                    transaction_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
-                .with_instructions([SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::MaxClockDriftMs(100),
-                ))])
+                .with_instructions(transaction_instructions())
                 .sign(transaction_key.private_key());
                 build_genesis_body(transaction, None)
             };
@@ -2044,6 +2472,9 @@ mod tests {
                 kura,
                 body_root,
                 genesis_key: transaction_key,
+                custody_account,
+                treasury_account,
+                include_projection_policies,
             }
         }
 
@@ -2060,7 +2491,12 @@ mod tests {
 
         fn restart_service_from_last_finalized_snapshot(&self) -> (V2ApplyService, Arc<State>) {
             let authority = self.service.genesis_account.clone();
-            let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+            let world = fixture_world(
+                &authority,
+                &self.custody_account,
+                &self.treasury_account,
+                self.include_projection_policies,
+            );
             let state = Arc::new(State::new_with_chain_for_testing(
                 world,
                 Arc::clone(&self.kura),
@@ -2087,6 +2523,8 @@ mod tests {
                 Arc::clone(&state),
                 queue,
                 Arc::clone(&self.kura),
+                self.service.provider_ingest_finalized_archive.clone(),
+                self.service.reputation_finalized_archive.clone(),
                 self.service.chain_id.clone(),
                 self.service.block_cadence,
                 authority,
@@ -2200,6 +2638,211 @@ mod tests {
                     .is_none(),
                 "Sumeragi v2 finality must not populate the legacy roster sidecar"
             );
+        }
+    }
+
+    struct SuccessorApplyFixture {
+        context: wire::HeightContext,
+        body: SignedBlock,
+        task: ApplyTask,
+        _body_root: tempfile::TempDir,
+        store: V2BodyStore,
+    }
+
+    fn build_successor_apply_fixture(fixture: &ApplyFixture) -> SuccessorApplyFixture {
+        assert_eq!(
+            fixture.state.committed_height(),
+            1,
+            "successor fixture requires the committed parent"
+        );
+        let mut context = fixture.context.clone();
+        context.height = 2;
+        context.parent_commit_qc = Some(fixture.task.certificate().clone());
+        context.validate().expect("valid successor height context");
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+
+        let transaction = TransactionBuilder::new(
+            context.chain_id.clone(),
+            fixture.service.genesis_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "reputation retained-capture successor".to_owned(),
+        )])
+        .sign(fixture.genesis_key.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
+        let routing_plan = fixture
+            .service
+            .queue
+            .route_plan_with_state(&accepted, fixture.state.as_ref())
+            .expect("resolve successor transaction route");
+        let leader_index = context.leader(round.view);
+        let route = routing_plan.coordinator_route();
+        let entrypoint_hash = Hash::from(accepted.hash_as_entrypoint());
+        let lane_plan = super::super::lane_planner::prepare_v2_lane_payload_plan(
+            fixture.state.as_ref(),
+            fixture.kura.as_ref(),
+            &context,
+            round.view,
+            &context.roster[usize::try_from(leader_index).expect("successor leader index")]
+                .validator,
+            std::slice::from_ref(&route),
+            std::slice::from_ref(&entrypoint_hash),
+        )
+        .expect("derive canonical successor lane plan");
+        assert!(
+            lane_plan.unavailable_indices.is_empty(),
+            "successor fixture lane must be available"
+        );
+        let execution_context =
+            BlockExecutionContextBundle::new(vec![execution_context_for_routing_plan(
+                transaction.hash_as_entrypoint(),
+                &routing_plan,
+            )])
+            .with_lane_payload_ownerships(lane_plan.ownerships);
+        let creation_time_ms = fixture
+            .body
+            .header()
+            .creation_time()
+            .checked_add(fixture.service.block_cadence)
+            .expect("successor logical time fits Duration")
+            .max(
+                transaction
+                    .creation_time()
+                    .checked_add(Duration::from_millis(1))
+                    .expect("successor transaction floor fits Duration"),
+            )
+            .as_millis()
+            .try_into()
+            .expect("successor creation time fits u64");
+        let mut header = BlockHeader::new(
+            NonZeroU64::new(context.height).expect("non-zero successor height"),
+            Some(fixture.body.hash()),
+            None,
+            None,
+            creation_time_ms,
+            0,
+        );
+        let confidential_features = {
+            let state_view = fixture.state.view();
+            let digest = crate::state::compute_confidential_feature_digest(
+                state_view.world(),
+                &state_view.zk,
+                state_view.sccp_registry.as_ref(),
+                context.height,
+            );
+            (!digest.is_empty()).then_some(digest)
+        };
+        header.set_confidential_features(confidential_features);
+        let proof_policy_bundle = crate::da::active_proof_policy_bundle_at_height(
+            &fixture.state.nexus_snapshot(),
+            context.height,
+        );
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic successor BLS key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let leader = usize::try_from(leader_index).expect("successor leader index");
+        assert_eq!(
+            keys[leader].public_key(),
+            context.roster[leader].validator.public_key(),
+            "successor signer must be the rotating leader"
+        );
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_da_proof_policies(Some(proof_policy_bundle));
+        builder.set_execution_context(Some(execution_context));
+        let body = builder
+            .try_build_with_signature(u64::from(leader_index), keys[leader].private_key())
+            .expect("sign successor proposal")
+            .canonical_resultless_proposal();
+        let canonical_wire = body.encode_wire().expect("encode successor body");
+        let subject = wire::BlockSubject {
+            parent_block_hash: Some(fixture.body.hash()),
+            block_hash: body.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            round,
+            subject,
+            u64::try_from(canonical_wire.len()).expect("successor body length"),
+            std::slice::from_ref(&canonical_wire),
+        )
+        .expect("derive successor payload manifest");
+        let execution_commitment = fixture
+            .service
+            .validate_candidate(&context, &body)
+            .expect("derive successor execution commitment");
+        let mut certificate = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        let preimage = wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signer: 0,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signatures = certificate
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    keys[usize::try_from(*index).expect("successor signer index")].private_key(),
+                    &preimage,
+                )
+                .expect("sign successor Commit vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate successor Commit votes");
+
+        let body_root = tempfile::tempdir().expect("successor body-store directory");
+        let mut store = V2BodyStore::open(body_root.path(), context.clone())
+            .expect("open successor rotating-leader body store");
+        let durable = store
+            .store(manifest, canonical_wire)
+            .expect("persist exact successor body");
+        let validated = store
+            .validate(&durable, |candidate| {
+                fixture.service.validate_candidate(&context, candidate)
+            })
+            .expect("persist successor validation marker");
+        let task = ApplyTask::for_test(
+            2,
+            EventTag::new(2, 0, Generation::new(2)),
+            subject,
+            certificate,
+            validated,
+        );
+        SuccessorApplyFixture {
+            context,
+            body,
+            task,
+            _body_root: body_root,
+            store,
         }
     }
 
@@ -4329,6 +4972,622 @@ mod tests {
                 .execute(&mut reopened)
                 .expect("replay the exact durable tip and publish WSV once");
             fixture.assert_complete();
+        }
+    );
+
+    v2_apply_test!(
+        provider_ingest_archive_failure_after_kura_and_checkpoint_keeps_state_unpublished,
+        {
+            let mut fixture = ApplyFixture::new();
+            let archive_root = direct_archive_tempdir();
+            let archive = Arc::new(
+                ProviderIngestFinalizedArchiveV1::try_open(
+                    archive_root.path(),
+                    provider_ingest_archive_bounds(32, 32),
+                )
+                .expect("open deliberately tiny provider-ingest archive"),
+            );
+            fixture.service.provider_ingest_finalized_archive = Some(Arc::clone(&archive));
+            let mut store = fixture.reopen_body_store();
+
+            let error = fixture
+                .execute(&mut store)
+                .expect_err("provider-ingest capture must exceed the tiny record bound");
+            assert!(
+                matches!(
+                    &error,
+                    V2ApplyError::CommittedRecoveryRequired { stage, .. }
+                        if *stage == "provider-ingest finalized archive capture"
+                ),
+                "unexpected committed recovery classification: {error:?}"
+            );
+            assert!(error.requires_restart_recovery());
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
+            assert!(
+                fixture
+                    .kura
+                    .wsv_checkpoint(1)
+                    .expect("read staged checkpoint")
+                    .is_some(),
+                "WSV checkpoint must precede provider-ingest archive capture"
+            );
+            assert!(
+                fixture
+                    .kura
+                    .v2_finality_artifact(1)
+                    .expect("read durable finality")
+                    .is_some(),
+                "authenticated Kura finality must precede provider-ingest capture"
+            );
+            assert_eq!(
+                fixture.state.committed_height(),
+                0,
+                "provider-ingest archive failure must precede live State publication"
+            );
+            assert!(
+                archive
+                    .activation_floor(&fixture.service.chain_id)
+                    .expect("read empty activation floor")
+                    .is_none()
+            );
+        }
+    );
+
+    v2_apply_test!(
+        provider_ingest_archive_recovery_replays_exact_capture_without_duplicate_generation,
+        {
+            let mut fixture = ApplyFixture::new();
+            let archive_root = direct_archive_tempdir();
+            let archive = Arc::new(
+                ProviderIngestFinalizedArchiveV1::try_open(
+                    archive_root.path(),
+                    provider_ingest_archive_bounds(4 * 1024 * 1024, 64 * 1024 * 1024),
+                )
+                .expect("open provider-ingest archive"),
+            );
+            fixture.service.provider_ingest_finalized_archive = Some(Arc::clone(&archive));
+            fixture
+                .service
+                .fail_after_provider_ingest_archive_capture_for_test();
+            let mut first_store = fixture.reopen_body_store();
+
+            let error = fixture
+                .execute(&mut first_store)
+                .expect_err("inject crash after provider-ingest archive capture");
+            assert!(
+                matches!(
+                    &error,
+                    V2ApplyError::InjectedCrashAfterProviderIngestArchiveCapture
+                ),
+                "unexpected provider-ingest capture result: {error:?}"
+            );
+            assert!(error.requires_restart_recovery());
+            assert_eq!(fixture.state.committed_height(), 0);
+            let generation_after_capture = archive
+                .health_generation()
+                .expect("read first provider-ingest archive generation");
+            let qualification = archive
+                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+                .expect("provider-ingest archive is exact at the durable Kura tip");
+            assert_eq!(qualification.activation_floor().height, 1);
+            assert_eq!(qualification.archive_tip().height, 1);
+            assert_eq!(qualification.kura_tip_height(), 1);
+            assert_eq!(qualification.lag_blocks(), 0);
+            drop(first_store);
+
+            let (restarted_service, restarted_state) =
+                fixture.restart_service_from_last_finalized_snapshot();
+            let mut restarted_store = fixture.reopen_body_store();
+            restarted_service
+                .execute(&fixture.context, &mut restarted_store, &fixture.task)
+                .expect("restart replays the exact provider-ingest capture and publishes WSV");
+            assert_eq!(restarted_state.committed_height(), 1);
+            assert_eq!(
+                archive
+                    .health_generation()
+                    .expect("read replayed provider-ingest archive generation"),
+                generation_after_capture,
+                "an exact replay must not publish another archive generation"
+            );
+
+            let (_, receipt) = restarted_service
+                .kura
+                .v2_finality_artifact_with_receipt(1)
+                .expect("read exact finality receipt")
+                .expect("height-one finality receipt");
+            let restarted_view = restarted_state.query_view();
+            let outcome = archive
+                .capture_kura_authenticated_view(&restarted_view, fixture.kura.as_ref(), &receipt)
+                .expect("same exact provider-ingest committed view is replay-safe");
+            assert_eq!(
+                outcome,
+                ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
+            );
+        }
+    );
+
+    v2_apply_test!(
+        reputation_archive_failure_after_kura_and_checkpoint_keeps_state_unpublished,
+        {
+            let mut fixture = ApplyFixture::new_with_reputation_archive();
+            let archive_root = direct_archive_tempdir();
+            let bounds = ReputationFinalizedArchiveBounds::try_new(32, 16, 32)
+                .expect("valid deliberately tiny archive bounds");
+            let archive = Arc::new(
+                ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
+                    .expect("open tiny archive"),
+            );
+            fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
+            let mut store = fixture.reopen_body_store();
+
+            let error = fixture
+                .execute(&mut store)
+                .expect_err("archive capture must exceed the deliberately tiny bound");
+            assert!(
+                matches!(
+                    &error,
+                    V2ApplyError::CommittedRecoveryRequired { stage, .. }
+                        if *stage == "reputation finalized archive capture"
+                ),
+                "unexpected committed recovery classification: {error:?}"
+            );
+            assert!(error.requires_restart_recovery());
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
+            assert!(
+                fixture
+                    .kura
+                    .wsv_checkpoint(1)
+                    .expect("read staged checkpoint")
+                    .is_some(),
+                "WSV checkpoint must precede archive capture"
+            );
+            assert!(
+                fixture
+                    .kura
+                    .v2_finality_artifact(1)
+                    .expect("read durable finality")
+                    .is_some(),
+                "authenticated Kura finality must precede archive capture"
+            );
+            assert_eq!(
+                fixture.state.committed_height(),
+                0,
+                "archive failure must precede live State publication"
+            );
+            assert!(
+                archive
+                    .activation_floor(&fixture.service.chain_id)
+                    .expect("read empty activation floor")
+                    .is_none()
+            );
+        }
+    );
+
+    v2_apply_test!(
+        crash_after_reputation_archive_capture_precedes_state_block_commit,
+        {
+            let mut fixture = ApplyFixture::new_with_reputation_archive();
+            let archive_root = direct_archive_tempdir();
+            let bounds =
+                ReputationFinalizedArchiveBounds::try_new(4 * 1024 * 1024, 16, 64 * 1024 * 1024)
+                    .expect("valid archive bounds");
+            let archive = Arc::new(
+                ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
+                    .expect("open archive"),
+            );
+            fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
+            fixture
+                .service
+                .fail_after_reputation_archive_capture_for_test();
+            let mut store = fixture.reopen_body_store();
+
+            let error = fixture
+                .execute(&mut store)
+                .expect_err("injected post-capture crash");
+            assert!(
+                matches!(
+                    &error,
+                    V2ApplyError::InjectedCrashAfterReputationArchiveCapture
+                ),
+                "unexpected post-capture result: {error:?}"
+            );
+            assert_eq!(
+                fixture.state.committed_height(),
+                0,
+                "injected archive-boundary crash must precede StateBlock::commit"
+            );
+            let qualification = archive
+                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+                .expect("captured archive is exact at the durable Kura tip");
+            assert_eq!(qualification.activation_floor().height, 1);
+            assert_eq!(qualification.archive_tip().height, 1);
+            assert_eq!(qualification.kura_tip_height(), 1);
+            assert_eq!(qualification.lag_blocks(), 0);
+            assert!(
+                fixture
+                    .kura
+                    .commit_manifest(1)
+                    .expect("read absent post-apply manifest")
+                    .is_none(),
+                "post-apply metadata must remain behind State publication"
+            );
+        }
+    );
+
+    v2_apply_test!(
+        reputation_archive_recovery_is_idempotent_without_skipping_height,
+        {
+            let mut fixture = ApplyFixture::new_with_reputation_archive();
+            let archive_root = direct_archive_tempdir();
+            let bounds =
+                ReputationFinalizedArchiveBounds::try_new(4 * 1024 * 1024, 16, 64 * 1024 * 1024)
+                    .expect("valid archive bounds");
+            let archive = Arc::new(
+                ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
+                    .expect("open archive"),
+            );
+            fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
+            fixture
+                .service
+                .fail_after_reputation_archive_capture_for_test();
+            let mut first_store = fixture.reopen_body_store();
+            let error = fixture
+                .execute(&mut first_store)
+                .expect_err("injected post-capture crash");
+            assert!(
+                matches!(
+                    &error,
+                    V2ApplyError::InjectedCrashAfterReputationArchiveCapture
+                ),
+                "unexpected post-capture result: {error:?}"
+            );
+            let generation_after_capture = archive
+                .health_generation()
+                .expect("read first archive generation");
+            let staged_checkpoint = fixture
+                .kura
+                .wsv_checkpoint(1)
+                .expect("read pre-retry staged checkpoint")
+                .expect("archive-boundary crash retains its staged checkpoint");
+            assert!(
+                fixture
+                    .kura
+                    .commit_manifest(1)
+                    .expect("read pre-retry commit manifest")
+                    .is_none(),
+                "archive-boundary crash must precede commit-manifest publication"
+            );
+            drop(first_store);
+
+            let (restarted_service, restarted_state) =
+                fixture.restart_service_from_last_finalized_snapshot();
+            let mut restarted_store = fixture.reopen_body_store();
+            if let Err(error) =
+                restarted_service.execute(&fixture.context, &mut restarted_store, &fixture.task)
+            {
+                let checkpoint_after_retry = fixture.kura.wsv_checkpoint(1);
+                let manifest_after_retry = fixture.kura.commit_manifest(1);
+                let replay_state_hash =
+                    crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref());
+                panic!(
+                    "exact durable replay reuses the archived height: {error:?}; \
+                     staged_state_hash={:?}; replay_state_hash={replay_state_hash:?}; \
+                     checkpoint_after_retry={checkpoint_after_retry:?}; \
+                     manifest_after_retry={manifest_after_retry:?}",
+                    staged_checkpoint.state_hash(),
+                );
+            }
+            assert_eq!(restarted_state.committed_height(), 1);
+            assert_eq!(
+                archive
+                    .health_generation()
+                    .expect("read replayed archive generation"),
+                generation_after_capture,
+                "an exact replay must not publish a second archive generation"
+            );
+            let projection = archive
+                .latest_at_or_before(&fixture.service.chain_id, 1)
+                .expect("read recovered projection")
+                .expect("height one remains archived");
+            assert_eq!(projection.key.height, 1);
+            let qualification = archive
+                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+                .expect("recovered archive remains contiguous and exact");
+            assert_eq!(qualification.activation_floor().height, 1);
+            assert_eq!(qualification.archive_tip().height, 1);
+
+            let (_, receipt) = restarted_service
+                .kura
+                .v2_finality_artifact_with_receipt(1)
+                .expect("read exact finality receipt")
+                .expect("height one finality receipt");
+            let restarted_view = restarted_state.query_view();
+            let outcome = archive
+                .capture_kura_authenticated_view(&restarted_view, fixture.kura.as_ref(), &receipt)
+                .expect("same exact committed view is replay-safe");
+            assert_eq!(
+                outcome,
+                ReputationFinalizedArchiveInsertOutcome::ExactReplay
+            );
+        }
+    );
+
+    v2_apply_test!(
+        reputation_archive_virtual_base_allows_commit_owned_successor_capture,
+        {
+            let mut fixture = ApplyFixture::new_with_reputation_archive();
+            let archive_root = direct_archive_tempdir();
+            let bounds =
+                ReputationFinalizedArchiveBounds::try_new(4 * 1024 * 1024, 16, 64 * 1024 * 1024)
+                    .expect("valid retained-capture archive bounds");
+            let archive = Arc::new(
+                ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
+                    .expect("open retained-capture archive"),
+            );
+            fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
+
+            let mut parent_store = fixture.reopen_body_store();
+            fixture
+                .execute(&mut parent_store)
+                .expect("commit and archive the retention-floor block");
+            drop(parent_store);
+            let parent = archive
+                .latest_at_or_before(&fixture.service.chain_id, 1)
+                .expect("read retention-floor projection")
+                .expect("height-one archive anchor");
+            let fence = archive
+                .retention_fence_for(&parent.key)
+                .expect("freeze exact authenticated retention fence");
+            let retention_authority = ReputationRetentionAuthorityForTest::new();
+            let retention_binding = retention_authority.binding();
+            let proposal = archive
+                .prepare_kura_authenticated_compaction(&fence, fixture.kura.as_ref())
+                .expect("prepare exact Kura-authenticated checkpoint");
+            let compaction = archive
+                .approve_and_install_kura_authenticated_compaction(
+                    &proposal,
+                    fixture.kura.as_ref(),
+                    &retention_binding,
+                    &retention_authority,
+                )
+                .expect("approve and compact the Kura-authenticated height-one prefix");
+            assert_eq!(compaction.retention_floor(), &parent.key);
+            assert_eq!(
+                compaction.generation(),
+                fence.expected_generation() + 1,
+                "checkpoint-head publication advances the archive generation"
+            );
+            assert_eq!(
+                archive
+                    .retention_floor(&fixture.service.chain_id)
+                    .expect("read active virtual base"),
+                Some(parent.key.clone())
+            );
+
+            let mut successor = build_successor_apply_fixture(&fixture);
+            let completion = match fixture.service.execute(
+                &successor.context,
+                &mut successor.store,
+                &successor.task,
+            ) {
+                Ok(completion) => completion,
+                Err(error) => {
+                    assert!(
+                        !matches!(
+                            &error,
+                            V2ApplyError::CommittedRecoveryRequired { stage, .. }
+                                if *stage == "reputation finalized archive capture"
+                        ),
+                        "retained capture must not degrade to committed recovery: {error:?}"
+                    );
+                    panic!(
+                        "commit-owned H+1 capture failed after virtual-base compaction: {error:?}"
+                    );
+                }
+            };
+            assert_eq!(completion.receipt().height(), 2);
+            assert_eq!(fixture.state.committed_height(), 2);
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 2);
+            assert_eq!(
+                fixture
+                    .kura
+                    .get_durable_block_hash(NonZeroUsize::new(2).expect("height two")),
+                Some(successor.body.hash())
+            );
+            let qualification = archive
+                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+                .expect("qualify retained successor against exact Kura tip");
+            assert_eq!(qualification.activation_floor().height, 1);
+            assert_eq!(qualification.archive_tip().height, 2);
+            assert_eq!(
+                qualification.checkpoint_digest(),
+                Some(compaction.checkpoint_digest())
+            );
+            assert_eq!(qualification.kura_tip_height(), 2);
+            assert_eq!(qualification.lag_blocks(), 0);
+            let generation = archive
+                .health_generation()
+                .expect("read post-successor archive generation");
+
+            drop(successor);
+            fixture.service.reputation_finalized_archive = None;
+            drop(archive);
+            let reopened = ReputationFinalizedArchive::try_open_with_retention_authority(
+                archive_root.path(),
+                bounds,
+                &fixture.service.chain_id,
+                fixture.kura.as_ref(),
+                &retention_binding,
+                &retention_authority,
+            )
+            .expect("reopen compacted successor archive through sealed authority");
+            assert_eq!(
+                reopened
+                    .health_generation()
+                    .expect("read reopened archive generation"),
+                generation
+            );
+            assert_eq!(
+                reopened
+                    .retention_floor(&fixture.service.chain_id)
+                    .expect("read reopened virtual base"),
+                Some(parent.key)
+            );
+            let reopened_qualification = reopened
+                .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+                .expect("reopened archive preserves exact predecessor continuity");
+            assert_eq!(reopened_qualification.archive_tip().height, 2);
+            assert_eq!(
+                reopened_qualification.checkpoint_digest(),
+                Some(compaction.checkpoint_digest())
+            );
+            assert_eq!(reopened_qualification.kura_tip_height(), 2);
+
+            let (_, receipt) = fixture
+                .kura
+                .v2_finality_artifact_with_receipt(2)
+                .expect("read height-two finality receipt")
+                .expect("height-two finality is durable");
+            let view = fixture.state.query_view();
+            assert_eq!(
+                reopened
+                    .capture_kura_authenticated_view(&view, fixture.kura.as_ref(), &receipt)
+                    .expect("replay retained H+1 capture after reopen"),
+                ReputationFinalizedArchiveInsertOutcome::ExactReplay
+            );
+            assert_eq!(
+                reopened
+                    .health_generation()
+                    .expect("exact replay preserves archive generation"),
+                generation
+            );
+        }
+    );
+
+    v2_apply_test!(
+        reputation_retention_restart_recovers_both_cas_publication_boundaries,
+        {
+            for (failed_load_after_cas, checkpoint_was_published) in [(1, false), (3, true)] {
+                let mut fixture = ApplyFixture::new_with_reputation_archive();
+                let archive_root = direct_archive_tempdir();
+                let bounds = ReputationFinalizedArchiveBounds::try_new(
+                    4 * 1024 * 1024,
+                    16,
+                    64 * 1024 * 1024,
+                )
+                .expect("valid retention-recovery archive bounds");
+                let archive = Arc::new(
+                    ReputationFinalizedArchive::try_open(archive_root.path(), bounds)
+                        .expect("open retention-recovery archive"),
+                );
+                fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
+
+                let mut parent_store = fixture.reopen_body_store();
+                fixture
+                    .execute(&mut parent_store)
+                    .expect("commit and archive the retention-floor block");
+                drop(parent_store);
+                let parent = archive
+                    .latest_at_or_before(&fixture.service.chain_id, 1)
+                    .expect("read retention-floor projection")
+                    .expect("height-one archive anchor");
+                let fence = archive
+                    .retention_fence_for(&parent.key)
+                    .expect("freeze exact retention fence");
+                let authority = ReputationRetentionAuthorityForTest::new();
+                let binding = authority.binding();
+                let proposal = archive
+                    .prepare_kura_authenticated_compaction(&fence, fixture.kura.as_ref())
+                    .expect("prepare exact retention proposal");
+                authority.fail_nth_load_after_next_cas(failed_load_after_cas);
+
+                assert!(matches!(
+                    archive.approve_and_install_kura_authenticated_compaction(
+                        &proposal,
+                        fixture.kura.as_ref(),
+                        &binding,
+                        &authority,
+                    ),
+                    Err(ReputationFinalizedArchiveError::RetentionAuthorityCasAmbiguous)
+                ));
+                assert_eq!(
+                    archive
+                        .retention_floor(&fixture.service.chain_id)
+                        .expect("read ambiguous local retention floor"),
+                    checkpoint_was_published.then(|| parent.key.clone())
+                );
+                assert_eq!(
+                    std::fs::read_dir(archive.root().join("anchors"))
+                        .expect("read ambiguous anchor namespace")
+                        .count(),
+                    1,
+                    "no physical anchor may be unlinked before the post-publication readback"
+                );
+                assert_eq!(
+                    std::fs::read_dir(archive.root().join("checkpoints"))
+                        .expect("read ambiguous checkpoint namespace")
+                        .count(),
+                    usize::from(checkpoint_was_published)
+                );
+
+                fixture.service.reputation_finalized_archive = None;
+                drop(archive);
+                let recovered = ReputationFinalizedArchive::try_open_with_retention_authority(
+                    archive_root.path(),
+                    bounds,
+                    &fixture.service.chain_id,
+                    fixture.kura.as_ref(),
+                    &binding,
+                    &authority,
+                )
+                .expect("recover exact externally approved retention state");
+                assert_eq!(
+                    recovered
+                        .retention_floor(&fixture.service.chain_id)
+                        .expect("read recovered retention floor"),
+                    Some(parent.key.clone())
+                );
+                assert_eq!(
+                    std::fs::read_dir(recovered.root().join("anchors"))
+                        .expect("read recovered anchor namespace")
+                        .count(),
+                    0,
+                    "recovery must clean the exact approved physical prefix"
+                );
+                assert_eq!(
+                    std::fs::read_dir(recovered.root().join("checkpoints"))
+                        .expect("read recovered checkpoint namespace")
+                        .count(),
+                    1
+                );
+                let recovered_generation = recovered
+                    .health_generation()
+                    .expect("read recovered archive generation");
+
+                drop(recovered);
+                let reopened = ReputationFinalizedArchive::try_open_with_retention_authority(
+                    archive_root.path(),
+                    bounds,
+                    &fixture.service.chain_id,
+                    fixture.kura.as_ref(),
+                    &binding,
+                    &authority,
+                )
+                .expect("repeat exact retention recovery");
+                assert_eq!(
+                    reopened
+                        .health_generation()
+                        .expect("read replayed archive generation"),
+                    recovered_generation,
+                    "recovery replay must be deterministic"
+                );
+                assert_eq!(
+                    reopened
+                        .retention_floor(&fixture.service.chain_id)
+                        .expect("read replayed retention floor"),
+                    Some(parent.key)
+                );
+            }
         }
     );
 

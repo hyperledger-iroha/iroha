@@ -19,7 +19,7 @@ use iroha_config::parameters::actual::{
 };
 use iroha_core::{
     queue::Queue,
-    state::{State, WorldReadOnly},
+    state::{State, StateView, WorldReadOnly},
     sumeragi::{self, SumeragiHandle},
     tx::AcceptedTransaction,
 };
@@ -35,10 +35,10 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     nexus::{
-        AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceId, FeeSponsorEligibility,
-        FeeSponsorProgramId, FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey,
-        FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE,
-        LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
+        AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceId, FeeSponsorAssetBudget,
+        FeeSponsorEligibility, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
+        FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey,
+        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
@@ -74,7 +74,7 @@ struct DurableRelayWork {
 enum RelayAttemptDecision {
     Deferred,
     Rejected,
-    Ready(LaneRelayEnvelope),
+    Ready(Box<LaneRelayEnvelope>),
 }
 
 #[derive(Clone, Debug, Decode, Encode)]
@@ -93,6 +93,14 @@ struct DurableAllocationWork {
     status: DurableWorkStatus,
     attempts: u32,
     last_height: u64,
+}
+
+struct AllocationCandidatePlanV1<'a> {
+    program_id: &'a FeeSponsorProgramId,
+    program_revision: u64,
+    current_height: u64,
+    expiry_height: u64,
+    routes: &'a [(DataSpaceId, [u8; 32])],
 }
 
 #[derive(Encode)]
@@ -117,7 +125,7 @@ enum DurableWorkStatus {
 }
 
 /// Queue-backed DPN/Nexus fee settlement relay worker.
-pub(crate) struct NexusFeeRelayWorker {
+pub struct NexusFeeRelayWorker {
     config: NexusRelayWorkerConfig,
     state_path: PathBuf,
     chain_id: Arc<ChainId>,
@@ -131,19 +139,47 @@ pub(crate) struct NexusFeeRelayWorker {
     announced_relays: parking_lot::Mutex<BTreeSet<String>>,
 }
 
+/// Node-owned dependencies consumed when constructing the Nexus fee relay worker.
+pub struct NexusFeeRelayWorkerContext {
+    /// Private durable worker-state directory.
+    pub storage_root: PathBuf,
+    /// Chain identity used for internally submitted transactions.
+    pub chain_id: Arc<ChainId>,
+    /// Transaction queue used for ordinary admission.
+    pub queue: Arc<Queue>,
+    /// Committed state used for finalized reads.
+    pub state: Arc<State>,
+    /// Consensus handle used to observe finalized relay work.
+    pub sumeragi: SumeragiHandle,
+    /// Node authority used for internal transactions.
+    pub authority: AccountId,
+    /// Node key used to sign internal transactions.
+    pub key_pair: KeyPair,
+    /// Configured deterministic proof backend.
+    pub fastpq: Fastpq,
+}
+
 impl NexusFeeRelayWorker {
     /// Construct a worker. The optional configured relayer account must match the node key.
-    pub(crate) fn new(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured authority is noncanonical or does
+    /// not match the node authority.
+    pub fn new(
         config: NexusRelayWorkerConfig,
-        storage_root: PathBuf,
-        chain_id: Arc<ChainId>,
-        queue: Arc<Queue>,
-        state: Arc<State>,
-        sumeragi: SumeragiHandle,
-        authority: AccountId,
-        key_pair: KeyPair,
-        fastpq: Fastpq,
+        context: NexusFeeRelayWorkerContext,
     ) -> Result<Self> {
+        let NexusFeeRelayWorkerContext {
+            storage_root,
+            chain_id,
+            queue,
+            state,
+            sumeragi,
+            authority,
+            key_pair,
+            fastpq,
+        } = context;
         if let Some(raw) = config.authority_account_id.as_deref() {
             let configured = parse_canonical_account_id(raw).wrap_err_with(|| {
                 format!("parse nexus.relay_worker.authority_account_id `{raw}`")
@@ -181,7 +217,7 @@ impl NexusFeeRelayWorker {
     }
 
     /// Start the worker reconciliation loop.
-    pub(crate) fn start(self, shutdown_signal: ShutdownSignal) -> Child {
+    pub fn start(self, shutdown_signal: ShutdownSignal) -> Child {
         let worker = Arc::new(self);
         let task = tokio::task::spawn({
             let worker = Arc::clone(&worker);
@@ -321,7 +357,7 @@ impl NexusFeeRelayWorker {
             match prove_lane_relay_envelope(&envelope, expiry_slot, current_height, &self.fastpq) {
                 Ok(proven) => proven,
                 Err(error) => {
-                    self.reject_or_retry_relay(key, envelope, error)?;
+                    self.reject_or_retry_relay(key, envelope, &error)?;
                     return Ok(());
                 }
             };
@@ -354,7 +390,7 @@ impl NexusFeeRelayWorker {
             }
             RelayAttemptDecision::Ready(envelope) => {
                 persist_durable_state(&self.state_path, &durable)?;
-                Ok(Some(envelope))
+                Ok(Some(*envelope))
             }
         }
     }
@@ -396,7 +432,7 @@ impl NexusFeeRelayWorker {
         &self,
         key: &str,
         envelope: LaneRelayEnvelope,
-        error: eyre::Report,
+        error: &eyre::Report,
     ) -> Result<()> {
         let mut durable = self.durable.lock();
         let Some(work) = durable.relays.get_mut(key) else {
@@ -496,7 +532,7 @@ impl NexusFeeRelayWorker {
             }
 
             let key = allocation_work_key(&candidate);
-            let mut work = self.prepare_allocation_work(key.clone(), candidate);
+            let mut work = self.prepare_allocation_work(&key, candidate);
             if self.verified_allocation_for_work(&work)?.is_some() {
                 work.status = DurableWorkStatus::Accepted;
                 work.last_height = current_height;
@@ -592,33 +628,7 @@ impl NexusFeeRelayWorker {
                 continue;
             };
 
-            let has_enrollment = view
-                .world()
-                .fee_sponsor_enrollments()
-                .iter()
-                .any(|(key, _)| &key.program_id == program_id);
-            let mut routes = view
-                .nexus
-                .dataspace_catalog
-                .entries()
-                .iter()
-                .filter_map(|entry| {
-                    let route_default = view.nexus.dataspace_fee_sponsor_program_ids.get(&entry.id)
-                        == Some(program_id);
-                    let eligible = fee_sponsor_route_allocation_eligible(
-                        has_enrollment,
-                        revision.eligibility,
-                        route_default,
-                    );
-                    eligible
-                        .then(|| {
-                            self.manifest_root_for(entry.id)
-                                .map(|root| (entry.id, root))
-                        })
-                        .flatten()
-                })
-                .collect::<Vec<_>>();
-            routes.sort_by_key(|(dataspace_id, _)| *dataspace_id);
+            let routes = self.eligible_allocation_routes(&view, program_id, revision.eligibility);
             if routes.is_empty() {
                 iroha_logger::warn!(
                     program_id = %program_id,
@@ -627,79 +637,129 @@ impl NexusFeeRelayWorker {
                 continue;
             }
 
+            let plan = AllocationCandidatePlanV1 {
+                program_id,
+                program_revision,
+                current_height,
+                expiry_height,
+                routes: &routes,
+            };
             for budget in &revision.asset_budgets {
-                let vault_key = FeeSponsorVaultKey {
-                    program_id: program_id.clone(),
-                    asset_definition_id: budget.asset_definition_id.clone(),
-                };
-                let Some(vault) = view.world().fee_sponsor_vaults().get(&vault_key) else {
-                    continue;
-                };
-                if vault.balance.is_zero() {
-                    continue;
-                }
-                let output_scale = view
-                    .world()
-                    .asset_definitions()
-                    .get(&budget.asset_definition_id)
-                    .and_then(|definition| definition.spec().scale())
-                    .unwrap_or(MAX_DECIMAL_SCALE);
-                let allocations =
-                    partition_fee_sponsor_vault(&vault.balance, routes.len(), output_scale)?;
-                for ((source_dataspace_id, manifest_root), verified_allocation) in
-                    routes.iter().copied().zip(allocations)
-                {
-                    if verified_allocation.is_zero() {
-                        continue;
-                    }
-                    let source_state_root = fee_sponsor_vault_source_state_root(
-                        program_id,
-                        program_revision,
-                        &budget.asset_definition_id,
-                        &vault.balance,
-                        source_dataspace_id,
-                        current_height,
-                    );
-                    let lease_id = fee_sponsor_vault_lease_id(
-                        program_id,
-                        program_revision,
-                        &budget.asset_definition_id,
-                        source_dataspace_id,
-                        current_height,
-                        source_state_root,
-                        expiry_height,
-                    )?;
-                    candidates.push(DurableAllocationWork {
-                        program_id: program_id.clone(),
-                        program_revision,
-                        asset_definition_id: budget.asset_definition_id.clone(),
-                        verified_allocation,
-                        source_dataspace_id,
-                        source_height: current_height,
-                        source_state_root,
-                        expires_at_height: expiry_height,
-                        lease_id,
-                        manifest_root,
-                        proof_blob: None,
-                        status: DurableWorkStatus::Pending,
-                        attempts: 0,
-                        last_height: current_height,
-                    });
-                }
+                candidates.extend(Self::allocation_candidates_for_budget(
+                    &view, &plan, budget,
+                )?);
             }
+        }
+        Ok(candidates)
+    }
+
+    fn eligible_allocation_routes(
+        &self,
+        view: &StateView<'_>,
+        program_id: &FeeSponsorProgramId,
+        eligibility: FeeSponsorEligibility,
+    ) -> Vec<(DataSpaceId, [u8; 32])> {
+        let has_enrollment = view
+            .world()
+            .fee_sponsor_enrollments()
+            .iter()
+            .any(|(key, _)| &key.program_id == program_id);
+        let mut routes = view
+            .nexus
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                let route_default =
+                    view.nexus.dataspace_fee_sponsor_program_ids.get(&entry.id) == Some(program_id);
+                fee_sponsor_route_allocation_eligible(has_enrollment, eligibility, route_default)
+                    .then(|| {
+                        self.manifest_root_for(entry.id)
+                            .map(|root| (entry.id, root))
+                    })
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        routes.sort_by_key(|(dataspace_id, _)| *dataspace_id);
+        routes
+    }
+
+    fn allocation_candidates_for_budget(
+        view: &StateView<'_>,
+        plan: &AllocationCandidatePlanV1<'_>,
+        budget: &FeeSponsorAssetBudget,
+    ) -> Result<Vec<DurableAllocationWork>> {
+        let vault_key = FeeSponsorVaultKey {
+            program_id: plan.program_id.clone(),
+            asset_definition_id: budget.asset_definition_id.clone(),
+        };
+        let Some(vault) = view.world().fee_sponsor_vaults().get(&vault_key) else {
+            return Ok(Vec::new());
+        };
+        if vault.balance.is_zero() {
+            return Ok(Vec::new());
+        }
+        let output_scale = view
+            .world()
+            .asset_definitions()
+            .get(&budget.asset_definition_id)
+            .and_then(|definition| definition.spec().scale())
+            .unwrap_or(MAX_DECIMAL_SCALE);
+        let allocations =
+            partition_fee_sponsor_vault(&vault.balance, plan.routes.len(), output_scale)?;
+        let mut candidates = Vec::new();
+        for ((source_dataspace_id, manifest_root), verified_allocation) in
+            plan.routes.iter().copied().zip(allocations)
+        {
+            if verified_allocation.is_zero() {
+                continue;
+            }
+            let source_state_root = fee_sponsor_vault_source_state_root(
+                plan.program_id,
+                plan.program_revision,
+                &budget.asset_definition_id,
+                &vault.balance,
+                source_dataspace_id,
+                plan.current_height,
+            );
+            let lease_id = fee_sponsor_vault_lease_id(
+                plan.program_id,
+                plan.program_revision,
+                &budget.asset_definition_id,
+                source_dataspace_id,
+                plan.current_height,
+                source_state_root,
+                plan.expiry_height,
+            )?;
+            candidates.push(DurableAllocationWork {
+                program_id: plan.program_id.clone(),
+                program_revision: plan.program_revision,
+                asset_definition_id: budget.asset_definition_id.clone(),
+                verified_allocation,
+                source_dataspace_id,
+                source_height: plan.current_height,
+                source_state_root,
+                expires_at_height: plan.expiry_height,
+                lease_id,
+                manifest_root,
+                proof_blob: None,
+                status: DurableWorkStatus::Pending,
+                attempts: 0,
+                last_height: plan.current_height,
+            });
         }
         Ok(candidates)
     }
 
     fn prepare_allocation_work(
         &self,
-        key: String,
+        key: &str,
         candidate: DurableAllocationWork,
     ) -> DurableAllocationWork {
         self.durable
             .lock()
             .allocations
-            .get(&key)
+            .get(key)
             .filter(|work| {
                 matches!(
                     work.status,
@@ -851,7 +911,7 @@ fn prepare_relay_attempt(
     }
     work.attempts = work.attempts.saturating_add(1);
     work.last_height = current_height;
-    RelayAttemptDecision::Ready(work.envelope.clone())
+    RelayAttemptDecision::Ready(Box::new(work.envelope.clone()))
 }
 
 fn sign_nexus_fee_relay_submission_transaction(
@@ -1171,33 +1231,14 @@ fn prove_fee_sponsor_vault_allocation(
         &[&work.manifest_root],
     );
     let program_text = work.program_id.to_string();
-    let asset_text = work.asset_definition_id.to_string();
-    let binding = AxtFastpqBinding {
-        parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
-        source_dsid: work.source_dataspace_id.as_u64(),
-        source_dataspace: format!("dataspace-{}", work.source_dataspace_id.as_u64()),
-        source_receipt_id: format!("fee-sponsor-vault-{}", hex::encode(work.lease_id.as_ref())),
-        source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
-        claim_type: "authorization".to_owned(),
-        claim_digest: hex::encode(claim_digest.as_ref()),
-        witness_commitment: hex::encode(witness_commitment.as_ref()),
-        policy_commitment: hex::encode(policy_commitment.as_ref()),
-        verified_effect_type: FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE.to_owned(),
-        corridor: format!("fee-sponsor-program:{program_text}"),
-        verifier_id: "fastpq".to_owned(),
-        verifier_version: "v1".to_owned(),
-        target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
-        effect_binding: Some(AxtEffectBinding {
-            destination_domain: None,
-            destination_account_id: Some(work.program_id.sponsor.to_string()),
-            vault_account_id: None,
-            issuance_account_id: None,
-            source_asset_definition_id: Some(asset_text.clone()),
-            destination_asset_definition_id: None,
-            source_amount_i64: None,
-            destination_amount_i64: None,
-        }),
-    };
+    let binding = fee_sponsor_vault_allocation_binding(
+        work,
+        &program_text,
+        &source_tx_commitment,
+        &claim_digest,
+        &witness_commitment,
+        &policy_commitment,
+    );
     let mut batch = transition_batch(
         work.source_dataspace_id,
         work.expires_at_height,
@@ -1244,6 +1285,42 @@ fn prove_fee_sponsor_vault_allocation(
             .wrap_err("encode fee sponsor vault allocation proof envelope")?,
         expiry_slot: Some(work.expires_at_height),
     })
+}
+
+fn fee_sponsor_vault_allocation_binding(
+    work: &DurableAllocationWork,
+    program_text: &str,
+    source_tx_commitment: &Hash,
+    claim_digest: &Hash,
+    witness_commitment: &Hash,
+    policy_commitment: &Hash,
+) -> AxtFastpqBinding {
+    AxtFastpqBinding {
+        parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+        source_dsid: work.source_dataspace_id.as_u64(),
+        source_dataspace: format!("dataspace-{}", work.source_dataspace_id.as_u64()),
+        source_receipt_id: format!("fee-sponsor-vault-{}", hex::encode(work.lease_id.as_ref())),
+        source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+        claim_type: "authorization".to_owned(),
+        claim_digest: hex::encode(claim_digest.as_ref()),
+        witness_commitment: hex::encode(witness_commitment.as_ref()),
+        policy_commitment: hex::encode(policy_commitment.as_ref()),
+        verified_effect_type: FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE.to_owned(),
+        corridor: format!("fee-sponsor-program:{program_text}"),
+        verifier_id: "fastpq".to_owned(),
+        verifier_version: "v1".to_owned(),
+        target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
+        effect_binding: Some(AxtEffectBinding {
+            destination_domain: None,
+            destination_account_id: Some(work.program_id.sponsor.to_string()),
+            vault_account_id: None,
+            issuance_account_id: None,
+            source_asset_definition_id: Some(work.asset_definition_id.to_string()),
+            destination_asset_definition_id: None,
+            source_amount_i64: None,
+            destination_amount_i64: None,
+        }),
+    }
 }
 
 fn transition_batch(
@@ -1432,7 +1509,7 @@ mod tests {
         let RelayAttemptDecision::Ready(ready) = decision else {
             panic!("relay should become retryable at its committed proposal height");
         };
-        assert_eq!(ready, envelope);
+        assert_eq!(*ready, envelope);
         let work = durable.relays.get(&key).expect("durable relay work");
         assert_eq!(work.attempts, 2);
         assert_eq!(work.last_height, proposal_height);
