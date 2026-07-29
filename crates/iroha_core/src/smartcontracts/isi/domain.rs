@@ -10144,7 +10144,7 @@ mod tests {
     }
 
     #[test]
-    fn local_offline_switch_does_not_change_asset_registration_execution() {
+    fn offline_asset_registration_has_no_local_service_switch() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId =
@@ -10175,11 +10175,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.settlement.offline.enabled = false;
-
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
-            .expect("process-local service switches must not affect consensus execution");
+            .expect("offline asset registration is part of unconditional consensus execution");
         assert!(
             tx.world.asset_definition(&definition_id).is_ok(),
             "offline-enabled asset registration must be independent of local service state"
@@ -12114,7 +12112,7 @@ mod tests {
     }
 
     #[test]
-    fn local_offline_switch_does_not_change_metadata_activation_execution() {
+    fn offline_metadata_activation_has_no_local_service_switch() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId =
@@ -12141,14 +12139,12 @@ mod tests {
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register baseline asset definition");
-        tx.settlement.offline.enabled = false;
-
         let metadata_key: Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
             .parse()
             .expect("metadata key");
         SetKeyValue::asset_definition(definition_id.clone(), metadata_key.clone(), Json::new(true))
             .execute(&authority, &mut tx)
-            .expect("process-local service switches must not affect consensus execution");
+            .expect("offline metadata activation is part of unconditional consensus execution");
         assert_eq!(
             tx.world
                 .asset_definition(&definition_id)

@@ -1235,7 +1235,10 @@ pub mod core {
     .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
     .with_cors_options(true);
-    /// Orchestrator-compatible liveness probe.
+    /// Backward-compatible readiness probe.
+    ///
+    /// This route reports the same complete node readiness as `/readyz`.
+    /// Process-only liveness is exposed separately at `/livez`.
     pub const HEALTH: RouteDescriptor = RouteDescriptor::new(
         "protocol.health",
         HttpMethod::Get,
@@ -1246,7 +1249,7 @@ pub mod core {
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_projections(RouteProjections::ALL)
     .with_path_policy(PathPolicy::ProtocolException {
-        reason: "orchestrator health-probe convention",
+        reason: "backward-compatible orchestrator readiness-probe convention",
     })
     .with_implicit_head(true);
     /// Process-only liveness probe. This does not imply protocol readiness.

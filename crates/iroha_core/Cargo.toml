@@ -328,6 +328,10 @@ path = "tests/swift_confidential_unshield_redeem.rs"
 name = "kagemusha_artifact_v4_streaming"
 path = "tests/kagemusha_artifact_v4_streaming.rs"
 
+[[test]]
+name = "offline_readiness_source_contract"
+path = "tests/offline_readiness_source_contract.rs"
+
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]

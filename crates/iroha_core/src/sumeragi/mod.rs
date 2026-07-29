@@ -4536,6 +4536,16 @@ impl SumeragiHandle {
     pub fn restart_required(&self) -> bool {
         self.output_guard.restart_required()
     }
+
+    /// Return whether consensus ingress is open after startup recovery.
+    ///
+    /// The serialized Sumeragi owner publishes this flag only after context and
+    /// safety-WAL replay complete. A fatal output failure closes readiness even
+    /// if the ingress flag has not yet been cleared by the owner.
+    #[must_use]
+    pub fn ingress_ready(&self) -> bool {
+        self.ingress_ready.load(Ordering::Acquire) && !self.restart_required()
+    }
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -5598,10 +5608,12 @@ mod authoritative_runtime_gate_tests {
         let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
         handle.ingress_ready.store(false, Ordering::Release);
 
+        assert!(!handle.ingress_ready());
         assert!(!handle.incoming_block_message(v2_message()));
         assert!(receiver.try_recv().is_none());
 
         handle.ingress_ready.store(true, Ordering::Release);
+        assert!(handle.ingress_ready());
         assert!(handle.incoming_block_message(v2_message()));
         assert!(receiver.try_recv().is_some());
     }

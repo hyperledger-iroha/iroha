@@ -123,6 +123,8 @@ pub mod mmr;
 pub mod native_amx;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
+/// Authoritative deterministic readiness evaluation for mandatory offline cash.
+pub mod offline_readiness;
 /// Oracle host helpers (admission/aggregation plumbing).
 pub mod oracle;
 /// Panic hook suppression helpers shared across crates.

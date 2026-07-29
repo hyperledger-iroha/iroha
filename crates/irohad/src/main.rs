@@ -7693,36 +7693,35 @@ enum MandatoryOfflineStartupReadinessProof {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MandatoryOfflineStartupGate {
-    empty_kura: bool,
+    committed_state_empty: bool,
     proof: Option<MandatoryOfflineStartupReadinessProof>,
 }
 
 impl MandatoryOfflineStartupGate {
-    fn new(durable_height: usize) -> Self {
+    fn new(committed_height: usize) -> Self {
         Self {
-            empty_kura: durable_height == 0,
+            committed_state_empty: committed_height == 0,
             proof: None,
         }
     }
 
     fn record_replayed_committed_state(&mut self) -> Result<(), &'static str> {
-        if self.empty_kura {
-            return Err("empty Kura cannot satisfy readiness from committed replay state");
+        if self.committed_state_empty {
+            return Err("empty committed state cannot satisfy readiness from replay");
         }
         self.record(MandatoryOfflineStartupReadinessProof::ReplayedCommittedState)
     }
 
     fn record_signed_staged_genesis(&mut self) -> Result<(), &'static str> {
-        if !self.empty_kura {
-            return Err("non-empty Kura cannot substitute a staged genesis for replay readiness");
+        if !self.committed_state_empty {
+            return Err(
+                "non-empty committed state cannot substitute staged genesis for replay readiness",
+            );
         }
         self.record(MandatoryOfflineStartupReadinessProof::SignedStagedGenesis)
     }
 
-    fn record(
-        &mut self,
-        proof: MandatoryOfflineStartupReadinessProof,
-    ) -> Result<(), &'static str> {
+    fn record(&mut self, proof: MandatoryOfflineStartupReadinessProof) -> Result<(), &'static str> {
         if self.proof.is_some() {
             return Err("mandatory offline startup readiness was validated more than once");
         }
@@ -7733,9 +7732,48 @@ impl MandatoryOfflineStartupGate {
     fn require_before_runtime_surfaces(
         self,
     ) -> Result<MandatoryOfflineStartupReadinessProof, &'static str> {
-        self.proof.ok_or(
-            "mandatory offline startup readiness was not validated before runtime surfaces",
-        )
+        self.proof
+            .ok_or("mandatory offline startup readiness was not validated before runtime surfaces")
+    }
+}
+
+fn is_authenticated_pending_durable_genesis(
+    committed_height: usize,
+    durable_height: usize,
+    pending_tip_height: Option<u64>,
+) -> bool {
+    committed_height == 0 && durable_height == 1 && pending_tip_height == Some(1)
+}
+
+fn load_mandatory_kagemusha_release_catalog(
+    config: &Config,
+) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
+    match (
+        config
+            .settlement
+            .offline
+            .kagemusha_release_policy_path
+            .as_deref(),
+        config.settlement.offline.kagemusha_artifact_dir.as_deref(),
+    ) {
+        (None, None) => Err(
+            "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory"
+                .to_owned(),
+        ),
+        (Some(policy_path), Some(artifact_dir)) => {
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
+                policy_path,
+                artifact_dir,
+                config.settlement.offline.kagemusha_max_decoded_bytes,
+            )
+            .map_err(|error| {
+                format!("failed to authenticate Kagemusha V4 release catalog: {error}")
+            })
+        }
+        _ => Err(
+            "Kagemusha V4 release policy and artifact directory must be configured together"
+                .to_owned(),
+        ),
     }
 }
 
@@ -7752,7 +7790,7 @@ mod snapshot_read_error_tests {
         let mut fresh = MandatoryOfflineStartupGate::new(0);
         assert_eq!(
             fresh.record_replayed_committed_state(),
-            Err("empty Kura cannot satisfy readiness from committed replay state")
+            Err("empty committed state cannot satisfy readiness from replay")
         );
         fresh
             .record_signed_staged_genesis()
@@ -7767,7 +7805,7 @@ mod snapshot_read_error_tests {
         let mut restart = MandatoryOfflineStartupGate::new(7);
         assert_eq!(
             restart.record_signed_staged_genesis(),
-            Err("non-empty Kura cannot substitute a staged genesis for replay readiness")
+            Err("non-empty committed state cannot substitute staged genesis for replay readiness")
         );
         restart
             .record_replayed_committed_state()
@@ -7812,10 +7850,18 @@ mod snapshot_read_error_tests {
     }
 
     #[test]
+    fn pending_durable_genesis_requires_the_exact_kura_first_crash_shape() {
+        assert!(is_authenticated_pending_durable_genesis(0, 1, Some(1)));
+        assert!(!is_authenticated_pending_durable_genesis(0, 0, None));
+        assert!(!is_authenticated_pending_durable_genesis(1, 1, None));
+        assert!(!is_authenticated_pending_durable_genesis(0, 2, Some(2)));
+    }
+
+    #[test]
     fn runtime_workers_are_source_ordered_after_the_offline_gate() {
         let source = include_str!("main.rs");
         let startup = source
-            .find("pub async fn start_with_runtime_deps")
+            .find("\n    pub async fn start_with_runtime_deps(")
             .expect("runtime startup function");
         let startup = &source[startup..];
         let staged_check = startup
@@ -7824,6 +7870,21 @@ mod snapshot_read_error_tests {
         let runtime_gate = startup
             .find("require_before_runtime_surfaces")
             .expect("typed runtime gate");
+        let release_catalog_auth = startup
+            .find("load_mandatory_kagemusha_release_catalog")
+            .expect("release catalog authentication");
+        let kura_init = startup
+            .find("Kura::new_with_configured_lane_catalog")
+            .expect("Kura initialization");
+        let live_query_start = startup
+            .find("LiveQueryStore::from_config")
+            .expect("live query child startup");
+        let global_event_bridge = startup
+            .find("register_events_sender")
+            .expect("process-global event bridge");
+        let queue_journal = startup
+            .find("install_lane_reservation_journal")
+            .expect("queue journal installation");
         let kura_start = startup.find("Kura::start").expect("Kura worker startup");
         let p2p_start = startup
             .find("IrohaNetwork::start_with_crypto")
@@ -7836,12 +7897,43 @@ mod snapshot_read_error_tests {
             .expect("Torii startup");
 
         assert!(
-            staged_check < runtime_gate
+            release_catalog_auth < kura_init
+                && release_catalog_auth < live_query_start
+                && staged_check < runtime_gate
+                && runtime_gate < global_event_bridge
+                && runtime_gate < queue_journal
                 && runtime_gate < kura_start
                 && kura_start < p2p_start
                 && p2p_start < voting_start
                 && voting_start < torii_start,
             "fresh-genesis validation and the typed gate must precede Kura, P2P, voting, block production, and Torii"
+        );
+    }
+
+    #[test]
+    fn runtime_has_no_disabled_or_empty_offline_catalog_path() {
+        let source = include_str!("main.rs");
+        let startup = source
+            .find("\n    pub async fn start_with_runtime_deps(")
+            .map(|start| &source[start..])
+            .expect("runtime startup function");
+        let catalog_start = startup
+            .find("let kagemusha_release_catalog")
+            .expect("mandatory release catalog load");
+        let catalog_end = startup[catalog_start..]
+            .find("state.set_kagemusha_release_catalog")
+            .map(|offset| catalog_start + offset)
+            .expect("release catalog installation");
+        let catalog_path = &startup[catalog_start..catalog_end];
+
+        assert!(
+            !catalog_path.contains("KagemushaReleaseCatalogV4::empty")
+                && !catalog_path.contains("settlement.offline.enabled"),
+            "runtime startup must authenticate one release catalog without an empty or disabled branch"
+        );
+        assert!(
+            catalog_path.contains("load_mandatory_kagemusha_release_catalog"),
+            "runtime startup must authenticate the reviewed ABI-21/V4 catalog"
         );
     }
 
@@ -8379,6 +8471,12 @@ impl Iroha {
                 "mandatory offline cash configuration failed: {error}"
             ))
         })?;
+        // Authenticate every deployment-owned release artifact before Kura can
+        // create or repair storage and before any supervised child can start.
+        // The catalog is installed into State after snapshot/replay state is
+        // constructed, but its bytes and policy are frozen at this boundary.
+        let kagemusha_release_catalog = load_mandatory_kagemusha_release_catalog(&config)
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
 
         // Log detailed backtraces if a lock-order deadlock occurs so we can
         // diagnose stalls during long-running scenarios (e.g., integration tests).
@@ -8622,41 +8720,6 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
-        let kagemusha_release_catalog = if config.settlement.offline.enabled {
-            match (
-                config
-                    .settlement
-                    .offline
-                    .kagemusha_release_policy_path
-                    .as_deref(),
-                config.settlement.offline.kagemusha_artifact_dir.as_deref(),
-            ) {
-                (None, None) => {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
-                    ));
-                }
-                (Some(policy_path), Some(artifact_dir)) => {
-                    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
-                        policy_path,
-                        artifact_dir,
-                        config.settlement.offline.kagemusha_max_decoded_bytes,
-                    )
-                    .map_err(|error| {
-                        Report::new(StartError::InitKura).attach(format!(
-                            "failed to authenticate Kagemusha V4 release catalog: {error}"
-                        ))
-                    })?
-                }
-                _ => {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "Kagemusha V4 release policy and artifact directory must be configured together",
-                    ));
-                }
-            }
-        } else {
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
-        };
         state.set_kagemusha_release_catalog(kagemusha_release_catalog);
         if !loaded_state_from_snapshot {
             // Snapshot candidates install this at their post-decode,
@@ -8877,14 +8940,14 @@ impl Iroha {
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
         let mut mandatory_offline_startup_gate =
-            MandatoryOfflineStartupGate::new(block_count.0);
-        if block_count.0 > 0 {
+            MandatoryOfflineStartupGate::new(state.committed_height());
+        if state.committed_height() > 0 {
             iroha_torii::ensure_mandatory_offline_startup_readiness(
                 &state,
                 &config.common.chain,
                 &config.settlement.offline,
                 config.torii.kagemusha_commands.as_ref(),
-                &config.nexus.fees.fee_asset_id,
+                &config.common.peer.id,
             )
             .map_err(|error| {
                 Report::new(StartError::InitKura)
@@ -8897,8 +8960,6 @@ impl Iroha {
         // Delay Arc wrapping until after we tweak state with config
 
         let (events_sender, _) = broadcast::channel(config.torii.events_buffer_capacity.get());
-        // Register pipeline events sender for ZK lane reporting
-        iroha_core::pipeline::zk_lane::register_events_sender(events_sender.clone());
         // Kura replay can advance consensus-owned Nexus topology beyond the
         // process configuration (manual lifecycle transactions and autoscale
         // transitions both do so). Seed every admission/manifest surface from
@@ -8996,65 +9057,6 @@ impl Iroha {
                 lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
             }
         }
-        // Independent lane producers transfer FIFO ownership before they
-        // publish any payload bytes. Install and replay that durable ownership
-        // journal before the mandatory ordinary queue-plan journal can reinsert
-        // pending transactions.
-        let lane_reservation_journal_path = config
-            .kura
-            .store_dir
-            .resolve_relative_path()
-            .join("lane_queue_reservations.norito");
-        let lane_reservation_replay = queue
-            .install_lane_reservation_journal(
-                &lane_reservation_journal_path,
-                config.queue.plan_journal_max_bytes,
-            )
-            .map_err(|err| {
-                Report::new(StartError::InitKura).attach(format!(
-                    "failed to open lane queue reservation journal {}: {err}",
-                    lane_reservation_journal_path.display()
-                ))
-            })?;
-        iroha_logger::info!(
-            path = %lane_reservation_journal_path.display(),
-            restored = lane_reservation_replay.restored,
-            awaiting_transaction_replay = lane_reservation_replay.awaiting_transaction_replay,
-            commit_barriers = lane_reservation_replay.commit_barriers,
-            release_barriers = lane_reservation_replay.release_barriers,
-            completed_releases = lane_reservation_replay.completed_releases,
-            "lane queue reservation journal installed"
-        );
-
-        let journal_path = config
-            .kura
-            .store_dir
-            .resolve_relative_path()
-            .join("queue_plan_journal.norito");
-        let replayable = queue
-            .install_plan_journal(&journal_path, config.queue.plan_journal_max_bytes, true)
-            .map_err(|err| {
-                Report::new(StartError::InitKura).attach(format!(
-                    "failed to open queue plan journal {}: {err}",
-                    journal_path.display()
-                ))
-            })?;
-        let replay_summary = queue.replay_plan_journal(&state).map_err(|err| {
-            Report::new(StartError::InitKura).attach(format!(
-                "failed to replay queue plan journal {}: {err}",
-                journal_path.display()
-            ))
-        })?;
-        iroha_logger::info!(
-            path = %journal_path.display(),
-            replayable,
-            records = replay_summary.records,
-            replayed = replay_summary.replayed,
-            tombstoned_committed = replay_summary.tombstoned_committed,
-            tombstoned_expired = replay_summary.tombstoned_expired,
-            "queue plan journal installed"
-        );
-
         let compliance_policy_digest = state
             .lane_compliance_engine()
             .map(|engine| engine.consensus_policy_digest());
@@ -9208,13 +9210,12 @@ impl Iroha {
             }
         }
 
-        if !snapshot_bootstrap_active && let Some(genesis_block) = genesis.as_ref() {
-            // On non-empty storage, avoid re-validating the provided genesis signature.
-            // Instead, ensure the optional provided payload matches the genesis already
-            // persisted at height 1 and continue replay from stored data.
-            if let Some(stored_genesis) = stored_genesis_block.as_ref() {
+        if !snapshot_bootstrap_active {
+            if let (Some(stored_genesis), Some(provided_genesis)) =
+                (stored_genesis_block.as_ref(), genesis.as_ref())
+            {
                 let stored_hash = stored_genesis.0.hash();
-                let provided_hash = genesis_block.0.hash();
+                let provided_hash = provided_genesis.0.hash();
                 if stored_hash != provided_hash {
                     return Err(Report::new(StartError::InitKura).attach(format!(
                         "provided genesis does not match stored genesis (stored={stored_hash}, provided={provided_hash})",
@@ -9224,7 +9225,30 @@ impl Iroha {
                     hash = %stored_hash,
                     "non-empty block store detected; using stored genesis for restart",
                 );
-            } else {
+            }
+
+            // An empty committed State is either a truly fresh chain or the
+            // authenticated Kura-first crash window at durable height one.
+            // Validate the effective signed genesis in a disposable overlay in
+            // both cases. Only a truly fresh chain passes the frozen bootstrap
+            // to Sumeragi; a durable pending tip remains owned by safety-WAL
+            // recovery.
+            if state.committed_height() == 0 {
+                let pending_durable_genesis = is_authenticated_pending_durable_genesis(
+                    state.committed_height(),
+                    block_count.0,
+                    v2_replay_plan.pending_tip_height(),
+                );
+                if block_count.0 > 0 && !pending_durable_genesis {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "empty committed state has no authenticated pending durable genesis tip",
+                    ));
+                }
+                let genesis_block = effective_genesis.ok_or_else(|| {
+                    Report::new(StartError::InitKura).attach(
+                        "empty committed state requires an effective signed genesis for mandatory offline staging",
+                    )
+                })?;
                 let (fresh_mode_tag, _fresh_bls_domain, fresh_caps, fresh_block_cadence_ms) =
                     consensus_caps_from_genesis(
                         genesis_block,
@@ -9234,12 +9258,12 @@ impl Iroha {
                     )
                     .ok_or_else(|| {
                         Report::new(StartError::InitKura).attach(
-                        "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
-                    )
+                            "signed genesis is missing required Sumeragi v2 consensus metadata",
+                        )
                     })?;
                 if fresh_block_cadence_ms != signed_block_cadence_ms {
                     return Err(Report::new(StartError::InitKura).attach(
-                        "fresh signed genesis cadence differs from the authenticated startup context",
+                        "signed genesis cadence differs from the authenticated startup context",
                     ));
                 }
                 verify_genesis_metadata(
@@ -9255,7 +9279,7 @@ impl Iroha {
                     || fresh_caps.proto_version != consensus_caps.proto_version
                 {
                     return Err(Report::new(StartError::InitKura).attach(
-                        "fresh signed genesis consensus metadata differs from the authenticated startup context",
+                        "signed genesis consensus metadata differs from the authenticated startup context",
                     ));
                 }
                 let genesis_account = AccountId::new(effective_genesis_public_key.clone());
@@ -9330,13 +9354,14 @@ impl Iroha {
                                 "failed to freeze staged Sumeragi v2 genesis: {error}"
                             ))
                         })?;
+                        let staged_context_id = frozen_genesis.context().id();
                         iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
                             &valid_block,
                             &state_block,
                             &config.common.chain,
                             &config.settlement.offline,
                             config.torii.kagemusha_commands.as_ref(),
-                            &config.nexus.fees.fee_asset_id,
+                            &config.common.peer.id,
                         )
                         .map_err(|error| {
                             Report::new(StartError::InitKura).attach(format!(
@@ -9344,29 +9369,27 @@ impl Iroha {
                             ))
                         })?;
                         // Dropping StateBlock discards the overlay. Consensus
-                        // must persist a CommitQC decision before applying it.
+                        // must persist a CommitQC decision before applying a
+                        // fresh block; pending-tip recovery owns an already
+                        // durable body.
                         drop(state_block);
                         if state.committed_height() != committed_height_before_staging
                             || block_count.0 != block_count_before_staging.0
                         {
-                            return Err(Report::new(StartError::InitKura).attach(
-                                "fresh genesis staging mutated committed state before consensus",
-                            ));
+                            return Err(Report::new(StartError::InitKura)
+                                .attach("signed genesis staging mutated committed state or Kura"));
                         }
-                        staged_v2_genesis = Some(frozen_genesis);
+                        if block_count.0 == 0 {
+                            staged_v2_genesis = Some(frozen_genesis);
+                        }
                         mandatory_offline_startup_gate
                             .record_signed_staged_genesis()
-                            .map_err(|error| {
-                                Report::new(StartError::InitKura).attach(error)
-                            })?;
+                            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                         iroha_logger::info!(
-                            context_id = ?staged_v2_genesis
-                                .as_ref()
-                                .expect("just staged")
-                                .context()
-                                .id(),
+                            context_id = ?staged_context_id,
+                            pending_durable_genesis,
                             capability = iroha_data_model::offline::KAGEMUSHA_STAGED_OFFLINE_INVARIANT_CAPABILITY_V1,
-                            "Validated mandatory offline cash in signed staged genesis without committing state or Kura"
+                            "Validated mandatory offline cash in signed staged genesis without mutating committed state"
                         );
                     }
                     Err((_failed_block, err)) => {
@@ -9396,6 +9419,70 @@ impl Iroha {
         iroha_logger::info!(
             readiness_boundary = ?offline_startup_readiness_proof,
             "Mandatory offline cash startup gate passed before runtime surfaces"
+        );
+
+        // The process-global event bridge and all queue journals are runtime
+        // surfaces: journal opening may create, repair, or truncate files.
+        // Install them only after the mandatory offline proof is complete.
+        iroha_core::pipeline::zk_lane::register_events_sender(events_sender.clone());
+
+        // Independent lane producers transfer FIFO ownership before they
+        // publish any payload bytes. Install and replay that durable ownership
+        // journal before the mandatory ordinary queue-plan journal can reinsert
+        // pending transactions.
+        let lane_reservation_journal_path = config
+            .kura
+            .store_dir
+            .resolve_relative_path()
+            .join("lane_queue_reservations.norito");
+        let lane_reservation_replay = queue
+            .install_lane_reservation_journal(
+                &lane_reservation_journal_path,
+                config.queue.plan_journal_max_bytes,
+            )
+            .map_err(|err| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to open lane queue reservation journal {}: {err}",
+                    lane_reservation_journal_path.display()
+                ))
+            })?;
+        iroha_logger::info!(
+            path = %lane_reservation_journal_path.display(),
+            restored = lane_reservation_replay.restored,
+            awaiting_transaction_replay = lane_reservation_replay.awaiting_transaction_replay,
+            commit_barriers = lane_reservation_replay.commit_barriers,
+            release_barriers = lane_reservation_replay.release_barriers,
+            completed_releases = lane_reservation_replay.completed_releases,
+            "lane queue reservation journal installed"
+        );
+
+        let journal_path = config
+            .kura
+            .store_dir
+            .resolve_relative_path()
+            .join("queue_plan_journal.norito");
+        let replayable = queue
+            .install_plan_journal(&journal_path, config.queue.plan_journal_max_bytes, true)
+            .map_err(|err| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to open queue plan journal {}: {err}",
+                    journal_path.display()
+                ))
+            })?;
+        let replay_summary = queue.replay_plan_journal(&state).map_err(|err| {
+            Report::new(StartError::InitKura).attach(format!(
+                "failed to replay queue plan journal {}: {err}",
+                journal_path.display()
+            ))
+        })?;
+        iroha_logger::info!(
+            path = %journal_path.display(),
+            replayable,
+            records = replay_summary.records,
+            replayed = replay_summary.replayed,
+            tombstoned_committed = replay_summary.tombstoned_committed,
+            tombstoned_expired = replay_summary.tombstoned_expired,
+            "queue plan journal installed"
         );
 
         // No Kura writer or network worker is live while replay, signed-genesis
@@ -13528,6 +13615,20 @@ fn validate_config_for_check(
     genesis: Option<&GenesisBlock>,
 ) -> ReportResult<(), MainError> {
     validate_config_offline(config).change_context(MainError::Config)?;
+    iroha_torii::ensure_mandatory_offline_configuration_for_chain(
+        &config.common.chain,
+        &config.settlement.offline,
+        config.torii.kagemusha_commands.as_ref(),
+    )
+    .map_err(|error| {
+        Report::new(MainError::Config).attach(format!(
+            "mandatory offline cash configuration failed: {error}"
+        ))
+    })?;
+    // Match runtime startup by authenticating the exact release catalog even
+    // when this joining node has no local genesis yet.
+    let kagemusha_release_catalog = load_mandatory_kagemusha_release_catalog(config)
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
 
     let Some(genesis) = genesis else {
         // A joining node may obtain genesis from its trusted peers. Static
@@ -13587,6 +13688,7 @@ fn validate_config_for_check(
         signed_mode,
         signed_parameters,
         block_cadence_ms,
+        kagemusha_release_catalog,
     )?;
 
     Ok(())
@@ -13661,6 +13763,7 @@ fn validate_genesis_execution_offline(
     signed_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     expected_block_cadence_ms: u64,
+    kagemusha_release_catalog: iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
 ) -> ReportResult<(), MainError> {
     let validation_root = DisposableValidationRoot::create().map_err(|error| {
         Report::new(MainError::Config).attach(format!(
@@ -13712,6 +13815,7 @@ fn validate_genesis_execution_offline(
             "failed to initialize disposable world state for genesis validation: {error}"
         ))
     })?;
+    state.set_kagemusha_release_catalog(kagemusha_release_catalog);
     install_zk_config_before_kura_replay(&mut state, config).change_context(MainError::Config)?;
     apply_state_runtime_config_before_snapshot_auth(&mut state, config);
     apply_state_geometry_config_before_kura_replay(&mut state, config)
@@ -13733,7 +13837,7 @@ fn validate_genesis_execution_offline(
         })?;
     let topology = Topology::new(signed_voters);
     let mut voting_block: Option<VotingBlock> = None;
-    let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
         genesis.0.clone(),
         &topology,
         &config.common.chain,
@@ -13769,6 +13873,19 @@ fn validate_genesis_execution_offline(
     .map_err(|error| {
         Report::new(MainError::Config).attach(format!(
             "failed to freeze staged Sumeragi v2 genesis: {error}"
+        ))
+    })?;
+    iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
+        &valid,
+        &staged,
+        &config.common.chain,
+        &config.settlement.offline,
+        config.torii.kagemusha_commands.as_ref(),
+        &config.common.peer.id,
+    )
+    .map_err(|error| {
+        Report::new(MainError::Config).attach(format!(
+            "mandatory staged offline cash readiness failed: {error}"
         ))
     })?;
 
@@ -17086,20 +17203,25 @@ mod tests {
         }
 
         #[test]
-        fn check_config_offline_executes_available_genesis() {
+        fn check_config_offline_rejects_available_genesis_without_mandatory_offline_state() {
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let fixture = offline_semantic_genesis_fixture([]);
 
-            validate_genesis_execution_offline(
+            let error = validate_genesis_execution_offline(
                 &fixture.config,
                 &fixture.genesis,
                 &fixture.authority,
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
             )
-            .expect("valid genesis should execute in the disposable overlay");
+            .expect_err("genesis without mandatory offline state must fail closed");
+            assert!(
+                format!("{error:?}").contains("mandatory staged offline cash readiness failed"),
+                "unexpected offline readiness error: {error:?}"
+            );
         }
 
         #[test]
@@ -17121,6 +17243,7 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
             )
             .expect_err("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");

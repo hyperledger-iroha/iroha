@@ -27,6 +27,28 @@ def _location_block(server: str, marker: str) -> str:
     return rest[:next_location]
 
 
+def _server_blocks(rendered: str) -> list[str]:
+    """Return balanced top-level nginx server blocks from generated text."""
+
+    blocks: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for line in rendered.splitlines():
+        if not current:
+            if line != "server {":
+                continue
+            current = [line]
+            depth = 1
+            continue
+        current.append(line)
+        depth += line.count("{") - line.count("}")
+        if depth == 0:
+            blocks.append("\n".join(current))
+            current = []
+    assert not current
+    return blocks
+
+
 def _write_roster(
     path: Path,
     *,
@@ -191,6 +213,95 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     assert "client_max_body_size 1g;" in rendered
 
 
+def test_render_edge_nginx_conf_gates_torii_admission_on_readyz() -> None:
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+
+    rendered = MODULE.render_edge_nginx_conf(validators)
+    public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
+        "server_name mon.taira.sora.net;", 1
+    )[0]
+    admission = _location_block(
+        public_server,
+        "location = /.taira-internal/offline-readiness",
+    )
+
+    assert "auth_request /.taira-internal/offline-readiness;" in public_server
+    assert "internal;" in admission
+    assert "auth_request off;" in admission
+    assert "proxy_pass http://taira_validator_1_upstream/readyz;" in admission
+    assert "proxy_method GET;" in admission
+    assert "proxy_pass_request_body off;" in admission
+    assert 'proxy_set_header Authorization "";' in admission
+    assert 'proxy_set_header X-API-Token "";' in admission
+
+    for path in (
+        "/livez",
+        "/health",
+        "/readyz",
+        "/status",
+        "/v1/offline/readiness",
+    ):
+        probe = _location_block(public_server, f"location = {path}")
+        assert "auth_request off;" in probe
+        assert "proxy_pass http://taira_validator_1_upstream;" in probe
+
+    validator_two_server = rendered.split(
+        "server_name taira-validator-2.sora.org;", 1
+    )[1].split("server_name taira-validator-3.sora.org;", 1)[0]
+    assert (
+        "proxy_pass http://taira_validator_2_upstream/readyz;"
+        in validator_two_server
+    )
+    assert (
+        "auth_request /.taira-internal/offline-readiness;"
+        in validator_two_server
+    )
+
+
+def test_every_generated_https_proxy_ingress_has_readiness_admission() -> None:
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+    routes = MODULE.parse_soracloud_alias_routes(
+        ["solswap-indexer.sora=127.0.0.1:8788"]
+    )
+
+    rendered = MODULE.render_edge_nginx_conf(
+        validators,
+        soracloud_alias_routes=routes,
+    )
+    https_proxy_servers = [
+        block
+        for block in _server_blocks(rendered)
+        if "listen 443 ssl;" in block and "proxy_pass " in block
+    ]
+
+    assert len(https_proxy_servers) == 10
+    for block in https_proxy_servers:
+        assert "auth_request /.taira-internal/offline-readiness;" in block
+        admission = _location_block(
+            block,
+            "location = /.taira-internal/offline-readiness",
+        )
+        assert "internal;" in admission
+        assert "auth_request off;" in admission
+        assert "/readyz;" in admission
+
+
 def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> None:
     validators = [
         MODULE.EdgeValidator(
@@ -217,6 +328,9 @@ def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> No
     )[0]
     assert "proxy_set_header Host taira-validator-3.sora.org;" in public_server
     assert "proxy_pass http://taira_validator_3_upstream;" in public_server
+    assert (
+        "proxy_pass http://taira_validator_3_upstream/readyz;" in public_server
+    )
 
 
 def test_render_edge_nginx_conf_rejects_unknown_public_validator() -> None:
@@ -360,6 +474,15 @@ def test_render_edge_nginx_conf_can_pin_soracloud_alias_route_to_service_upstrea
     ) in exact_host_server
     assert "proxy_set_header Host solswap-indexer.sora;" in exact_host_server
     assert "proxy_set_header X-Forwarded-Host $host;" in exact_host_server
+    assert (
+        "auth_request /.taira-internal/offline-readiness;"
+        in exact_host_server
+    )
+    assert (
+        "proxy_pass http://taira_validator_1_upstream/readyz;"
+        in exact_host_server
+    )
+    assert "location = /livez" not in exact_host_server
 
     public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
         "server_name mon.taira.sora.net;", 1
@@ -383,6 +506,24 @@ def test_render_edge_nginx_conf_can_pin_soracloud_alias_route_to_service_upstrea
         1,
     )[1]
     assert "proxy_set_header Host $taira_mon_alias_host;" in wildcard_mon_server
+
+
+def test_public_cors_preflight_is_documented_as_local_and_non_value_moving() -> None:
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+
+    rendered = MODULE.render_edge_nginx_conf(validators)
+
+    assert "A CORS preflight is answered locally without proxying" in rendered
+    assert "if ($request_method = OPTIONS) {" in rendered
+    assert "return 204;" in rendered
 
 
 def test_main_writes_rendered_conf(tmp_path: Path) -> None:

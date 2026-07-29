@@ -1030,7 +1030,6 @@ impl Root {
         Self::derive_default_snapshot_store_dir(&mut snapshot, &kura);
         let dev_telemetry = self.dev_telemetry;
         let parsed_sorafs = self.sorafs.parse(&mut emitter);
-        let kagemusha_commands_configured = self.torii.kagemusha_commands.is_some();
         let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse();
         let telemetry = self.telemetry.map(actual::Telemetry::from);
@@ -1101,13 +1100,6 @@ impl Root {
         let crypto = self.crypto.parse(&mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
-
-        if !settlement.offline.enabled && kagemusha_commands_configured {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig)
-                    .attach("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
-            );
-        }
 
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
@@ -7934,12 +7926,6 @@ pub struct Repo {
 /// User-level Kagemusha escrow and execution configuration.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
-    /// Enable the mandatory Kagemusha offline-cash service for this node profile.
-    #[config(default = "true")]
-    pub enabled: bool,
-    /// Require Kagemusha cash to be escrow-backed.
-    #[config(default = "true")]
-    pub escrow_required: bool,
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
     pub escrow_accounts: BTreeMap<String, String>,
@@ -7955,8 +7941,6 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            enabled: true,
-            escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
@@ -8181,27 +8165,11 @@ impl Offline {
     /// Convert Kagemusha escrow policy into runtime parameters.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Offline {
         let Offline {
-            enabled,
-            escrow_required,
             escrow_accounts,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
             mut kagemusha_max_decoded_bytes,
         } = self;
-        if !enabled
-            && (!escrow_accounts.is_empty()
-                || kagemusha_release_policy_path.is_some()
-                || kagemusha_artifact_dir.is_some())
-        {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.enabled=false requires empty escrow and release configuration",
-            ));
-        }
-        if !escrow_required {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.escrow_required cannot be false; offline cash is mandatory",
-            ));
-        }
         if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
             emitter.emit(
                 Report::new(ParseError::InvalidSettlementConfig).attach(
@@ -8269,8 +8237,6 @@ impl Offline {
             }
         }
         actual::Offline {
-            enabled,
-            escrow_required,
             escrow_accounts: escrow_bindings,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
@@ -14397,7 +14363,7 @@ impl Torii {
             faucet: self.faucet.and_then(|config| config.parse(emitter)),
             kagemusha_commands: self
                 .kagemusha_commands
-                .and_then(ToriiKagemushaCommands::parse),
+                .and_then(|config| config.parse(emitter)),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
             recipient_lookup: self
@@ -16245,9 +16211,6 @@ impl ToriiFaucet {
 /// Kagemusha command-submission configuration for app-facing lifecycle routes.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiKagemushaCommands {
-    /// Master enable switch (defaults to enabled when the section is present).
-    #[config(default = "true")]
-    pub enabled: bool,
     /// Private key for the account submitting typed Kagemusha instructions.
     #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY")]
     pub private_key: Option<ExposedPrivateKey>,
@@ -16268,62 +16231,119 @@ pub struct ToriiKagemushaCommands {
 }
 
 impl ToriiKagemushaCommands {
-    fn parse(self) -> Option<actual::ToriiKagemushaCommands> {
-        if !self.enabled {
-            return None;
-        }
-        let private_key = self
-            .private_key
-            .or_else(|| {
-                std::env::var("TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY")
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-                    .map(|value| {
-                        value.parse::<ExposedPrivateKey>().unwrap_or_else(|err| {
-                            panic!("invalid TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY: {err}")
-                        })
-                    })
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "torii.kagemusha_commands.private_key or TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY is required"
-                )
-            });
-        let key_pair = KeyPair::from_private_key(private_key.0.clone())
-            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.private_key: {err}"));
-        let algorithm = key_pair
-            .public_key()
-            .try_algorithm()
-            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.public_key: {err}"));
-        if !matches!(algorithm, Algorithm::Ed25519 | Algorithm::Secp256k1) {
-            panic!("torii.kagemusha_commands.private_key must use ed25519 or secp256k1");
-        }
-        if self.minimum_xor_balance.is_zero() {
-            panic!("torii.kagemusha_commands.minimum_xor_balance must be greater than zero");
-        }
-        if self.max_tx_value.is_zero() {
-            panic!("torii.kagemusha_commands.max_tx_value must be greater than zero");
-        }
-        let operation_registry_max_entries =
-            NonZeroUsize::new(self.operation_registry_max_entries).unwrap_or_else(|| {
-                panic!(
-                    "torii.kagemusha_commands.operation_registry_max_entries must be greater than zero"
-                )
-            });
-        let operation_registry_max_bytes =
-            NonZeroUsize::new(self.operation_registry_max_bytes).unwrap_or_else(|| {
-                panic!(
-                    "torii.kagemusha_commands.operation_registry_max_bytes must be greater than zero"
-                )
-            });
-        if operation_registry_max_bytes.get()
-            < defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
-        {
-            panic!(
-                "torii.kagemusha_commands.operation_registry_max_bytes must be at least {}",
-                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiKagemushaCommands> {
+        let key_pair = match self.private_key {
+            Some(private_key) => Self::parse_private_key(
+                private_key,
+                "torii.kagemusha_commands.private_key",
+                emitter,
+            ),
+            None => match std::env::var("TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY") {
+                Ok(value) if value.trim().is_empty() => {
+                    emit_torii_config_error(
+                        emitter,
+                        "torii.kagemusha_commands.private_key or TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY is required",
+                    );
+                    None
+                }
+                Ok(value) => match value.parse::<ExposedPrivateKey>() {
+                    Ok(private_key) => Self::parse_private_key(
+                        private_key,
+                        "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY",
+                        emitter,
+                    ),
+                    Err(err) => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!("invalid TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY: {err}"),
+                        );
+                        None
+                    }
+                },
+                Err(std::env::VarError::NotPresent) => {
+                    emit_torii_config_error(
+                        emitter,
+                        "torii.kagemusha_commands.private_key or TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY is required",
+                    );
+                    None
+                }
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    emit_torii_config_error(
+                        emitter,
+                        "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY must be valid Unicode",
+                    );
+                    None
+                }
+            },
+        };
+
+        let minimum_xor_balance_is_valid = if self.minimum_xor_balance.is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.minimum_xor_balance must be greater than zero",
             );
-        }
+            false
+        } else {
+            true
+        };
+        let max_tx_value_is_valid = if self.max_tx_value.is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.max_tx_value must be greater than zero",
+            );
+            false
+        } else {
+            true
+        };
+        let operation_registry_max_entries =
+            NonZeroUsize::new(self.operation_registry_max_entries).or_else(|| {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.kagemusha_commands.operation_registry_max_entries must be greater than zero",
+                );
+                None
+            });
+        let operation_registry_max_bytes = NonZeroUsize::new(self.operation_registry_max_bytes)
+            .or_else(|| {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.kagemusha_commands.operation_registry_max_bytes must be greater than zero",
+                );
+                None
+            })
+            .and_then(|maximum| {
+                let minimum = defaults::torii::kagemusha_commands::
+                    OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
+                if maximum.get() < minimum {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.kagemusha_commands.operation_registry_max_bytes must be at least {minimum}"
+                        ),
+                    );
+                    None
+                } else {
+                    Some(maximum)
+                }
+            });
+
+        let (
+            Some(key_pair),
+            true,
+            true,
+            Some(operation_registry_max_entries),
+            Some(operation_registry_max_bytes),
+        ) = (
+            key_pair,
+            minimum_xor_balance_is_valid,
+            max_tx_value_is_valid,
+            operation_registry_max_entries,
+            operation_registry_max_bytes,
+        )
+        else {
+            return None;
+        };
+
         Some(actual::ToriiKagemushaCommands {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
@@ -16332,6 +16352,31 @@ impl ToriiKagemushaCommands {
             operation_registry_max_entries,
             operation_registry_max_bytes,
         })
+    }
+
+    fn parse_private_key(
+        private_key: ExposedPrivateKey,
+        source: &str,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<KeyPair> {
+        let key_pair = match KeyPair::from_private_key(private_key.0) {
+            Ok(key_pair) => key_pair,
+            Err(err) => {
+                emit_torii_config_error(emitter, format!("invalid {source}: {err}"));
+                return None;
+            }
+        };
+        match key_pair.public_key().try_algorithm() {
+            Ok(Algorithm::Ed25519 | Algorithm::Secp256k1) => Some(key_pair),
+            Ok(_) => {
+                emit_torii_config_error(emitter, format!("{source} must use ed25519 or secp256k1"));
+                None
+            }
+            Err(err) => {
+                emit_torii_config_error(emitter, format!("invalid {source} public key: {err}"));
+                None
+            }
+        }
     }
 }
 
@@ -16342,7 +16387,6 @@ mod torii_kagemusha_commands_tests {
     fn sample() -> ToriiKagemushaCommands {
         let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
         ToriiKagemushaCommands {
-            enabled: true,
             private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
             minimum_xor_balance: Quantity::from(25_u32),
             max_tx_value: defaults::torii::kagemusha_commands::max_tx_value(),
@@ -16355,7 +16399,11 @@ mod torii_kagemusha_commands_tests {
 
     #[test]
     fn parses_minimal_kagemusha_submission_authority() {
-        let parsed = sample().parse().expect("enabled configuration");
+        let mut emitter = Emitter::new();
+        let parsed = sample()
+            .parse(&mut emitter)
+            .expect("valid command configuration");
+        assert!(emitter.into_result().is_ok());
         assert_eq!(
             parsed.operation_registry_max_entries.get(),
             defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES
@@ -16365,24 +16413,89 @@ mod torii_kagemusha_commands_tests {
     }
 
     #[test]
-    fn rejects_zero_minimum_xor_balance() {
+    fn missing_command_private_key_emits_torii_configuration_error() {
+        let mut config = sample();
+        config.private_key = None;
+        let mut emitter = Emitter::new();
+
+        assert!(config.parse(&mut emitter).is_none());
+        let report = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("missing private key must fail validation")
+        );
+        assert!(report.contains("Invalid Torii configuration"), "{report}");
+        assert!(
+            report.contains("torii.kagemusha_commands.private_key"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn unsupported_command_private_key_emits_torii_configuration_error() {
+        let mut config = sample();
+        let key_pair = KeyPair::from_seed(vec![0x42; 32], Algorithm::BlsNormal);
+        config.private_key = Some(ExposedPrivateKey(key_pair.private_key().clone()));
+        let mut emitter = Emitter::new();
+
+        assert!(config.parse(&mut emitter).is_none());
+        let report = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("unsupported command key must fail validation")
+        );
+        assert!(report.contains("Invalid Torii configuration"), "{report}");
+        assert!(report.contains("must use ed25519 or secp256k1"), "{report}");
+    }
+
+    #[test]
+    fn invalid_command_limits_emit_all_torii_configuration_errors() {
         let mut config = sample();
         config.minimum_xor_balance = Quantity::zero();
-        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
-    }
-
-    #[test]
-    fn rejects_zero_operation_registry_limits() {
-        let mut config = sample();
-        config.operation_registry_max_entries = 0;
-        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
-    }
-
-    #[test]
-    fn rejects_zero_maximum_transaction_value() {
-        let mut config = sample();
         config.max_tx_value = Quantity::zero();
-        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
+        config.operation_registry_max_entries = 0;
+        config.operation_registry_max_bytes = 0;
+        let mut emitter = Emitter::new();
+
+        assert!(config.parse(&mut emitter).is_none());
+        let report = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("invalid command limits must fail validation")
+        );
+        assert!(report.contains("Invalid Torii configuration"), "{report}");
+        for field in [
+            "minimum_xor_balance",
+            "max_tx_value",
+            "operation_registry_max_entries",
+            "operation_registry_max_bytes",
+        ] {
+            assert!(report.contains(field), "missing `{field}` in {report}");
+        }
+    }
+
+    #[test]
+    fn undersized_command_registry_budget_emits_torii_configuration_error() {
+        let mut config = sample();
+        config.operation_registry_max_bytes =
+            defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY - 1;
+        let mut emitter = Emitter::new();
+
+        assert!(config.parse(&mut emitter).is_none());
+        let report = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("undersized command registry budget must fail validation")
+        );
+        assert!(report.contains("Invalid Torii configuration"), "{report}");
+        assert!(
+            report.contains("operation_registry_max_bytes must be at least"),
+            "{report}"
+        );
     }
 }
 
@@ -26021,21 +26134,29 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
-    fn disabled_offline_profile_rejects_dormant_kagemusha_commands_during_root_parse() {
-        let mut table = base_table();
-        let settlement = table
-            .entry("settlement")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("settlement table");
-        settlement.insert(
-            "offline".into(),
-            Value::Table(Table::from_iter([(
-                "enabled".into(),
-                Value::Boolean(false),
-            )])),
-        );
+    fn retired_offline_opt_out_keys_are_rejected_during_root_parse() {
+        for key in ["enabled", "escrow_required"] {
+            let mut table = base_table();
+            let settlement = table
+                .entry("settlement")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("settlement table");
+            settlement.insert(
+                "offline".into(),
+                Value::Table(Table::from_iter([(key.into(), Value::Boolean(false))])),
+            );
 
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("retired offline opt-out keys must be rejected");
+            let report = format!("{error:?}");
+            assert!(report.contains(key), "{report}");
+        }
+    }
+
+    #[test]
+    fn retired_kagemusha_command_disable_key_is_rejected_during_root_parse() {
+        let mut table = base_table();
         let torii = table
             .get_mut("torii")
             .and_then(Value::as_table_mut)
@@ -26053,6 +26174,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 ),
                 ("minimum_xor_balance".into(), Value::String("1".into())),
                 ("max_tx_value".into(), Value::String("1".into())),
+            ])),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("retired Kagemusha command disable key must be rejected");
+        let report = format!("{error:?}");
+        assert!(report.contains("enabled"), "{report}");
+    }
+
+    #[test]
+    fn missing_kagemusha_command_private_key_returns_root_configuration_error() {
+        let mut table = base_table();
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        torii.insert(
+            "kagemusha_commands".into(),
+            Value::Table(Table::from_iter([
+                ("minimum_xor_balance".into(), Value::String("1".into())),
+                ("max_tx_value".into(), Value::String("1".into())),
                 (
                     "operation_registry_max_entries".into(),
                     Value::Integer(4_096),
@@ -26065,10 +26207,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("disabled offline profile must reject dormant Kagemusha commands");
+            .expect_err("missing command private key must return a configuration error");
         let report = format!("{error:?}");
+        assert!(report.contains("Invalid Torii configuration"), "{report}");
         assert!(
-            report.contains("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
+            report.contains("torii.kagemusha_commands.private_key"),
             "{report}"
         );
     }
@@ -29086,63 +29229,17 @@ mod settlement_offline_tests {
     use super::*;
 
     #[test]
-    fn offline_parse_defaults_to_enabled_mandatory_escrow() {
+    fn offline_parse_has_no_disable_or_escrow_opt_out() {
         let mut emitter = Emitter::new();
         let actual = Offline::default().parse(&mut emitter);
 
         assert!(emitter.into_result().is_ok());
-        assert!(actual.enabled);
-        assert!(actual.escrow_required);
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
         assert_eq!(
             actual.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
         );
-    }
-
-    #[test]
-    fn offline_parse_accepts_explicit_disabled_empty_profile() {
-        let mut emitter = Emitter::new();
-        let actual = Offline {
-            enabled: false,
-            ..Offline::default()
-        }
-        .parse(&mut emitter);
-
-        assert!(emitter.into_result().is_ok());
-        assert!(!actual.enabled);
-        assert!(actual.escrow_required);
-        assert!(actual.escrow_accounts.is_empty());
-        assert!(actual.kagemusha_release_policy_path.is_none());
-        assert!(actual.kagemusha_artifact_dir.is_none());
-    }
-
-    #[test]
-    fn offline_parse_rejects_disabled_profile_with_dormant_release_configuration() {
-        let mut emitter = Emitter::new();
-        let _ = Offline {
-            enabled: false,
-            kagemusha_release_policy_path: Some("release-policy.norito".into()),
-            kagemusha_artifact_dir: Some("artifacts".into()),
-            ..Offline::default()
-        }
-        .parse(&mut emitter);
-
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn offline_parse_rejects_false_escrow_opt_out() {
-        let mut emitter = Emitter::new();
-        let actual = Offline {
-            escrow_required: false,
-            ..Offline::default()
-        }
-        .parse(&mut emitter);
-
-        assert!(emitter.into_result().is_err());
-        assert!(!actual.escrow_required);
     }
 
     #[test]

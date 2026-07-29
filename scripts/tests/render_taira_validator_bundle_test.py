@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import stat
 import sys
@@ -348,6 +349,21 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
     assert "iroha.custom" not in selector_wire_ids
 
 
+def test_checked_in_taira_genesis_uses_only_reviewed_boi_mobile_domains() -> None:
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+    domain_ids = {
+        instruction["Register"]["Domain"]["id"]
+        for instruction in _genesis_instructions(genesis)
+        if isinstance(instruction.get("Register", {}).get("Domain"), dict)
+    }
+
+    assert not any(domain_id.startswith("wonderland.") for domain_id in domain_ids)
+    assert not any(domain_id.endswith(".is") for domain_id in domain_ids)
+    assert {
+        domain_id for domain_id in domain_ids if domain_id.endswith(".is2")
+    } == MODULE.TAIRA_REVIEWED_IS2_DOMAINS
+
+
 def test_checked_in_taira_genesis_gas_parameters_are_structured_parameters() -> None:
     genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
     custom = genesis["transactions"][0]["parameters"]["custom"]
@@ -423,11 +439,9 @@ public_address = "https://taira-validator-1.sora.org"
 enabled = true
 
 [torii.kagemusha_commands]
-enabled = true
 private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
 
 [settlement.offline]
-escrow_required = true
 escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
 kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
 kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
@@ -523,6 +537,54 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
     path.write_text("\n".join(validators), encoding="utf-8")
 
 
+def _reviewed_is2_domain_instructions() -> list[dict[str, object]]:
+    return [
+        {"Register": {"Domain": {"id": domain_id}}}
+        for domain_id in sorted(MODULE.TAIRA_REVIEWED_IS2_DOMAINS)
+    ]
+
+
+def _operator_offline_bootstrap_inputs(
+    root: Path,
+    *,
+    genesis_path: Path | None = None,
+) -> dict[str, object]:
+    """Create renderer-only path fixtures that cannot pass Kagami authentication."""
+
+    if genesis_path is None:
+        genesis_path = root / "offline-bootstrap-genesis.json"
+        genesis_path.write_text(
+            json.dumps(
+                {
+                    "sumeragi_v2": {
+                        "da_layout": {},
+                        "nexus_amx_context_hash": "01" * 32,
+                    },
+                    "transactions": [
+                        {
+                            "instructions": _reviewed_is2_domain_instructions(),
+                            "ivm_triggers": [],
+                            "topology": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+    release_policy_path = root / "reviewed-release-policy.norito"
+    release_policy_path.write_bytes(b"renderer-path-contract-only\n")
+    artifact_dir = root / "reviewed-v4-artifacts"
+    artifact_dir.mkdir(exist_ok=True)
+    return {
+        "offline_bootstrap_genesis_path": genesis_path,
+        "authorized_offline_bootstrap_sha256": hashlib.sha256(
+            genesis_path.read_bytes()
+        ).hexdigest(),
+        "offline_release_policy_path": release_policy_path,
+        "offline_artifact_dir": artifact_dir,
+    }
+
+
 def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     secrets_path = tmp_path / "validator_secrets.toml"
@@ -533,7 +595,11 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
 
     written = MODULE.render_bundle(
-        base_config_path, roster_path, output_dir, secrets_path=secrets_path
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        **_operator_offline_bootstrap_inputs(tmp_path),
     )
 
     assert len(written) == 4
@@ -557,6 +623,33 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert (
         f'escrow_accounts = {{ "{TAIRA_GAS_ASSET_ID}" = '
         f'"{TAIRA_GENESIS_DEPLOYER_ID}" }}' in config
+    )
+    assert (
+        f'kagemusha_release_policy_path = "{MODULE.DEFAULT_OFFLINE_RUNTIME_RELEASE_POLICY_PATH}"'
+        in config
+    )
+    assert (
+        f'kagemusha_artifact_dir = "{MODULE.DEFAULT_OFFLINE_RUNTIME_ARTIFACT_DIR}"'
+        in config
+    )
+    signing_config = (
+        output_dir / "taira-validator-3" / "genesis-signing-config.toml"
+    ).read_text(encoding="utf-8")
+    assert (
+        stat.S_IMODE(
+            (
+                output_dir / "taira-validator-3" / "genesis-signing-config.toml"
+            ).stat().st_mode
+        )
+        == 0o600
+    )
+    assert (
+        f'kagemusha_release_policy_path = "{tmp_path / "reviewed-release-policy.norito"}"'
+        in signing_config
+    )
+    assert (
+        f'kagemusha_artifact_dir = "{tmp_path / "reviewed-v4-artifacts"}"'
+        in signing_config
     )
     assert 'id = "local-dev"' in config
     assert 'scope = { dataspace = "is2" }' in config
@@ -646,11 +739,15 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
                 "sumeragi_v2": {
                     "da_layout": {},
                     "nexus_amx_context_hash": "01" * 32,
-                },
-                "transactions": [
-                    {"instructions": [], "ivm_triggers": [], "topology": []}
-                ],
-            }
+                    },
+                    "transactions": [
+                        {
+                            "instructions": _reviewed_is2_domain_instructions(),
+                            "ivm_triggers": [],
+                            "topology": [],
+                        }
+                    ],
+                }
         ),
         encoding="utf-8",
     )
@@ -660,7 +757,10 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
         roster_path,
         output_dir,
         secrets_path=secrets_path,
-        base_genesis_path=base_genesis_path,
+        **_operator_offline_bootstrap_inputs(
+            tmp_path,
+            genesis_path=base_genesis_path,
+        ),
     )
 
     rendered = json.loads((output_dir / "genesis.json").read_text(encoding="utf-8"))
@@ -695,11 +795,120 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
     signing_command = (output_dir / "genesis-signing-command.txt").read_text(
         encoding="utf-8"
     )
-    assert "$TAIRA_GENESIS_PRIVATE_KEY" in signing_command
-    assert "taira-validator-1/config.toml" in signing_command
+    assert "$TAIRA_GENESIS_PRIVATE_KEY_FILE" in signing_command
+    assert "taira-validator-1/genesis-signing-config.toml" in signing_command
 
 
-def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
+def test_render_bundle_requires_detached_offline_bootstrap_review(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    try:
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            output_dir,
+            secrets_path=secrets_path,
+        )
+    except ValueError as error:
+        assert "--offline-bootstrap-genesis" in str(error)
+        assert "--authorize-offline-bootstrap-sha256" in str(error)
+        assert "--offline-release-policy-path" in str(error)
+        assert "--offline-artifact-dir" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted an implicit offline bootstrap")
+    assert not output_dir.exists()
+
+
+def test_render_bundle_rejects_offline_bootstrap_hash_drift(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    bootstrap = _operator_offline_bootstrap_inputs(tmp_path)
+    bootstrap["authorized_offline_bootstrap_sha256"] = "00" * 32
+
+    try:
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            output_dir,
+            secrets_path=secrets_path,
+            **bootstrap,
+        )
+    except ValueError as error:
+        assert "not operator-authorized" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted a drifted offline bootstrap")
+    assert not output_dir.exists()
+
+
+def test_render_bundle_rejects_forbidden_domain_before_output_creation(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    base_genesis_path = tmp_path / "genesis.json"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    base_genesis_path.write_text(
+        json.dumps(
+            {
+                "sumeragi_v2": {
+                    "da_layout": {},
+                    "nexus_amx_context_hash": "01" * 32,
+                },
+                "transactions": [
+                    {
+                        "instructions": [
+                            {
+                                "Register": {
+                                    "Domain": {"id": "wonderland.universal"}
+                                }
+                            },
+                            *_reviewed_is2_domain_instructions(),
+                        ],
+                        "ivm_triggers": [],
+                        "topology": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            output_dir,
+            secrets_path=secrets_path,
+            **_operator_offline_bootstrap_inputs(
+                tmp_path,
+                genesis_path=base_genesis_path,
+            ),
+        )
+    except ValueError as error:
+        assert "forbidden Wonderland domain `wonderland.universal`" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted a forbidden Wonderland domain")
+    assert not output_dir.exists()
+
+
+def test_explicitly_authorized_genesis_renderer_preserves_fresh_contract_deployment_gate(
     tmp_path: Path,
 ) -> None:
     roster_path = tmp_path / "validator_roster.toml"
@@ -711,8 +920,10 @@ def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
 
     rendered_path = MODULE.render_genesis_template(
         TAIRA_GENESIS_PATH,
+        hashlib.sha256(TAIRA_GENESIS_PATH.read_bytes()).hexdigest(),
         validators,
         output_dir,
+        output_dir / "genesis-signing-config.toml",
     )
     rendered = json.loads(rendered_path.read_text(encoding="utf-8"))
 
@@ -761,14 +972,148 @@ def test_genesis_renderer_rejects_merged_instruction_objects(tmp_path: Path) -> 
     try:
         MODULE.render_genesis_template(
             base_genesis_path,
+            hashlib.sha256(base_genesis_path.read_bytes()).hexdigest(),
             validators,
             output_dir,
+            output_dir / "genesis-signing-config.toml",
         )
     except ValueError as error:
         assert "transaction 0 instruction 0" in str(error)
         assert "single-key structured instruction object" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("renderer accepted a merged genesis instruction object")
+
+
+def test_genesis_renderer_rejects_forbidden_bootstrap_domains(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    validators = MODULE.load_roster(roster_path)
+
+    for domain_id in (
+        "wonderland.universal",
+        "wonderland.is",
+        "boi.is",
+        "unreviewed-bank.is",
+        "wonderland.is2",
+        "unreviewed-bank.is2",
+    ):
+        base_genesis_path = tmp_path / f"{domain_id}.json"
+        base_genesis_path.write_text(
+            json.dumps(
+                {
+                    "sumeragi_v2": {
+                        "da_layout": {},
+                        "nexus_amx_context_hash": "01" * 32,
+                    },
+                    "transactions": [
+                        {
+                            "instructions": [
+                                {"Register": {"Domain": {"id": domain_id}}}
+                            ],
+                            "ivm_triggers": [],
+                            "topology": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        try:
+            MODULE.render_genesis_template(
+                base_genesis_path,
+                hashlib.sha256(base_genesis_path.read_bytes()).hexdigest(),
+                validators,
+                tmp_path / "out",
+                tmp_path / "out" / "genesis-signing-config.toml",
+            )
+        except ValueError as error:
+            assert domain_id in str(error)
+            assert (
+                "forbidden Wonderland domain" in str(error)
+                or "prematurely stages `is` dataspace domain" in str(error)
+                or "unreviewed `is2` dataspace domain" in str(error)
+            )
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError(
+                f"renderer accepted unreviewed BOI domain {domain_id!r}"
+            )
+
+
+def test_genesis_renderer_requires_exact_is2_domain_set(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_genesis_path = tmp_path / "genesis.json"
+    _write_roster(roster_path)
+    validators = MODULE.load_roster(roster_path)
+    base_genesis_path.write_text(
+        json.dumps(
+            {
+                "sumeragi_v2": {
+                    "da_layout": {},
+                    "nexus_amx_context_hash": "01" * 32,
+                },
+                "transactions": [
+                    {"instructions": [], "ivm_triggers": [], "topology": []}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        MODULE.render_genesis_template(
+            base_genesis_path,
+            hashlib.sha256(base_genesis_path.read_bytes()).hexdigest(),
+            validators,
+            tmp_path / "out",
+            tmp_path / "out" / "genesis-signing-config.toml",
+        )
+    except ValueError as error:
+        assert "exact reviewed BOI/FI `is2` domain set" in str(error)
+        assert "boi.is2" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted a missing `is2` domain set")
+
+
+def test_genesis_renderer_rejects_opaque_instructions(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_genesis_path = tmp_path / "genesis.json"
+    _write_roster(roster_path)
+    validators = MODULE.load_roster(roster_path)
+    base_genesis_path.write_text(
+        json.dumps(
+            {
+                "sumeragi_v2": {
+                    "da_layout": {},
+                    "nexus_amx_context_hash": "01" * 32,
+                },
+                "transactions": [
+                    {
+                        "instructions": ["Zm9yYmlkZGVu"],
+                        "ivm_triggers": [],
+                        "topology": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        MODULE.render_genesis_template(
+            base_genesis_path,
+            hashlib.sha256(base_genesis_path.read_bytes()).hexdigest(),
+            validators,
+            tmp_path / "out",
+            tmp_path / "out" / "genesis-signing-config.toml",
+        )
+    except ValueError as error:
+        assert "is opaque" in str(error)
+        assert "inspectable structured instructions" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted an opaque genesis instruction")
 
 
 def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> None:
@@ -859,6 +1204,7 @@ def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) ->
         roster_path,
         output_dir,
         secrets_path=secrets_path,
+        **_operator_offline_bootstrap_inputs(tmp_path),
     )
 
     rendered = MODULE._load_toml(
@@ -897,7 +1243,12 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
             base_config_path.write_text(template, encoding="utf-8")
 
             try:
-                MODULE.render_bundle(base_config_path, roster_path, output_dir)
+                MODULE.render_bundle(
+                    base_config_path,
+                    roster_path,
+                    output_dir,
+                    **_operator_offline_bootstrap_inputs(tmp_path),
+                )
             except ValueError as error:
                 assert f"field `{key}` must be a positive integer" in str(error)
             else:  # pragma: no cover - defensive assertion
@@ -926,7 +1277,12 @@ def test_render_bundle_rejects_unpopulated_template_placeholders(tmp_path: Path)
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
 
     try:
-        MODULE.render_bundle(base_config_path, roster_path, output_dir)
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            output_dir,
+            **_operator_offline_bootstrap_inputs(tmp_path),
+        )
     except ValueError as error:
         assert "template placeholder values" in str(error)
     else:  # pragma: no cover - defensive assertion
@@ -1109,6 +1465,7 @@ def test_main_supports_single_validator_render(tmp_path: Path) -> None:
     _write_roster(roster_path, inline_private_keys=False)
     _write_secrets(secrets_path)
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    bootstrap = _operator_offline_bootstrap_inputs(tmp_path)
 
     exit_code = MODULE.main(
         [
@@ -1120,6 +1477,14 @@ def test_main_supports_single_validator_render(tmp_path: Path) -> None:
             str(secrets_path),
             "--output-dir",
             str(output_dir),
+            "--offline-bootstrap-genesis",
+            str(bootstrap["offline_bootstrap_genesis_path"]),
+            "--authorize-offline-bootstrap-sha256",
+            str(bootstrap["authorized_offline_bootstrap_sha256"]),
+            "--offline-release-policy-path",
+            str(bootstrap["offline_release_policy_path"]),
+            "--offline-artifact-dir",
+            str(bootstrap["offline_artifact_dir"]),
             "--only",
             "taira-validator-2",
         ]

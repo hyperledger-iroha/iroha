@@ -57,6 +57,11 @@ Direct NPoS localnet:
 kagami localnet --consensus-mode npos --peers 4 --out-dir ./localnet-npos
 ```
 
+These direct localnet commands are scaffolding examples. With mandatory offline
+cash enabled, signing intentionally fails until the generated manifest and peer
+configuration are provisioned with the externally reviewed release described
+below. Kagami does not synthesize or silently substitute a local V4 catalog.
+
 Docker Compose from an existing config/genesis directory:
 
 ```bash
@@ -165,6 +170,7 @@ Sign with topology and PoPs:
 ```bash
 target/debug/kagami genesis sign \
   genesis.json \
+  --config peer0.toml \
   --topology "$TOPOLOGY_JSON" \
   --peer-pop "$PK_A=$POP_A" \
   --peer-pop "$PK_B=$POP_B" \
@@ -172,6 +178,49 @@ target/debug/kagami genesis sign \
   --algorithm ed25519 \
   --out-file genesis.signed.nrt
 ```
+
+### Mandatory offline release bootstrap
+
+`kagami genesis sign` requires `--config`; it refuses to emit a deployment
+genesis unless that peer configuration names at least one offline
+asset-to-escrow binding, the funded Kagemusha command issuer, a positive decode
+budget, and absolute paths to an authenticated ABI-21/V4 release policy and
+artifact directory. Kagami loads and authenticates that catalog before staging
+genesis, then calls Core's authoritative mandatory-offline evaluator over the
+exact staged height-one block. Signing fails unless the issuer is registered,
+permissioned, and funded for the effective fee asset; every escrow binding and
+fixed-scale asset agrees; the governed hardware policy is active; and the
+authenticated release exposes all five distinct verifier roles with the exact
+ABI-21/V4 recursive proof backend. `irohad` calls the same evaluator after Kura
+replay and before networking, so signing and runtime admission cannot drift.
+
+No reviewed V4 catalog is checked into this repository, and localnet must not
+substitute generated test keys. Produce the externally mounted release through
+the sealed workflow:
+
+1. Build the source-bound candidate generator with
+   `scripts/build_kagemusha_v4_candidate_bundle.py`.
+2. Run `scripts/run_kagemusha_v4_generation.py ... generate-candidate` with the
+   reviewed chain, asset, scale, activation window, circuit parameters, and
+   top-up finality roster.
+3. Run the sealed binary's `finalize-release` command with the canonical
+   release policy, signed release attestation, benchmark evidence, and signed
+   cryptographic review.
+4. Configure the final policy and artifact paths in
+   `[settlement.offline]`, and configure the issuer under
+   `[torii.kagemusha_commands]`.
+5. In genesis, register and fund that issuer with the exact
+   `CanManageOfflineEscrow` permission; register the offline asset at fixed
+   scale with `offline.enabled=true`; register the transfer, top-up-shield, and
+   unshield verifier records and ZK bindings; grant the release activation and
+   device-policy permissions; and append the catalog-built release activation
+   at height 1.
+6. Sign with `--config`, then run the validator's full offline readiness check.
+   Do not admit any validator until every peer reports the same artifact
+   identity and `ready:true`.
+
+The complete guarded generator and finalization syntax is embedded in
+[`kagemusha_recursive_spend_v4_bundle.rs`](../iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs).
 
 ## Streaming Identities
 

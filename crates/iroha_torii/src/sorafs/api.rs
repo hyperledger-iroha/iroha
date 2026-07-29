@@ -18768,6 +18768,7 @@ fn asset_escrow_kind_label(kind: AssetEscrowKind) -> &'static str {
     match kind {
         AssetEscrowKind::Marketplace => "marketplace",
         AssetEscrowKind::Lock => "lock",
+        AssetEscrowKind::Conditional => "conditional",
     }
 }
 

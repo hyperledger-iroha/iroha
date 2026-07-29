@@ -17,8 +17,12 @@ use iroha_core::{
     compliance::LaneComplianceEngine,
     governance::manifest::LaneManifestRegistry,
     kura::Kura,
+    offline_readiness::{
+        MandatoryOfflinePolicy, ensure_mandatory_offline_ready,
+        evaluate_staged_genesis_mandatory_offline, mandatory_offline_policy_from_config,
+    },
     query::store::LiveQueryStore,
-    smartcontracts::isi::Registrable as _,
+    smartcontracts::isi::{Registrable as _, offline::KagemushaReleaseCatalogV4},
     state::{State, World},
     sumeragi::{VotingBlock, network_topology::Topology},
 };
@@ -82,7 +86,7 @@ pub struct Args {
     /// Algorithm of the genesis key (must match the genesis public key).
     #[clap(long, default_value = "ed25519", value_name = "ALGORITHM")]
     algorithm: Algorithm,
-    /// Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis.
+    /// Mandatory deployment peer config used for DA policy and complete offline-readiness staging.
     #[clap(long, value_name = "PATH")]
     config: Option<PathBuf>,
     /// Select the consensus mode to stamp into the manifest (optional override).
@@ -394,6 +398,12 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
     })
 }
 
+/// Bind and sign one genesis manifest against an optional peer configuration.
+///
+/// Supplying a peer configuration also stages and verifies the complete
+/// mandatory-offline readiness invariant. The deployment-facing CLI requires
+/// that configuration; `None` remains only for in-process consensus-context
+/// construction that is not sufficient to start an `irohad` node.
 pub fn bind_staged_sumeragi_v2_context(
     genesis: RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
@@ -493,6 +503,8 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
         )?;
 
     let authority = AccountId::new(genesis_key_pair.public_key().clone());
+    let (release_catalog, offline_policy) =
+        load_staged_kagemusha_release_inputs(genesis.chain_id(), config)?;
     let mut world = World::with(
         [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
         [Account::new(authority.clone()).build(&authority)],
@@ -524,7 +536,7 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
     );
-    configure_staged_genesis_state(&mut state, genesis, config)?;
+    configure_staged_genesis_state(&mut state, genesis, config, release_catalog)?;
     install_staged_nexus_policies(&mut state, genesis, config)?;
 
     let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
@@ -536,7 +548,7 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
     }
     let topology = Topology::new(voters);
     let mut voting_block: Option<VotingBlock> = None;
-    let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
         provisional.0,
         &topology,
         genesis.chain_id(),
@@ -564,6 +576,17 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
             )
         }
     })?;
+    if let (Some(config), Some(policy)) = (config, offline_policy.as_ref()) {
+        let status = evaluate_staged_genesis_mandatory_offline(
+            &valid,
+            &staged,
+            policy,
+            Some(&config.common.peer.id),
+        )
+        .map_err(|error| eyre!("mandatory staged offline snapshot failed: {error}"))?;
+        ensure_mandatory_offline_ready(&status)
+            .map_err(|error| eyre!("mandatory staged offline readiness failed: {error}"))?;
+    }
     let hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
     drop(staged);
     Ok(hash)
@@ -657,6 +680,7 @@ fn configure_staged_genesis_state(
     state: &mut State,
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
+    release_catalog: Option<KagemushaReleaseCatalogV4>,
 ) -> Result<(), color_eyre::eyre::Error> {
     if let Some(config) = config {
         state.set_pipeline(staged_genesis_pipeline(config.pipeline.clone()));
@@ -672,6 +696,10 @@ fn configure_staged_genesis_state(
         state
             .set_nexus_from_config(config.nexus.clone())
             .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
+        state.set_settlement(config.settlement.clone());
+        if let Some(release_catalog) = release_catalog {
+            state.set_kagemusha_release_catalog(release_catalog);
+        }
         state.set_crypto(config.crypto.clone());
     } else {
         state.set_pipeline(staged_default_pipeline(genesis)?);
@@ -681,6 +709,57 @@ fn configure_staged_genesis_state(
         state.set_crypto(actual::Crypto::default());
     }
     Ok(())
+}
+
+fn load_staged_kagemusha_release_inputs(
+    chain_id: &ChainId,
+    config: Option<&actual::Root>,
+) -> Result<
+    (
+        Option<KagemushaReleaseCatalogV4>,
+        Option<MandatoryOfflinePolicy>,
+    ),
+    color_eyre::eyre::Error,
+> {
+    let Some(config) = config else {
+        return Ok((None, None));
+    };
+
+    let policy = mandatory_offline_policy_from_config(
+        chain_id,
+        &config.settlement.offline,
+        config.torii.kagemusha_commands.as_ref(),
+    )
+    .map_err(|error| eyre!("mandatory offline signing configuration is invalid: {error}"))?;
+
+    match (
+        config
+            .settlement
+            .offline
+            .kagemusha_release_policy_path
+            .as_deref(),
+        config.settlement.offline.kagemusha_artifact_dir.as_deref(),
+    ) {
+        (Some(release_policy_path), Some(artifacts)) => {
+            let catalog = KagemushaReleaseCatalogV4::load_with_decoded_budget(
+                release_policy_path,
+                artifacts,
+                config
+                    .settlement
+                    .offline
+                    .kagemusha_max_decoded_bytes,
+            )
+            .map_err(|error| {
+                eyre!(
+                    "chain `{chain_id}` failed to authenticate the configured ABI-21/V4 Kagemusha release catalog: {error}"
+                )
+            })?;
+            Ok((Some(catalog), Some(policy)))
+        }
+        _ => Err(eyre!(
+            "chain `{chain_id}` requires both settlement.offline.kagemusha_release_policy_path and settlement.offline.kagemusha_artifact_dir"
+        )),
+    }
 }
 
 fn install_staged_nexus_policies(
@@ -740,6 +819,11 @@ impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
+        if self.config.is_none() {
+            return Err(eyre!(
+                "mandatory offline genesis signing requires `--config <peer-config.toml>` with reviewed ABI-21/V4 release inputs"
+            ));
+        }
         if let Some(path) = self.out_file.as_deref() {
             reject_legacy_scale_out_file(path)?;
         }
@@ -1181,6 +1265,32 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 path.display()
             )
         })
+    }
+
+    #[test]
+    fn deployment_signing_requires_peer_config_before_reading_genesis() {
+        let args = Args {
+            genesis_file: PathBuf::from("/not/read/without/mandatory-config.json"),
+            out_file: None,
+            bound_manifest_out: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: None,
+            private_key_file: None,
+            seed: Some("not-used".to_owned()),
+            algorithm: Algorithm::Ed25519,
+            config: None,
+            consensus_mode: None,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("deployment signing without peer config must fail");
+        assert!(
+            error.to_string().contains(
+                "mandatory offline genesis signing requires `--config <peer-config.toml>`"
+            ),
+            "unexpected error: {error:#}"
+        );
     }
 
     type ConsensusHandshakeMetaTest =

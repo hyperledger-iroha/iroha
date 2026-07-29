@@ -95,7 +95,10 @@ config rather than wrapper-local defaults:
 - `taira-irohad.env.example`: sample `/etc/default/taira-irohad` overrides for
   pointing the systemd unit at a rendered validator config.
 - `docker-compose.validator.yml`: sample containerized validator deployment
-  that mounts one rendered validator config plus persistent `/storage`.
+  that mounts one rendered validator config, persistent `/storage`, and the
+  operator-reviewed authenticated Kagemusha release policy/V4 artifact
+  directory. Its health check uses `/readyz`; `/livez` is process-only and is
+  never sufficient for validator or load-balancer admission.
 - `taira-validator-container.compose.env.example`: sample compose env file for
   a single validator host using the published Taira image.
 - `taira-validator-container.sh`: plain-`docker` wrapper for hosts that do not
@@ -192,8 +195,11 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    which derives dataspace ID `8477022798449861195` from the first eight digest
    bytes in little-endian order. Identity nonce `1` is the first proposal nonce
    whose derived nonzero ID fits canonical TOML's signed integer range.
-5. Render the per-validator bundle only after that detached approval:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
+5. Select the complete operator-reviewed unsigned offline bootstrap genesis,
+   record its exact SHA-256 after review, and select the matching finalized
+   release policy and artifact directory. Render only after both detached
+   approvals:
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --offline-bootstrap-genesis /absolute/reviewed/genesis.json --authorize-offline-bootstrap-sha256 "${OFFLINE_BOOTSTRAP_SHA256}" --offline-release-policy-path /absolute/reviewed/release-policy.norito --offline-artifact-dir /absolute/reviewed/v4 --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
 6. Copy each validator's complete generated directory to its host and point the
    node at `<validator-slug>/config.toml`. The renderer creates bundle and
    runtime directories with mode `0700`, creates the onboarding/faucet signer
@@ -203,12 +209,20 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 
 The bundle also contains one shared unsigned `genesis.json` whose dedicated
 topology transaction is rebuilt from the public roster and PoPs, plus
-`genesis-signing-command.txt`. Set `TAIRA_GENESIS_PRIVATE_KEY` only in the
-operator shell and run that command. `kagami genesis sign --config` executes
-genesis in a disposable state block, replaces the template Nexus/AMX context
-hash with the exact staged value, recomputes the consensus fingerprint, and
-then writes `genesis.signed.nrt`. Never copy the genesis signer or validator
-private keys into the checked-in template or rendered genesis JSON.
+`genesis-signing-command.txt`. Each validator directory has a separate
+mode-0600 `genesis-signing-config.toml`: it uses the validated host source
+paths so Kagami can authenticate the reviewed release during signing. Runtime
+`config.toml` always uses the fixed container destinations
+`/etc/iroha/kagemusha/release-policy.norito` and
+`/var/lib/iroha/kagemusha/v4`; operator source paths can never leak into the
+container contract. Point `TAIRA_GENESIS_PRIVATE_KEY_FILE` at an owner-held
+mode-0600 canonical key file and run the emitted command on the render host.
+`kagami genesis sign --config` executes genesis in a disposable state block,
+calls Core's complete mandatory-offline evaluator, replaces the template
+Nexus/AMX context hash with the exact staged value, recomputes the consensus
+fingerprint, and only then writes `genesis.signed.nrt`. Never copy the genesis
+signer or validator private keys into the checked-in template or rendered
+genesis JSON.
 
 The renderer rewrites the checked-in peer-1 baseline with the full
 `trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
@@ -223,6 +237,15 @@ It also refuses every render that omits offline cash inputs, retains a
 non-canonical Taira I105 account. The checked-in config contains no guessed DS
 asset ID; the operator-provisioned ID is injected into
 `settlement.offline.escrow_accounts` at render time.
+The runtime has no offline-service or escrow opt-out: the retired
+`settlement.offline.enabled`, `settlement.offline.escrow_required`, and
+`torii.kagemusha_commands.enabled` keys are rejected rather than interpreted.
+The operator-authorized genesis is also inspected before the renderer creates
+any output. It must use structured instructions and register exactly the eight
+reviewed BOI/FI `is2` mobile domains; Wonderland, opaque instructions, and
+premature scenario-browser `.is` domain registrations are rejected. The `.is`
+domains are applied separately only after the four-validator offline readiness
+gate succeeds.
 
 ## Private profiles
 
@@ -235,6 +258,11 @@ python3 scripts/render_taira_validator_bundle.py \
   --base-config /absolute/path/to/private-profile.toml \
   --roster configs/soranexus/taira/validator_roster.local.toml \
   --secrets configs/soranexus/taira/validator_secrets.local.toml \
+  --offline-bootstrap-genesis /absolute/reviewed/genesis.json \
+  --authorize-offline-bootstrap-sha256 "${OFFLINE_BOOTSTRAP_SHA256}" \
+  --offline-release-policy-path /absolute/reviewed/release-policy.norito \
+  --offline-artifact-dir /absolute/reviewed/v4 \
+  --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b \
   --output-dir dist/taira-private-validators
 ```
 
@@ -257,8 +285,9 @@ When you run the shared nginx edge on one host, keep the same roster as the
 source of truth for the edge upstreams too:
 
 - add `edge_torii_upstream = "<host>:<port>"` for each validator entry
-- render the nginx snippet from that roster instead of hand-editing ports:
-  - `python3 scripts/render_taira_edge_nginx_conf.py --roster configs/soranexus/taira/validator_roster.local.toml --output dist/taira-edge/taira.sora.org.conf`
+- dry-run the guarded nginx helper from that roster instead of hand-editing
+  ports:
+  - `bash configs/soranexus/taira/install_taira_edge_nginx_conf.sh --roster configs/soranexus/taira/validator_roster.local.toml`
 - add `[[soracloud_alias_routes]]` entries to the same local roster for
   dedicated runtime aliases that should terminate at local service listeners.
   For the Solswap indexer on the shared host:
@@ -941,18 +970,29 @@ available as an optional convenience for environments that do have Compose.
    - local host-side override:
      `docker load < iroha3-<version>-linux-image.tar`
 2. Render the validator config bundle from your user-local roster and secrets:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --offline-bootstrap-genesis /absolute/reviewed/genesis.json --authorize-offline-bootstrap-sha256 "${OFFLINE_BOOTSTRAP_SHA256}" --offline-release-policy-path /absolute/reviewed/release-policy.norito --offline-artifact-dir /absolute/reviewed/v4 --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
 3. Install the rendered config and storage directories on the validator host:
    - `sudo install -d -o 1001 -g 1001 /etc/iroha/taira-validator-1`
    - `sudo install -d -o 1001 -g 1001 /var/lib/iroha/taira-validator-1`
    - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
+   - install the exact reviewed rollout bundle's authenticated policy at
+     `/opt/iroha/kagemusha/release-policy.norito` and its complete V4 artifact
+     directory at `/opt/iroha/kagemusha/v4`; do not copy a candidate or
+     synthesize a local catalog
 4. Copy the sample env file and adjust the host-specific values:
    - `sudo cp configs/soranexus/taira/taira-validator-container.compose.env.example /etc/default/taira-validator-container.compose.env`
    - set at least:
      - `TAIRA_IMAGE=hyperledger/iroha:taira-latest` or the exact pushed `taira-<suffix>` tag
      - `TAIRA_CONFIG_PATH=/etc/iroha/taira-validator-1/config.toml`
      - `TAIRA_STORAGE_PATH=/var/lib/iroha/taira-validator-1`
+     - `TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH=/opt/iroha/kagemusha/release-policy.norito`
+     - `TAIRA_KAGEMUSHA_ARTIFACT_DIR=/opt/iroha/kagemusha/v4`
      - `TAIRA_TORII_PORT=18080` unless your ingress expects another loopback port
+   - both container launchers reject missing release inputs and mount them
+     read-only at `/etc/iroha/kagemusha/release-policy.norito` and
+     `/var/lib/iroha/kagemusha/v4`, exactly matching `[settlement.offline]` in
+     the rendered config. Compose also disables automatic host-path creation,
+     so a typo cannot become an empty mounted directory.
 5. Start the validator directly with the plain-`docker` wrapper:
    - `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env up`
    - `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env status`
@@ -960,10 +1000,13 @@ available as an optional convenience for environments that do have Compose.
    - to inspect the exact `docker run` invocation before starting:
      `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env config`
 6. If you prefer Docker Compose and the host actually has the plugin, the
-   equivalent commands are:
-   - `docker compose --env-file /etc/default/taira-validator-container.compose.env -f configs/soranexus/taira/docker-compose.validator.yml up -d`
-   - `docker compose --env-file /etc/default/taira-validator-container.compose.env -f configs/soranexus/taira/docker-compose.validator.yml ps`
-   - `docker compose --env-file /etc/default/taira-validator-container.compose.env -f configs/soranexus/taira/docker-compose.validator.yml logs --tail=200`
+   reviewed wrapper is mandatory. It rejects any alternate Compose file,
+   verifies the resolved `/readyz` healthcheck and read-only offline mounts,
+   and waits boundedly for `healthy`:
+   - `bash configs/soranexus/taira/taira-validator-compose.sh --env-file /etc/default/taira-validator-container.compose.env up`
+   - `bash configs/soranexus/taira/taira-validator-compose.sh --env-file /etc/default/taira-validator-container.compose.env status`
+   - `bash configs/soranexus/taira/taira-validator-compose.sh --env-file /etc/default/taira-validator-container.compose.env logs`
+   - direct `docker compose up` is not an authorized Taira deployment path
 7. If you want systemd ownership, install the wrapper service:
    - `sudo cp configs/soranexus/taira/taira-validator-container.service /etc/systemd/system/`
    - if the repo checkout is not `/opt/iroha`, edit the script path in
@@ -1013,7 +1056,7 @@ away from the shipped MCP-enabled config:
      that is the exact runtime candidate the later SoraSwap gate must approve
 3. Render the per-validator config bundle from a user-local roster file, then
    copy the correct validator config onto the host, for example:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --offline-bootstrap-genesis /absolute/reviewed/genesis.json --authorize-offline-bootstrap-sha256 "${OFFLINE_BOOTSTRAP_SHA256}" --offline-release-policy-path /absolute/reviewed/release-policy.norito --offline-artifact-dir /absolute/reviewed/v4 --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
    - `validator_secrets.local.toml` must include both the validator private
      keys and the shared `account_onboarding_*`, `torii_faucet_*`, and
      `streaming_identity_*`, `sorafs_council_public_keys`, and
@@ -1093,17 +1136,17 @@ From `../iroha2-block-explorer-web`:
    - `corepack enable && pnpm i && pnpm build`
 3. Render and install the nginx snippet from the same validator roster you use
    for the validator configs:
-   - preferred edge-host helper for the Solswap indexer binding:
-     `bash configs/soranexus/taira/install_taira_edge_nginx_conf.sh --roster configs/soranexus/taira/validator_roster.local.toml --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 --require-alias solswap-indexer.sora --install --reload`
-   - the helper renders the same config as the manual command below, refuses
+   - mandatory edge-host helper for the Solswap indexer binding:
+     `bash configs/soranexus/taira/install_taira_edge_nginx_conf.sh --roster configs/soranexus/taira/validator_roster.local.toml --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 --require-alias solswap-indexer.sora --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --install --reload`
+   - the helper binds fleet admission to the exact four
+     `edge_torii_upstream` listeners that nginx will proxy, refuses
      stale backup `.conf` files in the nginx include directory by default,
      validates the rendered snippet with a temporary nginx config, runs live
      `nginx -t` after install, rolls the target back if that live validation
      fails, and reloads nginx only when `--reload` is explicit
-   - `python3 scripts/render_taira_edge_nginx_conf.py --roster configs/soranexus/taira/validator_roster.local.toml --output dist/taira-edge/taira.sora.org.conf`
-   - `sudo cp dist/taira-edge/taira.sora.org.conf /etc/nginx/conf.d/taira.conf`
-   - on the shared macOS/Homebrew host, install the rendered file as
-     `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` instead
+   - direct renderer/copy/reload commands are diagnostic-only and are not an
+     authorized deployment path; use the helper's `--target-conf` when the
+     host needs a non-default nginx include path
    - set each validator entry's `edge_torii_upstream` in the roster to the
      real Torii listener the edge should proxy to, for example the current
      shared-host `127.0.0.1:29080..29083` layout rather than the old
@@ -1125,6 +1168,17 @@ From `../iroha2-block-explorer-web`:
     current state view. Move the public pin only after direct height and state
     parity checks pass. The validator-specific hostnames remain available for
     consensus diagnostics.
+  - every Torii-backed HTTPS server uses an nginx `auth_request` subrequest to
+    the selected validator's `/readyz` before serving application, API,
+    explorer, SoraFS, Connect, or MCP traffic. This is the active fail-closed
+    admission check that passive `max_fails` transport tracking cannot provide.
+    `/livez` remains an ungated process-liveness proxy; `/health`, `/readyz`,
+    `/status`, and `/v1/offline/readiness` are also ungated diagnostic proxies
+    so operators can see the complete blocker state. A validator that is alive
+    but missing any mandatory offline input therefore remains observable while
+    all non-probe traffic is rejected. The edge nginx build must include
+    `ngx_http_auth_request_module`; the install helper's mandatory `nginx -t`
+    validation refuses the rendered configuration if that module is absent.
   - keep the dedicated `location = /v1/mcp` blocks pinned to the same Torii
     upstream as `/v1/connect/session`, `/v1/connect/status`, and
     `/v1/connect/ws`. MCP exposes Connect session creation and management
@@ -1227,9 +1281,9 @@ From `../iroha2-block-explorer-web`:
      current SORA content is pornographic. Confirm from the edge host or an
      unfiltered external network before treating that as a Soracloud runtime
      failure, and treat the durable fix as ISP/filter-vendor delisting.
-5. Validate and reload nginx:
-   - `sudo nginx -t && sudo systemctl reload nginx`
-   - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
+5. Do not validate or reload nginx separately. The guarded helper in step 3
+   performs candidate validation, all-validator exact-identity admission,
+   live validation, rollback, and reload as one fail-closed operation.
 6. Run the MCP rollout smoke from any host that can see the validator loopback
    and the public endpoint:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`

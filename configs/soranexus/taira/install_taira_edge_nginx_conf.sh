@@ -7,6 +7,10 @@ ROSTER="${ROSTER:-${REPO_ROOT}/configs/soranexus/taira/validator_roster.local.to
 OUTPUT="${OUTPUT:-${REPO_ROOT}/dist/taira-edge/taira.sora.org.conf}"
 TARGET_CONF="${TARGET_CONF:-}"
 NGINX_BIN="${NGINX_BIN:-nginx}"
+ROLLOUT_CHECK="${ROLLOUT_CHECK:-${SCRIPT_DIR}/check_mcp_rollout.sh}"
+OFFLINE_ASSET_DEFINITION_ID="${OFFLINE_ASSET_DEFINITION_ID:-}"
+OFFLINE_EXPECTED_IDENTITY_PATH="${OFFLINE_EXPECTED_IDENTITY_PATH:-}"
+EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
 INSTALL=0
 RELOAD=0
 ALLOW_BACKUP_CONFS=0
@@ -14,6 +18,7 @@ SKIP_NGINX_TEST=0
 ALIAS_ROUTES=()
 REQUIRED_ALIASES=()
 NGINX_TEST_DIRS=()
+ADMISSION_VALIDATOR_ROOTS=()
 INSTALL_BACKUP_DIR=""
 INSTALL_BACKUP_CONF=""
 TARGET_CONF_EXISTED=0
@@ -24,6 +29,7 @@ cleanup_nginx_test_dirs() {
   for path in "${NGINX_TEST_DIRS[@]:-}"; do
     [[ -n "$path" && -e "$path" ]] && rm -rf "$path"
   done
+  return 0
 }
 
 cleanup_runtime_state() {
@@ -48,6 +54,9 @@ Usage: install_taira_edge_nginx_conf.sh [--roster PATH] [--output PATH]
                                        [--target-conf PATH]
                                        [--soracloud-alias-route ALIAS=HOST:PORT]
                                        [--require-alias ALIAS]
+                                       [--offline-asset-definition-id ID]
+                                       [--offline-expected-identity ABSOLUTE_PATH]
+                                       [--expected-git-sha FULL_40_HEX_SHA]
                                        [--install] [--reload]
                                        [--nginx-bin PATH]
                                        [--allow-backup-confs]
@@ -64,6 +73,9 @@ For the current Solswap indexer edge binding:
     --roster configs/soranexus/taira/validator_roster.local.toml \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
+    --offline-asset-definition-id REPLACE_WITH_CANONICAL_DS_ID \
+    --offline-expected-identity /absolute/reviewed/offline-artifact-identity.json \
+    --expected-git-sha REPLACE_WITH_EXACT_40_HEX_RELEASE_COMMIT \
     --install --reload
 
 On Linux, the default target is /etc/nginx/conf.d/taira.conf.
@@ -114,6 +126,30 @@ while [[ $# -gt 0 ]]; do
       REQUIRED_ALIASES+=("$2")
       shift 2
       ;;
+    --offline-asset-definition-id)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --offline-asset-definition-id" >&2
+        exit 1
+      }
+      OFFLINE_ASSET_DEFINITION_ID="$2"
+      shift 2
+      ;;
+    --offline-expected-identity)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --offline-expected-identity" >&2
+        exit 1
+      }
+      OFFLINE_EXPECTED_IDENTITY_PATH="$2"
+      shift 2
+      ;;
+    --expected-git-sha)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --expected-git-sha" >&2
+        exit 1
+      }
+      EXPECTED_TAIRA_GIT_SHA="$2"
+      shift 2
+      ;;
     --install)
       INSTALL=1
       shift
@@ -151,6 +187,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ $INSTALL -eq 1 && $SKIP_NGINX_TEST -eq 1 ]]; then
+  echo "--skip-nginx-test is limited to non-mutating render diagnostics" >&2
+  exit 1
+fi
+
 if [[ -z "$TARGET_CONF" ]]; then
   if [[ -d /opt/homebrew/etc/nginx/servers ]]; then
     TARGET_CONF="/opt/homebrew/etc/nginx/servers/taira.sora.org.conf"
@@ -186,6 +227,137 @@ require_in_rendered_conf() {
     echo "rendered nginx config missing ${message}: $OUTPUT" >&2
     exit 1
   fi
+}
+
+load_admission_validator_roots() {
+  local roots_output spec
+  roots_output="$(
+    python3 - "$ROSTER" <<'PY'
+import pathlib
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError as error:
+        raise SystemExit("python3 must provide tomllib or tomli") from error
+
+path = pathlib.Path(sys.argv[1])
+with path.open("rb") as stream:
+    payload = tomllib.load(stream)
+validators = payload.get("validators")
+if not isinstance(validators, list) or len(validators) != 4:
+    count = len(validators) if isinstance(validators, list) else 0
+    raise SystemExit(
+        f"Taira edge admission requires exactly four roster validators; found {count}"
+    )
+
+default_torii_address = payload.get("torii_address", "0.0.0.0:18080")
+if not isinstance(default_torii_address, str) or not default_torii_address.strip():
+    raise SystemExit("roster default torii_address must be a non-empty host:port")
+
+
+def normalize_upstream(value, context):
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"{context} must be a non-empty host:port")
+    text = value.strip()
+    if text.startswith("["):
+        end = text.find("]")
+        if end == -1 or end + 2 >= len(text) or text[end + 1] != ":":
+            raise SystemExit(f"{context} must be a valid [ipv6]:port or host:port")
+        host = text[1:end]
+        port = text[end + 2 :]
+    else:
+        host, separator, port = text.rpartition(":")
+        if not separator or not host or not port:
+            raise SystemExit(f"{context} must be a valid host:port")
+    if not port.isdigit():
+        raise SystemExit(f"{context} port must be numeric")
+    if host in {"0.0.0.0", "::", "[::]", "localhost"}:
+        host = "127.0.0.1"
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{host}:{port}"
+
+
+seen_labels = set()
+seen_roots = set()
+for index, validator in enumerate(validators, start=1):
+    if not isinstance(validator, dict):
+        raise SystemExit(f"validator #{index} must be a TOML table")
+    label = validator.get("slug")
+    if not isinstance(label, str) or not label or any(ch.isspace() for ch in label):
+        raise SystemExit(f"validator #{index} has an invalid slug")
+    upstream_source = validator.get(
+        "edge_torii_upstream",
+        validator.get("torii_address", default_torii_address),
+    )
+    upstream = normalize_upstream(
+        upstream_source,
+        f"validator {label} edge_torii_upstream",
+    )
+    canonical_root = f"http://{upstream}"
+    if label in seen_labels or canonical_root in seen_roots:
+        raise SystemExit("validator labels and edge Torii upstreams must be distinct")
+    seen_labels.add(label)
+    seen_roots.add(canonical_root)
+    print(f"{label}={canonical_root}")
+PY
+  )"
+
+  ADMISSION_VALIDATOR_ROOTS=()
+  while IFS= read -r spec; do
+    [[ -n "$spec" ]] && ADMISSION_VALIDATOR_ROOTS+=("$spec")
+  done <<<"$roots_output"
+  if ((${#ADMISSION_VALIDATOR_ROOTS[@]} != 4)); then
+    echo "Taira edge admission did not resolve exactly four validator roots" >&2
+    exit 1
+  fi
+}
+
+run_taira_deployment_admission() {
+  local public_root spec
+  local check_args
+
+  if [[ -z "$OFFLINE_ASSET_DEFINITION_ID" ]]; then
+    echo "--offline-asset-definition-id is required for install/reload" >&2
+    exit 1
+  fi
+  if [[ -z "$OFFLINE_EXPECTED_IDENTITY_PATH" ]]; then
+    echo "--offline-expected-identity is required for install/reload" >&2
+    exit 1
+  fi
+  if [[ ! "$EXPECTED_TAIRA_GIT_SHA" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+    echo "--expected-git-sha must be the exact full 40-character release commit" >&2
+    exit 1
+  fi
+  if [[ ! -f "$ROLLOUT_CHECK" ]]; then
+    echo "Taira rollout check not found: $ROLLOUT_CHECK" >&2
+    exit 1
+  fi
+
+  load_admission_validator_roots
+  public_root="${ADMISSION_VALIDATOR_ROOTS[0]#*=}"
+  check_args=(
+    "$ROLLOUT_CHECK"
+    --skip-local
+    --public-root "$public_root"
+  )
+  for spec in "${ADMISSION_VALIDATOR_ROOTS[@]}"; do
+    check_args+=(--validator-root "$spec")
+  done
+  check_args+=(
+    --require-all-validators
+    --offline-asset-definition-id "$OFFLINE_ASSET_DEFINITION_ID"
+    --offline-expected-identity "$OFFLINE_EXPECTED_IDENTITY_PATH"
+    --expected-git-sha "$EXPECTED_TAIRA_GIT_SHA"
+    --skip-write-canary
+  )
+
+  echo "verifying all four validators before nginx mutation"
+  bash "${check_args[@]}"
 }
 
 alias_path_regex() {
@@ -333,6 +505,9 @@ rollback_installed_conf() {
 require_in_rendered_conf 'server_name[[:space:]]+mon\.taira\.sora\.net;' 'Mon apex server block'
 require_in_rendered_conf 'server_name[[:space:]]+\*\.mon\.taira\.sora\.net[[:space:]]+~\^\.\+\\\.mon\\\.taira\\\.sora\\\.net\$;' 'Mon wildcard/regex fallback'
 require_in_rendered_conf 'proxy_next_upstream[[:space:]].*non_idempotent' 'shared-edge retry policy'
+require_in_rendered_conf 'auth_request[[:space:]]+/\.taira-internal/offline-readiness;' 'mandatory /readyz admission gate'
+require_in_rendered_conf 'proxy_pass[[:space:]]+http://[^;[:space:]]+_upstream/readyz;' 'selected-validator /readyz subrequest'
+require_in_rendered_conf 'location[[:space:]]*=[[:space:]]*/livez[[:space:]]*\{' 'ungated process-liveness proxy'
 
 if ((${#REQUIRED_ALIASES[@]} > 0)); then
   for alias in "${REQUIRED_ALIASES[@]}"; do
@@ -381,6 +556,7 @@ if [[ $SKIP_NGINX_TEST -ne 1 ]]; then
 fi
 
 if [[ $INSTALL -eq 1 ]]; then
+  run_taira_deployment_admission
   backup_target_conf
   INSTALL_ROLLBACK_NEEDED=1
   if ! copy_to_target_conf "$OUTPUT"; then
@@ -393,7 +569,6 @@ if [[ $INSTALL -eq 1 ]]; then
       exit 1
     fi
   fi
-  INSTALL_ROLLBACK_NEEDED=0
   echo "installed nginx config: $TARGET_CONF"
 else
   echo "rendered nginx config: $OUTPUT"
@@ -402,6 +577,13 @@ else
 fi
 
 if [[ $RELOAD -eq 1 ]]; then
-  "$NGINX_BIN" -s reload
+  if ! "$NGINX_BIN" -s reload; then
+    echo "nginx reload failed; rolling back installed config: $TARGET_CONF" >&2
+    exit 1
+  fi
   echo "nginx reloaded"
+fi
+
+if [[ $INSTALL -eq 1 ]]; then
+  INSTALL_ROLLBACK_NEEDED=0
 fi

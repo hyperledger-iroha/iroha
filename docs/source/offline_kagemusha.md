@@ -249,8 +249,10 @@ Operators must configure both paths together under `settlement.offline`:
 `kagemusha_artifact_dir` names the directory whose children are manifest
 digests. `kagemusha_max_decoded_bytes` caps the conservative decoded verifier
 working-set estimate. It defaults to, and cannot be raised above, 256 MiB per
-node; lower deployment limits are accepted. Leaving either path unset,
-disabling escrow, omitting every escrow asset, omitting the funded permitted
+node; lower deployment limits are accepted. Offline cash and escrow are
+unconditional protocol services: there is no `enabled` or `escrow_required`
+switch in either `settlement.offline` or `torii.kagemusha_commands`. Leaving
+either path unset, omitting every escrow asset, omitting the funded permitted
 command issuer, or supplying malformed/corrupt material is a startup error
 after Kura replay and before Kura writing, networking, consensus, or Torii.
 

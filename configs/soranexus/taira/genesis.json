@@ -26,10 +26,87 @@
         {
           "Register": {
             "Domain": {
-              "id": "wonderland.universal",
+              "id": "boi.is2",
               "logo": null,
               "metadata": {
-                "key": "value"
+                "purpose": "boi_mobile_is2_domain"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "discount.is2",
+              "logo": null,
+              "metadata": {
+                "purpose": "boi_mobile_is2_domain"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "fibi.is2",
+              "logo": null,
+              "metadata": {
+                "purpose": "boi_mobile_is2_domain"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "hapoalim.is2",
+              "logo": null,
+              "metadata": {
+                "purpose": "boi_mobile_is2_domain"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "jerusalem.is2",
+              "logo": null,
+              "metadata": {
+                "purpose": "boi_mobile_is2_domain"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "leumi.is2",
+              "logo": null,
+              "metadata": {
+                "purpose": "boi_mobile_is2_domain"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "mizrahi.is2",
+              "logo": null,
+              "metadata": {
+                "purpose": "boi_mobile_is2_domain"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "onezero.is2",
+              "logo": null,
+              "metadata": {
+                "purpose": "boi_mobile_is2_domain"
               }
             }
           }

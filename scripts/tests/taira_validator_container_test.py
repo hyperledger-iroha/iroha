@@ -27,6 +27,10 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                 """\
                 chain = "test"
 
+                [settlement.offline]
+                kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
+                kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
+
                 [sorafs.gateway.site_bindings]
                 path = "/config/sorafs_sites.json"
                 max_bytes = 1048576
@@ -37,6 +41,16 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         )
         self.storage_path = self.root / "storage"
         self.storage_path.mkdir()
+        self.kagemusha_release_policy_path = (
+            self.root / "kagemusha" / "release-policy.norito"
+        )
+        self.kagemusha_release_policy_path.parent.mkdir()
+        self.kagemusha_release_policy_path.write_bytes(b"authenticated-policy")
+        self.kagemusha_artifact_dir = self.root / "kagemusha" / "v4"
+        self.kagemusha_artifact_dir.mkdir()
+        (self.kagemusha_artifact_dir / "catalog.norito").write_bytes(
+            b"authenticated-v4-catalog"
+        )
         self.genesis_path = self.root / "genesis.json"
         self.genesis_path.write_text("{}\n", encoding="utf-8")
         self.signed_genesis_path = self.root / "genesis.signed.nrt"
@@ -53,9 +67,13 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                 TAIRA_IMAGE=example/taira:test
                 TAIRA_CONFIG_PATH={self.config_path}
                 TAIRA_STORAGE_PATH={self.storage_path}
+                TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH={self.kagemusha_release_policy_path}
+                TAIRA_KAGEMUSHA_ARTIFACT_DIR={self.kagemusha_artifact_dir}
                 TAIRA_P2P_PORT=1447
                 TAIRA_TORII_PORT=19080
                 TAIRA_RUST_LOG=debug
+                TAIRA_HEALTH_TIMEOUT_SECONDS=3
+                TAIRA_HEALTH_POLL_SECONDS=1
                 TAIRA_EXPOSE_KVM=false
                 TAIRA_DOCKER_NETWORK=taira-localnet
                 TAIRA_GENESIS_PATH={self.genesis_path}
@@ -81,6 +99,14 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                 fi
                 if [[ "${{1:-}}" == "container" && "${{2:-}}" == "inspect" ]]; then
                     exit "${{FAKE_DOCKER_CONTAINER_INSPECT_EXIT:-1}}"
+                fi
+                if [[ "${{1:-}}" == "run" ]]; then
+                    printf '%s\\n' "fake-new-container-id"
+                    exit 0
+                fi
+                if [[ "${{1:-}}" == "inspect" && "${{2:-}}" == "--format" ]]; then
+                    printf '%s\\n' "${{FAKE_DOCKER_HEALTH_STATUS:-running healthy}}"
+                    exit "${{FAKE_DOCKER_HEALTH_INSPECT_EXIT:-0}}"
                 fi
                 exit 0
                 """
@@ -121,6 +147,21 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.assertIn("-p 1447:1337", result.stdout)
         self.assertIn("-p 19080:8080", result.stdout)
         self.assertIn("IROHA_INROU_PORTABLE_ACCEL=auto", result.stdout)
+        self.assertIn(
+            "--health-cmd curl\\ -fsS\\ http://127.0.0.1:8080/readyz",
+            result.stdout,
+        )
+        normalized_stdout = result.stdout.replace("\\,", ",")
+        self.assertIn(
+            f"source={self.kagemusha_release_policy_path},"
+            "target=/etc/iroha/kagemusha/release-policy.norito,readonly",
+            normalized_stdout,
+        )
+        self.assertIn(
+            f"source={self.kagemusha_artifact_dir},"
+            "target=/var/lib/iroha/kagemusha/v4,readonly",
+            normalized_stdout,
+        )
         self.assertIn("--network taira-localnet", result.stdout)
         self.assertIn("IROHA_TAIRA_GENESIS=/config/genesis.json", result.stdout)
         self.assertIn("IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt", result.stdout)
@@ -140,9 +181,18 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                 (
                     "run -d --name test-validator --restart unless-stopped --init "
                     "-e RUST_LOG=debug -e IROHA_INROU_PORTABLE_ACCEL=auto "
+                    "--health-cmd curl -fsS http://127.0.0.1:8080/readyz "
+                    "--health-interval 10s --health-timeout 3s "
+                    "--health-retries 12 --health-start-period 20s "
                     "-p 1447:1337 -p 19080:8080 "
                     f"-v {self.config_path}:/config/config.toml:ro "
                     f"-v {self.storage_path}:/storage "
+                    "--mount "
+                    f"type=bind,source={self.kagemusha_release_policy_path},"
+                    "target=/etc/iroha/kagemusha/release-policy.norito,readonly "
+                    "--mount "
+                    f"type=bind,source={self.kagemusha_artifact_dir},"
+                    "target=/var/lib/iroha/kagemusha/v4,readonly "
                     "--network taira-localnet "
                     "-e IROHA_TAIRA_GENESIS=/config/genesis.json "
                     f"-v {self.genesis_path}:/config/genesis.json:ro "
@@ -151,8 +201,15 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                     f"-v {self.sites_path}:/config/sorafs_sites.json:ro "
                     "example/taira:test"
                 ),
+                (
+                    "inspect --format "
+                    "{{.State.Status}} "
+                    "{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}} "
+                    "fake-new-container-id"
+                ),
             ],
         )
+        self.assertEqual(result.stdout.strip(), "fake-new-container-id")
 
     def test_up_recreates_existing_container(self) -> None:
         result = self.run_script(
@@ -165,14 +222,100 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("rm -f test-validator", "\n".join(self.read_docker_log()))
 
+    def test_unhealthy_new_container_is_removed_and_up_fails(self) -> None:
+        result = self.run_script(
+            "up",
+            env={"FAKE_DOCKER_HEALTH_STATUS": "running unhealthy"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("reported unhealthy", result.stderr)
+        self.assertIn(
+            "rm -f fake-new-container-id",
+            "\n".join(self.read_docker_log()),
+        )
+
+    def test_missing_container_health_contract_fails_closed(self) -> None:
+        result = self.run_script(
+            "up",
+            env={"FAKE_DOCKER_HEALTH_STATUS": "running missing"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot become ready", result.stderr)
+        self.assertIn(
+            "rm -f fake-new-container-id",
+            "\n".join(self.read_docker_log()),
+        )
+
+    def test_health_poll_interval_cannot_exceed_deadline(self) -> None:
+        env_text = self.env_file.read_text(encoding="utf-8")
+        env_text = env_text.replace(
+            "TAIRA_HEALTH_TIMEOUT_SECONDS=3\nTAIRA_HEALTH_POLL_SECONDS=1",
+            "TAIRA_HEALTH_TIMEOUT_SECONDS=2\nTAIRA_HEALTH_POLL_SECONDS=3",
+        )
+        self.env_file.write_text(env_text, encoding="utf-8")
+        result = self.run_script(
+            "up",
+            env={"FAKE_DOCKER_HEALTH_STATUS": "running starting"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must not exceed TAIRA_HEALTH_TIMEOUT_SECONDS", result.stderr)
+        self.assertIn(
+            "rm -f fake-new-container-id",
+            "\n".join(self.read_docker_log()),
+        )
+
     def test_missing_config_fails_fast(self) -> None:
         self.config_path.unlink()
         result = self.run_script("up")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing Taira config", result.stderr)
 
+    def test_missing_mandatory_kagemusha_input_fails_fast(self) -> None:
+        self.kagemusha_release_policy_path.unlink()
+        result = self.run_script("config")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("authenticated Kagemusha release policy", result.stderr)
+
+        self.kagemusha_release_policy_path.write_bytes(b"authenticated-policy")
+        (self.kagemusha_artifact_dir / "catalog.norito").unlink()
+        self.kagemusha_artifact_dir.rmdir()
+        result = self.run_script("config")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("reviewed Kagemusha V4 artifact directory", result.stderr)
+
+    def test_kagemusha_mounts_must_match_offline_config_paths(self) -> None:
+        self.config_path.write_text(
+            textwrap.dedent(
+                """\
+                chain = "test"
+
+                [settlement.offline]
+                kagemusha_release_policy_path = "/wrong/release-policy.norito"
+                kagemusha_artifact_dir = "/wrong/v4"
+                """
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_script("config")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Taira config must bind [settlement.offline]",
+            result.stderr,
+        )
+
     def test_site_binding_mount_requires_config_backed_path(self) -> None:
-        self.config_path.write_text('chain = "test"\n', encoding="utf-8")
+        self.config_path.write_text(
+            textwrap.dedent(
+                """\
+                chain = "test"
+
+                [settlement.offline]
+                kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
+                kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
+                """
+            ),
+            encoding="utf-8",
+        )
         result = self.run_script("config")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("[sorafs.gateway.site_bindings].path", result.stderr)

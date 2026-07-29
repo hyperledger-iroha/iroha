@@ -17,8 +17,29 @@ services:
       - "${TAIRA_P2P_PORT:-1337}:1337"
       - "${TAIRA_TORII_PORT:-18080}:8080"
     volumes:
-      - "${TAIRA_CONFIG_PATH:-/etc/iroha/taira-validator-1/config.toml}:/config/config.toml:ro"
-      - "${TAIRA_STORAGE_PATH:-/var/lib/iroha/taira-validator-1}:/storage"
+      - type: bind
+        source: "${TAIRA_CONFIG_PATH:?set TAIRA_CONFIG_PATH to the rendered validator config}"
+        target: /config/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${TAIRA_STORAGE_PATH:?set TAIRA_STORAGE_PATH to the existing validator storage directory}"
+        target: /storage
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH:?set TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH to the reviewed authenticated release policy}"
+        target: /etc/iroha/kagemusha/release-policy.norito
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${TAIRA_KAGEMUSHA_ARTIFACT_DIR:?set TAIRA_KAGEMUSHA_ARTIFACT_DIR to the reviewed V4 artifact directory}"
+        target: /var/lib/iroha/kagemusha/v4
+        read_only: true
+        bind:
+          create_host_path: false
       # Uncomment to override the bundled public genesis.
       # - "${TAIRA_GENESIS_PATH:-/etc/iroha/taira-validator-1/genesis.json}:/config/genesis.json:ro"
       # Uncomment to inject a signed genesis block for disconnected/local smoke boots.
@@ -27,7 +48,9 @@ services:
       # "/config/sorafs_sites.json" in the rendered validator config.
       # - "${TAIRA_SORAFS_SITE_BINDINGS_PATH:-/etc/iroha/taira-validator-1/sorafs_sites.json}:/config/sorafs_sites.json:ro"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/status"]
+      # `/livez` is process-only. Container/LB admission must use the complete
+      # mandatory-offline readiness contract exposed by `/readyz`.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/readyz"]
       interval: 10s
       timeout: 3s
       retries: 12

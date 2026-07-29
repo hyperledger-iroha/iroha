@@ -438,9 +438,11 @@ where
 
     /// Declare that this route intentionally has no route-specific credential.
     ///
-    /// Listener-wide controls, including the configured Torii API token, still
-    /// wrap the composed router. The returned state can receive ordinary
-    /// middleware but cannot later claim a different authentication policy.
+    /// Listener-wide capacity controls still wrap the composed router. The
+    /// configured Torii API token also applies unless the global middleware
+    /// names an exact cataloged protocol probe as public. The returned state
+    /// can receive ordinary middleware but cannot later claim a different
+    /// authentication policy.
     #[must_use]
     pub(crate) fn unauthenticated(self) -> CatalogMethodRouter<S, UnauthenticatedRoute> {
         CatalogMethodRouter {

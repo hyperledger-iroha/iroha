@@ -33,9 +33,11 @@ lane_count = 3
 [genesis]
 public_key = "ed012067822E5566A0F5A2DDBD8745CFCAA215EB684D2D8BA200EA9F2DD9B247B1A306"
 
-# Optional ABI-21/V4 Kagemusha release catalog. Configure both paths together.
-# Omit both for normal node startup with Kagemusha issuance readiness false.
+# Required ABI-21/V4 Kagemusha release catalog. Every node must configure the
+# escrow catalog, authenticated release, and issuer command authority before it
+# can start any Kura, P2P, consensus, or Torii runtime surface.
 # [settlement.offline]
+# escrow_accounts = { "REPLACE_WITH_FIXED_SCALE_OFFLINE_ASSET" = "REPLACE_WITH_OFFLINE_ESCROW_ACCOUNT" }
 # kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
 # kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
 # kagemusha_max_decoded_bytes = 268435456

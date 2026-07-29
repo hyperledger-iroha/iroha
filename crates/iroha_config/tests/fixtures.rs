@@ -3047,8 +3047,6 @@ fn minimal_config_snapshot() {
                     collateral_substitution_matrix: {},
                 },
                 offline: Offline {
-                    enabled: true,
-                    escrow_required: true,
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,
                     kagemusha_artifact_dir: None,
@@ -4557,16 +4555,26 @@ fn taira_config_enables_untrusted_cid_hosting() {
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
 
-    assert_eq!(
-        doc.get("settlement")
-            .and_then(TomlValue::as_table)
-            .and_then(|settlement| settlement.get("offline"))
-            .and_then(TomlValue::as_table)
-            .and_then(|offline| offline.get("enabled"))
-            .and_then(TomlValue::as_bool),
-        Some(true),
-        "Taira must explicitly enable mandatory offline cash"
+    let offline = doc
+        .get("settlement")
+        .and_then(TomlValue::as_table)
+        .and_then(|settlement| settlement.get("offline"))
+        .and_then(TomlValue::as_table)
+        .expect("Taira must configure mandatory offline cash");
+    assert!(
+        !offline.contains_key("enabled") && !offline.contains_key("escrow_required"),
+        "offline cash has no service-disable or escrow opt-out configuration"
     );
+    for key in [
+        "escrow_accounts",
+        "kagemusha_release_policy_path",
+        "kagemusha_artifact_dir",
+    ] {
+        assert!(
+            offline.contains_key(key),
+            "Taira mandatory offline configuration is missing `{key}`"
+        );
+    }
 
     let dataspaces = doc
         .get("nexus")

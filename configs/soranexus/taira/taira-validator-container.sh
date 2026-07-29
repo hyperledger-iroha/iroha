@@ -59,15 +59,21 @@ TAIRA_CONTAINER_NAME="${TAIRA_CONTAINER_NAME:-taira-validator-1}"
 TAIRA_IMAGE="${TAIRA_IMAGE:-hyperledger/iroha:taira-latest}"
 TAIRA_CONFIG_PATH="${TAIRA_CONFIG_PATH:-/etc/iroha/taira-validator-1/config.toml}"
 TAIRA_STORAGE_PATH="${TAIRA_STORAGE_PATH:-/var/lib/iroha/taira-validator-1}"
+TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH="${TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH:-}"
+TAIRA_KAGEMUSHA_ARTIFACT_DIR="${TAIRA_KAGEMUSHA_ARTIFACT_DIR:-}"
 TAIRA_P2P_PORT="${TAIRA_P2P_PORT:-1337}"
 TAIRA_TORII_PORT="${TAIRA_TORII_PORT:-18080}"
 TAIRA_RUST_LOG="${TAIRA_RUST_LOG:-info}"
+TAIRA_HEALTH_TIMEOUT_SECONDS="${TAIRA_HEALTH_TIMEOUT_SECONDS:-180}"
+TAIRA_HEALTH_POLL_SECONDS="${TAIRA_HEALTH_POLL_SECONDS:-2}"
 TAIRA_INROU_PORTABLE_ACCEL="${TAIRA_INROU_PORTABLE_ACCEL:-auto}"
 TAIRA_EXPOSE_KVM="${TAIRA_EXPOSE_KVM:-auto}"
 TAIRA_GENESIS_PATH="${TAIRA_GENESIS_PATH:-}"
 TAIRA_SIGNED_GENESIS_PATH="${TAIRA_SIGNED_GENESIS_PATH:-}"
 TAIRA_SORAFS_SITE_BINDINGS_PATH="${TAIRA_SORAFS_SITE_BINDINGS_PATH:-}"
 TAIRA_DOCKER_NETWORK="${TAIRA_DOCKER_NETWORK:-}"
+KAGEMUSHA_CONTAINER_RELEASE_POLICY_PATH="/etc/iroha/kagemusha/release-policy.norito"
+KAGEMUSHA_CONTAINER_ARTIFACT_DIR="/var/lib/iroha/kagemusha/v4"
 
 require_file() {
     local path="$1"
@@ -87,6 +93,15 @@ require_directory() {
     fi
 }
 
+require_positive_integer() {
+    local value="$1"
+    local label="$2"
+    if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+        printf '%s must be a positive integer, got %s\n' "$label" "$value" >&2
+        exit 1
+    fi
+}
+
 config_declares_container_site_bindings() {
     awk '
         /^[[:space:]]*\[/ {
@@ -99,11 +114,52 @@ config_declares_container_site_bindings() {
     ' "$TAIRA_CONFIG_PATH"
 }
 
+config_declares_container_kagemusha_inputs() {
+    awk \
+        -v policy_path="$KAGEMUSHA_CONTAINER_RELEASE_POLICY_PATH" \
+        -v artifact_dir="$KAGEMUSHA_CONTAINER_ARTIFACT_DIR" '
+        /^[[:space:]]*\[/ {
+            in_offline = ($0 ~ /^[[:space:]]*\[settlement\.offline\][[:space:]]*$/)
+        }
+        in_offline {
+            line = $0
+            sub(/[[:space:]]*#.*/, "", line)
+            gsub(/[[:space:]]/, "", line)
+            if (line == "kagemusha_release_policy_path=\"" policy_path "\"") {
+                found_policy = 1
+            }
+            if (line == "kagemusha_artifact_dir=\"" artifact_dir "\"") {
+                found_artifacts = 1
+            }
+        }
+        END { exit(found_policy && found_artifacts ? 0 : 1) }
+    ' "$TAIRA_CONFIG_PATH"
+}
+
 docker_cmd=(docker)
 
 build_run_args() {
     require_file "$TAIRA_CONFIG_PATH" "Taira config"
     require_directory "$TAIRA_STORAGE_PATH" "Taira storage directory"
+    if [[ -z "$TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH" ]]; then
+        printf '%s\n' \
+            'TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH is required for mandatory offline startup' >&2
+        exit 1
+    fi
+    if [[ -z "$TAIRA_KAGEMUSHA_ARTIFACT_DIR" ]]; then
+        printf '%s\n' \
+            'TAIRA_KAGEMUSHA_ARTIFACT_DIR is required for mandatory offline startup' >&2
+        exit 1
+    fi
+    require_file "$TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH" \
+        "authenticated Kagemusha release policy"
+    require_directory "$TAIRA_KAGEMUSHA_ARTIFACT_DIR" \
+        "reviewed Kagemusha V4 artifact directory"
+    if ! config_declares_container_kagemusha_inputs; then
+        printf '%s\n' \
+            "Taira config must bind [settlement.offline] kagemusha_release_policy_path = \"$KAGEMUSHA_CONTAINER_RELEASE_POLICY_PATH\" and kagemusha_artifact_dir = \"$KAGEMUSHA_CONTAINER_ARTIFACT_DIR\"" >&2
+        exit 1
+    fi
 
     docker_run_args=(
         run -d
@@ -112,10 +168,17 @@ build_run_args() {
         --init
         -e "RUST_LOG=$TAIRA_RUST_LOG"
         -e "IROHA_INROU_PORTABLE_ACCEL=$TAIRA_INROU_PORTABLE_ACCEL"
+        --health-cmd "curl -fsS http://127.0.0.1:8080/readyz"
+        --health-interval 10s
+        --health-timeout 3s
+        --health-retries 12
+        --health-start-period 20s
         -p "${TAIRA_P2P_PORT}:1337"
         -p "${TAIRA_TORII_PORT}:8080"
         -v "${TAIRA_CONFIG_PATH}:/config/config.toml:ro"
         -v "${TAIRA_STORAGE_PATH}:/storage"
+        --mount "type=bind,source=${TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH},target=${KAGEMUSHA_CONTAINER_RELEASE_POLICY_PATH},readonly"
+        --mount "type=bind,source=${TAIRA_KAGEMUSHA_ARTIFACT_DIR},target=${KAGEMUSHA_CONTAINER_ARTIFACT_DIR},readonly"
     )
 
     if [[ "$TAIRA_EXPOSE_KVM" == "1" || "$TAIRA_EXPOSE_KVM" == "true" ]]; then
@@ -169,6 +232,58 @@ image_exists() {
     "${docker_cmd[@]}" image inspect "$TAIRA_IMAGE" >/dev/null 2>&1
 }
 
+wait_for_healthy() {
+    local container_id="$1"
+    local deadline status
+
+    require_positive_integer \
+        "$TAIRA_HEALTH_TIMEOUT_SECONDS" \
+        "TAIRA_HEALTH_TIMEOUT_SECONDS"
+    require_positive_integer \
+        "$TAIRA_HEALTH_POLL_SECONDS" \
+        "TAIRA_HEALTH_POLL_SECONDS"
+    if ((TAIRA_HEALTH_POLL_SECONDS > TAIRA_HEALTH_TIMEOUT_SECONDS)); then
+        printf '%s must not exceed TAIRA_HEALTH_TIMEOUT_SECONDS (%s > %s)\n' \
+            "TAIRA_HEALTH_POLL_SECONDS" \
+            "$TAIRA_HEALTH_POLL_SECONDS" \
+            "$TAIRA_HEALTH_TIMEOUT_SECONDS" >&2
+        return 1
+    fi
+    deadline=$((SECONDS + TAIRA_HEALTH_TIMEOUT_SECONDS))
+
+    while ((SECONDS < deadline)); do
+        if ! status="$(
+            "${docker_cmd[@]}" inspect \
+                --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' \
+                "$container_id"
+        )"; then
+            printf 'failed to inspect new Taira container %s\n' "$container_id" >&2
+            return 1
+        fi
+        case "$status" in
+            "running healthy")
+                return 0
+                ;;
+            "running starting")
+                ;;
+            "running unhealthy")
+                printf 'new Taira container %s reported unhealthy\n' "$container_id" >&2
+                return 1
+                ;;
+            *)
+                printf 'new Taira container %s cannot become ready: %s\n' \
+                    "$container_id" "$status" >&2
+                return 1
+                ;;
+        esac
+        sleep "$TAIRA_HEALTH_POLL_SECONDS"
+    done
+
+    printf 'new Taira container %s did not become healthy within %s seconds\n' \
+        "$container_id" "$TAIRA_HEALTH_TIMEOUT_SECONDS" >&2
+    return 1
+}
+
 do_pull() {
     "${docker_cmd[@]}" pull "$TAIRA_IMAGE"
 }
@@ -200,6 +315,8 @@ do_reset() {
 }
 
 do_up() {
+    local new_container_id
+
     build_run_args
 
     if ! image_exists; then
@@ -207,7 +324,16 @@ do_up() {
     fi
 
     do_down
-    "${docker_cmd[@]}" "${docker_run_args[@]}"
+    new_container_id="$("${docker_cmd[@]}" "${docker_run_args[@]}")"
+    if [[ -z "$new_container_id" ]]; then
+        printf 'docker run did not return the new Taira container id\n' >&2
+        return 1
+    fi
+    if ! wait_for_healthy "$new_container_id"; then
+        "${docker_cmd[@]}" rm -f "$new_container_id" >/dev/null 2>&1 || true
+        return 1
+    fi
+    printf '%s\n' "$new_container_id"
 }
 
 case "$command_name" in

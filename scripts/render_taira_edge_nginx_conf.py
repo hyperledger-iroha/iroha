@@ -21,6 +21,14 @@ DEFAULT_MON_HOST_SUFFIX = "mon.taira.sora.net"
 DEFAULT_CLIENT_MAX_BODY_SIZE = "1g"
 DEFAULT_UPSTREAM_KEEPALIVE = 64
 DEFAULT_UPSTREAM_FAIL_TIMEOUT = "5s"
+TAIRA_READINESS_ADMISSION_URI = "/.taira-internal/offline-readiness"
+TAIRA_UNGATED_PROBE_PATHS = (
+    "/livez",
+    "/health",
+    "/readyz",
+    "/status",
+    "/v1/offline/readiness",
+)
 MIN_VALIDATORS = 4
 PUBLIC_TORII_CORS_ORIGINS = [
     "https://test.soraswap.org",
@@ -294,6 +302,9 @@ def _render_public_torii_cors_server_lines() -> list[str]:
         f'  add_header Access-Control-Max-Age "{PUBLIC_TORII_CORS_MAX_AGE}" always;',
         '  add_header Vary "Origin" always;',
         "",
+        "  # A CORS preflight is answered locally without proxying, reading chain",
+        "  # state, or submitting value. It remains available while admission is",
+        "  # closed so clients can report the subsequent readiness failure cleanly.",
         "  if ($request_method = OPTIONS) {",
         "    return 204;",
         "  }",
@@ -309,8 +320,11 @@ def _render_exact_proxy_location(
     websocket: bool = False,
     retry_non_idempotent: bool = False,
     forwarded_host_expr: str | None = None,
+    bypass_readiness_admission: bool = False,
 ) -> list[str]:
     lines = [f"  location = {path} {{", f"    proxy_pass http://{upstream};", "    proxy_http_version 1.1;"]
+    if bypass_readiness_admission:
+        lines.insert(1, "    auth_request off;")
     if websocket:
         lines.extend(
             [
@@ -334,6 +348,53 @@ def _render_exact_proxy_location(
             "  }",
         ]
     )
+    return lines
+
+
+def _render_torii_readiness_admission(
+    upstream: str,
+    *,
+    host_expr: str,
+    forwarded_host_expr: str | None = None,
+    include_torii_diagnostics: bool = True,
+) -> list[str]:
+    """Require the selected Torii validator to pass `/readyz` before admission."""
+
+    lines = [
+        "  # Gate every non-probe request on the selected validator's complete",
+        "  # offline readiness. nginx OSS only has passive transport health checks,",
+        "  # so an internal auth subrequest is required to reject a live-but-unready",
+        "  # validator before proxying any application or value-moving request.",
+        f"  auth_request {TAIRA_READINESS_ADMISSION_URI};",
+        "",
+        f"  location = {TAIRA_READINESS_ADMISSION_URI} {{",
+        "    internal;",
+        "    auth_request off;",
+        f"    proxy_pass http://{upstream}/readyz;",
+        "    proxy_method GET;",
+        "    proxy_pass_request_body off;",
+        '    proxy_set_header Content-Length "";',
+        '    proxy_set_header Authorization "";',
+        '    proxy_set_header X-API-Token "";',
+        f"    proxy_set_header Host {host_expr};",
+        "    proxy_connect_timeout 2s;",
+        "    proxy_read_timeout 3s;",
+        "    proxy_send_timeout 3s;",
+        "  }",
+        "",
+    ]
+    if include_torii_diagnostics:
+        for path in TAIRA_UNGATED_PROBE_PATHS:
+            lines.extend(
+                _render_exact_proxy_location(
+                    path,
+                    upstream,
+                    host_expr=host_expr,
+                    forwarded_host_expr=forwarded_host_expr,
+                    bypass_readiness_admission=True,
+                )
+            )
+            lines.append("")
     return lines
 
 
@@ -416,6 +477,8 @@ def _render_soracloud_alias_server(
     route: SoracloudAliasRoute,
     *,
     client_max_body_size: str,
+    readiness_upstream: str,
+    readiness_host_expr: str,
 ) -> list[str]:
     lines = [
         "server {",
@@ -431,6 +494,13 @@ def _render_soracloud_alias_server(
         "  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;",
         "",
     ]
+    lines.extend(
+        _render_torii_readiness_admission(
+            readiness_upstream,
+            host_expr=readiness_host_expr,
+            include_torii_diagnostics=False,
+        )
+    )
     lines.extend(
         _render_prefix_proxy_location(
             "/",
@@ -626,6 +696,13 @@ def render_edge_nginx_conf(
             "",
         ]
     )
+    lines.extend(
+        _render_torii_readiness_admission(
+            public_validator_upstream,
+            host_expr=public_upstream_host,
+            forwarded_host_expr="$host",
+        )
+    )
     lines.extend(_render_public_torii_cors_server_lines())
     lines.extend(
         _render_connect_stateful_locations(
@@ -676,12 +753,19 @@ def render_edge_nginx_conf(
             "  include /etc/letsencrypt/options-ssl-nginx.conf;",
             "  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;",
             "",
-            "  location = /health {",
-            '    default_type "text/plain";',
-            "    return 200 \"Healthy\\n\";",
-            "  }",
-            "",
+        ]
+    )
+    lines.extend(
+        _render_torii_readiness_admission(
+            public_validator_upstream,
+            host_expr=public_upstream_host,
+            forwarded_host_expr="$host",
+        )
+    )
+    lines.extend(
+        [
             "  location = / {",
+            "    auth_request off;",
             '    default_type "text/plain";',
             "    return 200 \"Taira Soracloud Mon gateway\\n\\nUse https://<alias>."
             f"{mon_host_suffix}/<path> for browser clients.\\nExample: "
@@ -706,6 +790,8 @@ def render_edge_nginx_conf(
             _render_soracloud_alias_server(
                 route,
                 client_max_body_size=client_max_body_size,
+                readiness_upstream=public_validator_upstream,
+                readiness_host_expr=public_upstream_host,
             )
         )
     lines.extend(
@@ -726,6 +812,13 @@ def render_edge_nginx_conf(
             "  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;",
             "",
         ]
+    )
+    lines.extend(
+        _render_torii_readiness_admission(
+            public_validator_upstream,
+            host_expr=public_upstream_host,
+            forwarded_host_expr="$host",
+        )
     )
     lines.extend(
         _render_prefix_proxy_location(
@@ -755,6 +848,12 @@ def render_edge_nginx_conf(
         ]
     )
     lines.extend(
+        _render_torii_readiness_admission(
+            public_validator_upstream,
+            host_expr="$host",
+        )
+    )
+    lines.extend(
         _render_prefix_proxy_location(
             "/",
             "taira_public_edge_upstream",
@@ -779,6 +878,12 @@ def render_edge_nginx_conf(
                 "  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;",
                 "",
             ]
+        )
+        lines.extend(
+            _render_torii_readiness_admission(
+                f"{validator.upstream_name}_upstream",
+                host_expr="$host",
+            )
         )
         lines.extend(
             _render_exact_proxy_location(
@@ -823,23 +928,19 @@ def render_edge_nginx_conf(
             f"  root {explorer_root};",
             "  index index.html;",
             "",
+        ]
+    )
+    lines.extend(
+        _render_torii_readiness_admission(
+            public_validator_upstream,
+            host_expr=public_upstream_host,
+            forwarded_host_expr=public_host,
+        )
+    )
+    lines.extend(
+        [
             "  location / {",
             "    try_files $uri $uri/ /index.html;",
-            "  }",
-            "",
-            "  location = /status {",
-            "    proxy_pass http://taira_public_edge_upstream/status;",
-            "    proxy_http_version 1.1;",
-            f"    proxy_set_header Host {public_upstream_host};",
-            "    proxy_set_header X-Real-IP $remote_addr;",
-            "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-            f"    proxy_set_header X-Forwarded-Host {public_host};",
-            "    proxy_set_header X-Forwarded-Proto $scheme;",
-            "    proxy_next_upstream error timeout http_502 http_503 http_504 invalid_header non_idempotent;",
-            "    proxy_next_upstream_tries 4;",
-            "    proxy_read_timeout 3600;",
-            "    proxy_send_timeout 3600;",
-            "    proxy_buffering off;",
             "  }",
             "",
         ]

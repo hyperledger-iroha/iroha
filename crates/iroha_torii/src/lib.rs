@@ -4297,6 +4297,51 @@ mod preauth_connection_lifetime_tests {
     }
 
     #[tokio::test]
+    async fn cataloged_health_readyz_and_livez_bypass_listener_api_token() {
+        let mut app = app_with_scheme_cap("http");
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        let router = Router::new()
+            .route("/probe", get(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_api_token,
+            ));
+
+        for descriptor in [
+            route_catalog::core::HEALTH,
+            route_catalog::core::READYZ,
+            route_catalog::core::LIVEZ,
+        ] {
+            let mut request = request("/probe", false);
+            request
+                .extensions_mut()
+                .insert(MatchedRouteMetadata::from_descriptor(descriptor));
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("public probe response");
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{} must remain public",
+                descriptor.path()
+            );
+        }
+
+        let mut protected = request("/probe", false);
+        protected
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::core::API_VERSION,
+            ));
+        let response = router.oneshot(protected).await.expect("protected response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn duplicate_api_token_headers_fail_closed() {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
@@ -4746,6 +4791,18 @@ async fn enforce_api_token(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
+    let public_probe = req
+        .extensions()
+        .get::<MatchedRouteMetadata>()
+        .is_some_and(|route| {
+            let route_id = route.stable_route_id();
+            route_id == route_catalog::core::HEALTH.stable_route_id()
+                || route_id == route_catalog::core::READYZ.stable_route_id()
+                || route_id == route_catalog::core::LIVEZ.stable_route_id()
+        });
+    if public_probe {
+        return Ok(next.run(req).await);
+    }
     if let Some(response) = api_token_rejection(&app, req.headers()) {
         return Ok(response);
     }
@@ -12157,7 +12214,7 @@ const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize 
     }
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 fn offline_kagemusha_readiness_error(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "readiness_unavailable",
@@ -12165,7 +12222,7 @@ fn offline_kagemusha_readiness_error(message: impl Into<String>) -> Error {
     }
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 fn offline_kagemusha_readiness_verifier_record(
     world: &impl WorldReadOnly,
     block_height: u64,
@@ -12257,7 +12314,7 @@ fn offline_kagemusha_readiness_verifier_record(
     }))
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 fn offline_kagemusha_asset_transfer_verifier_record(
     world: &impl WorldReadOnly,
     asset: &AssetDefinitionId,
@@ -12343,7 +12400,7 @@ fn offline_kagemusha_asset_transfer_verifier_record(
     ))
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 fn offline_kagemusha_asset_topup_shield_verifier_record(
     world: &impl WorldReadOnly,
     asset: &AssetDefinitionId,
@@ -12430,7 +12487,7 @@ fn offline_kagemusha_asset_topup_shield_verifier_record(
     ))
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 fn ensure_offline_readiness_verifier_roles_are_distinct(
     roles: [(
         &'static str,
@@ -12474,7 +12531,7 @@ fn offline_readiness_blocker(
     }
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 struct OfflineKagemushaRecursiveV4Evaluation {
     step_eq: Option<iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEqVerifier>,
     step_ep: Option<iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEpVerifier>,
@@ -12483,7 +12540,7 @@ struct OfflineKagemushaRecursiveV4Evaluation {
     blockers: Vec<iroha_torii_shared::offline_api::OfflineReadinessBlocker>,
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 fn offline_kagemusha_readiness_capability_flags(
     proof_backend_available: bool,
     artifact_set_available: bool,
@@ -12502,7 +12559,7 @@ fn offline_kagemusha_readiness_capability_flags(
     )
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 fn project_kagemusha_recursive_verifier_v4(
     verifier: iroha_core::smartcontracts::isi::offline::KagemushaRecursiveVerifierReadinessV4,
 ) -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
@@ -12521,7 +12578,7 @@ fn project_kagemusha_recursive_verifier_v4(
     }
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(test, feature = "app_api"))]
 fn offline_kagemusha_recursive_v4_evaluation_from_resolution(
     resolution: Result<
         Option<iroha_core::smartcontracts::isi::offline::KagemushaRecursiveReadinessV4>,
@@ -12642,19 +12699,22 @@ fn strong_etag_for_representation(bytes: &[u8]) -> String {
 }
 
 #[cfg(feature = "app_api")]
-const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-
-#[cfg(feature = "app_api")]
-fn chain_requires_mandatory_offline(chain_id: &ChainId) -> bool {
-    matches!(
-        chain_id.as_str(),
-        PUBLIC_TAIRA_CHAIN_ID | "iroha3-taira" | "taira"
-    )
+fn offline_service_is_mandatory() -> bool {
+    true
 }
 
 #[cfg(feature = "app_api")]
-fn offline_service_is_mandatory(chain_id: &ChainId, configured_enabled: bool) -> bool {
-    configured_enabled || chain_requires_mandatory_offline(chain_id)
+fn mandatory_offline_policy_for_chain(
+    chain_id: &ChainId,
+    offline_config: &iroha_config::parameters::actual::Offline,
+    command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
+) -> Result<iroha_core::offline_readiness::MandatoryOfflinePolicy, String> {
+    iroha_core::offline_readiness::mandatory_offline_policy_from_config(
+        chain_id,
+        offline_config,
+        command_config,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Enforce the complete mandatory offline-cash invariant after Kura replay and
@@ -12671,311 +12731,22 @@ pub fn ensure_mandatory_offline_configuration(
     offline_config: &iroha_config::parameters::actual::Offline,
     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
 ) -> Result<(), String> {
-    if !offline_config.enabled {
-        if !offline_config.escrow_accounts.is_empty()
-            || offline_config.kagemusha_release_policy_path.is_some()
-            || offline_config.kagemusha_artifact_dir.is_some()
-            || command_config.is_some()
-        {
-            return Err(
-                "settlement.offline.enabled=false forbids dormant escrow, release, and command configuration"
-                    .to_owned(),
-            );
-        }
-        return Ok(());
-    }
-    if !offline_config.escrow_required {
-        return Err("settlement.offline.escrow_required must be true".to_owned());
-    }
-    if offline_config.escrow_accounts.is_empty() {
-        return Err(
-            "settlement.offline.escrow_accounts must bind at least one required offline asset"
-                .to_owned(),
-        );
-    }
-    match (
-        offline_config.kagemusha_release_policy_path.as_ref(),
-        offline_config.kagemusha_artifact_dir.as_ref(),
-    ) {
-        (Some(policy), Some(artifacts))
-            if !policy.as_os_str().is_empty() && !artifacts.as_os_str().is_empty() => {}
-        _ => {
-            return Err(
-                "settlement.offline requires a non-empty authenticated release policy and artifact directory"
-                    .to_owned(),
-            );
-        }
-    }
-    if offline_config.kagemusha_max_decoded_bytes == 0 {
-        return Err(
-            "settlement.offline.kagemusha_max_decoded_bytes must be greater than zero".to_owned(),
-        );
-    }
-    if command_config.is_none() {
-        return Err("torii.kagemusha_commands is mandatory for offline cash".to_owned());
-    }
-    Ok(())
+    let validation_chain = ChainId::from("mandatory-offline-configuration");
+    mandatory_offline_policy_for_chain(&validation_chain, offline_config, command_config)
+        .map(|_| ())
 }
 
 #[cfg(feature = "app_api")]
-/// Enforce chain-profile requirements in addition to local offline configuration.
+/// Enforce the mandatory offline configuration for a specific chain.
 ///
-/// Public Taira validators must never join with offline cash disabled. Other
-/// profiles may disable only local service surfaces; consensus execution stays
-/// independent of this process-local switch.
+/// Offline cash is a protocol invariant on every chain. Validation errors
+/// identify the chain whose signed genesis is being staged.
 pub fn ensure_mandatory_offline_configuration_for_chain(
     chain_id: &ChainId,
     offline_config: &iroha_config::parameters::actual::Offline,
     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
 ) -> Result<(), String> {
-    if chain_requires_mandatory_offline(chain_id) && !offline_config.enabled {
-        return Err(format!(
-            "public Taira chain `{chain_id}` requires settlement.offline.enabled=true"
-        ));
-    }
-    ensure_mandatory_offline_configuration(offline_config, command_config)
-}
-
-#[cfg(feature = "app_api")]
-fn mandatory_offline_escrow_bindings_after_replay(
-    configured: &BTreeMap<AssetDefinitionId, AccountId>,
-    replayed: &BTreeMap<AssetDefinitionId, AccountId>,
-    metadata_derived: &BTreeMap<AssetDefinitionId, AccountId>,
-) -> Result<BTreeMap<AssetDefinitionId, AccountId>, String> {
-    if replayed.is_empty() {
-        return Err(
-            "replayed settlement.offline.escrow_accounts must bind at least one required offline asset"
-                .to_owned(),
-        );
-    }
-
-    for (asset_definition_id, configured_account_id) in configured {
-        let replayed_account_id = replayed.get(asset_definition_id).ok_or_else(|| {
-            format!(
-                "configured offline escrow binding for `{asset_definition_id}` disappeared during Kura replay"
-            )
-        })?;
-        if replayed_account_id != configured_account_id {
-            return Err(format!(
-                "configured offline escrow binding for `{asset_definition_id}` is `{configured_account_id}`, but Kura replay selected `{replayed_account_id}`"
-            ));
-        }
-    }
-
-    let mut effective = replayed.clone();
-    for (asset_definition_id, derived_account_id) in metadata_derived {
-        match effective.entry(asset_definition_id.clone()) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(derived_account_id.clone());
-            }
-            std::collections::btree_map::Entry::Occupied(entry)
-                if entry.get() != derived_account_id =>
-            {
-                return Err(format!(
-                    "offline-enabled asset `{asset_definition_id}` deterministically requires escrow account `{derived_account_id}`, but replayed settlement selected `{}`",
-                    entry.get()
-                ));
-            }
-            std::collections::btree_map::Entry::Occupied(_) => {}
-        }
-    }
-
-    Ok(effective)
-}
-
-#[cfg(feature = "app_api")]
-fn mandatory_offline_asset_enabled(
-    asset_definition_id: &AssetDefinitionId,
-    metadata: &iroha_data_model::metadata::Metadata,
-) -> Result<bool, String> {
-    let key: iroha_data_model::name::Name =
-        iroha_data_model::offline::OFFLINE_ASSET_ENABLED_METADATA_KEY
-            .parse()
-            .map_err(|error| {
-                format!(
-                    "offline asset `{asset_definition_id}` has an invalid metadata key: {error}"
-                )
-            })?;
-    let Some(value) = metadata.get(&key) else {
-        return Ok(false);
-    };
-    if let Ok(enabled) = value.try_into_any::<bool>() {
-        return Ok(enabled);
-    }
-    if let Ok(text) = value.try_into_any::<String>() {
-        let trimmed = text.trim();
-        if trimmed.eq_ignore_ascii_case("true") {
-            return Ok(true);
-        }
-        if trimmed.eq_ignore_ascii_case("false") {
-            return Ok(false);
-        }
-    }
-    Err(format!(
-        "offline asset `{asset_definition_id}` metadata `offline.enabled` must be a boolean or the string `true`/`false`"
-    ))
-}
-
-#[cfg(feature = "app_api")]
-fn mandatory_offline_metadata_escrow_bindings(
-    world: &impl WorldReadOnly,
-    chain_id: &ChainId,
-) -> Result<BTreeMap<AssetDefinitionId, AccountId>, String> {
-    let mut bindings = BTreeMap::new();
-    for (asset_definition_id, asset_definition) in world.asset_definitions().iter() {
-        let enabled =
-            mandatory_offline_asset_enabled(asset_definition_id, &asset_definition.metadata)?;
-        if enabled {
-            bindings.insert(
-                asset_definition_id.clone(),
-                iroha_data_model::offline::offline_escrow_account_id(chain_id, asset_definition_id),
-            );
-        }
-    }
-    Ok(bindings)
-}
-
-#[cfg(feature = "app_api")]
-fn ensure_mandatory_offline_readiness_snapshot(
-    world: &impl WorldReadOnly,
-    release_catalog: &iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-    replayed_offline_config: &iroha_config::parameters::actual::Offline,
-    block_height: u64,
-    evaluated_at_ms: u64,
-    chain_id: &ChainId,
-    offline_config: &iroha_config::parameters::actual::Offline,
-    command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
-    fee_asset_selector: &str,
-) -> Result<(), String> {
-    ensure_mandatory_offline_configuration_for_chain(chain_id, offline_config, command_config)?;
-    if !offline_config.enabled {
-        return Ok(());
-    }
-    let command_config = command_config
-        .cloned()
-        .ok_or_else(|| "torii.kagemusha_commands is mandatory for offline cash".to_owned())?;
-    let issuer = offline_commands::OfflineCommandRuntime::from_config(command_config);
-    if block_height == 0 {
-        return Err("offline readiness requires a non-zero committed height".to_owned());
-    }
-
-    iroha_core::smartcontracts::isi::offline::ensure_kagemusha_active_release_material_v4(
-        world,
-        release_catalog,
-        block_height,
-    )?;
-    iroha_core::smartcontracts::isi::offline::isi::ensure_offline_device_attestation_policy_ready_v1(
-        world,
-        evaluated_at_ms,
-    )?;
-    offline_commands::ensure_offline_command_authority_ready_in_world(
-        world,
-        &issuer,
-        fee_asset_selector,
-        evaluated_at_ms,
-    )
-    .map_err(|error| format!("offline command issuer is not ready: {error:?}"))?;
-
-    // `State::settlement` is process-local and intentionally absent from WSV
-    // snapshots, while `offline.enabled` metadata and its escrow account are
-    // committed world state. Re-derive those bindings from the fully replayed
-    // world so snapshot startup gates the complete catalog. Conversely, an
-    // operator-provided binding must not be silently replaced: that would make
-    // the startup report validate a different reserve account than the operator
-    // reviewed.
-    let metadata_derived = mandatory_offline_metadata_escrow_bindings(world, chain_id)?;
-    let escrow_bindings = mandatory_offline_escrow_bindings_after_replay(
-        &offline_config.escrow_accounts,
-        &replayed_offline_config.escrow_accounts,
-        &metadata_derived,
-    )?;
-    for (asset_definition_id, escrow_account_id) in &escrow_bindings {
-        let asset_definition = world.asset_definition(asset_definition_id).map_err(|error| {
-            format!(
-                "required offline asset definition `{asset_definition_id}` is unavailable: {error}"
-            )
-        })?;
-        let scale = asset_definition.spec().scale().ok_or_else(|| {
-            format!("required offline asset `{asset_definition_id}` is not fixed-scale")
-        })?;
-        if scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 {
-            return Err(format!(
-                "required offline asset `{asset_definition_id}` scale {scale} exceeds the protocol maximum"
-            ));
-        }
-        world.account(escrow_account_id).map_err(|error| {
-            format!(
-                "offline escrow account `{escrow_account_id}` for `{asset_definition_id}` is unavailable: {error}"
-            )
-        })?;
-
-        let transfer = offline_kagemusha_asset_transfer_verifier_record(
-            world,
-            asset_definition_id,
-            block_height,
-        )
-        .map_err(|error| format!("offline transfer verifier is invalid: {error:?}"))?;
-        let topup = offline_kagemusha_asset_topup_shield_verifier_record(
-            world,
-            asset_definition_id,
-            block_height,
-        )
-        .map_err(|error| format!("offline top-up verifier is invalid: {error:?}"))?;
-        let unshield = offline_kagemusha_readiness_verifier_record(
-            world,
-            block_height,
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            "pallas",
-            iroha_crypto::Hash::new(
-                iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
-            )
-            .into(),
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-        )
-        .map_err(|error| format!("offline unshield verifier is invalid: {error:?}"))?;
-        let recursive =
-            iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_readiness_v4(
-                world,
-                release_catalog,
-                chain_id,
-                asset_definition_id,
-                scale,
-                block_height,
-            )?
-            .ok_or_else(|| {
-                format!(
-                    "required offline asset `{asset_definition_id}` has no active authenticated ABI-21/V4 recursive release"
-                )
-            })?;
-        if let Some(error) = recursive.proof_backend_error.as_ref() {
-            return Err(format!(
-                "required offline asset `{asset_definition_id}` proof backend is unavailable: {error}"
-            ));
-        }
-        let recursive_step_eq = project_kagemusha_recursive_verifier_v4(recursive.step_eq);
-        let recursive_step_ep = project_kagemusha_recursive_verifier_v4(recursive.step_ep);
-        ensure_offline_readiness_verifier_roles_are_distinct([
-            ("transfer", transfer.as_ref()),
-            ("topup_shield", topup.as_ref()),
-            ("unshield", unshield.as_ref()),
-            ("recursive_step_eq", Some(&recursive_step_eq)),
-            ("recursive_step_ep", Some(&recursive_step_ep)),
-        ])
-        .map_err(|error| format!("offline verifier roles are not distinct: {error:?}"))?;
-        for (role, available) in [
-            ("transfer", transfer.is_some()),
-            ("topup_shield", topup.is_some()),
-            ("unshield", unshield.is_some()),
-        ] {
-            if !available {
-                return Err(format!(
-                    "required offline asset `{asset_definition_id}` has no active `{role}` verifier"
-                ));
-            }
-        }
-    }
-    Ok(())
+    mandatory_offline_policy_for_chain(chain_id, offline_config, command_config).map(|_| ())
 }
 
 #[cfg(feature = "app_api")]
@@ -12994,30 +12765,33 @@ pub fn ensure_mandatory_offline_startup_readiness(
     chain_id: &ChainId,
     offline_config: &iroha_config::parameters::actual::Offline,
     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
-    fee_asset_selector: &str,
+    peer_id: &PeerId,
 ) -> Result<(), String> {
-    ensure_mandatory_offline_configuration_for_chain(chain_id, offline_config, command_config)?;
-    if !offline_config.enabled {
-        return Ok(());
-    }
+    let policy = mandatory_offline_policy_for_chain(chain_id, offline_config, command_config)?;
     let state_view = state.view();
-    let evaluated_block = state_view
-        .latest_block()
-        .ok_or_else(|| "offline readiness requires a committed block".to_owned())?;
-    let evaluated_at_ms =
-        u64::try_from(evaluated_block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-    let block_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-    ensure_mandatory_offline_readiness_snapshot(
-        state_view.world(),
-        state_view.kagemusha_release_catalog.as_ref(),
-        &state_view.settlement.offline,
-        block_height,
-        evaluated_at_ms,
-        chain_id,
-        offline_config,
-        command_config,
-        fee_asset_selector,
+    let status = iroha_core::offline_readiness::evaluate_committed_mandatory_offline(
+        &state_view,
+        &policy,
+        Some(peer_id),
     )
+    .map_err(|error| error.to_string())?;
+    iroha_core::offline_readiness::ensure_mandatory_offline_ready(&status)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "app_api")]
+fn mandatory_offline_status_from_state_view(
+    state_view: &iroha_core::state::StateView<'_>,
+    chain_id: &ChainId,
+    offline_config: &iroha_config::parameters::actual::Offline,
+    command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
+    peer_id: Option<&PeerId>,
+) -> Result<iroha_torii_shared::offline_api::OfflineStatus, String> {
+    let policy = mandatory_offline_policy_for_chain(chain_id, offline_config, command_config)?;
+    iroha_core::offline_readiness::evaluate_committed_mandatory_offline(
+        state_view, &policy, peer_id,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "app_api")]
@@ -13039,34 +12813,18 @@ pub fn ensure_mandatory_offline_staged_genesis_readiness(
     chain_id: &ChainId,
     offline_config: &iroha_config::parameters::actual::Offline,
     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
-    fee_asset_selector: &str,
+    peer_id: &PeerId,
 ) -> Result<(), String> {
-    let signed_genesis: &SignedBlock = valid_genesis.as_ref();
-    let header = signed_genesis.header();
-    if !header.is_genesis() || header.height().get() != 1 {
-        return Err(
-            "staged offline readiness requires a validated height-one genesis block".to_owned(),
-        );
-    }
-    if staged_genesis.height() != 0 {
-        return Err("staged offline readiness requires an empty committed parent state".to_owned());
-    }
-    if staged_genesis.chain_id() != chain_id {
-        return Err("staged offline readiness chain id differs from node configuration".to_owned());
-    }
-
-    let evaluated_at_ms = u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX);
-    ensure_mandatory_offline_readiness_snapshot(
-        staged_genesis.world(),
-        staged_genesis.kagemusha_release_catalog.as_ref(),
-        &staged_genesis.settlement.offline,
-        1,
-        evaluated_at_ms,
-        chain_id,
-        offline_config,
-        command_config,
-        fee_asset_selector,
+    let policy = mandatory_offline_policy_for_chain(chain_id, offline_config, command_config)?;
+    let status = iroha_core::offline_readiness::evaluate_staged_genesis_mandatory_offline(
+        valid_genesis,
+        staged_genesis,
+        &policy,
+        Some(peer_id),
     )
+    .map_err(|error| error.to_string())?;
+    iroha_core::offline_readiness::ensure_mandatory_offline_ready(&status)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "app_api")]
@@ -13074,181 +12832,53 @@ fn offline_kagemusha_readiness_snapshot(
     app: &AppState,
     asset_definition_selector: &str,
 ) -> Result<iroha_torii_shared::offline_api::OfflineReadiness, Error> {
-    let peer_id = app
-        .local_peer_id
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    let offline_command_readiness = app
+    let state_view = app.state.view();
+    authoritative_offline_readiness_snapshot_from_state_view(
+        app,
+        &state_view,
+        asset_definition_selector,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn authoritative_offline_readiness_snapshot_from_state_view(
+    app: &AppState,
+    state_view: &iroha_core::state::StateView<'_>,
+    asset_definition_selector: &str,
+) -> Result<iroha_torii_shared::offline_api::OfflineReadiness, Error> {
+    let command_config = app
         .offline_commands
         .as_deref()
-        .map(|issuer| offline_commands::ensure_offline_command_authority_ready(&app, issuer));
-    let state_view = app.state.view();
-    let world = state_view.world();
+        .map(offline_commands::OfflineCommandRuntime::startup_config);
+    let status = mandatory_offline_status_from_state_view(
+        state_view,
+        app.chain_id.as_ref(),
+        &state_view.settlement.offline,
+        command_config.as_ref(),
+        app.local_peer_id.as_ref(),
+    )
+    .map_err(|message| Error::AppServiceUnavailable {
+        code: "offline_readiness_unavailable",
+        message,
+    })?;
     let alias_observation_time_ms = state_view.latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
     });
     let asset_definition_id = parse_offline_readiness_asset_definition_id(
-        world,
+        state_view.world(),
         alias_observation_time_ms,
         asset_definition_selector,
     )?;
-    let asset_definition =
-        world
-            .asset_definition(&asset_definition_id)
-            .map_err(|_| Error::AppNotFound {
-                code: "asset_definition_not_found",
-                message: format!("Asset definition `{asset_definition_id}` is not registered."),
-            })?;
-    let asset_scale = asset_definition.spec().scale();
-    let block_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-    let block_hash = state_view.latest_block_hash().ok_or_else(|| {
-        offline_kagemusha_readiness_error(
-            "the evaluated committed block has no canonical hash for device attestation",
-        )
-    })?;
-    let evaluated_block_hash = hex::encode(block_hash.as_ref().as_ref());
-    let transfer = offline_kagemusha_asset_transfer_verifier_record(
-        world,
-        &asset_definition_id,
-        block_height,
-    )?;
-    let topup_shield = offline_kagemusha_asset_topup_shield_verifier_record(
-        world,
-        &asset_definition_id,
-        block_height,
-    )?;
-    let unshield = offline_kagemusha_readiness_verifier_record(
-        world,
-        block_height,
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-        "pallas",
-        iroha_crypto::Hash::new(
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
-        )
-        .into(),
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-    )?;
-    let recursive_v4 = offline_kagemusha_recursive_v4_evaluation_from_resolution(
-        asset_scale.map_or(Ok(None), |scale| {
-            iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_readiness_v4(
-                world,
-                &state_view.kagemusha_release_catalog,
-                app.chain_id.as_ref(),
-                &asset_definition_id,
-                scale,
-                block_height,
-            )
-        }),
-    );
-    let issuance_window_active = recursive_v4
-        .artifact_set
-        .as_ref()
-        .is_some_and(|artifact_set| {
-            block_height >= artifact_set.activation_height
-                && block_height < artifact_set.withdrawal_height
-        });
-    let recursive_backend_constructed = recursive_v4.proof_backend_available;
-    let recursive_step_eq = recursive_v4.step_eq;
-    let recursive_step_ep = recursive_v4.step_ep;
-    ensure_offline_readiness_verifier_roles_are_distinct([
-        ("transfer", transfer.as_ref()),
-        ("topup_shield", topup_shield.as_ref()),
-        ("unshield", unshield.as_ref()),
-        ("recursive_step_eq", recursive_step_eq.as_ref()),
-        ("recursive_step_ep", recursive_step_ep.as_ref()),
-    ])?;
-    let mut blockers = recursive_v4.blockers;
-    if peer_id.is_empty() {
-        blockers.push(offline_readiness_blocker(
-            "peer_identity_unavailable",
-            "The validator peer identity is unavailable.",
-        ));
-    }
-    match offline_command_readiness {
-        None => blockers.push(offline_readiness_blocker(
-            "issuer_unavailable",
-            "The offline command issuer is not configured on this node.",
-        )),
-        Some(Ok(())) => {}
-        Some(Err(Error::AppServiceUnavailable { code, message })) => {
-            blockers.push(offline_readiness_blocker(code, message));
-        }
-        Some(Err(error)) => return Err(error),
-    }
-    if recursive_v4.artifact_set.is_some() && !issuance_window_active {
-        blockers.push(offline_readiness_blocker(
-            "recursive_release_outside_issuance_window",
-            "The authenticated ABI-21/V4 release is not inside its issuance window.",
-        ));
-    }
-    if asset_scale.is_none() {
-        blockers.push(offline_readiness_blocker(
-            "asset_scale_unavailable",
-            "The asset definition has no authoritative numeric scale.",
-        ));
-    } else if asset_scale.is_some_and(|scale| {
-        scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-    }) {
-        blockers.push(offline_readiness_blocker(
-            "asset_scale_unsupported",
-            "The asset scale exceeds the offline payment limit.",
-        ));
-    }
-    for (available, code, message) in [
-        (
-            transfer.is_some(),
-            "transfer_verifier_unavailable",
-            "The transfer verifier is not active at the evaluated block.",
-        ),
-        (
-            topup_shield.is_some(),
-            "topup_shield_verifier_unavailable",
-            "The top-up shield verifier is not active at the evaluated block.",
-        ),
-        (
-            unshield.is_some(),
-            "unshield_verifier_unavailable",
-            "The unshield verifier is not active at the evaluated block.",
-        ),
-    ] {
-        if !available {
-            blockers.push(offline_readiness_blocker(code, message));
-        }
-    }
-    // Role distinctness was checked above. Preserve the recursive capabilities
-    // independently from unrelated issuer, transfer, or issuance blockers.
-    let (proof_backend_available, recursive_lineage_supported, ready) =
-        offline_kagemusha_readiness_capability_flags(
-            recursive_backend_constructed,
-            recursive_v4.artifact_set.is_some(),
-            recursive_step_eq.is_some(),
-            recursive_step_ep.is_some(),
-            &blockers,
-        );
-    Ok(iroha_torii_shared::offline_api::OfflineReadiness {
-        peer_id,
-        cash_handoff_capability: iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
-            .to_owned(),
-        required_bridge_abi_version:
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-        max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-        asset_definition_id: asset_definition_id.to_string(),
-        asset_scale,
-        evaluated_block_height: block_height,
-        evaluated_block_hash,
-        active_transfer_verifier: transfer,
-        active_topup_shield_verifier: topup_shield,
-        active_unshield_verifier: unshield,
-        active_recursive_step_eq_verifier: recursive_step_eq,
-        active_recursive_step_ep_verifier: recursive_step_ep,
-        artifact_set: recursive_v4.artifact_set,
-        proof_backend_available,
-        recursive_lineage_supported,
-        ready,
-        blockers,
-    })
+    status
+        .assets
+        .into_iter()
+        .find(|readiness| readiness.asset_definition_id == asset_definition_id.to_string())
+        .ok_or_else(|| Error::AppNotFound {
+            code: "offline_asset_not_required",
+            message: format!(
+                "Asset definition `{asset_definition_id}` is not in the mandatory offline escrow catalog."
+            ),
+        })
 }
 
 #[cfg(feature = "app_api")]
@@ -13522,15 +13152,12 @@ async fn handler_offline_recipient_lineage(
 
 #[cfg(all(test, feature = "app_api"))]
 mod offline_kagemusha_readiness_tests {
-    use std::collections::BTreeMap;
-
     use iroha_data_model::{ChainId, asset::AssetDefinitionId};
 
     use super::{
-        PUBLIC_TAIRA_CHAIN_ID, encode_offline_readiness_representation,
-        ensure_mandatory_offline_configuration, ensure_mandatory_offline_configuration_for_chain,
-        ensure_offline_readiness_verifier_roles_are_distinct,
-        mandatory_offline_escrow_bindings_after_replay, mandatory_offline_probe_status,
+        encode_offline_readiness_representation, ensure_mandatory_offline_configuration,
+        ensure_mandatory_offline_configuration_for_chain,
+        ensure_offline_readiness_verifier_roles_are_distinct, mandatory_offline_probe_status,
         offline_kagemusha_asset_transfer_verifier_record,
         offline_kagemusha_readiness_capability_flags, offline_kagemusha_readiness_verifier_record,
         offline_kagemusha_recursive_v4_evaluation_from_resolution, offline_readiness_blocker,
@@ -13549,12 +13176,11 @@ mod offline_kagemusha_readiness_tests {
             mandatory_offline_probe_status(true),
             axum::http::StatusCode::OK,
         );
-        let public_taira = ChainId::from(PUBLIC_TAIRA_CHAIN_ID);
-        assert!(offline_service_is_mandatory(&public_taira, false));
+        assert!(offline_service_is_mandatory());
         assert_eq!(
             mandatory_offline_probe_status(false),
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "public Taira must remain fail-closed when local config disables offline cash",
+            "every chain must remain fail-closed when offline cash is incomplete",
         );
     }
 
@@ -13588,6 +13214,12 @@ mod offline_kagemusha_readiness_tests {
             Some(false)
         );
         assert_eq!(
+            payload
+                .get("sumeragi_ingress_ready")
+                .and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
             payload.get("peer_id").and_then(norito::json::Value::as_str),
             Some("")
         );
@@ -13604,21 +13236,88 @@ mod offline_kagemusha_readiness_tests {
         assert_eq!(&body[..], b"Alive");
     }
 
+    #[tokio::test]
+    async fn mandatory_health_is_public_even_when_torii_requires_api_tokens() {
+        let mut app = super::mk_app_state_for_tests();
+        {
+            let state = std::sync::Arc::get_mut(&mut app).expect("unique app fixture");
+            state.require_api_token = true;
+            state.api_tokens_set =
+                std::sync::Arc::new(std::collections::HashSet::from(["secret".to_owned()]));
+        }
+
+        let response = super::handler_health(axum::extract::State(app)).await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "an unauthenticated health request must reach readiness evaluation"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("health body");
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode public readiness payload");
+        assert_eq!(
+            payload.get("ready").and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            payload.get("blockers").is_some(),
+            "the public probe must return readiness blockers, not an authentication envelope"
+        );
+    }
+
+    #[test]
+    fn status_admits_before_one_view_offline_snapshot() {
+        let source = include_str!("lib.rs");
+        for (handler, next_handler) in [
+            (
+                "async fn handler_status_tail",
+                "async fn handler_status_root",
+            ),
+            ("async fn handler_status_root", "async fn handler_metrics"),
+        ] {
+            let start = source.rfind(handler).expect("status handler");
+            let end = source[start..]
+                .find(next_handler)
+                .map(|offset| start + offset)
+                .expect("next status handler");
+            let body = &source[start..end];
+            let admission = body
+                .find("admit_status_request")
+                .expect("status admission call");
+            let view = body.find("app.state.view()").expect("one state view");
+            assert!(
+                admission < view,
+                "{handler} must finish token/rate admission before acquiring its state view"
+            );
+            assert_eq!(
+                body.matches("app.state.view()").count(),
+                1,
+                "{handler} must project status from one stable committed view"
+            );
+        }
+
+        let snapshot_start = source
+            .rfind("fn mandatory_offline_status_snapshot")
+            .expect("offline status snapshot");
+        let snapshot_end = source[snapshot_start..]
+            .find("fn mandatory_offline_probe_status")
+            .map(|offset| snapshot_start + offset)
+            .expect("next probe helper");
+        let snapshot = &source[snapshot_start..snapshot_end];
+        assert!(
+            !snapshot.contains("app.state.view()")
+                && snapshot.contains("mandatory_offline_status_from_state_view"),
+            "full offline status must use the authoritative Core evaluator with its caller-owned StateView"
+        );
+    }
+
     #[test]
     fn mandatory_offline_configuration_rejects_absent_and_partial_sections() {
         let mut offline = iroha_config::parameters::actual::Offline::default();
         let error = ensure_mandatory_offline_configuration(&offline, None)
             .expect_err("default/absent offline configuration must fail closed");
-        assert!(error.contains("escrow_accounts"));
-
-        offline.escrow_required = false;
-        let error = ensure_mandatory_offline_configuration(&offline, None)
-            .expect_err("an explicit escrow opt-out must fail closed");
-        assert!(error.contains("escrow_required must be true"));
-
-        offline.escrow_required = true;
-        let error = ensure_mandatory_offline_configuration(&offline, None)
-            .expect_err("an empty escrow catalog must fail closed");
         assert!(error.contains("escrow_accounts"));
 
         let asset_definition_id = AssetDefinitionId::new(
@@ -13642,48 +13341,21 @@ mod offline_kagemusha_readiness_tests {
     }
 
     #[test]
-    fn explicit_disabled_offline_profile_is_empty_and_accepted() {
-        let mut offline = iroha_config::parameters::actual::Offline {
-            enabled: false,
-            ..iroha_config::parameters::actual::Offline::default()
-        };
-        ensure_mandatory_offline_configuration(&offline, None)
-            .expect("an explicit empty disabled profile is valid");
-
-        let asset_definition_id = AssetDefinitionId::new(
-            iroha_data_model::domain::DomainId::try_new("boi", "is").expect("fixture asset domain"),
-            "ds".parse().expect("fixture asset name"),
-        );
-        offline
-            .escrow_accounts
-            .insert(asset_definition_id, iroha_test_samples::ALICE_ID.clone());
-        let error = ensure_mandatory_offline_configuration(&offline, None)
-            .expect_err("disabled profiles must reject dormant escrow configuration");
-        assert!(error.contains("enabled=false"));
-    }
-
-    #[test]
-    fn public_taira_profile_rejects_disabled_offline_service() {
-        let offline = iroha_config::parameters::actual::Offline {
-            enabled: false,
-            ..iroha_config::parameters::actual::Offline::default()
-        };
-        for chain_id in [PUBLIC_TAIRA_CHAIN_ID, "iroha3-taira", "taira"] {
+    fn every_chain_requires_complete_offline_service_configuration() {
+        let offline = iroha_config::parameters::actual::Offline::default();
+        for chain_id in [
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+            "iroha3-taira",
+            "generic-chain",
+        ] {
             let chain_id = ChainId::from(chain_id);
             let error = ensure_mandatory_offline_configuration_for_chain(&chain_id, &offline, None)
-                .expect_err("public Taira must not start with offline cash disabled");
+                .expect_err("every chain must reject incomplete offline cash configuration");
             assert!(
-                error.contains("requires settlement.offline.enabled=true"),
-                "unexpected Taira profile rejection: {error}"
+                error.contains("escrow_accounts"),
+                "unexpected mandatory offline rejection: {error}"
             );
         }
-
-        ensure_mandatory_offline_configuration_for_chain(
-            &ChainId::from("generic-offline-optional-chain"),
-            &offline,
-            None,
-        )
-        .expect("non-Taira profiles may disable local offline service surfaces");
     }
 
     #[test]
@@ -13699,102 +13371,42 @@ mod offline_kagemusha_readiness_tests {
         let staged_start = source
             .find("pub fn ensure_mandatory_offline_staged_genesis_readiness")
             .expect("staged-genesis readiness wrapper");
-        let readiness_snapshot = source
-            .find("fn offline_kagemusha_readiness_snapshot")
-            .expect("runtime readiness snapshot");
-        let common_start = source
-            .find("fn ensure_mandatory_offline_readiness_snapshot")
-            .expect("shared complete readiness validator");
         let committed = &source[committed_start..staged_start];
-        let staged = &source[staged_start..readiness_snapshot];
-        let common = &source[common_start..committed_start];
+        let staged = &source[staged_start
+            ..source
+                .find("fn offline_kagemusha_readiness_snapshot")
+                .expect("runtime readiness snapshot")];
 
-        assert!(committed.contains("ensure_mandatory_offline_readiness_snapshot"));
-        assert!(staged.contains("ensure_mandatory_offline_readiness_snapshot"));
+        assert!(committed.contains("evaluate_committed_mandatory_offline"));
+        assert!(staged.contains("evaluate_staged_genesis_mandatory_offline"));
+        assert!(
+            committed.contains("ensure_mandatory_offline_ready"),
+            "committed-state readiness must enforce the complete Core status"
+        );
+        assert!(
+            staged.contains("ensure_mandatory_offline_ready"),
+            "staged-genesis readiness must enforce the complete Core status"
+        );
+        assert!(
+            !committed.contains("fee_asset_selector: &str"),
+            "committed-state readiness must not accept a caller-supplied fee selector"
+        );
+        assert!(
+            !staged.contains("fee_asset_selector: &str"),
+            "staged-genesis readiness must not accept a caller-supplied fee selector"
+        );
         assert!(staged.contains("valid_genesis: &ValidBlock"));
         assert!(staged.contains("staged_genesis: &StateBlock"));
-        assert!(staged.contains("staged_genesis.height() != 0"));
         assert!(
             !staged.contains("ensure_mandatory_offline_startup_readiness("),
             "staged genesis must evaluate its overlay rather than the empty committed State"
-        );
-        for required_check in [
-            "ensure_kagemusha_active_release_material_v4",
-            "ensure_offline_device_attestation_policy_ready_v1",
-            "ensure_offline_command_authority_ready_in_world",
-            "mandatory_offline_escrow_bindings_after_replay",
-            "offline_kagemusha_asset_transfer_verifier_record",
-            "offline_kagemusha_asset_topup_shield_verifier_record",
-            "CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID",
-            "resolve_kagemusha_recursive_readiness_v4",
-            "ensure_offline_readiness_verifier_roles_are_distinct",
-        ] {
-            assert!(
-                common.contains(required_check),
-                "shared staged/restart validator omitted `{required_check}`"
-            );
-        }
-    }
-
-    #[test]
-    fn mandatory_offline_startup_uses_the_exact_complete_replayed_escrow_catalog() {
-        let configured_asset = AssetDefinitionId::new(
-            iroha_data_model::domain::DomainId::try_new("boi", "is")
-                .expect("configured asset domain"),
-            "ds".parse().expect("configured asset name"),
-        );
-        let replay_added_asset = AssetDefinitionId::new(
-            iroha_data_model::domain::DomainId::try_new("leumi", "is")
-                .expect("replay-added asset domain"),
-            "ds".parse().expect("replay-added asset name"),
-        );
-        let configured_account = iroha_test_samples::ALICE_ID.clone();
-        let replay_added_account = iroha_test_samples::BOB_ID.clone();
-        let conflicting_account = iroha_test_samples::CARPENTER_ID.clone();
-
-        let configured = BTreeMap::from([(configured_asset.clone(), configured_account.clone())]);
-        let replayed = BTreeMap::from([(configured_asset.clone(), configured_account.clone())]);
-        let metadata_derived = BTreeMap::from([(replay_added_asset.clone(), replay_added_account)]);
-        let selected = mandatory_offline_escrow_bindings_after_replay(
-            &configured,
-            &replayed,
-            &metadata_derived,
-        )
-        .expect("an exact configured binding plus replayed-world metadata is valid");
-        assert_eq!(selected.len(), 2);
-        assert!(selected.contains_key(&replay_added_asset));
-
-        let wrong_metadata_binding = BTreeMap::from([
-            (configured_asset.clone(), configured_account),
-            (replay_added_asset.clone(), conflicting_account.clone()),
-        ]);
-        let error = mandatory_offline_escrow_bindings_after_replay(
-            &configured,
-            &wrong_metadata_binding,
-            &metadata_derived,
-        )
-        .expect_err("metadata-derived escrow must reject a conflicting runtime binding");
-        assert!(
-            error.contains("deterministically requires escrow account"),
-            "unexpected error: {error}"
-        );
-
-        let conflicting = BTreeMap::from([(configured_asset, conflicting_account)]);
-        let error = mandatory_offline_escrow_bindings_after_replay(
-            &configured,
-            &conflicting,
-            &BTreeMap::new(),
-        )
-        .expect_err("Kura replay must not silently replace an operator-reviewed binding");
-        assert!(
-            error.contains("Kura replay selected"),
-            "unexpected error: {error}"
         );
     }
 
     #[test]
     fn readiness_authenticates_exact_release_without_global_backend_flag() {
         let source = include_str!("lib.rs");
+        let core_source = include_str!("../../iroha_core/src/offline_readiness.rs");
         let snapshot_start = source
             .find("fn offline_kagemusha_readiness_snapshot")
             .expect("offline readiness snapshot");
@@ -13811,8 +13423,9 @@ mod offline_kagemusha_readiness_tests {
             "readiness must authenticate a concrete release instead of treating compile capability as runtime readiness",
         );
         assert!(handler.contains("offline_kagemusha_readiness_snapshot"));
-        assert!(snapshot.contains("resolve_kagemusha_recursive_readiness_v4"));
-        assert!(snapshot.contains("offline_kagemusha_readiness_capability_flags"));
+        assert!(snapshot.contains("mandatory_offline_status_from_state_view"));
+        assert!(core_source.contains("ensure_kagemusha_active_release_material_v4"));
+        assert!(core_source.contains("resolve_kagemusha_recursive_readiness_v4"));
     }
 
     #[test]
@@ -17542,12 +17155,23 @@ async fn handler_peers(
 #[cfg(feature = "app_api")]
 fn mandatory_offline_status_snapshot(
     app: &AppState,
+    state_view: &iroha_core::state::StateView<'_>,
 ) -> iroha_torii_shared::offline_api::OfflineStatus {
-    let offline_config = app.state.view().settlement.offline.clone();
-    let mandatory = offline_service_is_mandatory(app.chain_id.as_ref(), offline_config.enabled);
-    if !mandatory {
-        return iroha_torii_shared::offline_api::OfflineStatus {
-            mandatory: false,
+    debug_assert!(offline_service_is_mandatory());
+    let command_config = app
+        .offline_commands
+        .as_deref()
+        .map(offline_commands::OfflineCommandRuntime::startup_config);
+    match mandatory_offline_status_from_state_view(
+        state_view,
+        app.chain_id.as_ref(),
+        &state_view.settlement.offline,
+        command_config.as_ref(),
+        app.local_peer_id.as_ref(),
+    ) {
+        Ok(status) => status,
+        Err(message) => iroha_torii_shared::offline_api::OfflineStatus {
+            mandatory: true,
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
@@ -17555,76 +17179,11 @@ fn mandatory_offline_status_snapshot(
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             ready: false,
             assets: Vec::new(),
-            blockers: Vec::new(),
-        };
-    }
-    let command_config = app
-        .offline_commands
-        .as_deref()
-        .map(offline_commands::OfflineCommandRuntime::startup_config);
-    let fee_asset_selector = app.state.nexus_snapshot().fees.fee_asset_id;
-    let mut blockers = Vec::new();
-    if let Err(message) = ensure_mandatory_offline_startup_readiness(
-        app.state.as_ref(),
-        app.chain_id.as_ref(),
-        &offline_config,
-        command_config.as_ref(),
-        &fee_asset_selector,
-    ) {
-        blockers.push(offline_readiness_blocker(
-            "mandatory_offline_invariant_failed",
-            message,
-        ));
-    }
-
-    let effective_bindings = {
-        let state_view = app.state.view();
-        mandatory_offline_metadata_escrow_bindings(state_view.world(), app.chain_id.as_ref())
-            .and_then(|metadata_derived| {
-                mandatory_offline_escrow_bindings_after_replay(
-                    &offline_config.escrow_accounts,
-                    &state_view.settlement.offline.escrow_accounts,
-                    &metadata_derived,
-                )
-            })
-    };
-    let mut asset_selectors = match effective_bindings {
-        Ok(bindings) => bindings.keys().map(ToString::to_string).collect::<Vec<_>>(),
-        Err(message) => {
-            blockers.push(offline_readiness_blocker(
-                "offline_escrow_catalog_invalid",
+            blockers: vec![offline_readiness_blocker(
+                "mandatory_offline_configuration_invalid",
                 message,
-            ));
-            offline_config
-                .escrow_accounts
-                .keys()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        }
-    };
-    asset_selectors.sort_unstable();
-    let mut assets = Vec::with_capacity(asset_selectors.len());
-    for selector in asset_selectors {
-        match offline_kagemusha_readiness_snapshot(app, &selector) {
-            Ok(readiness) => assets.push(readiness),
-            Err(error) => blockers.push(offline_readiness_blocker(
-                "offline_readiness_evaluation_failed",
-                format!("Could not evaluate `{selector}`: {error}"),
-            )),
-        }
-    }
-    let ready = blockers.is_empty() && !assets.is_empty() && assets.iter().all(|asset| asset.ready);
-
-    iroha_torii_shared::offline_api::OfflineStatus {
-        mandatory: true,
-        cash_handoff_capability: iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
-            .to_owned(),
-        required_bridge_abi_version:
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-        max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-        ready,
-        assets,
-        blockers,
+            )],
+        },
     }
 }
 
@@ -17638,9 +17197,31 @@ fn mandatory_offline_probe_status(ready: bool) -> StatusCode {
 }
 
 #[cfg(feature = "app_api")]
+fn sumeragi_probe_readiness(app: &AppState) -> (bool, Option<String>) {
+    let Some(sumeragi) = app.sumeragi.as_ref() else {
+        return (false, Some("Sumeragi runtime is unavailable.".to_owned()));
+    };
+    if sumeragi.restart_required() {
+        return (
+            false,
+            Some("Sumeragi requires restart after a fatal consensus failure.".to_owned()),
+        );
+    }
+    if !sumeragi.ingress_ready() {
+        return (
+            false,
+            Some(
+                "Sumeragi ingress is closed until context and safety-WAL recovery complete."
+                    .to_owned(),
+            ),
+        );
+    }
+    (true, None)
+}
+
+#[cfg(feature = "app_api")]
 fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
-    let offline_config = app.state.view().settlement.offline.clone();
-    let mandatory = offline_service_is_mandatory(app.chain_id.as_ref(), offline_config.enabled);
+    let mandatory = offline_service_is_mandatory();
     let peer_id = app
         .local_peer_id
         .as_ref()
@@ -17650,28 +17231,39 @@ fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
         .offline_commands
         .as_deref()
         .map(offline_commands::OfflineCommandRuntime::startup_config);
-    let fee_asset_selector = app.state.nexus_snapshot().fees.fee_asset_id;
-    let result = ensure_mandatory_offline_startup_readiness(
-        app.state.as_ref(),
-        app.chain_id.as_ref(),
-        &offline_config,
-        command_config.as_ref(),
-        &fee_asset_selector,
-    );
-    let mut blockers = result.err().into_iter().collect::<Vec<_>>();
-    if !mandatory {
-        blockers.push("offline cash is not mandatory for this node profile".to_owned());
-    }
-    if peer_id.is_empty() {
-        blockers.push("validator peer identity is unavailable".to_owned());
-    }
-    let ready = mandatory && blockers.is_empty();
+    let offline_status = {
+        let state_view = app.state.view();
+        mandatory_offline_status_from_state_view(
+            &state_view,
+            app.chain_id.as_ref(),
+            &state_view.settlement.offline,
+            command_config.as_ref(),
+            app.local_peer_id.as_ref(),
+        )
+    };
+    let mut blockers = match offline_status {
+        Ok(status) => iroha_core::offline_readiness::ensure_mandatory_offline_ready(&status)
+            .err()
+            .map(|error| {
+                error
+                    .blockers()
+                    .iter()
+                    .map(|blocker| format!("{}: {}", blocker.code, blocker.message))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        Err(error) => vec![error],
+    };
+    let (sumeragi_ingress_ready, sumeragi_blocker) = sumeragi_probe_readiness(app);
+    blockers.extend(sumeragi_blocker);
+    let ready = mandatory && sumeragi_ingress_ready && blockers.is_empty();
     crate::utils::respond_json_value_with_status(
         mandatory_offline_probe_status(ready),
         json_object([
             json_entry("peer_id", peer_id),
             json_entry("live", true),
             json_entry("ready", ready),
+            json_entry("sumeragi_ingress_ready", sumeragi_ingress_ready),
             json_entry(
                 "cash_handoff_capability",
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1,
@@ -17685,20 +17277,19 @@ fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
     )
 }
 
-/// GET `/health` — readiness probe. Offline blockers are HTTP 503.
-async fn handler_health(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/health").await?;
+/// GET `/health` — public readiness probe. Any readiness blocker is HTTP 503.
+async fn handler_health(State(app): State<SharedAppState>) -> AxResponse {
     #[cfg(feature = "app_api")]
-    return Ok(mandatory_offline_probe_response(&app));
+    return mandatory_offline_probe_response(&app);
     #[cfg(not(feature = "app_api"))]
-    Ok(routing::handle_health().await.into_response())
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Offline cash readiness requires the app_api capability",
+    )
+        .into_response()
 }
 
-/// GET `/readyz` — readiness probe with the same complete offline invariant.
+/// GET `/readyz` — readiness probe including offline and Sumeragi recovery.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     #[cfg(feature = "app_api")]
     {
@@ -20179,14 +19770,15 @@ async fn handler_zk_vote_tally(
 #[cfg(feature = "telemetry")]
 fn status_offline_snapshot(
     app: &AppState,
+    state_view: &iroha_core::state::StateView<'_>,
 ) -> Option<iroha_torii_shared::offline_api::OfflineStatus> {
     #[cfg(feature = "app_api")]
     {
-        return Some(mandatory_offline_status_snapshot(app));
+        return Some(mandatory_offline_status_snapshot(app, state_view));
     }
     #[cfg(not(feature = "app_api"))]
     {
-        let _ = app;
+        let _ = (app, state_view);
         None
     }
 }
@@ -20205,55 +19797,26 @@ fn status_peer_id(app: &AppState) -> Option<String> {
 }
 
 #[cfg(feature = "telemetry")]
-async fn handler_status_tail(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<utils::extractors::ExtractAccept>,
-    AxPath(tail): AxPath<String>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    let nexus = app.state.nexus_snapshot();
-    let nexus_enabled = nexus.enabled;
-    let nexus_routing_policy = nexus.routing_policy.clone();
-    let offline = status_offline_snapshot(&app);
-    // Allowlist bypass
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
-        let authoritative_block_height =
-            u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
-        return routing::handle_status(
-            &app.telemetry,
-            accept.map(|e| e.0),
-            Some(&tail),
-            nexus_enabled,
-            Some(&nexus_routing_policy),
-            Some(authoritative_block_height),
-            offline,
-            status_peer_id(&app),
-        )
-        .await;
+async fn admit_status_request(
+    app: &AppState,
+    headers: &axum::http::HeaderMap,
+    remote_ip: std::net::IpAddr,
+) -> Result<(), Error> {
+    if limits::is_allowed_by_cidr(headers, Some(remote_ip), &app.allow_nets) {
+        return Ok(());
     }
-    // Token gate
-    let token_hdr = headers
+    let token = headers
         .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+        .and_then(|value| value.to_str().ok());
+    if app.require_api_token
+        && !app.api_tokens_set.is_empty()
+        && token.is_none_or(|token| !app.api_tokens_set.contains(token))
+    {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
     }
-    // Conditional rate limiting based on load/fees
-    let key = rate_limit_key(
-        &headers,
-        Some(remote.ip()),
-        "status",
-        app.api_token_enforced(),
-    );
+    let key = rate_limit_key(headers, Some(remote_ip), "status", app.api_token_enforced());
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if enforce && !app.rate_limiter.allow(&key).await {
@@ -20261,8 +19824,27 @@ async fn handler_status_tail(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let authoritative_block_height =
-        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    Ok(())
+}
+
+#[cfg(feature = "telemetry")]
+async fn handler_status_tail(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    accept: Option<utils::extractors::ExtractAccept>,
+    AxPath(tail): AxPath<String>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    admit_status_request(&app, &headers, remote.ip()).await?;
+    let (nexus_enabled, nexus_routing_policy, authoritative_block_height, offline) = {
+        let state_view = app.state.view();
+        (
+            state_view.nexus.enabled,
+            state_view.nexus.routing_policy.clone(),
+            u64::try_from(state_view.height()).unwrap_or(u64::MAX),
+            status_offline_snapshot(&app, &state_view),
+        )
+    };
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
@@ -20283,54 +19865,16 @@ async fn handler_status_root(
     accept: Option<utils::extractors::ExtractAccept>,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    let nexus = app.state.nexus_snapshot();
-    let nexus_enabled = nexus.enabled;
-    let nexus_routing_policy = nexus.routing_policy.clone();
-    let offline = status_offline_snapshot(&app);
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
-        let authoritative_block_height =
-            u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
-        return routing::handle_status(
-            &app.telemetry,
-            accept.map(|e| e.0),
-            None,
-            nexus_enabled,
-            Some(&nexus_routing_policy),
-            Some(authoritative_block_height),
-            offline,
-            status_peer_id(&app),
+    admit_status_request(&app, &headers, remote.ip()).await?;
+    let (nexus_enabled, nexus_routing_policy, authoritative_block_height, offline) = {
+        let state_view = app.state.view();
+        (
+            state_view.nexus.enabled,
+            state_view.nexus.routing_policy.clone(),
+            u64::try_from(state_view.height()).unwrap_or(u64::MAX),
+            status_offline_snapshot(&app, &state_view),
         )
-        .await;
-    }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote.ip()),
-        "status",
-        app.api_token_enforced(),
-    );
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    if enforce && !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let authoritative_block_height =
-        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    };
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
@@ -70385,16 +69929,7 @@ pub(crate) mod tests_runtime_handlers {
         // A generic test state intentionally has no authenticated ABI-21/V4
         // release, issuer, or escrow catalog. `/health` is readiness (not
         // liveness), so it must fail closed for this fixture.
-        // For ConnectInfo we can pass a dummy loopback address by constructing the extractor arg manually is not possible here.
-        // Instead, rely on non-allowlist path (headers don't carry the internal x-iroha-remote-addr), which doesn't need ConnectInfo IP.
-        let resp = super::handler_health(
-            State(app),
-            headers,
-            axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
-        )
-        .await
-        .expect("ok")
-        .into_response();
+        let resp = super::handler_health(State(app)).await;
         assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
         let health_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await

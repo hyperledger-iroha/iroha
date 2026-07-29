@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,10 @@ from typing import Any
 
 DEFAULT_NETWORK_ADDRESS = "0.0.0.0:1337"
 DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
+DEFAULT_OFFLINE_RUNTIME_RELEASE_POLICY_PATH = Path(
+    "/etc/iroha/kagemusha/release-policy.norito"
+)
+DEFAULT_OFFLINE_RUNTIME_ARTIFACT_DIR = Path("/var/lib/iroha/kagemusha/v4")
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 128
@@ -25,10 +30,35 @@ TAIRA_IS2_LANE_INDEX = 4
 TAIRA_IS2_LANE_ALIAS = "boi-mobile"
 TAIRA_IS2_DATASPACE_ALIAS = "is2"
 TAIRA_IS_DATASPACE_ID = 6_647_857_470_246_403_404
+TAIRA_REVIEWED_IS_DOMAINS = frozenset(
+    {
+        "boi.is",
+        "discount.is",
+        "fibi.is",
+        "hapoalim.is",
+        "jerusalem.is",
+        "leumi.is",
+        "mizrahi.is",
+        "onezero.is",
+    }
+)
+TAIRA_REVIEWED_IS2_DOMAINS = frozenset(
+    {
+        "boi.is2",
+        "discount.is2",
+        "fibi.is2",
+        "hapoalim.is2",
+        "jerusalem.is2",
+        "leumi.is2",
+        "mizrahi.is2",
+        "onezero.is2",
+    }
+)
 TAIRA_IS2_PROPOSAL_PATH = (
     Path(__file__).resolve().parents[1]
     / "configs/soranexus/taira/is2-council-manifest.proposal.json"
 )
+SHA256_HEX_RE = re.compile(r"[0-9a-f]{64}")
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 I105_ALPHABET = tuple(BASE58_ALPHABET) + (
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
@@ -632,6 +662,78 @@ def _write_private_text(path: Path, value: str) -> None:
     path.chmod(0o600)
 
 
+def _require_operator_reviewed_offline_bootstrap(
+    genesis_path: Path | None,
+    authorized_sha256: str | None,
+    release_policy_path: Path | None,
+    artifact_dir: Path | None,
+) -> tuple[Path, str, Path, Path]:
+    """Validate explicit operator inputs for one mandatory offline bootstrap.
+
+    The renderer deliberately does not infer or generate any Kagemusha
+    material. Kagami authenticates the release policy and artifacts and stages
+    the complete on-chain readiness invariant when the rendered genesis is
+    signed.
+    """
+
+    missing = [
+        flag
+        for flag, value in (
+            ("--offline-bootstrap-genesis", genesis_path),
+            ("--authorize-offline-bootstrap-sha256", authorized_sha256),
+            ("--offline-release-policy-path", release_policy_path),
+            ("--offline-artifact-dir", artifact_dir),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            "mandatory offline Taira rendering requires explicit operator-reviewed "
+            "inputs: " + ", ".join(missing)
+        )
+
+    assert genesis_path is not None
+    assert authorized_sha256 is not None
+    assert release_policy_path is not None
+    assert artifact_dir is not None
+
+    if genesis_path.is_symlink() or not genesis_path.is_file():
+        raise ValueError(
+            f"offline bootstrap genesis must be a regular non-symlink file: {genesis_path}"
+        )
+    if not SHA256_HEX_RE.fullmatch(authorized_sha256):
+        raise ValueError(
+            "--authorize-offline-bootstrap-sha256 must be exactly 64 lowercase hex characters"
+        )
+    observed_sha256 = hashlib.sha256(genesis_path.read_bytes()).hexdigest()
+    if observed_sha256 != authorized_sha256:
+        raise ValueError(
+            "offline bootstrap genesis is not operator-authorized: expected "
+            f"{authorized_sha256}, observed {observed_sha256}"
+        )
+
+    if not release_policy_path.is_absolute():
+        raise ValueError("--offline-release-policy-path must be absolute")
+    if release_policy_path.is_symlink() or not release_policy_path.is_file():
+        raise ValueError(
+            "offline release policy must be a regular non-symlink file: "
+            f"{release_policy_path}"
+        )
+    if not artifact_dir.is_absolute():
+        raise ValueError("--offline-artifact-dir must be absolute")
+    if artifact_dir.is_symlink() or not artifact_dir.is_dir():
+        raise ValueError(
+            f"offline artifact directory must be a non-symlink directory: {artifact_dir}"
+        )
+
+    return (
+        genesis_path.resolve(),
+        observed_sha256,
+        release_policy_path.resolve(),
+        artifact_dir.resolve(),
+    )
+
+
 def _validate_account_onboarding_secrets(
     shared: SharedSecrets, context: str
 ) -> None:
@@ -998,56 +1100,154 @@ def _render_governance_manifest(validators: list[ValidatorEntry]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
-def render_genesis_template(
-    base_genesis_path: Path,
-    validators: list[ValidatorEntry],
-    output_dir: Path,
-) -> Path:
-    """Render the unsigned shared genesis template with the exact public BLS roster.
+def _validate_reviewed_boi_domain_registration(
+    domain_id: str,
+    offline_bootstrap_genesis_path: Path,
+    transaction_index: int,
+    instruction_index: int,
+) -> None:
+    """Reject domains that do not belong in the Taira mobile genesis."""
 
-    The matching private validator keys are intentionally absent. ``kagami
-    genesis sign --config`` stages this template, derives the signed Nexus/AMX
-    height-context commitment from the chosen validator config, and only then
-    emits the final Norito genesis block.
-    """
+    if domain_id.startswith("wonderland."):
+        raise ValueError(
+            f"offline bootstrap genesis {offline_bootstrap_genesis_path} transaction "
+            f"{transaction_index} instruction {instruction_index} registers forbidden "
+            f"Wonderland domain `{domain_id}`"
+        )
+    if domain_id.endswith(".is"):
+        reviewed = ", ".join(sorted(TAIRA_REVIEWED_IS_DOMAINS))
+        raise ValueError(
+            f"offline bootstrap genesis {offline_bootstrap_genesis_path} transaction "
+            f"{transaction_index} instruction {instruction_index} prematurely stages "
+            f"`is` dataspace domain `{domain_id}`; scenario-browser domains ({reviewed}) "
+            "must be applied only after the mandatory offline readiness gate"
+        )
+    if (
+        domain_id.endswith(".is2")
+        and domain_id not in TAIRA_REVIEWED_IS2_DOMAINS
+    ):
+        raise ValueError(
+            f"offline bootstrap genesis {offline_bootstrap_genesis_path} transaction "
+            f"{transaction_index} instruction {instruction_index} registers unreviewed "
+            f"`is2` dataspace domain `{domain_id}`; only the exact BOI/FI mobile "
+            "domain set is allowed"
+        )
 
-    payload = json.loads(base_genesis_path.read_text(encoding="utf-8"))
+
+def _load_authorized_offline_bootstrap_genesis(
+    offline_bootstrap_genesis_path: Path,
+    authorized_offline_bootstrap_sha256: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], set[str]]:
+    """Load and fully inspect an operator-authorized Taira genesis."""
+
+    if (
+        not SHA256_HEX_RE.fullmatch(authorized_offline_bootstrap_sha256)
+        or hashlib.sha256(offline_bootstrap_genesis_path.read_bytes()).hexdigest()
+        != authorized_offline_bootstrap_sha256
+    ):
+        raise ValueError(
+            "offline bootstrap genesis must match the exact operator-authorized SHA-256"
+        )
+
+    payload = json.loads(offline_bootstrap_genesis_path.read_text(encoding="utf-8"))
     transactions = payload.get("transactions")
     if not isinstance(transactions, list) or not transactions:
         raise ValueError(
-            f"base genesis {base_genesis_path} must contain a non-empty transactions array"
+            f"offline bootstrap genesis {offline_bootstrap_genesis_path} "
+            "must contain a non-empty transactions array"
         )
     if not isinstance(payload.get("sumeragi_v2"), dict):
         raise ValueError(
-            f"base genesis {base_genesis_path} is missing required sumeragi_v2 parameters"
+            f"offline bootstrap genesis {offline_bootstrap_genesis_path} "
+            "is missing required sumeragi_v2 parameters"
         )
     for transaction in transactions:
         if not isinstance(transaction, dict):
             raise ValueError(
-                f"base genesis {base_genesis_path} contains a non-object transaction"
+                f"offline bootstrap genesis {offline_bootstrap_genesis_path} "
+                "contains a non-object transaction"
             )
         transaction["topology"] = []
 
     registered_accounts: set[str] = set()
+    registered_is2_domains: set[str] = set()
     for transaction_index, transaction in enumerate(transactions):
         instructions = transaction.get("instructions", [])
         if not isinstance(instructions, list):
             raise ValueError(
-                f"base genesis {base_genesis_path} contains a non-array instructions field"
+                f"offline bootstrap genesis {offline_bootstrap_genesis_path} "
+                "contains a non-array instructions field"
             )
         for instruction_index, instruction in enumerate(instructions):
             if isinstance(instruction, str) and instruction:
-                continue
+                raise ValueError(
+                    f"offline bootstrap genesis {offline_bootstrap_genesis_path} transaction "
+                    f"{transaction_index} instruction {instruction_index} is opaque; "
+                    "Taira admission requires inspectable structured instructions"
+                )
             if not isinstance(instruction, dict) or len(instruction) != 1:
                 raise ValueError(
-                    f"base genesis {base_genesis_path} transaction "
+                    f"offline bootstrap genesis {offline_bootstrap_genesis_path} transaction "
                     f"{transaction_index} instruction {instruction_index} must be "
-                    "a single-key structured instruction object or a non-empty "
-                    "canonical base64 instruction string"
+                    "a single-key structured instruction object"
                 )
-            account = instruction.get("Register", {}).get("Account")
+            register = instruction.get("Register")
+            if register is not None and not isinstance(register, dict):
+                raise ValueError(
+                    f"offline bootstrap genesis {offline_bootstrap_genesis_path} transaction "
+                    f"{transaction_index} instruction {instruction_index} has a malformed "
+                    "Register payload"
+                )
+            if not isinstance(register, dict):
+                continue
+            account = register.get("Account")
             if isinstance(account, dict) and isinstance(account.get("id"), str):
                 registered_accounts.add(account["id"])
+            domain = register.get("Domain")
+            if isinstance(domain, dict) and isinstance(domain.get("id"), str):
+                _validate_reviewed_boi_domain_registration(
+                    domain["id"],
+                    offline_bootstrap_genesis_path,
+                    transaction_index,
+                    instruction_index,
+                )
+                if domain["id"].endswith(".is2"):
+                    registered_is2_domains.add(domain["id"])
+
+    if registered_is2_domains != TAIRA_REVIEWED_IS2_DOMAINS:
+        missing = sorted(TAIRA_REVIEWED_IS2_DOMAINS - registered_is2_domains)
+        unexpected = sorted(registered_is2_domains - TAIRA_REVIEWED_IS2_DOMAINS)
+        raise ValueError(
+            f"offline bootstrap genesis {offline_bootstrap_genesis_path} must register "
+            "the exact reviewed BOI/FI `is2` domain set; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+    return payload, transactions, registered_accounts
+
+
+def render_genesis_template(
+    offline_bootstrap_genesis_path: Path,
+    authorized_offline_bootstrap_sha256: str,
+    validators: list[ValidatorEntry],
+    output_dir: Path,
+    signing_config_path: Path,
+) -> Path:
+    """Render an authorized offline bootstrap with the exact public BLS roster.
+
+    The matching private validator keys are intentionally absent. ``kagami
+    genesis sign --config`` stages this template, derives the signed Nexus/AMX
+    height-context commitment from the chosen validator config, validates the
+    complete authenticated offline invariant, and only then emits the final
+    Norito genesis block.
+    """
+
+    payload, transactions, registered_accounts = (
+        _load_authorized_offline_bootstrap_genesis(
+            offline_bootstrap_genesis_path,
+            authorized_offline_bootstrap_sha256,
+        )
+    )
 
     validator_account_instructions = [
         {
@@ -1085,12 +1285,12 @@ def render_genesis_template(
         " ".join(
             [
                 "kagami genesis sign",
-                str(target),
+                shlex.quote(str(target)),
                 "--config",
-                str(output_dir / validators[0].slug / "config.toml"),
-                "--private-key \"$TAIRA_GENESIS_PRIVATE_KEY\"",
+                shlex.quote(str(signing_config_path)),
+                '--private-key-file "$TAIRA_GENESIS_PRIVATE_KEY_FILE"',
                 "--out-file",
-                str(output_dir / "genesis.signed.nrt"),
+                shlex.quote(str(output_dir / "genesis.signed.nrt")),
             ]
         )
         + "\n",
@@ -1215,6 +1415,8 @@ def render_validator_config(
     onboarding_private_key_file: Path | None = None,
     onboarding_token_hash: str | None = None,
     faucet_private_key_file: Path | None = None,
+    offline_release_policy_path: Path | None = None,
+    offline_artifact_dir: Path | None = None,
     sumeragi_body_bytes: int | None = None,
 ) -> str:
     """Rewrite the checked-in peer-1 baseline for one validator."""
@@ -1359,6 +1561,25 @@ def render_validator_config(
             )
             continue
         if (
+            current_section == "[settlement.offline]"
+            and stripped.startswith("kagemusha_release_policy_path = ")
+            and offline_release_policy_path is not None
+        ):
+            rendered.append(
+                "kagemusha_release_policy_path = "
+                f"{_quote_toml(str(offline_release_policy_path))}"
+            )
+            continue
+        if (
+            current_section == "[settlement.offline]"
+            and stripped.startswith("kagemusha_artifact_dir = ")
+            and offline_artifact_dir is not None
+        ):
+            rendered.append(
+                f"kagemusha_artifact_dir = {_quote_toml(str(offline_artifact_dir))}"
+            )
+            continue
+        if (
             current_section == "[torii.faucet]"
             and stripped.startswith("private_key_file = ")
             and faucet_private_key_file is not None
@@ -1441,12 +1662,30 @@ def render_bundle(
     output_dir: Path,
     secrets_path: Path | None = None,
     only: str | None = None,
-    base_genesis_path: Path | None = None,
+    offline_bootstrap_genesis_path: Path | None = None,
+    authorized_offline_bootstrap_sha256: str | None = None,
+    offline_release_policy_path: Path | None = None,
+    offline_artifact_dir: Path | None = None,
     is2_manifest_path: Path = TAIRA_IS2_PROPOSAL_PATH,
     authorized_is2_manifest_hash: str | None = None,
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
+    (
+        offline_bootstrap_genesis_path,
+        authorized_offline_bootstrap_sha256,
+        offline_release_policy_path,
+        offline_artifact_dir,
+    ) = _require_operator_reviewed_offline_bootstrap(
+        offline_bootstrap_genesis_path,
+        authorized_offline_bootstrap_sha256,
+        offline_release_policy_path,
+        offline_artifact_dir,
+    )
+    _load_authorized_offline_bootstrap_genesis(
+        offline_bootstrap_genesis_path,
+        authorized_offline_bootstrap_sha256,
+    )
     secret_material = (
         load_secret_material(secrets_path) if secrets_path is not None else None
     )
@@ -1464,6 +1703,7 @@ def render_bundle(
     _write_private_text(output_dir / ".gitignore", "*\n!.gitignore")
 
     written: list[Path] = []
+    signing_config_path: Path | None = None
     for validator in validators:
         if only is not None and validator.slug != only:
             continue
@@ -1506,19 +1746,40 @@ def render_bundle(
                 )
 
         target_path = target_dir / "config.toml"
+        shared_secrets = secret_material.shared if secret_material else None
         _write_private_text(
             target_path,
             render_validator_config(
                 template_text,
                 validator,
                 validators,
-                shared_secrets=secret_material.shared if secret_material else None,
+                shared_secrets=shared_secrets,
                 onboarding_private_key_file=onboarding_private_key_file,
                 onboarding_token_hash=onboarding_token_hash,
                 faucet_private_key_file=faucet_private_key_file,
+                offline_release_policy_path=DEFAULT_OFFLINE_RUNTIME_RELEASE_POLICY_PATH,
+                offline_artifact_dir=DEFAULT_OFFLINE_RUNTIME_ARTIFACT_DIR,
                 sumeragi_body_bytes=sumeragi_body_bytes,
             ),
         )
+        candidate_signing_config_path = target_dir / "genesis-signing-config.toml"
+        _write_private_text(
+            candidate_signing_config_path,
+            render_validator_config(
+                template_text,
+                validator,
+                validators,
+                shared_secrets=shared_secrets,
+                onboarding_private_key_file=onboarding_private_key_file,
+                onboarding_token_hash=onboarding_token_hash,
+                faucet_private_key_file=faucet_private_key_file,
+                offline_release_policy_path=offline_release_policy_path,
+                offline_artifact_dir=offline_artifact_dir,
+                sumeragi_body_bytes=sumeragi_body_bytes,
+            ),
+        )
+        if signing_config_path is None:
+            signing_config_path = candidate_signing_config_path
         (manifest_dir / "governance.manifest.json").write_text(
             _render_governance_manifest(validators),
             encoding="utf-8",
@@ -1527,8 +1788,15 @@ def render_bundle(
 
     if only is not None and not written:
         raise ValueError(f"validator `{only}` is not present in {roster_path}")
-    if base_genesis_path is not None:
-        render_genesis_template(base_genesis_path, validators, output_dir)
+    if signing_config_path is None:  # pragma: no cover - roster validation is authoritative
+        raise ValueError("no validator config was rendered")
+    render_genesis_template(
+        offline_bootstrap_genesis_path,
+        authorized_offline_bootstrap_sha256,
+        validators,
+        output_dir,
+        signing_config_path,
+    )
     return written
 
 
@@ -1544,9 +1812,28 @@ def main(argv: list[str] | None = None) -> int:
         help="checked-in peer-1 baseline config to rewrite",
     )
     parser.add_argument(
-        "--base-genesis",
-        default="configs/soranexus/taira/genesis.json",
-        help="checked-in unsigned Taira genesis template to populate with the public roster",
+        "--offline-bootstrap-genesis",
+        required=True,
+        help=(
+            "operator-reviewed complete unsigned genesis containing the mandatory "
+            "offline asset, escrow, issuer, device policy, five verifier roles, and "
+            "authenticated ABI-21/V4 activation"
+        ),
+    )
+    parser.add_argument(
+        "--authorize-offline-bootstrap-sha256",
+        required=True,
+        help="exact lowercase SHA-256 authorized after review of --offline-bootstrap-genesis",
+    )
+    parser.add_argument(
+        "--offline-release-policy-path",
+        required=True,
+        help="absolute regular-file path to the reviewed Kagemusha release policy",
+    )
+    parser.add_argument(
+        "--offline-artifact-dir",
+        required=True,
+        help="absolute directory containing the reviewed Kagemusha ABI-21/V4 artifacts",
     )
     parser.add_argument(
         "--roster",
@@ -1586,7 +1873,10 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.output_dir),
         secrets_path=Path(args.secrets) if args.secrets else None,
         only=args.only,
-        base_genesis_path=Path(args.base_genesis),
+        offline_bootstrap_genesis_path=Path(args.offline_bootstrap_genesis),
+        authorized_offline_bootstrap_sha256=args.authorize_offline_bootstrap_sha256,
+        offline_release_policy_path=Path(args.offline_release_policy_path),
+        offline_artifact_dir=Path(args.offline_artifact_dir),
         is2_manifest_path=Path(args.is2_council_manifest),
         authorized_is2_manifest_hash=args.authorize_is2_manifest_hash,
     )

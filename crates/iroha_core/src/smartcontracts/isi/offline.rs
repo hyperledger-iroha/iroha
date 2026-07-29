@@ -1058,14 +1058,11 @@ fn resolve_offline_escrow_account(
     {
         return Ok(Some(account.clone()));
     }
-    if state_transaction.settlement.offline.escrow_required {
-        return Err(labeled_invariant(
-            "escrow_missing",
-            format!("offline escrow account not configured for asset definition `{definition}`"),
-        )
-        .into());
-    }
-    Ok(None)
+    Err(labeled_invariant(
+        "escrow_missing",
+        format!("offline escrow account not configured for asset definition `{definition}`"),
+    )
+    .into())
 }
 
 pub(crate) fn is_offline_escrow_source_asset(
@@ -2497,9 +2494,14 @@ pub mod isi {
             .into());
         }
 
+        let revoked_certificate_hashes = policy_revoked_certificate_hashes(policy)?;
         let platforms = policy
             .trusted_roots
             .iter()
+            .filter(|root| {
+                trusted_root_is_active(root, block_unix_timestamp_ms)
+                    && !revoked_certificate_hashes.contains(&sha256_bytes(&root.der))
+            })
             .map(|root| root.platform.as_str())
             .collect::<BTreeSet<_>>();
         if platforms
@@ -2517,7 +2519,7 @@ pub mod isi {
         {
             return Err(labeled_invariant(
                 "invalid_attestation_policy",
-                "Kagemusha release activation requires bounded trust roots for both production platforms",
+                "Kagemusha release activation requires active, non-revoked, bounded trust roots for both production platforms",
             )
             .into());
         }
@@ -3652,7 +3654,12 @@ pub mod isi {
         world: &impl WorldReadOnly,
         evaluated_at_ms: u64,
     ) -> Result<(), String> {
-        current_offline_device_attestation_policy_from_world(world, evaluated_at_ms).map(|_| ())
+        let (policy, _) =
+            current_offline_device_attestation_policy_from_world(world, evaluated_at_ms)?;
+        validate_offline_attestation_policy_for_release_activation(&policy, evaluated_at_ms)
+            .map_err(|error| {
+                format!("the governed device-attestation policy is not release-grade: {error}")
+            })
     }
 
     /// Derive the canonical end-of-block active-receiver snapshot.
@@ -9269,7 +9276,7 @@ pub mod isi {
         }
 
         #[test]
-        fn every_offline_executor_is_independent_of_local_service_switch() {
+        fn every_offline_executor_has_no_local_service_gate() {
             let source = include_str!("offline.rs");
             let executor_names = [
                 "IssueOfflineNote",
@@ -9307,7 +9314,7 @@ pub mod isi {
         }
 
         #[test]
-        fn local_offline_switch_does_not_change_offline_instruction_execution() {
+        fn offline_instruction_execution_has_no_local_service_switch() {
             let state = offline_test_state();
             let mut block = state.block(offline_test_header());
             let mut state_transaction = block.transaction();
@@ -9315,14 +9322,12 @@ pub mod isi {
                 &ALICE_ID,
                 offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION),
             );
-            state_transaction.settlement.offline.enabled = false;
-
             SetOfflineDeviceAttestationPolicy::new(
                 default_offline_device_attestation_policy()
                     .expect("built-in policy fixture must be valid"),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect("process-local service switches must not affect consensus execution");
+            .expect("offline instructions are part of unconditional consensus execution");
             assert!(
                 state_transaction
                     .world
@@ -9349,7 +9354,8 @@ pub mod isi {
         #[test]
         fn release_activation_device_policy_is_production_and_fail_closed() {
             let policy = release_activation_device_policy();
-            validate_offline_attestation_policy_for_release_activation(&policy, 0)
+            let evaluation_time_ms = 1_800_000_000_000;
+            validate_offline_attestation_policy_for_release_activation(&policy, evaluation_time_ms)
                 .expect("exact production policy must be activation-eligible");
 
             let mut missing_android_gate = policy.clone();
@@ -9357,7 +9363,7 @@ pub mod isi {
             assert!(
                 validate_offline_attestation_policy_for_release_activation(
                     &missing_android_gate,
-                    0,
+                    evaluation_time_ms,
                 )
                 .is_err(),
                 "activation must not publish an Android fail-open policy",
@@ -9366,16 +9372,54 @@ pub mod isi {
             let mut development_ios = policy.clone();
             development_ios.ios_apps[0].environment = "development".to_owned();
             assert!(
-                validate_offline_attestation_policy_for_release_activation(&development_ios, 0)
-                    .is_err(),
+                validate_offline_attestation_policy_for_release_activation(
+                    &development_ios,
+                    evaluation_time_ms,
+                )
+                .is_err(),
                 "activation must not publish a development App Attest policy",
             );
 
             let mut legacy_ios = policy.clone();
             legacy_ios.ios_apps[0].allow_legacy_auth_data_without_extensions = true;
             assert!(
-                validate_offline_attestation_policy_for_release_activation(&legacy_ios, 0).is_err(),
+                validate_offline_attestation_policy_for_release_activation(
+                    &legacy_ios,
+                    evaluation_time_ms,
+                )
+                .is_err(),
                 "activation must not publish a legacy App Attest fallback",
+            );
+
+            let mut expired_ios_roots = policy.clone();
+            for root in &mut expired_ios_roots.trusted_roots {
+                if root.platform == OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST {
+                    root.not_after_ms = Some(evaluation_time_ms - 1);
+                }
+            }
+            assert!(
+                validate_offline_attestation_policy_for_release_activation(
+                    &expired_ios_roots,
+                    evaluation_time_ms,
+                )
+                .is_err(),
+                "activation must require a currently active iOS trust root",
+            );
+
+            let mut revoked_ios_roots = policy.clone();
+            revoked_ios_roots.revoked_certificate_sha256 = revoked_ios_roots
+                .trusted_roots
+                .iter()
+                .filter(|root| root.platform == OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST)
+                .map(|root| sha256_bytes(&root.der).to_vec())
+                .collect();
+            assert!(
+                validate_offline_attestation_policy_for_release_activation(
+                    &revoked_ios_roots,
+                    evaluation_time_ms,
+                )
+                .is_err(),
+                "activation must require a non-revoked iOS trust root",
             );
         }
 
