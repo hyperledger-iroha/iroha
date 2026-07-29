@@ -15,6 +15,7 @@ from iroha_python.crypto import (
     GOST_3410_2012_512_PARAMSET_A_ALGORITHM,
     GOST_3410_2012_512_PARAMSET_B_ALGORITHM,
     ML_DSA_ALGORITHM,
+    PRIVACY_CAPABILITY_VALIDATION_STATUS_V1,
     PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
     PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
     SECP256K1_ALGORITHM,
@@ -102,14 +103,30 @@ def test_supported_crypto_algorithms_include_all_rust_signature_suites() -> None
 
 
 def test_privacy_native_archive_cap_is_stable() -> None:
-    assert PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024
+    assert PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024
 
 
 def test_privacy_native_archive_cap_is_reexported_from_package_root() -> None:
     import iroha_python
 
     assert iroha_python.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
+    assert (
+        iroha_python.PRIVACY_CAPABILITY_VALIDATION_STATUS_V1
+        == PRIVACY_CAPABILITY_VALIDATION_STATUS_V1
+    )
     assert "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES" in iroha_python.__all__
+    assert "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1" in iroha_python.__all__
+    assert dict(PRIVACY_CAPABILITY_VALIDATION_STATUS_V1) == {
+        "VALID": 0,
+        "NULL_POINTER": 1,
+        "EMPTY": 2,
+        "ARCHIVE_TOO_LARGE": 3,
+        "DECODE_RESOURCE_LIMIT": 4,
+        "SCHEMA_MISMATCH": 5,
+        "NON_CANONICAL": 6,
+        "MALFORMED_ARCHIVE": 7,
+        "INVALID_SNAPSHOT": 8,
+    }
     for retired in (
         "PRIVACY_FFI_STATUS_ERROR",
         "privacy_proof_request_v1",
@@ -389,6 +406,13 @@ class _CapabilityNative:
     def privacy_capabilities_v1(self) -> object:
         return self.archive
 
+    def privacy_validate_capabilities_v1(self, archive: bytes) -> int:
+        return (
+            PRIVACY_CAPABILITY_VALIDATION_STATUS_V1["VALID"]
+            if archive == _privacy_capability_archive()
+            else PRIVACY_CAPABILITY_VALIDATION_STATUS_V1["MALFORMED_ARCHIVE"]
+        )
+
 
 def test_privacy_native_capability_surface_is_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
     import iroha_python
@@ -414,13 +438,19 @@ def test_privacy_native_availability_rejects_missing_stale_and_malformed_bridges
     for native in (
         object(),
         _CapabilityNative(abi=PRIVACY_REQUIRED_BRIDGE_ABI_VERSION - 1),
+        _CapabilityNative(abi=PRIVACY_REQUIRED_BRIDGE_ABI_VERSION + 1),
         _CapabilityNative(abi=True),
-        _CapabilityNative(abi="7"),
+        _CapabilityNative(abi="21"),
         _CapabilityNative(archive=b""),
         _CapabilityNative(archive=b"not-norito"),
     ):
         monkeypatch.setattr(crypto_module, "_crypto", native)
         assert not is_privacy_native_available()
+
+    missing_validator = _CapabilityNative()
+    missing_validator.privacy_validate_capabilities_v1 = None  # type: ignore[method-assign]
+    monkeypatch.setattr(crypto_module, "_crypto", missing_validator)
+    assert not is_privacy_native_available()
 
 
 def test_privacy_capability_archive_rejects_adversarial_native_outputs(
@@ -436,6 +466,7 @@ def test_privacy_capability_archive_rejects_adversarial_native_outputs(
     for output in (
         None,
         "json is not Norito",
+        b"\x50",
         [0x50, 0x00],
         memoryview(array("H", [0x5050] * 24)),
         bytes(bad_magic),

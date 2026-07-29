@@ -126,7 +126,7 @@ class IrohaPeerNearbyConnectionsReducerV1Test {
                 receiver,
                 IrohaPeerNearbyConnectionsModeV1.DISCOVERING,
                 IrohaPeerNearbyDiscoveryContextV1.senderBootstrap(
-                    IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                    IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 ),
             ),
         )
@@ -856,7 +856,7 @@ class IrohaPeerNearbyConnectionsReducerV1Test {
         role: IrohaPeerNearbyRoleV1,
         seed: Int,
     ): IrohaPeerNearbyDiscoveryContextV1 = IrohaPeerNearbyDiscoveryContextV1(
-        IrohaPeerPayloadProfile.OFFLINE_NOTE,
+        IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
         role,
         ByteArray(16) { (seed + it).toByte() },
         ByteArray(32) { (seed + it + 16).toByte() },

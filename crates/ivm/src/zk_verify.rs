@@ -11,8 +11,8 @@ use iroha_zkp_halo2::{
 
 /// Verify a Halo2 IPA polynomial opening encoded as a Norito envelope (outer TLV payload).
 pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> {
-    let env: OpenVerifyEnvelope =
-        norito::decode_from_bytes(raw).map_err(|_| iroha_zkp_halo2::Error::VerificationFailed)?;
+    let env: OpenVerifyEnvelope = ivm_abi::codec::decode_canonical_norito(raw)
+        .map_err(|_| iroha_zkp_halo2::Error::VerificationFailed)?;
     let decoded = nh::decode_envelope(&env)?;
     let mut tr = Transcript::new(&env.transcript_label);
     let metadata = env.transcript_metadata();
@@ -108,27 +108,8 @@ pub fn batch_verify_open_envelopes(
     iroha_zkp_halo2::batch::verify_open_batch(envs)
 }
 
-// Request/response structs for state-read syscalls (roots/tally)
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
-pub struct RootsGetRequest {
-    pub asset_id: String,
-    pub max: u32,
-}
-
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
-pub struct RootsGetResponse {
-    pub latest: [u8; 32],
-    pub roots: Vec<[u8; 32]>,
-    pub height: u32,
-}
-
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
-pub struct VoteGetTallyRequest {
-    pub election_id: String,
-}
-
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
-pub struct VoteGetTallyResponse {
-    pub finalized: bool,
-    pub tally: Vec<u64>,
-}
+// Preserve the established runtime module paths while making the shared ABI
+// crate the sole owner of these nominal wire types.
+pub use ivm_abi::host_payload::{
+    RootsGetRequest, RootsGetResponse, VoteGetTallyRequest, VoteGetTallyResponse,
+};

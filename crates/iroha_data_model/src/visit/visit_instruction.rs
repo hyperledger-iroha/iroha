@@ -94,21 +94,6 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         .downcast_ref::<crate::isi::domain_link::SetAccountAliasBinding>()
     {
         visitor.visit_set_account_alias_binding(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::offline::IssueOfflineNote>()
-    {
-        visitor.visit_issue_offline_note(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::offline::RedeemOfflineNote>()
-    {
-        visitor.visit_redeem_offline_note(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::offline::AuditOfflineNote>()
-    {
-        visitor.visit_audit_offline_note(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<BurnBox>() {
@@ -208,6 +193,21 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
             .downcast_ref::<crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1>()
     {
         visitor.visit_revoke_privacy_bootle_lantern_issuer_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RegisterPrivacyVegaIssuerV1>()
+    {
+        visitor.visit_register_privacy_vega_issuer_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RotatePrivacyVegaIssuerV1>()
+    {
+        visitor.visit_rotate_privacy_vega_issuer_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RevokePrivacyVegaIssuerV1>()
+    {
+        visitor.visit_revoke_privacy_vega_issuer_v1(v);
     } else if let Some(v) = isi
         .as_any()
         .downcast_ref::<crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1>()
@@ -685,9 +685,6 @@ macro_rules! instruction_visitors {
             visit_compare_and_set_primary_account_alias(&$crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias),
             visit_acquire_account_alias_lease(&$crate::isi::account_alias_lease::AcquireAccountAliasLease),
             visit_set_account_alias_binding(&$crate::isi::domain_link::SetAccountAliasBinding),
-            visit_issue_offline_note(&$crate::isi::offline::IssueOfflineNote),
-            visit_redeem_offline_note(&$crate::isi::offline::RedeemOfflineNote),
-            visit_audit_offline_note(&$crate::isi::offline::AuditOfflineNote),
             visit_log(&Log),
             visit_custom_instruction(&CustomInstruction),
             visit_register_privacy_protocol_activation_v1(
@@ -732,6 +729,15 @@ macro_rules! instruction_visitors {
             ),
             visit_revoke_privacy_bootle_lantern_issuer_policy_v1(
                 &$crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1
+            ),
+            visit_register_privacy_vega_issuer_v1(
+                &$crate::isi::privacy::RegisterPrivacyVegaIssuerV1
+            ),
+            visit_rotate_privacy_vega_issuer_v1(
+                &$crate::isi::privacy::RotatePrivacyVegaIssuerV1
+            ),
+            visit_revoke_privacy_vega_issuer_v1(
+                &$crate::isi::privacy::RevokePrivacyVegaIssuerV1
             ),
             visit_register_privacy_zk_x509_trust_anchor_v1(
                 &$crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1
@@ -856,12 +862,14 @@ mod tests {
     use super::*;
     use crate::{
         isi::privacy::{
-            RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
-            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
-            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyVegaIssuerV1,
+            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
+            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyBootleLanternIssuerPolicyV1,
+            RevokePrivacyVegaIssuerV1, RevokePrivacyZkX509CertificatePolicyV1,
             RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
-            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
-            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
+            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyVegaIssuerV1,
+            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
+            RotatePrivacyZkX509TrustAnchorV1,
         },
         prelude::*,
         privacy::{
@@ -871,6 +879,10 @@ mod tests {
             BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
             PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
             PrivacyParameterIdV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyRootV1,
+            PrivacyCredentialDocumentTypeV1, PrivacyP256PointV1,
+            PrivacyVegaIssuerRecordDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
+            PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDigestAlgorithmV1,
+            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
             PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
             PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
             PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
@@ -929,6 +941,29 @@ mod tests {
             .validate_initial()
             .expect("canonical Bootle/Lantern visitor fixture");
         policy
+    }
+
+    fn vega_visitor_record(
+        epoch: u64,
+        key_seed: u8,
+        previous_record_digest: Option<PrivacyVegaIssuerRecordDigestV1>,
+        lifecycle: PrivacyVegaIssuerRecordLifecycleV1,
+    ) -> PrivacyVegaIssuerRecordV1 {
+        let mut key = [key_seed; 33];
+        key[0] = 0x02;
+        PrivacyVegaIssuerRecordV1::new(
+            PrivacyIssuerIdV1::new([0x31; 32]),
+            epoch,
+            PrivacyP256PointV1::new(key),
+            PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+            PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+            PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical structural Vega visitor fixture")
     }
 
     #[test]
@@ -1066,6 +1101,62 @@ mod tests {
     }
 
     #[test]
+    fn visit_all_vega_governance_instructions_dispatches_from_boxes() {
+        struct VegaVisitor {
+            calls: Vec<&'static str>,
+        }
+
+        impl Visit for VegaVisitor {
+            fn visit_register_privacy_vega_issuer_v1(
+                &mut self,
+                _: &RegisterPrivacyVegaIssuerV1,
+            ) {
+                self.calls.push("register");
+            }
+
+            fn visit_rotate_privacy_vega_issuer_v1(
+                &mut self,
+                _: &RotatePrivacyVegaIssuerV1,
+            ) {
+                self.calls.push("rotate");
+            }
+
+            fn visit_revoke_privacy_vega_issuer_v1(
+                &mut self,
+                _: &RevokePrivacyVegaIssuerV1,
+            ) {
+                self.calls.push("revoke");
+            }
+        }
+
+        let current =
+            vega_visitor_record(1, 0x41, None, PrivacyVegaIssuerRecordLifecycleV1::Active);
+        let rotated = vega_visitor_record(
+            2,
+            0x42,
+            Some(current.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        let revoked = vega_visitor_record(
+            2,
+            0x41,
+            Some(current.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Revoked,
+        );
+        let instructions: Vec<InstructionBox> = vec![
+            RegisterPrivacyVegaIssuerV1::new(current).into(),
+            RotatePrivacyVegaIssuerV1::new(current.record_digest, rotated).into(),
+            RevokePrivacyVegaIssuerV1::new(current.record_digest, revoked).into(),
+        ];
+
+        let mut visitor = VegaVisitor { calls: Vec::new() };
+        for instruction in &instructions {
+            visit_instruction(&mut visitor, instruction);
+        }
+        assert_eq!(visitor.calls, ["register", "rotate", "revoke"]);
+    }
+
+    #[test]
     fn visit_all_x509_governance_instructions_dispatches_from_boxes() {
         struct X509Visitor {
             calls: Vec<&'static str>,
@@ -1165,8 +1256,6 @@ mod tests {
             PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(b"visitor SPKI DER fixture"),
             1_000,
             1_300,
-            PrivacyRootV1::new([0x16; 32]),
-            1,
             None,
             PrivacyZkX509RecordLifecycleV1::Active,
         )

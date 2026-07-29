@@ -1,8 +1,6 @@
 using System;
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Hyperledger.Iroha.Privacy;
@@ -22,6 +20,20 @@ public enum PrivacyProtocolIdV1
     MoneroFcmpPlusPlusV1,
     IrohaIvmPrivateNoteStarkV1,
     PqMaspStarkV0,
+}
+
+/// <summary>Stable ABI-21 result of validating one typed privacy capability archive.</summary>
+public enum PrivacyCapabilityValidationStatusV1
+{
+    Valid = 0,
+    NullPointer = 1,
+    Empty = 2,
+    ArchiveTooLarge = 3,
+    DecodeResourceLimit = 4,
+    SchemaMismatch = 5,
+    NonCanonical = 6,
+    MalformedArchive = 7,
+    InvalidSnapshot = 8,
 }
 
 public static class PrivacyProtocolsV1
@@ -84,20 +96,13 @@ public static class PrivacyProtocolsV1
 /// <summary>Validated canonical <c>PrivacyCapabilitySnapshotV1</c> Norito archive.</summary>
 public sealed class PrivacyCapabilitiesArchive
 {
-    internal const byte SchemaByte = 0x50;
-    private const int HeaderBytes = 40;
-    private const int MaximumHeaderPaddingBytes = 64;
-    private const byte SupportedFlagsMask = 0x27;
-    private const byte FieldBitsetFlag = 0x20;
-    private const byte FieldBitsetRequiredFlags = 0x06;
-    private const ulong Crc64ReflectedPolynomial = 0xC96C5795D7870F42UL;
-
     private readonly byte[] _noritoBytes;
 
-    public PrivacyCapabilitiesArchive(byte[] noritoBytes)
+    internal PrivacyCapabilitiesArchive(byte[] noritoBytes)
     {
         ArgumentNullException.ThrowIfNull(noritoBytes);
-        if (!IsCanonicalArchive(noritoBytes))
+        if (PrivacyNative.ValidateCapabilitiesV1(noritoBytes)
+            != PrivacyCapabilityValidationStatusV1.Valid)
         {
             throw new ArgumentException(
                 "Expected a canonical PrivacyCapabilitySnapshotV1 Norito archive.",
@@ -108,70 +113,6 @@ public sealed class PrivacyCapabilitiesArchive
 
     /// <summary>Returns a defensive copy of the typed Norito archive.</summary>
     public byte[] NoritoBytes => (byte[])_noritoBytes.Clone();
-
-    internal static bool IsCanonicalArchive(ReadOnlySpan<byte> bytes)
-    {
-        if (bytes.Length < HeaderBytes || bytes.Length > PrivacyNative.PrivacyNativeArchiveMaxBytes)
-        {
-            return false;
-        }
-        if (!bytes[..4].SequenceEqual("NRT0"u8)
-            || bytes[4] != 0
-            || bytes[5] != 0
-            || bytes[22] != 0)
-        {
-            return false;
-        }
-        for (var index = 6; index < 22; index++)
-        {
-            if (bytes[index] != SchemaByte)
-            {
-                return false;
-            }
-        }
-        var flags = bytes[39];
-        if ((flags & ~SupportedFlagsMask) != 0
-            || ((flags & FieldBitsetFlag) != 0
-                && (flags & FieldBitsetRequiredFlags) != FieldBitsetRequiredFlags))
-        {
-            return false;
-        }
-        var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(23, 8));
-        if (payloadLength == 0 || payloadLength > int.MaxValue)
-        {
-            return false;
-        }
-        var minimumLength = HeaderBytes + (int)payloadLength;
-        if (minimumLength > bytes.Length)
-        {
-            return false;
-        }
-        var paddingLength = bytes.Length - minimumLength;
-        if (paddingLength > MaximumHeaderPaddingBytes
-            || bytes.Slice(HeaderBytes, paddingLength).ContainsAnyExcept((byte)0))
-        {
-            return false;
-        }
-        var payload = bytes[(HeaderBytes + paddingLength)..];
-        var expectedCrc = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(31, 8));
-        return Crc64(payload) == expectedCrc;
-    }
-
-    internal static ulong Crc64(ReadOnlySpan<byte> payload)
-    {
-        var crc = ulong.MaxValue;
-        foreach (var value in payload)
-        {
-            crc ^= value;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 1UL) != 0
-                    ? (crc >> 1) ^ Crc64ReflectedPolynomial
-                    : crc >> 1;
-            }
-        }
-        return crc ^ ulong.MaxValue;
-    }
 }
 
 /// <summary>
@@ -180,7 +121,7 @@ public sealed class PrivacyCapabilitiesArchive
 /// </summary>
 public static class PrivacyNative
 {
-    internal const int PrivacyNativeArchiveMaxBytes = 64 * 1024 * 1024;
+    public const int PrivacyNativeArchiveMaxBytes = 256 * 1024;
     public const uint RequiredBridgeAbiVersion = 21;
     private const string LibraryName = "connect_norito_bridge";
     private static readonly bool Available = DetectAvailability();
@@ -194,6 +135,10 @@ public static class PrivacyNative
         {
             return NativeLibrary.TryLoad(LibraryName, out handle)
                 && NativeLibrary.TryGetExport(handle, "iroha_privacy_capabilities_v1", out _)
+                && NativeLibrary.TryGetExport(
+                    handle,
+                    "iroha_privacy_validate_capabilities_v1",
+                    out _)
                 && NativeLibrary.TryGetExport(handle, "iroha_privacy_free_buffer", out _)
                 && NativeBridgeAbiVersion() == RequiredBridgeAbiVersion;
         }
@@ -247,6 +192,30 @@ public static class PrivacyNative
         }
     }
 
+    public static PrivacyCapabilityValidationStatusV1 ValidateCapabilitiesV1(byte[] archive)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        if (archive.Length == 0)
+        {
+            return PrivacyCapabilityValidationStatusV1.Empty;
+        }
+        if (archive.Length > PrivacyNativeArchiveMaxBytes)
+        {
+            return PrivacyCapabilityValidationStatusV1.ArchiveTooLarge;
+        }
+        if (!IsAvailable())
+        {
+            throw new InvalidOperationException("Native privacy capability bridge is unavailable.");
+        }
+        var code = NativeValidateCapabilities(archive, new UIntPtr((uint)archive.Length));
+        if (!Enum.IsDefined(typeof(PrivacyCapabilityValidationStatusV1), code))
+        {
+            throw new InvalidOperationException(
+                "Native privacy capability validation returned an unknown status.");
+        }
+        return (PrivacyCapabilityValidationStatusV1)code;
+    }
+
     [DllImport(
         LibraryName,
         EntryPoint = "connect_norito_bridge_abi_version",
@@ -258,6 +227,14 @@ public static class PrivacyNative
         EntryPoint = "iroha_privacy_capabilities_v1",
         CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeCapabilities(out IntPtr output, out UIntPtr outputLength);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "iroha_privacy_validate_capabilities_v1",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeValidateCapabilities(
+        [In] byte[] archive,
+        UIntPtr archiveLength);
 
     [DllImport(
         LibraryName,

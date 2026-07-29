@@ -5,7 +5,7 @@ use iroha_data_model::{
         FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY,
     },
-    nexus::{AxtFastpqBinding, AxtProofEnvelope, ProofBlob},
+    nexus::{AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, ProofBlob},
 };
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
@@ -60,7 +60,7 @@ pub struct AxtVerifiedProof {
 /// malformed, or use an unsupported claim type.
 pub fn canonicalize_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBinding> {
     Ok(AxtFastpqBinding {
-        parameter: normalized_parameter(&binding.parameter),
+        parameter: normalized_parameter(&binding.parameter)?,
         source_dsid: binding.source_dsid,
         source_dataspace: required_string(&binding.source_dataspace, "source_dataspace")?,
         source_receipt_id: required_string(&binding.source_receipt_id, "source_receipt_id")?,
@@ -80,7 +80,11 @@ pub fn canonicalize_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBindi
         verifier_id: normalized_verifier_id(&binding.verifier_id)?,
         verifier_version: normalized_verifier_version(&binding.verifier_version)?,
         target_dsids: required_target_dsids(&binding.target_dsids)?,
-        effect_binding: binding.effect_binding.clone(),
+        effect_binding: binding
+            .effect_binding
+            .as_ref()
+            .map(canonicalize_effect_binding)
+            .transpose()?,
     })
 }
 
@@ -93,10 +97,10 @@ pub fn encode_axt_fastpq_payload(batch: &TransitionBatch, proof: Proof) -> Resul
         batch: transition_batch_to_model(batch),
         proof,
     };
-    to_bytes(&payload).map_err(Error::Encode)
+    encode_canonical_norito(&payload)
 }
 
-/// Decode and canonicalize the AXT binding already embedded in a `FastPQ` batch.
+/// Decode the canonical AXT binding already embedded in a `FastPQ` batch.
 ///
 /// This helper never mutates the batch. It is intended for export paths that
 /// need to package proof material after the batch has already been bound before
@@ -108,11 +112,9 @@ pub fn encode_axt_fastpq_payload(batch: &TransitionBatch, proof: Proof) -> Resul
 /// concrete batch metadata.
 pub fn embedded_axt_binding(batch: &TransitionBatch) -> Result<AxtFastpqBinding> {
     let encoded = required_metadata(batch, AXT_FASTPQ_BINDING_METADATA_KEY)?;
-    let decoded: AxtFastpqBinding =
-        decode_from_bytes(encoded).map_err(|source| Error::TransferMetadataDecode { source })?;
-    let canonical = canonicalize_binding(&decoded)?;
-    verify_batch_matches_binding(batch, &canonical)?;
-    Ok(canonical)
+    let binding = decode_canonical_binding(encoded)?;
+    verify_batch_matches_binding(batch, &binding)?;
+    Ok(binding)
 }
 
 /// Build an AXT proof envelope from an already AXT-bound batch and proof.
@@ -156,7 +158,7 @@ pub fn axt_proof_blob_from_bound_batch(
 ) -> Result<ProofBlob> {
     let envelope = axt_proof_envelope_from_bound_batch(batch, proof, manifest_root, da_commitment)?;
     Ok(ProofBlob {
-        payload: to_bytes(&envelope).map_err(Error::Encode)?,
+        payload: encode_canonical_norito(&envelope)?,
         expiry_slot,
     })
 }
@@ -209,6 +211,7 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
         .ok_or_else(|| Error::InvalidAxtBinding {
             details: "AXT proof envelope is missing fastpq_binding".into(),
         })?;
+    require_canonical_binding(binding)?;
     if binding.source_dsid != envelope.dsid.as_u64() {
         return Err(Error::InvalidAxtBinding {
             details: "AXT proof envelope source_dsid does not match dsid".into(),
@@ -221,8 +224,7 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
             max: DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES,
         });
     }
-    let payload: AxtFastpqProofPayload = decode_from_bytes(&envelope.proof)
-        .map_err(|source| Error::AxtProofPayloadDecode { source })?;
+    let payload = decode_canonical_axt_fastpq_payload(&envelope.proof)?;
     let batch = transition_batch_from_model(&payload.batch);
     verify_batch_matches_binding(&batch, binding)?;
     verify(&batch, &payload.proof)?;
@@ -360,7 +362,7 @@ impl<'a> BindingContext<'a> {
 }
 
 fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBinding) -> Result<()> {
-    let canonical = canonicalize_binding(binding)?;
+    let canonical = require_canonical_binding(binding)?;
     let context = BindingContext::from_binding(&canonical)?;
     if batch.parameter != canonical.parameter {
         return Err(Error::InvalidAxtBinding {
@@ -374,9 +376,8 @@ fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBind
     }
     require_concrete_execution_batch(batch, &context)?;
     let encoded = required_metadata(batch, AXT_FASTPQ_BINDING_METADATA_KEY)?;
-    let decoded: AxtFastpqBinding =
-        decode_from_bytes(encoded).map_err(|source| Error::TransferMetadataDecode { source })?;
-    if canonicalize_binding(&decoded)? != canonical {
+    let decoded = decode_canonical_binding(encoded)?;
+    if decoded != canonical {
         return Err(Error::InvalidAxtBinding {
             details: "FastPQ batch metadata binding does not match AXT binding".into(),
         });
@@ -494,8 +495,8 @@ fn axt_statement_digest(
     if let Some(da_commitment) = envelope.da_commitment {
         payload.extend_from_slice(&da_commitment);
     }
-    payload.extend_from_slice(&to_bytes(&canonicalize_binding(binding)?)?);
-    payload.extend_from_slice(&to_bytes(batch)?);
+    payload.extend_from_slice(&encode_canonical_norito(&canonicalize_binding(binding)?)?);
+    payload.extend_from_slice(&encode_canonical_norito(batch)?);
     Ok(Hash::new(payload).into())
 }
 
@@ -509,8 +510,8 @@ fn axt_batch_seal(
         .remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
     let mut payload = Vec::new();
     payload.extend_from_slice(AXT_BATCH_SEAL_DOMAIN);
-    payload.extend_from_slice(&to_bytes(canonical_binding)?);
-    payload.extend_from_slice(&to_bytes(&sealed_batch)?);
+    payload.extend_from_slice(&encode_canonical_norito(canonical_binding)?);
+    payload.extend_from_slice(&encode_canonical_norito(&sealed_batch)?);
     Ok(Hash::new(payload).into())
 }
 
@@ -520,7 +521,7 @@ fn insert_binding_metadata(
 ) -> Result<()> {
     batch.metadata.insert(
         AXT_FASTPQ_BINDING_METADATA_KEY.into(),
-        to_bytes(context.binding).map_err(Error::Encode)?,
+        encode_canonical_norito(context.binding)?,
     );
     batch.metadata.insert(
         "source_tx_commitment".into(),
@@ -570,29 +571,19 @@ fn required_string(value: &str, field: &str) -> Result<String> {
 }
 
 fn required_digest(value: &str, field: &str) -> Result<String> {
-    let trimmed = value.trim().to_lowercase();
+    let trimmed = value.trim().to_ascii_lowercase();
     decode_hex_digest(&trimmed, field)?;
     Ok(trimmed)
 }
 
-fn normalized_parameter(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        DEFAULT_PARAMETER.to_string()
-    } else {
-        trimmed.to_string()
-    }
+fn normalized_parameter(value: &str) -> Result<String> {
+    required_string(value, "parameter")
 }
 
 fn normalized_verifier_id(value: &str) -> Result<String> {
-    let trimmed = value.trim();
-    let verifier_id = if trimmed.is_empty() {
-        "fastpq"
-    } else {
-        trimmed
-    };
+    let verifier_id = required_string(value, "verifier_id")?.to_ascii_lowercase();
     if verifier_id == "fastpq" {
-        Ok(verifier_id.to_string())
+        Ok(verifier_id)
     } else {
         Err(Error::InvalidAxtBinding {
             details: format!("unsupported AXT verifier_id: {value}"),
@@ -601,10 +592,9 @@ fn normalized_verifier_id(value: &str) -> Result<String> {
 }
 
 fn normalized_verifier_version(value: &str) -> Result<String> {
-    let trimmed = value.trim();
-    let verifier_version = if trimmed.is_empty() { "v1" } else { trimmed };
+    let verifier_version = required_string(value, "verifier_version")?.to_ascii_lowercase();
     if verifier_version == "v1" {
-        Ok(verifier_version.to_string())
+        Ok(verifier_version)
     } else {
         Err(Error::InvalidAxtBinding {
             details: format!("unsupported AXT verifier_version: {value}"),
@@ -618,10 +608,18 @@ fn required_target_dsids(values: &[u64]) -> Result<Vec<u64>> {
             details: "target_dsids must not be empty".into(),
         });
     }
-    for (idx, value) in values.iter().enumerate() {
-        if values[..idx].contains(value) {
+    for pair in values.windows(2) {
+        if pair[0] == pair[1] {
             return Err(Error::InvalidAxtBinding {
-                details: format!("target_dsids contains duplicate value: {value}"),
+                details: format!("target_dsids contains duplicate value: {}", pair[0]),
+            });
+        }
+        if pair[0] > pair[1] {
+            return Err(Error::InvalidAxtBinding {
+                details: format!(
+                    "target_dsids must be strictly ordered: {} precedes {}",
+                    pair[0], pair[1]
+                ),
             });
         }
     }
@@ -629,13 +627,93 @@ fn required_target_dsids(values: &[u64]) -> Result<Vec<u64>> {
 }
 
 fn normalized_claim_type(value: &str) -> Result<String> {
-    let claim_type = value.trim().to_lowercase();
+    let claim_type = value.trim().to_ascii_lowercase();
     match claim_type.as_str() {
         "authorization" | "compliance" | "tx_predicate" | "value_conservation" => Ok(claim_type),
         _ => Err(Error::InvalidAxtBinding {
             details: format!("unsupported claim_type: {value}"),
         }),
     }
+}
+
+fn canonicalize_effect_binding(binding: &AxtEffectBinding) -> Result<AxtEffectBinding> {
+    Ok(AxtEffectBinding {
+        destination_domain: canonical_optional_string(
+            &binding.destination_domain,
+            "effect_binding.destination_domain",
+        )?,
+        destination_account_id: canonical_optional_string(
+            &binding.destination_account_id,
+            "effect_binding.destination_account_id",
+        )?,
+        vault_account_id: canonical_optional_string(
+            &binding.vault_account_id,
+            "effect_binding.vault_account_id",
+        )?,
+        issuance_account_id: canonical_optional_string(
+            &binding.issuance_account_id,
+            "effect_binding.issuance_account_id",
+        )?,
+        source_asset_definition_id: canonical_optional_string(
+            &binding.source_asset_definition_id,
+            "effect_binding.source_asset_definition_id",
+        )?,
+        destination_asset_definition_id: canonical_optional_string(
+            &binding.destination_asset_definition_id,
+            "effect_binding.destination_asset_definition_id",
+        )?,
+        source_amount_i64: binding.source_amount_i64,
+        destination_amount_i64: binding.destination_amount_i64,
+    })
+}
+
+fn canonical_optional_string(value: &Option<String>, field: &str) -> Result<Option<String>> {
+    value
+        .as_deref()
+        .map(|value| required_string(value, field))
+        .transpose()
+}
+
+fn require_canonical_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBinding> {
+    let canonical = canonicalize_binding(binding)?;
+    if &canonical != binding {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT FASTPQ binding must use its exact canonical field representation".into(),
+        });
+    }
+    Ok(canonical)
+}
+
+fn encode_canonical_norito<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    to_bytes(value).map_err(Error::Encode)
+}
+
+fn decode_canonical_binding(encoded: &[u8]) -> Result<AxtFastpqBinding> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let binding: AxtFastpqBinding =
+        decode_from_bytes(encoded).map_err(|source| Error::TransferMetadataDecode { source })?;
+    if encode_canonical_norito(&binding)?.as_slice() != encoded {
+        return Err(Error::InvalidAxtBinding {
+            details: "FastPQ batch metadata binding must use canonical Norito bytes".into(),
+        });
+    }
+    require_canonical_binding(&binding)
+}
+
+fn decode_canonical_axt_fastpq_payload(encoded: &[u8]) -> Result<AxtFastpqProofPayload> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let payload: AxtFastpqProofPayload =
+        decode_from_bytes(encoded).map_err(|source| Error::AxtProofPayloadDecode { source })?;
+    if encode_canonical_norito(&payload)?.as_slice() != encoded {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT FastPQ proof payload must use canonical Norito bytes".into(),
+        });
+    }
+    Ok(payload)
 }
 
 fn dsid_bytes(source_dsid: u64) -> [u8; 16] {
@@ -668,7 +746,7 @@ fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32]> {
 /// [`Error::Encode`] when Norito serialization of the canonical binding fails.
 pub fn batch_manifest_sha256(binding: &AxtFastpqBinding) -> Result<String> {
     let canonical = canonicalize_binding(binding)?;
-    let bytes = to_bytes(&canonical).map_err(Error::Encode)?;
+    let bytes = encode_canonical_norito(&canonical)?;
     Ok(format!("{:x}", sha2::Sha256::digest(bytes)))
 }
 
@@ -707,6 +785,13 @@ mod tests {
             target_dsids: vec![9],
             effect_binding: None,
         }
+    }
+
+    fn alternate_norito_bytes<T: NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        to_bytes(value).expect("encode alternate-layout fixture")
     }
 
     fn envelope_with_payload(binding: AxtFastpqBinding, proof: Vec<u8>) -> AxtProofEnvelope {
@@ -877,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_binding_rejects_non_fastpq_v1_verifier_labels() {
+    fn canonicalize_binding_rejects_non_fastpq_v1_or_blank_verifier_labels() {
         let mut binding = sample_binding();
         binding.verifier_id = "halo2".to_owned();
         let err = canonicalize_binding(&binding).expect_err("wrong verifier id must fail");
@@ -894,14 +979,29 @@ mod tests {
 
         let mut binding = sample_binding();
         binding.verifier_id.clear();
+        let err = canonicalize_binding(&binding).expect_err("blank verifier id must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("verifier_id"))
+        );
+
+        let mut binding = sample_binding();
         binding.verifier_version.clear();
-        let canonical = canonicalize_binding(&binding).expect("empty labels default to FastPQ V1");
-        assert_eq!(canonical.verifier_id, "fastpq");
-        assert_eq!(canonical.verifier_version, "v1");
+        let err = canonicalize_binding(&binding).expect_err("blank verifier version must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("verifier_version"))
+        );
+
+        let mut binding = sample_binding();
+        binding.parameter.clear();
+        let err = canonicalize_binding(&binding).expect_err("blank parameter must fail");
+        assert!(matches!(
+            err,
+            Error::InvalidAxtBinding { details } if details.contains("parameter")
+        ));
     }
 
     #[test]
-    fn canonicalize_binding_rejects_empty_or_duplicate_targets() {
+    fn canonicalize_binding_requires_strictly_ordered_unique_targets() {
         let mut binding = sample_binding();
         binding.target_dsids.clear();
         let err = canonicalize_binding(&binding).expect_err("empty targets must fail");
@@ -915,25 +1015,47 @@ mod tests {
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("duplicate"))
         );
+
+        let mut binding = sample_binding();
+        binding.target_dsids = vec![11, 9];
+        let err = canonicalize_binding(&binding).expect_err("out-of-order targets must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("strictly ordered"))
+        );
+
+        let mut binding = sample_binding();
+        binding.target_dsids = vec![9, 11];
+        assert_eq!(
+            canonicalize_binding(&binding)
+                .expect("strict target order")
+                .target_dsids,
+            vec![9, 11]
+        );
     }
 
     #[test]
     fn canonicalize_binding_normalizes_labels_and_manifest_hash() {
         let mut binding = sample_binding();
-        binding.parameter = "  ".to_owned();
+        binding.parameter = format!("  {DEFAULT_PARAMETER}  ");
         binding.source_dataspace = "  taira  ".to_owned();
         binding.source_receipt_id = "  receipt-0001  ".to_owned();
+        binding.source_tx_commitment =
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned();
         binding.claim_type = "  AUTHORIZATION  ".to_owned();
         binding.claim_digest =
             "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_owned();
-        binding.verifier_id.clear();
-        binding.verifier_version.clear();
+        binding.verifier_id = "  fastpq  ".to_owned();
+        binding.verifier_version = "  v1  ".to_owned();
         binding.corridor = "  corridor-a  ".to_owned();
 
         let canonical = canonicalize_binding(&binding).expect("canonical binding");
         assert_eq!(canonical.parameter, DEFAULT_PARAMETER);
         assert_eq!(canonical.source_dataspace, "taira");
         assert_eq!(canonical.source_receipt_id, "receipt-0001");
+        assert_eq!(
+            canonical.source_tx_commitment,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
         assert_eq!(canonical.claim_type, "authorization");
         assert_eq!(
             canonical.claim_digest,
@@ -945,6 +1067,57 @@ mod tests {
         assert_eq!(
             batch_manifest_sha256(&binding).expect("raw manifest"),
             batch_manifest_sha256(&canonical).expect("canonical manifest")
+        );
+    }
+
+    #[test]
+    fn verification_rejects_normalizable_but_noncanonical_binding_values() {
+        let mutations: [fn(&mut AxtFastpqBinding); 4] = [
+            |binding: &mut AxtFastpqBinding| binding.parameter = format!(" {DEFAULT_PARAMETER}"),
+            |binding: &mut AxtFastpqBinding| {
+                binding.claim_type = "AUTHORIZATION".to_owned();
+            },
+            |binding: &mut AxtFastpqBinding| {
+                binding.claim_digest =
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned();
+            },
+            |binding: &mut AxtFastpqBinding| binding.verifier_id = "fastpq ".to_owned(),
+        ];
+        for mutate in mutations {
+            let mut binding = sample_binding();
+            mutate(&mut binding);
+            let envelope = envelope_with_payload(binding, vec![0x00]);
+            let err = verify_axt_proof_envelope(&envelope)
+                .expect_err("normalizable noncanonical binding must fail before proof decoding");
+            assert!(
+                matches!(&err, Error::InvalidAxtBinding { details } if details.contains("exact canonical")),
+                "unexpected error: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bind_axt_batch_pins_canonical_norito_flags_under_an_ambient_layout() {
+        let binding = sample_binding();
+        let canonical = real_authorization_batch(&binding);
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let under_alternate_layout = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            real_authorization_batch(&binding)
+        };
+
+        assert_eq!(
+            under_alternate_layout
+                .metadata
+                .get(AXT_FASTPQ_BINDING_METADATA_KEY),
+            canonical.metadata.get(AXT_FASTPQ_BINDING_METADATA_KEY)
+        );
+        assert_eq!(
+            under_alternate_layout
+                .metadata
+                .get(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY),
+            canonical.metadata.get(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY)
         );
     }
 
@@ -1311,6 +1484,48 @@ mod tests {
     }
 
     #[test]
+    fn embedded_axt_binding_rejects_alternate_norito_layout() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let alternate = alternate_norito_bytes(&binding);
+        assert_ne!(
+            alternate,
+            encode_canonical_norito(&binding).expect("canonical binding")
+        );
+        assert_eq!(
+            decode_from_bytes::<AxtFastpqBinding>(&alternate)
+                .expect("ordinary Norito accepts advertised alternate layout"),
+            binding
+        );
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_BINDING_METADATA_KEY.into(), alternate);
+
+        let err = embedded_axt_binding(&batch).expect_err("alternate binding layout must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("canonical Norito"))
+        );
+    }
+
+    #[test]
+    fn embedded_axt_binding_rejects_semantically_noncanonical_metadata() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let mut noncanonical = binding;
+        noncanonical.claim_type = " AUTHORIZATION ".to_owned();
+        batch.metadata.insert(
+            AXT_FASTPQ_BINDING_METADATA_KEY.into(),
+            encode_canonical_norito(&noncanonical).expect("canonical Norito layout"),
+        );
+
+        let err = embedded_axt_binding(&batch)
+            .expect_err("normalizable metadata value must not be accepted as canonical");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("exact canonical"))
+        );
+    }
+
+    #[test]
     fn verify_axt_envelope_rejects_source_tx_commitment_metadata_mismatch() {
         let binding = sample_binding();
         let mut batch = real_authorization_batch(&binding);
@@ -1511,6 +1726,44 @@ mod tests {
             } if actual == DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES + 1
                 && max == DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES
         ));
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_alternate_payload_layout_and_encoder_is_pinned() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let payload = AxtFastpqProofPayload {
+            batch: transition_batch_to_model(&batch),
+            proof: proof.clone(),
+        };
+        let canonical =
+            encode_axt_fastpq_payload(&batch, proof.clone()).expect("canonical payload");
+        let alternate = alternate_norito_bytes(&payload);
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            decode_from_bytes::<AxtFastpqProofPayload>(&alternate)
+                .expect("ordinary Norito accepts advertised alternate layout"),
+            payload
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let pinned_under_ambient = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            encode_axt_fastpq_payload(&batch, proof).expect("pinned payload")
+        };
+        assert_eq!(pinned_under_ambient, canonical);
+
+        let envelope = envelope_with_payload(binding, alternate);
+        let err =
+            verify_axt_proof_envelope(&envelope).expect_err("alternate payload layout must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("proof payload") && details.contains("canonical Norito"))
+        );
     }
 
     #[test]

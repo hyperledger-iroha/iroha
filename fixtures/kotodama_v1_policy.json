@@ -29,6 +29,35 @@
     "NftView",
     "QueryPage"
   ],
+  "dynamic_access_hints": {
+    "state_map_key_types": [
+      "int",
+      "decimal",
+      "quantity",
+      "bool",
+      "string",
+      "bytes",
+      "DataSpaceId",
+      "AccountId",
+      "AssetDefinitionId",
+      "AssetId",
+      "NftId",
+      "DomainId",
+      "Name"
+    ],
+    "bound_kinds": [
+      "range",
+      "take"
+    ],
+    "max_keys": 64,
+    "base_prefix": "state:",
+    "base_identifier": "state_declaration_identifier",
+    "base_reserved_prefixes": [
+      "__kotodama_link_"
+    ],
+    "requires_declared_state_map": true,
+    "scheduler_authoritative": false
+  },
   "retired_numeric_type_spellings": [
     "i8",
     "i16",
@@ -79,7 +108,13 @@
     "__kotodama_quantity_div_round",
     "__kotodama_quantity_ratio_round",
     "__kotodama_decimal_to_int_trunc",
-    "__kotodama_decimal_to_int_round"
+    "__kotodama_decimal_to_int_round",
+    "is_some",
+    "is_none",
+    "is_ok",
+    "is_err",
+    "unwrap_or",
+    "unwrap_err_or"
   ],
   "numeric_suffix_fixits": {
     "amt": "strip",

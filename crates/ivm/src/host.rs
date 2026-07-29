@@ -25,7 +25,7 @@ use iroha_data_model::{
     domain::DomainId,
     isi::transfer::TransferAssetBatch,
     name::Name,
-    nexus::{AxtPolicySnapshot, DataSpaceId},
+    nexus::{AxtPolicySnapshot, AxtPolicySnapshotValidationError, DataSpaceId},
     nft::NftId,
     zk::{OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
@@ -35,9 +35,14 @@ use iroha_primitives::{
     json::Json,
     numeric_abi::{MAX_QUANTITY_FRAME_BYTES_V1, QuantityValueV1},
 };
-use ivm_abi::private_input::{
-    MAX_PRIVATE_INPUT_RECORD_BYTES_V1, MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1, MAX_PRIVATE_INPUTS_V1,
-    PrivateInputKindV1, PrivateInputRecordV1,
+use ivm_abi::{
+    codec::{
+        decode_canonical_norito, decode_canonical_norito_with_limits, encode_canonical_norito,
+    },
+    private_input::{
+        MAX_PRIVATE_INPUT_RECORD_BYTES_V1, MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1,
+        MAX_PRIVATE_INPUTS_V1, PrivateInputKindV1, PrivateInputRecordV1,
+    },
 };
 use norito::{
     core::{Archived, Header, NoritoDeserialize, NoritoSerialize},
@@ -152,6 +157,17 @@ pub struct ZkExecutionCounters {
     /// Backend verifier invocations made after exact-cost preflight.
     pub backend_invocations: u64,
     /// Guest-visible batch response allocations made after verification.
+    pub response_allocations: u64,
+}
+
+/// Per-host counters used to prove VRF reserve/decode/backend/allocation ordering.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VrfExecutionCounters {
+    /// Canonical single-request or batch decode attempts made after gas reservation.
+    pub canonical_decodes: u64,
+    /// Pairing verifier invocations made after exact-cost preflight.
+    pub backend_invocations: u64,
+    /// Successful guest-visible response allocations.
     pub response_allocations: u64,
 }
 
@@ -343,19 +359,14 @@ where
     if tlv.type_id != expected_type {
         return Err(VMError::NoritoInvalid);
     }
-    let decoded: T = decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-    let canonical = canonical_norito_bytes(&decoded)?;
-    if canonical != tlv.payload {
-        return Err(VMError::NoritoInvalid);
-    }
+    let _: T = decode_canonical_norito(tlv.payload)?;
     Ok(())
 }
 
 pub(crate) fn canonical_norito_bytes<T: norito::NoritoSerialize>(
     value: &T,
 ) -> Result<Vec<u8>, VMError> {
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    norito::to_bytes(value).map_err(|_| VMError::NoritoInvalid)
+    encode_canonical_norito(value)
 }
 
 /// Validate canonical `StateMap` key bytes against the loaded CNTR declaration.
@@ -375,8 +386,8 @@ pub(crate) fn validate_declared_state_map_key(
         EmbeddedStateType::Decimal => crate::numeric_tlv::decode_decimal_bytes(key).map(drop),
         EmbeddedStateType::Quantity => crate::numeric_tlv::decode_quantity_bytes(key).map(drop),
         EmbeddedStateType::Bool => {
-            let value: i64 = decode_from_bytes(key).map_err(|_| VMError::NoritoInvalid)?;
-            if !matches!(value, 0 | 1) || canonical_norito_bytes(&value)? != key {
+            let value: i64 = decode_canonical_norito(key)?;
+            if !matches!(value, 0 | 1) {
                 return Err(VMError::NoritoInvalid);
             }
             Ok(())
@@ -571,7 +582,8 @@ pub(crate) fn canonical_state_map_key_at(
     {
         return Err(VMError::NoritoInvalid);
     }
-    let paths: Vec<Name> = decode_from_bytes(page_payload).map_err(|_| VMError::DecodeError)?;
+    let paths: Vec<Name> =
+        decode_canonical_norito(page_payload).map_err(|_| VMError::DecodeError)?;
     if paths.len() > usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS).unwrap_or(usize::MAX) {
         return Err(VMError::NoritoInvalid);
     }
@@ -823,7 +835,7 @@ pub fn decode_canonical_zk_envelope(payload: &[u8]) -> Result<OpenVerifyEnvelope
     // `from_bytes` path. The canonical slice decoder validates the same
     // header, schema, flags, padding, and checksum while safely realigning
     // when required.
-    decode_from_bytes(payload).map_err(|_| ERR_DECODE)
+    decode_canonical_norito(payload).map_err(|_| ERR_DECODE)
 }
 
 /// Decode the sole ABI-v1 public ZK batch schema with a bounded item count.
@@ -837,6 +849,9 @@ pub fn decode_canonical_zk_batch(
     max_items: usize,
 ) -> Result<Vec<OpenVerifyEnvelope>, u64> {
     type Batch = Vec<OpenVerifyEnvelope>;
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let _payload_context = norito::core::PayloadCtxGuard::enter(payload);
     // Validate the complete frame without requiring the TLV payload address
     // itself to satisfy `Archived<Batch>` alignment. Inspect the bounded
     // top-level count before materializing any elements.
@@ -865,7 +880,7 @@ pub fn decode_canonical_zk_batch(
     if count > max_items {
         return Err(ERR_BATCH);
     }
-    let batch: Batch = decode_from_bytes(payload).map_err(|_| ERR_DECODE)?;
+    let batch: Batch = decode_canonical_norito(payload).map_err(|_| ERR_DECODE)?;
     if batch.len() != count {
         return Err(ERR_DECODE);
     }
@@ -884,6 +899,7 @@ pub const fn map_open_verify_validation_error(error: OpenVerifyEnvelopeValidatio
         | OpenVerifyEnvelopeValidationError::AuxTooLarge { .. } => ERR_ENVELOPE_SIZE,
         OpenVerifyEnvelopeValidationError::EmptyCircuitId
         | OpenVerifyEnvelopeValidationError::InvalidCircuitId
+        | OpenVerifyEnvelopeValidationError::ReservedPrivacyProtocolCircuitId
         | OpenVerifyEnvelopeValidationError::EmptyPublicInputs
         | OpenVerifyEnvelopeValidationError::AllZeroPublicInputs
         | OpenVerifyEnvelopeValidationError::EmptyProofBytes
@@ -934,6 +950,8 @@ pub enum HostSyscallGasFormula {
     ByteLinear,
     /// Cryptographic verification with the canonical verification base.
     VerifyByteLinear,
+    /// V1 VRF verification charged by canonical bytes and examined items.
+    VrfVerifyV1,
     /// V1 ZK verification charged per proof, public input, and encoded byte.
     ZkVerifyV1,
     /// Schema codec with the canonical schema base.
@@ -971,6 +989,8 @@ pub enum HostSyscallGasParameters {
     HostByte,
     /// Verification base and byte rate.
     HostVerify,
+    /// V1 VRF base, item/byte rates, formula version, and hard caps.
+    VrfVerifyV1,
     /// V1 ZK rates, public-input unit, batch-output layout, and hard caps.
     ZkVerifyV1,
     /// Schema codec base and byte rate.
@@ -1057,13 +1077,14 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
     ) {
         return Some(HostSyscallGasFormula::ZkVerifyV1);
     }
+    if matches!(number, syscalls::SYSCALL_VERIFY_SIGNATURE) {
+        return Some(HostSyscallGasFormula::VerifyByteLinear);
+    }
     if matches!(
         number,
-        syscalls::SYSCALL_VERIFY_SIGNATURE
-            | syscalls::SYSCALL_VRF_VERIFY
-            | syscalls::SYSCALL_VRF_VERIFY_BATCH
+        syscalls::SYSCALL_VRF_VERIFY | syscalls::SYSCALL_VRF_VERIFY_BATCH
     ) {
-        return Some(HostSyscallGasFormula::VerifyByteLinear);
+        return Some(HostSyscallGasFormula::VrfVerifyV1);
     }
     if matches!(
         number,
@@ -1288,6 +1309,7 @@ pub fn host_syscall_metering_spec(
     let parameters = match formula {
         HostSyscallGasFormula::NumericStaged => HostSyscallGasParameters::Numeric,
         HostSyscallGasFormula::VerifyByteLinear => HostSyscallGasParameters::HostVerify,
+        HostSyscallGasFormula::VrfVerifyV1 => HostSyscallGasParameters::VrfVerifyV1,
         HostSyscallGasFormula::ZkVerifyV1 => HostSyscallGasParameters::ZkVerifyV1,
         HostSyscallGasFormula::SchemaByteLinear => HostSyscallGasParameters::HostSchema,
         HostSyscallGasFormula::AllocationExtent => HostSyscallGasParameters::Allocation,
@@ -1317,6 +1339,7 @@ pub fn host_syscall_metering_spec(
     let minimum_gas = match parameters {
         HostSyscallGasParameters::Numeric => crate::numeric_gas::NUMERIC_ENTRY_GAS,
         HostSyscallGasParameters::HostVerify => gas::HOST_VERIFY_GAS_BASE,
+        HostSyscallGasParameters::VrfVerifyV1 => gas::vrf_verify_gas(1, 0),
         HostSyscallGasParameters::ZkVerifyV1 => gas::HOST_ZK_VERIFY_GAS_PER_PROOF,
         HostSyscallGasParameters::HostSchema => gas::HOST_SCHEMA_GAS_BASE,
         HostSyscallGasParameters::Allocation => gas::ALLOCATION_GAS_BASE,
@@ -1549,6 +1572,8 @@ fn state_keys_page_payload_bound_from_parts(
 }
 
 fn state_key_encoded_len_from_text(key: &str) -> Result<usize, VMError> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     <&str as NoritoSerialize>::encoded_len_exact(&key).ok_or(VMError::NoritoInvalid)
 }
 
@@ -1999,6 +2024,7 @@ pub struct DefaultHost {
     zk_cfg: ZkHalo2Config,
     zk_gas_schedule: gas::ZkGasScheduleV1,
     zk_execution_counters: ZkExecutionCounters,
+    vrf_execution_counters: VrfExecutionCounters,
     chain_id: Option<Vec<u8>>,
     halo2_external_vks: std::collections::HashMap<String, Vec<u8>>,
     axt_state: Option<axt::HostAxtState>,
@@ -2022,6 +2048,7 @@ impl DefaultHost {
             zk_cfg: ZkHalo2Config::default(),
             zk_gas_schedule: gas::ZkGasScheduleV1::default(),
             zk_execution_counters: ZkExecutionCounters::default(),
+            vrf_execution_counters: VrfExecutionCounters::default(),
             chain_id: None,
             halo2_external_vks: std::collections::HashMap::new(),
             axt_state: None,
@@ -2178,6 +2205,17 @@ impl DefaultHost {
         self.zk_execution_counters = ZkExecutionCounters::default();
     }
 
+    /// Return the current VRF execution-order counters.
+    #[must_use]
+    pub const fn vrf_execution_counters(&self) -> VrfExecutionCounters {
+        self.vrf_execution_counters
+    }
+
+    /// Reset the VRF execution-order counters.
+    pub fn reset_vrf_execution_counters(&mut self) {
+        self.vrf_execution_counters = VrfExecutionCounters::default();
+    }
+
     /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
     pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
         self.public_inputs = inputs;
@@ -2195,9 +2233,17 @@ impl DefaultHost {
     }
 
     /// Install an AXT policy sourced from a data-model snapshot.
-    pub fn with_axt_policy_from_snapshot(mut self, snapshot: &AxtPolicySnapshot) -> Self {
-        self.axt_policy = std::sync::Arc::new(axt::SnapshotAxtPolicy::new(snapshot));
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when the snapshot is not
+    /// canonically ordered or its version does not bind its exact entries.
+    pub fn with_axt_policy_from_snapshot(
+        mut self,
+        snapshot: &AxtPolicySnapshot,
+    ) -> Result<Self, AxtPolicySnapshotValidationError> {
+        self.axt_policy = std::sync::Arc::new(axt::SnapshotAxtPolicy::new(snapshot)?);
+        Ok(self)
     }
 
     /// Convenience: select ZK curve backend from a string.
@@ -2328,7 +2374,7 @@ impl DefaultHost {
             return Err(VMError::NoritoInvalid);
         }
         let batch: TransferAssetBatch =
-            decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
         if batch.entries().is_empty() {
             return Err(VMError::DecodeError);
         }
@@ -2486,6 +2532,13 @@ impl DefaultHost {
         VERIFY_GAS_BASE.saturating_add(VERIFY_GAS_PER_BYTE.saturating_mul(bytes))
     }
 
+    fn vrf_verify_gas(examined_items: usize, input_len: usize) -> u64 {
+        gas::vrf_verify_gas(
+            u64::try_from(examined_items).unwrap_or(u64::MAX),
+            u64::try_from(input_len).unwrap_or(u64::MAX),
+        )
+    }
+
     fn sysvar_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         SYSVAR_GAS_BASE.saturating_add(SYSVAR_GAS_PER_BYTE.saturating_mul(bytes))
@@ -2620,7 +2673,7 @@ impl DefaultHost {
         if tlv.payload.len() > syscalls::STATE_MAX_PATH_BYTES {
             return Err(VMError::NoritoInvalid);
         }
-        let path: Name = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        let path: Name = decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
         validate_state_path_name(&path)?;
         validate_declared_state_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
@@ -2631,7 +2684,7 @@ impl DefaultHost {
         if tlv.payload.len() > syscalls::STATE_MAX_PATH_BYTES {
             return Err(VMError::NoritoInvalid);
         }
-        let path: Name = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        let path: Name = decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
         validate_state_path_name(&path)?;
         validate_declared_state_scan_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
@@ -2715,8 +2768,7 @@ impl DefaultHost {
             return Err(VMError::NoritoInvalid);
         }
         let gas = Self::axt_gas(tlv.payload.len());
-        let descriptor: axt::AxtDescriptor =
-            norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let descriptor: axt::AxtDescriptor = decode_canonical_norito(tlv.payload)?;
         axt::validate_descriptor(&descriptor)?;
         let binding = axt::compute_binding(&descriptor).map_err(|_| VMError::NoritoInvalid)?;
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
@@ -2731,8 +2783,7 @@ impl DefaultHost {
             return Err(VMError::NoritoInvalid);
         }
         let mut gas_len = ds_tlv.payload.len();
-        let dsid: DataSpaceId =
-            norito::decode_from_bytes(ds_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state.expected_dsids().contains(&dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -2748,8 +2799,9 @@ impl DefaultHost {
                 return Err(VMError::NoritoInvalid);
             }
             gas_len = gas_len.saturating_add(manifest_tlv.payload.len());
-            norito::decode_from_bytes(manifest_tlv.payload).map_err(|_| VMError::NoritoInvalid)?
+            decode_canonical_norito(manifest_tlv.payload)?
         };
+        axt::validate_touch_manifest(&manifest)?;
         let gas = Self::axt_gas(gas_len);
         preflight_reserved_syscall_gas(vm, gas)?;
         self.axt_policy.allow_touch(dsid, &manifest)?;
@@ -2764,8 +2816,7 @@ impl DefaultHost {
         if ds_tlv.type_id != PointerType::DataSpaceId {
             return Err(VMError::NoritoInvalid);
         }
-        let dsid: DataSpaceId =
-            norito::decode_from_bytes(ds_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state.expected_dsids().contains(&dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -2780,10 +2831,9 @@ impl DefaultHost {
         if proof_tlv.type_id != PointerType::ProofBlob {
             return Err(VMError::NoritoInvalid);
         }
-        let proof: ProofBlob =
-            norito::decode_from_bytes(proof_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-        let envelope = norito::decode_from_bytes::<axt::AxtProofEnvelope>(&proof.payload)
-            .map_err(|_| VMError::NoritoInvalid)?;
+        let proof: ProofBlob = decode_canonical_norito(proof_tlv.payload)?;
+        axt::validate_proof_blob(&proof)?;
+        let envelope = decode_canonical_norito::<axt::AxtProofEnvelope>(&proof.payload)?;
         axt::preflight_fastpq_v1_proof_envelope(&envelope, dsid)?;
         // The standalone host does not link the FastPQ verifier. Shape preflight
         // is diagnostic only, so proof-consuming AXT calls fail closed here.
@@ -2801,8 +2851,7 @@ impl DefaultHost {
         if handle.manifest_view_root.iter().all(|byte| *byte == 0) {
             return Err(VMError::PermissionDenied);
         }
-        let envelope = norito::decode_from_bytes::<axt::AxtProofEnvelope>(&proof.payload)
-            .map_err(|_| VMError::NoritoInvalid)?;
+        let envelope = decode_canonical_norito::<axt::AxtProofEnvelope>(&proof.payload)?;
         axt::preflight_fastpq_v1_proof_envelope(&envelope, dsid)?;
         if handle.manifest_view_root.as_slice() != envelope.manifest_root.as_slice() {
             return Err(VMError::PermissionDenied);
@@ -2819,8 +2868,8 @@ impl DefaultHost {
             return Err(VMError::NoritoInvalid);
         }
         let mut gas_len = handle_tlv.payload.len();
-        let handle: AssetHandle =
-            norito::decode_from_bytes(handle_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let handle: AssetHandle = decode_canonical_norito(handle_tlv.payload)?;
+        axt::validate_asset_handle(&handle)?;
         let Some(binding) = handle.binding_array() else {
             return Err(VMError::NoritoInvalid);
         };
@@ -2834,8 +2883,8 @@ impl DefaultHost {
             return Err(VMError::NoritoInvalid);
         }
         gas_len = gas_len.saturating_add(op_tlv.payload.len());
-        let intent: RemoteSpendIntent =
-            norito::decode_from_bytes(op_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let intent: RemoteSpendIntent = decode_canonical_norito(op_tlv.payload)?;
+        axt::validate_remote_spend_intent(&intent)?;
         if !state.expected_dsids().contains(&intent.asset_dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -2851,12 +2900,12 @@ impl DefaultHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 gas_len = gas_len.saturating_add(proof_tlv.payload.len());
-                Some(
-                    norito::decode_from_bytes(proof_tlv.payload)
-                        .map_err(|_| VMError::NoritoInvalid)?,
-                )
+                Some(decode_canonical_norito(proof_tlv.payload)?)
             }
         };
+        if let Some(proof) = &proof {
+            axt::validate_proof_blob(proof)?;
+        }
         if let Some(proof_blob) = proof
             .as_ref()
             .or_else(|| state.proofs().get(&intent.asset_dsid))
@@ -3071,8 +3120,23 @@ impl IVMHost for DefaultHost {
                 gas::zk_verify_gas(payload_len)
             }
             crate::syscalls::SYSCALL_VERIFY_SIGNATURE => Self::signature_verify_gas_quote(vm)?,
-            crate::syscalls::SYSCALL_VRF_VERIFY | crate::syscalls::SYSCALL_VRF_VERIFY_BATCH => {
-                Self::verify_gas(tlv_len(10)?)
+            crate::syscalls::SYSCALL_VRF_VERIFY => {
+                let payload_len = quote_bounded_tlv_payload_len_at(
+                    vm,
+                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                    PointerType::NoritoBytes,
+                    crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1,
+                )?;
+                Self::vrf_verify_gas(1, payload_len)
+            }
+            crate::syscalls::SYSCALL_VRF_VERIFY_BATCH => {
+                let payload_len = quote_bounded_tlv_payload_len_at(
+                    vm,
+                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                    PointerType::NoritoBytes,
+                    crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1,
+                )?;
+                Self::vrf_verify_gas(crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1, payload_len)
             }
             crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
             | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
@@ -3294,7 +3358,7 @@ impl IVMHost for DefaultHost {
                 self.access_log
                     .read_keys
                     .insert(prefix.as_ref().to_string());
-                let payload = norito::to_bytes(&selected).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(&selected)?;
                 let gas = STATE_QUERY_GAS_BASE
                     .saturating_add(scan_work_gas)
                     .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
@@ -3313,7 +3377,7 @@ impl IVMHost for DefaultHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let base: Name =
-                    decode_from_bytes(base_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(base_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 validate_declared_state_map_base(vm, &base)?;
                 let key = canonical_state_map_key_at(page.payload, &base, vm.register(12))?;
                 if let Some(key) = key.as_deref() {
@@ -3624,25 +3688,42 @@ impl IVMHost for DefaultHost {
                 const ERR_PK: u64 = 4; // bad pk encoding/length
                 const ERR_PROOF: u64 = 5; // bad proof encoding/length
                 const ERR_VERIFY: u64 = 6; // pairing check failed
-                const ERR_OOM: u64 = 7; // allocation failure
                 const ERR_CHAIN: u64 = 8; // chain_id mismatch
 
                 let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                let gas = Self::verify_gas(tlv.payload.len());
-                if tlv.type_id != PointerType::NoritoBytes {
+                let (pointer_type, payload_len) = read_tlv_header_at(vm, ptr)?;
+                let decode_gas = Self::vrf_verify_gas(0, payload_len);
+                preflight_reserved_syscall_gas(vm, decode_gas)?;
+                if payload_len > crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 {
+                    return Err(VMError::metered(decode_gas, VMError::NoritoInvalid));
+                }
+                validate_quoted_tlv_range(vm, ptr, payload_len)
+                    .map_err(|error| VMError::metered(decode_gas, error))?;
+                let tlv = vm
+                    .validate_tlv(ptr)
+                    .map_err(|error| VMError::metered(decode_gas, error))?;
+                if pointer_type != PointerType::NoritoBytes {
                     vm.set_register(10, 0);
                     vm.set_register(11, ERR_TYPE);
-                    return Ok(gas);
+                    return Ok(decode_gas);
                 }
-                let req: VrfVerifyRequest = match norito::decode_from_bytes(tlv.payload) {
+                self.vrf_execution_counters.canonical_decodes = self
+                    .vrf_execution_counters
+                    .canonical_decodes
+                    .saturating_add(1);
+                let req: VrfVerifyRequest = match decode_canonical_norito_with_limits(
+                    tlv.payload,
+                    crate::vrf::VRF_VERIFY_DECODE_LIMITS_V1,
+                ) {
                     Ok(v) => v,
                     Err(_) => {
                         vm.set_register(10, 0);
                         vm.set_register(11, ERR_DECODE);
-                        return Ok(gas);
+                        return Ok(decode_gas);
                     }
                 };
+                let actual = Self::vrf_verify_gas(1, payload_len);
+                preflight_reserved_syscall_gas(vm, actual)?;
 
                 // Prehash input with domain separation; enforce configured chain_id when present
                 if let Some(cid) = &self.chain_id
@@ -3650,7 +3731,7 @@ impl IVMHost for DefaultHost {
                 {
                     vm.set_register(10, 0);
                     vm.set_register(11, ERR_CHAIN);
-                    return Ok(gas);
+                    return Ok(actual);
                 }
                 let chain_bytes: &[u8] = if let Some(cid) = &self.chain_id {
                     cid
@@ -3729,13 +3810,17 @@ impl IVMHost for DefaultHost {
                         let Some(pk) = to_g1(&req.pk) else {
                             vm.set_register(10, 0);
                             vm.set_register(11, ERR_PK);
-                            return Ok(gas);
+                            return Ok(actual);
                         };
                         let Some(sig) = to_g2(&req.proof) else {
                             vm.set_register(10, 0);
                             vm.set_register(11, ERR_PROOF);
-                            return Ok(gas);
+                            return Ok(actual);
                         };
+                        self.vrf_execution_counters.backend_invocations = self
+                            .vrf_execution_counters
+                            .backend_invocations
+                            .saturating_add(1);
                         let h = hash_to_g2(&msg);
                         let terms: [(&G1Affine, &G2Prepared); 2] = [
                             (&G1Affine::generator(), &G2Prepared::from(sig)),
@@ -3749,13 +3834,17 @@ impl IVMHost for DefaultHost {
                         let Some(pk) = to_g2(&req.pk) else {
                             vm.set_register(10, 0);
                             vm.set_register(11, ERR_PK);
-                            return Ok(gas);
+                            return Ok(actual);
                         };
                         let Some(sig) = to_g1(&req.proof) else {
                             vm.set_register(10, 0);
                             vm.set_register(11, ERR_PROOF);
-                            return Ok(gas);
+                            return Ok(actual);
                         };
+                        self.vrf_execution_counters.backend_invocations = self
+                            .vrf_execution_counters
+                            .backend_invocations
+                            .saturating_add(1);
                         let h = hash_to_g1(&msg);
                         let terms: [(&G1Affine, &G2Prepared); 2] = [
                             (&sig, &G2Prepared::from(G2Affine::generator())),
@@ -3767,14 +3856,14 @@ impl IVMHost for DefaultHost {
                     _ => {
                         vm.set_register(10, 0);
                         vm.set_register(11, ERR_VARIANT);
-                        return Ok(gas);
+                        return Ok(actual);
                     }
                 };
 
                 if !ok {
                     vm.set_register(10, 0);
                     vm.set_register(11, ERR_VERIFY);
-                    return Ok(gas);
+                    return Ok(actual);
                 }
 
                 // Derive output y = Hash(b"iroha:vrf:v1:output" || proof)
@@ -3792,17 +3881,16 @@ impl IVMHost for DefaultHost {
                 tlv.extend_from_slice(&y);
                 let h: [u8; 32] = iroha_crypto::Hash::new(y).into();
                 tlv.extend_from_slice(&h);
-                match vm.alloc_host_tlv(&tlv) {
-                    Ok(p) => {
-                        vm.set_register(10, p);
-                        vm.set_register(11, OK);
-                    }
-                    Err(_) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ERR_OOM);
-                    }
-                }
-                Ok(gas)
+                let pointer = vm
+                    .alloc_host_tlv(&tlv)
+                    .map_err(|error| VMError::metered(actual, error))?;
+                self.vrf_execution_counters.response_allocations = self
+                    .vrf_execution_counters
+                    .response_allocations
+                    .saturating_add(1);
+                vm.set_register(10, pointer);
+                vm.set_register(11, OK);
+                Ok(actual)
             }
             crate::syscalls::SYSCALL_VRF_VERIFY_BATCH => {
                 // r10 = &NoritoBytes(VrfVerifyBatchRequest { items: [VrfVerifyRequest] })
@@ -3815,39 +3903,52 @@ impl IVMHost for DefaultHost {
                 const ERR_PROOF: u64 = 5;
                 const ERR_VERIFY: u64 = 6;
                 const ERR_CHAIN: u64 = 8;
+                const ERR_BATCH: u64 = 9;
 
                 let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                let gas = Self::verify_gas(tlv.payload.len());
-                if tlv.type_id != PointerType::NoritoBytes {
+                let (pointer_type, payload_len) = read_tlv_header_at(vm, ptr)?;
+                let decode_gas = Self::vrf_verify_gas(0, payload_len);
+                preflight_reserved_syscall_gas(vm, decode_gas)?;
+                if payload_len > crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 {
+                    return Err(VMError::metered(decode_gas, VMError::NoritoInvalid));
+                }
+                validate_quoted_tlv_range(vm, ptr, payload_len)
+                    .map_err(|error| VMError::metered(decode_gas, error))?;
+                let tlv = vm
+                    .validate_tlv(ptr)
+                    .map_err(|error| VMError::metered(decode_gas, error))?;
+                if pointer_type != PointerType::NoritoBytes {
                     vm.set_register(10, 0);
                     vm.set_register(11, ERR_TYPE);
-                    return Ok(gas);
+                    vm.set_register(12, u64::MAX);
+                    return Ok(decode_gas);
                 }
-                let req: VrfVerifyBatchRequest = match norito::decode_from_bytes(tlv.payload) {
+                self.vrf_execution_counters.canonical_decodes = self
+                    .vrf_execution_counters
+                    .canonical_decodes
+                    .saturating_add(1);
+                let req: VrfVerifyBatchRequest = match decode_canonical_norito_with_limits(
+                    tlv.payload,
+                    crate::vrf::VRF_VERIFY_DECODE_LIMITS_V1,
+                ) {
                     Ok(v) => v,
                     Err(_) => {
                         vm.set_register(10, 0);
                         vm.set_register(11, ERR_DECODE);
-                        return Ok(gas);
+                        vm.set_register(12, u64::MAX);
+                        return Ok(decode_gas);
                     }
                 };
-                if req.items.is_empty() {
-                    // Return empty outputs vector
-                    let body = norito::to_bytes(&Vec::<[u8; 32]>::new())
-                        .map_err(|_| VMError::NoritoInvalid)?;
-                    let mut out = Vec::with_capacity(7 + body.len() + 32);
-                    out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                    out.push(1);
-                    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                    out.extend_from_slice(&body);
-                    let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                    out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
-                    vm.set_register(11, OK);
-                    return Ok(gas);
+                if req.items.is_empty()
+                    || req.items.len() > crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1
+                {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ERR_BATCH);
+                    vm.set_register(12, u64::MAX);
+                    return Ok(decode_gas);
                 }
+                let success_gas = Self::vrf_verify_gas(req.items.len(), payload_len);
+                preflight_reserved_syscall_gas(vm, success_gas)?;
 
                 // Shared helpers
                 use blstrs::{Bls12, G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
@@ -3906,13 +4007,14 @@ impl IVMHost for DefaultHost {
 
                 let mut outputs: Vec<[u8; 32]> = Vec::with_capacity(req.items.len());
                 for (idx, it) in req.items.iter().enumerate() {
+                    let examined_gas = Self::vrf_verify_gas(idx.saturating_add(1), payload_len);
                     if let Some(cid) = &self.chain_id
                         && it.chain_id != *cid
                     {
                         vm.set_register(10, 0);
                         vm.set_register(11, ERR_CHAIN);
                         vm.set_register(12, idx as u64);
-                        return Ok(gas);
+                        return Ok(examined_gas);
                     }
                     // Prehash with configured chain id (if present)
                     let chain_bytes: &[u8] = if let Some(cid) = &self.chain_id {
@@ -3934,14 +4036,18 @@ impl IVMHost for DefaultHost {
                                 vm.set_register(10, 0);
                                 vm.set_register(11, ERR_PK);
                                 vm.set_register(12, idx as u64);
-                                return Ok(gas);
+                                return Ok(examined_gas);
                             };
                             let Some(sig) = to_g2(&it.proof) else {
                                 vm.set_register(10, 0);
                                 vm.set_register(11, ERR_PROOF);
                                 vm.set_register(12, idx as u64);
-                                return Ok(gas);
+                                return Ok(examined_gas);
                             };
+                            self.vrf_execution_counters.backend_invocations = self
+                                .vrf_execution_counters
+                                .backend_invocations
+                                .saturating_add(1);
                             let h = hash_to_g2(&msg);
                             let terms: [(&G1Affine, &G2Prepared); 2] = [
                                 (&G1Affine::generator(), &G2Prepared::from(sig)),
@@ -3955,14 +4061,18 @@ impl IVMHost for DefaultHost {
                                 vm.set_register(10, 0);
                                 vm.set_register(11, ERR_PK);
                                 vm.set_register(12, idx as u64);
-                                return Ok(gas);
+                                return Ok(examined_gas);
                             };
                             let Some(sig) = to_g1(&it.proof) else {
                                 vm.set_register(10, 0);
                                 vm.set_register(11, ERR_PROOF);
                                 vm.set_register(12, idx as u64);
-                                return Ok(gas);
+                                return Ok(examined_gas);
                             };
+                            self.vrf_execution_counters.backend_invocations = self
+                                .vrf_execution_counters
+                                .backend_invocations
+                                .saturating_add(1);
                             let h = hash_to_g1(&msg);
                             let terms: [(&G1Affine, &G2Prepared); 2] = [
                                 (&sig, &G2Prepared::from(G2Affine::generator())),
@@ -3975,14 +4085,14 @@ impl IVMHost for DefaultHost {
                             vm.set_register(10, 0);
                             vm.set_register(11, ERR_VARIANT);
                             vm.set_register(12, idx as u64);
-                            return Ok(gas);
+                            return Ok(examined_gas);
                         }
                     };
                     if !ok {
                         vm.set_register(10, 0);
                         vm.set_register(11, ERR_VERIFY);
                         vm.set_register(12, idx as u64);
-                        return Ok(gas);
+                        return Ok(examined_gas);
                     }
                     // Compute y
                     let mut out_buf =
@@ -3994,7 +4104,8 @@ impl IVMHost for DefaultHost {
                 }
 
                 // Encode outputs Vec<[u8;32]> as NoritoBytes and return pointer
-                let body = norito::to_bytes(&outputs).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&outputs)
+                    .map_err(|error| VMError::metered(success_gas, error))?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                 out.push(1);
@@ -4002,10 +4113,17 @@ impl IVMHost for DefaultHost {
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_host_tlv(&out)?;
-                vm.set_register(10, p);
+                let pointer = vm
+                    .alloc_host_tlv(&out)
+                    .map_err(|error| VMError::metered(success_gas, error))?;
+                self.vrf_execution_counters.response_allocations = self
+                    .vrf_execution_counters
+                    .response_allocations
+                    .saturating_add(1);
+                vm.set_register(10, pointer);
                 vm.set_register(11, OK);
-                Ok(gas)
+                vm.set_register(12, u64::MAX);
+                Ok(success_gas)
             }
             crate::syscalls::SYSCALL_GROW_HEAP => {
                 // Increase heap limit by `x10` bytes.
@@ -4060,8 +4178,7 @@ impl IVMHost for DefaultHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let name: Name =
-                    norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let name: Name = decode_canonical_norito(tlv.payload)?;
                 let Some(bytes) = self.public_inputs.get(&name) else {
                     return Err(VMError::PermissionDenied);
                 };
@@ -4092,7 +4209,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_PROVE_EXECUTION => {
                 let proof = vm.execution_proof();
-                let payload = norito::to_bytes(&proof).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(&proof)?;
                 let ptr = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, ptr);
                 vm.set_register(11, 0);
@@ -4681,15 +4798,14 @@ impl IVMHost for DefaultHost {
                 if number == crate::syscalls::SYSCALL_ZK_ROOTS_GET {
                     // Decode request
                     let _req: crate::zk_verify::RootsGetRequest =
-                        norito::decode_from_bytes(tlv.payload)
-                            .map_err(|_| VMError::NoritoInvalid)?;
+                        decode_canonical_norito(tlv.payload)?;
                     // DefaultHost response (empty roots)
                     let resp = crate::zk_verify::RootsGetResponse {
                         latest: [0u8; 32],
                         roots: Vec::new(),
                         height: 0,
                     };
-                    let body = norito::to_bytes(&resp).map_err(|_| VMError::NoritoInvalid)?;
+                    let body = encode_canonical_norito(&resp)?;
                     // Build a host-owned TLV and return its public pointer.
                     let mut out = Vec::with_capacity(7 + body.len() + 32);
                     out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -4704,13 +4820,12 @@ impl IVMHost for DefaultHost {
                 } else {
                     // Vote tally read
                     let _req: crate::zk_verify::VoteGetTallyRequest =
-                        norito::decode_from_bytes(tlv.payload)
-                            .map_err(|_| VMError::NoritoInvalid)?;
+                        decode_canonical_norito(tlv.payload)?;
                     let resp = crate::zk_verify::VoteGetTallyResponse {
                         finalized: false,
                         tally: Vec::new(),
                     };
-                    let body = norito::to_bytes(&resp).map_err(|_| VMError::NoritoInvalid)?;
+                    let body = encode_canonical_norito(&resp)?;
                     let mut out = Vec::with_capacity(7 + body.len() + 32);
                     out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                     out.push(1);
@@ -4782,7 +4897,7 @@ impl IVMHost for DefaultHost {
                 // verified`). DefaultHost has no verifier backend, so every
                 // canonical item fails closed and the first failure is index 0.
                 let statuses = vec![0_u8; envelopes.len()];
-                let body = norito::to_bytes(&statuses)
+                let body = encode_canonical_norito(&statuses)
                     .map_err(|_| VMError::metered(actual, VMError::NoritoInvalid))?;
                 let encoded_output_bytes = TLV_ENVELOPE_OVERHEAD.saturating_add(body.len());
                 if u64::try_from(encoded_output_bytes).unwrap_or(u64::MAX)
@@ -4790,11 +4905,11 @@ impl IVMHost for DefaultHost {
                 {
                     return Err(VMError::metered(actual, VMError::NoritoInvalid));
                 }
+                let output = Self::alloc_norito_bytes_tlv(vm, &body)?;
                 self.zk_execution_counters.response_allocations = self
                     .zk_execution_counters
                     .response_allocations
                     .saturating_add(1);
-                let output = Self::alloc_norito_bytes_tlv(vm, &body)?;
                 vm.set_register(10, output);
                 vm.set_register(11, first_error.unwrap_or(ERR_BACKEND));
                 vm.set_register(
@@ -4867,6 +4982,7 @@ mod tests {
     use super::*;
     use crate::ProgramMetadata;
     use crate::pointer_abi::PointerType;
+    use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
     use iroha_data_model::zk::BackendTag;
 
     fn test_tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -4918,6 +5034,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_host_rejects_noncanonical_axt_policy_snapshot_without_panicking() {
+        let snapshot = AxtPolicySnapshot {
+            version: 1,
+            entries: Vec::new(),
+        };
+
+        assert!(matches!(
+            DefaultHost::new().with_axt_policy_from_snapshot(&snapshot),
+            Err(AxtPolicySnapshotValidationError::VersionMismatch {
+                expected: 0,
+                actual: 1,
+            })
+        ));
+    }
+
     fn dummy_zk_batch_envelope() -> OpenVerifyEnvelope {
         OpenVerifyEnvelope::new(
             BackendTag::Halo2IpaPasta,
@@ -4926,6 +5058,62 @@ mod tests {
             vec![0x22; 64],
             vec![0x33; 96],
         )
+    }
+
+    fn valid_vrf_request(chain_id: &[u8], input: &[u8]) -> crate::vrf::VrfVerifyRequest {
+        use blstrs::{G1Projective, G2Projective, Scalar};
+        use group::{Curve as _, Group as _};
+
+        let secret = Scalar::from(7_u64);
+        let public_key = (G1Projective::generator() * secret)
+            .to_affine()
+            .to_compressed();
+        let mut preimage =
+            Vec::with_capacity(b"iroha:vrf:v1:input|".len() + chain_id.len() + 1 + input.len());
+        preimage.extend_from_slice(b"iroha:vrf:v1:input|");
+        preimage.extend_from_slice(chain_id);
+        preimage.push(b'|');
+        preimage.extend_from_slice(input);
+        let message: [u8; 32] = iroha_crypto::Hash::new(&preimage).into();
+        const DST: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
+        let proof = (G2Projective::hash_to_curve(&message, DST, &[]) * secret)
+            .to_affine()
+            .to_compressed();
+        crate::vrf::VrfVerifyRequest {
+            variant: 1,
+            pk: public_key.to_vec(),
+            proof: proof.to_vec(),
+            chain_id: chain_id.to_vec(),
+            input: input.to_vec(),
+        }
+    }
+
+    fn run_vm_dispatched_vrf_batch(payload: &[u8]) -> (IVM, DefaultHost, u64) {
+        crate::set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let scall = crate::encoding::wide::encode_sys(
+            crate::instruction::wide::system::SCALL,
+            u8::try_from(syscalls::SYSCALL_VRF_VERIFY_BATCH).expect("syscall fits"),
+        );
+        let mut code = Vec::new();
+        code.extend_from_slice(&scall.to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        vm.load_code(&code).expect("load VRF batch test program");
+        let pointer = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, payload))
+            .expect("allocate VRF batch");
+        vm.set_register(10, pointer);
+        vm.set_register(11, u64::MAX);
+        vm.set_register(12, u64::MAX);
+        let mut host = DefaultHost::new();
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm)
+            .expect("quote VRF batch without decoding");
+        let instruction_gas = gas::cost_of(scall).expect("SCALL is scheduled");
+        vm.set_gas_limit(instruction_gas.saturating_add(quote));
+        vm.run_with_host(&mut host)
+            .expect("VRF status paths do not trap");
+        (vm, host, quote)
     }
 
     fn run_vm_dispatched_zk_batch(payload: &[u8]) -> (IVM, DefaultHost, u64) {
@@ -5255,6 +5443,39 @@ mod tests {
     }
 
     #[test]
+    fn state_path_and_page_bounds_ignore_ambient_layout() {
+        let name: Name = "state/ambient_layout_probe"
+            .parse()
+            .expect("valid state path");
+        let canonical_name = encode_canonical_norito(&name).expect("encode canonical state path");
+        let canonical_path_len =
+            state_path_name_payload_len(&name).expect("canonical state path length");
+        let canonical_tail = state_keys_response_tail_after_item(0, 0, name.as_ref())
+            .expect("canonical state-key page tail");
+
+        assert_eq!(canonical_path_len, canonical_name.len());
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate_name = norito::to_bytes(&name).expect("encode alternate-layout state path");
+        assert_ne!(
+            alternate_name, canonical_name,
+            "fixture must distinguish the ambient layout from canonical V1"
+        );
+        assert_eq!(
+            state_path_name_payload_len(&name),
+            Ok(canonical_path_len),
+            "path admission and gas must use canonical V1 lengths"
+        );
+        assert_eq!(
+            state_keys_response_tail_after_item(0, 0, name.as_ref()),
+            Ok(canonical_tail),
+            "page selection and response bounds must use canonical V1 lengths"
+        );
+    }
+
+    #[test]
     fn maximum_state_map_page_is_accepted_by_key_decoder() {
         let base = maximum_bounded_state_map_base();
         let mut expected_last = Vec::new();
@@ -5332,6 +5553,56 @@ mod tests {
 
         let legacy = norito::to_bytes(&42_u64).expect("encode non-envelope archive");
         assert_eq!(decode_canonical_zk_envelope(&legacy), Err(ERR_DECODE));
+
+        let canonical =
+            encode_canonical_norito(&envelope).expect("encode canonical data-model envelope");
+        assert!(decode_canonical_zk_envelope(&canonical).is_ok());
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope).expect("encode alternate-layout data-model envelope")
+        };
+        assert_ne!(alternate, canonical);
+        assert!(
+            norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate).is_ok(),
+            "ordinary Norito decoding must accept the advertised alternate layout"
+        );
+        assert_eq!(decode_canonical_zk_envelope(&alternate), Err(ERR_DECODE));
+    }
+
+    #[test]
+    fn default_host_rejects_every_reserved_privacy_circuit_label_before_dispatch() {
+        let host = DefaultHost::new();
+        for label in PrivacyProtocolIdV1::ALL
+            .into_iter()
+            .map(PrivacyProtocolIdV1::canonical_label)
+            .chain(PRIVACY_RETIRED_PROTOCOL_LABELS_V1)
+        {
+            for circuit_id in [
+                label.to_owned(),
+                format!("halo2/ipa::{label}"),
+                format!("generic/namespace/{label}"),
+            ] {
+                let mut envelope = dummy_zk_batch_envelope();
+                envelope.circuit_id = circuit_id.clone();
+                assert_eq!(
+                    host.validate_zk_open_envelope(&envelope),
+                    Err(ERR_DECODE),
+                    "reserved circuit id {circuit_id:?}"
+                );
+            }
+
+            for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
+                let mut envelope = dummy_zk_batch_envelope();
+                envelope.circuit_id = near_miss.clone();
+                assert_eq!(
+                    host.validate_zk_open_envelope(&envelope),
+                    Err(ERR_BACKEND),
+                    "portable near miss {near_miss:?} must pass shape validation"
+                );
+            }
+        }
     }
 
     #[test]
@@ -5391,7 +5662,7 @@ mod tests {
     }
 
     #[test]
-    fn default_host_vrf_verify_status_paths_charge_payload_bytes() {
+    fn default_host_vrf_verify_status_paths_charge_bytes_and_examined_items() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
@@ -5403,7 +5674,7 @@ mod tests {
         vm.set_register(10, wrong_type_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_VRF_VERIFY, &mut vm),
-            Ok(DefaultHost::verify_gas(wrong_type_payload.len()))
+            Ok(DefaultHost::vrf_verify_gas(0, wrong_type_payload.len()))
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 1);
@@ -5415,7 +5686,7 @@ mod tests {
         vm.set_register(10, malformed_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_VRF_VERIFY, &mut vm),
-            Ok(DefaultHost::verify_gas(malformed.len()))
+            Ok(DefaultHost::vrf_verify_gas(0, malformed.len()))
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 2);
@@ -5434,33 +5705,397 @@ mod tests {
         vm.set_register(10, bad_pk_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_VRF_VERIFY, &mut vm),
-            Ok(DefaultHost::verify_gas(body.len()))
+            Ok(DefaultHost::vrf_verify_gas(1, body.len()))
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 4);
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters {
+                canonical_decodes: 2,
+                backend_invocations: 0,
+                response_allocations: 0,
+            }
+        );
     }
 
     #[test]
-    fn default_host_vrf_batch_empty_request_charges_payload_bytes() {
+    fn default_host_vrf_batch_empty_request_is_rejected_without_output() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
         let request = crate::vrf::VrfVerifyBatchRequest { items: Vec::new() };
-        let body = norito::to_bytes(&request).expect("encode vrf batch request");
+        let body = encode_canonical_norito(&request).expect("encode canonical VRF batch request");
         let ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &body))
             .expect("alloc batch request");
 
+        let ambient_probe = vec!["first".to_owned(), "second".to_owned()];
+        let canonical_probe =
+            encode_canonical_norito(&ambient_probe).expect("encode canonical ambient probe");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before =
+            norito::to_bytes(&ambient_probe).expect("encode alternate-layout ambient probe");
+        assert_ne!(ambient_before, canonical_probe);
+
         vm.set_register(10, ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &mut vm),
-            Ok(DefaultHost::verify_gas(body.len()))
+            Ok(DefaultHost::vrf_verify_gas(0, body.len()))
         );
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), 9);
+        assert_eq!(vm.register(12), u64::MAX);
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters {
+                canonical_decodes: 1,
+                backend_invocations: 0,
+                response_allocations: 0,
+            }
+        );
+        assert_eq!(
+            norito::to_bytes(&ambient_probe).expect("encode ambient probe after syscall"),
+            ambient_before,
+            "host canonical decode and encode must restore the ambient layout"
+        );
+    }
+
+    #[test]
+    fn vm_dispatched_vrf_batch_count_boundaries_have_stable_refunds() {
+        let invalid = crate::vrf::VrfVerifyRequest {
+            variant: 0,
+            pk: Vec::new(),
+            proof: Vec::new(),
+            chain_id: Vec::new(),
+            input: Vec::new(),
+        };
+        for count in [0_usize, crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1 + 1] {
+            let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
+                items: vec![invalid.clone(); count],
+            })
+            .expect("encode rejected VRF batch");
+            let (vm, host, quote) = run_vm_dispatched_vrf_batch(&payload);
+            assert_eq!(
+                quote,
+                DefaultHost::vrf_verify_gas(
+                    crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1,
+                    payload.len()
+                )
+            );
+            assert_eq!(vm.register(10), 0);
+            assert_eq!(vm.register(11), 9);
+            assert_eq!(vm.register(12), u64::MAX);
+            assert_eq!(
+                vm.remaining_gas(),
+                quote - DefaultHost::vrf_verify_gas(0, payload.len())
+            );
+            assert_eq!(
+                host.vrf_execution_counters(),
+                VrfExecutionCounters {
+                    canonical_decodes: 1,
+                    backend_invocations: 0,
+                    response_allocations: 0,
+                }
+            );
+        }
+
+        for count in [1_usize, crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1] {
+            let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
+                items: vec![invalid.clone(); count],
+            })
+            .expect("encode admitted VRF batch");
+            let (vm, host, quote) = run_vm_dispatched_vrf_batch(&payload);
+            assert_eq!(vm.register(10), 0);
+            assert_eq!(
+                vm.register(11),
+                3,
+                "count {count} must pass batch admission"
+            );
+            assert_eq!(vm.register(12), 0);
+            assert_eq!(
+                vm.remaining_gas(),
+                quote - DefaultHost::vrf_verify_gas(1, payload.len())
+            );
+            assert_eq!(
+                host.vrf_execution_counters(),
+                VrfExecutionCounters {
+                    canonical_decodes: 1,
+                    backend_invocations: 0,
+                    response_allocations: 0,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn vm_dispatched_vrf_batch_rejects_alternate_layout_and_restores_ambient_flags() {
+        let request = crate::vrf::VrfVerifyBatchRequest {
+            items: vec![crate::vrf::VrfVerifyRequest {
+                variant: 0,
+                pk: Vec::new(),
+                proof: Vec::new(),
+                chain_id: Vec::new(),
+                input: Vec::new(),
+            }],
+        };
+        let canonical = encode_canonical_norito(&request).expect("encode canonical VRF batch");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&request).expect("encode alternate-layout VRF batch")
+        };
+        assert_ne!(alternate, canonical);
+        assert!(
+            norito::decode_from_bytes::<crate::vrf::VrfVerifyBatchRequest>(&alternate).is_ok(),
+            "ordinary Norito must accept its advertised alternate layout"
+        );
+
+        let ambient_probe = vec!["first".to_owned(), "second".to_owned()];
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before =
+            norito::to_bytes(&ambient_probe).expect("encode ambient VRF layout probe");
+        let (vm, host, quote) = run_vm_dispatched_vrf_batch(&alternate);
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), 2);
+        assert_eq!(vm.register(12), u64::MAX);
+        assert_eq!(
+            vm.remaining_gas(),
+            quote - DefaultHost::vrf_verify_gas(0, alternate.len())
+        );
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters {
+                canonical_decodes: 1,
+                backend_invocations: 0,
+                response_allocations: 0,
+            }
+        );
+        assert_eq!(
+            norito::to_bytes(&ambient_probe).expect("encode ambient probe after VRF syscall"),
+            ambient_before
+        );
+    }
+
+    #[test]
+    fn vm_dispatched_vrf_batch_rejects_forged_vector_length_before_backend_or_output() {
+        const FORGED_LENGTH: u64 = 1 << 40;
+        let request = crate::vrf::VrfVerifyBatchRequest { items: Vec::new() };
+        let mut bare = Vec::new();
+        {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::NoritoSerialize::serialize(&request, &mut bare)
+                .expect("encode bare canonical VRF batch");
+        }
+        assert!(
+            bare.ends_with(&0_u64.to_le_bytes()),
+            "empty batch must end in its zero sequence count"
+        );
+        let count_offset = bare.len() - core::mem::size_of::<u64>();
+        bare[count_offset..].copy_from_slice(&FORGED_LENGTH.to_le_bytes());
+        let forged =
+            norito::core::frame_bare_with_header_flags::<crate::vrf::VrfVerifyBatchRequest>(
+                &bare,
+                norito::core::default_encode_flags(),
+            )
+            .expect("frame forged VRF batch with a valid checksum");
+
+        let (vm, host, quote) = run_vm_dispatched_vrf_batch(&forged);
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), 2);
+        assert_eq!(vm.register(12), u64::MAX);
+        assert_eq!(
+            vm.remaining_gas(),
+            quote - DefaultHost::vrf_verify_gas(0, forged.len())
+        );
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters {
+                canonical_decodes: 1,
+                backend_invocations: 0,
+                response_allocations: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn vm_dispatched_vrf_batch_refunds_unexamined_items() {
+        let valid = valid_vrf_request(b"test-chain", b"valid");
+        let invalid = crate::vrf::VrfVerifyRequest {
+            variant: 0,
+            pk: Vec::new(),
+            proof: Vec::new(),
+            chain_id: b"test-chain".to_vec(),
+            input: b"invalid".to_vec(),
+        };
+        let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
+            items: vec![valid, invalid],
+        })
+        .expect("encode VRF batch with second-item failure");
+        let (vm, host, quote) = run_vm_dispatched_vrf_batch(&payload);
+
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), 3);
+        assert_eq!(vm.register(12), 1);
+        assert_eq!(
+            vm.remaining_gas(),
+            quote - DefaultHost::vrf_verify_gas(2, payload.len())
+        );
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters {
+                canonical_decodes: 1,
+                backend_invocations: 1,
+                response_allocations: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn vm_dispatched_vrf_batch_success_refunds_reserved_tail() {
+        let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
+            items: vec![valid_vrf_request(b"test-chain", b"success")],
+        })
+        .expect("encode successful VRF batch");
+        let (vm, host, quote) = run_vm_dispatched_vrf_batch(&payload);
+
         assert_eq!(vm.register(11), 0);
-        let out = vm.validate_tlv(vm.register(10)).expect("output tlv");
-        assert_eq!(out.type_id, PointerType::NoritoBytes);
-        let outputs: Vec<[u8; 32]> = norito::decode_from_bytes(out.payload).expect("decode output");
-        assert!(outputs.is_empty());
+        assert_eq!(vm.register(12), u64::MAX);
+        let output = vm.validate_tlv(vm.register(10)).expect("VRF output");
+        assert_eq!(output.type_id, PointerType::NoritoBytes);
+        assert_eq!(
+            norito::decode_from_bytes::<Vec<[u8; 32]>>(output.payload)
+                .expect("decode VRF outputs")
+                .len(),
+            1
+        );
+        assert_eq!(
+            vm.remaining_gas(),
+            quote - DefaultHost::vrf_verify_gas(1, payload.len())
+        );
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters {
+                canonical_decodes: 1,
+                backend_invocations: 1,
+                response_allocations: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn vrf_prepare_rejects_wrong_type_and_oversized_payload_without_decode() {
+        let mut vm = IVM::new(u64::MAX);
+        let wrong_type = vm
+            .alloc_input_tlv(&test_tlv(PointerType::Blob, b"wrong type"))
+            .expect("allocate wrong-type VRF request");
+        vm.set_register(10, wrong_type);
+        let host = DefaultHost::new();
+        assert_eq!(
+            host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let oversized = vec![0_u8; crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 + 1];
+        let envelope = test_tlv(PointerType::NoritoBytes, &oversized);
+        let pointer = vm
+            .alloc_heap(u64::try_from(envelope.len()).expect("oversized envelope length fits"))
+            .expect("allocate oversized envelope");
+        vm.store_bytes(pointer, &envelope)
+            .expect("store oversized envelope");
+        vm.set_register(10, pointer);
+        assert_eq!(
+            host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters::default()
+        );
+    }
+
+    #[test]
+    fn unaffordable_vrf_batch_stops_before_decode_or_backend_work() {
+        let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
+            items: vec![valid_vrf_request(b"test-chain", b"unaffordable")],
+        })
+        .expect("encode VRF batch");
+        let mut vm = IVM::new(u64::MAX);
+        let scall = crate::encoding::wide::encode_sys(
+            crate::instruction::wide::system::SCALL,
+            u8::try_from(syscalls::SYSCALL_VRF_VERIFY_BATCH).expect("syscall fits"),
+        );
+        let mut code = Vec::new();
+        code.extend_from_slice(&scall.to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        vm.load_code(&code).expect("load VRF batch program");
+        let pointer = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &payload))
+            .expect("allocate VRF batch");
+        vm.set_register(10, pointer);
+        vm.set_register(11, 0xfeed);
+        vm.set_register(12, 0xbeef);
+        let mut host = DefaultHost::new();
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm)
+            .expect("quote VRF batch");
+        vm.set_gas_limit(quote);
+
+        assert_eq!(vm.run_with_host(&mut host), Err(VMError::OutOfGas));
+        assert_eq!(vm.register(10), pointer);
+        assert_eq!(vm.register(11), 0xfeed);
+        assert_eq!(vm.register(12), 0xbeef);
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters::default()
+        );
+    }
+
+    #[test]
+    fn vrf_batch_allocation_failure_reports_metered_work_without_publication() {
+        let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
+            items: vec![valid_vrf_request(b"test-chain", b"allocation")],
+        })
+        .expect("encode successful VRF batch");
+        let input = test_tlv(PointerType::NoritoBytes, &payload);
+        let mut vm = IVM::new(u64::MAX);
+        let pointer = vm
+            .alloc_input_tlv(&input)
+            .expect("allocate canonical VRF batch");
+        let aligned_used = input.len().next_multiple_of(8);
+        let remaining = usize::try_from(Memory::INPUT_SIZE)
+            .expect("INPUT size fits usize")
+            .saturating_sub(aligned_used);
+        vm.alloc_input_tlv(&vec![0_u8; remaining])
+            .expect("fill the remaining INPUT allocator");
+        vm.memory
+            .set_heap_limit(0)
+            .expect("disable heap spill allocation");
+        vm.set_register(10, pointer);
+        vm.set_register(11, 0xfeed);
+        vm.set_register(12, 0xbeef);
+        let mut host = DefaultHost::new();
+        let actual = DefaultHost::vrf_verify_gas(1, payload.len());
+
+        let error = host
+            .syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &mut vm)
+            .expect_err("response allocation must fail");
+        assert_eq!(error.split_metered(), (Some(actual), VMError::OutOfMemory));
+        assert_eq!(vm.register(10), pointer);
+        assert_eq!(vm.register(11), 0xfeed);
+        assert_eq!(vm.register(12), 0xbeef);
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters {
+                canonical_decodes: 1,
+                backend_invocations: 1,
+                response_allocations: 0,
+            }
+        );
     }
 
     #[test]
@@ -5564,6 +6199,34 @@ mod tests {
         let canonical =
             norito::to_bytes(&vec![dummy_zk_batch_envelope()]).expect("encode canonical ZK batch");
         assert!(canonical.len() > norito::core::Header::SIZE);
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient_probe = vec!["first".to_owned(), "second".to_owned()];
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let ambient_before =
+                norito::to_bytes(&ambient_probe).expect("encode ambient batch probe");
+            assert!(decode_canonical_zk_batch(&canonical, 16).is_ok());
+            assert_eq!(
+                norito::to_bytes(&ambient_probe).expect("encode ambient probe after batch decode"),
+                ambient_before,
+                "canonical batch decoding must restore the ambient layout"
+            );
+        }
+        let alternate_layout = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&vec![dummy_zk_batch_envelope()])
+                .expect("encode alternate-layout ZK batch")
+        };
+        assert_ne!(alternate_layout, canonical);
+        assert!(
+            norito::decode_from_bytes::<Vec<OpenVerifyEnvelope>>(&alternate_layout).is_ok(),
+            "ordinary Norito decoding must accept the advertised alternate layout"
+        );
+        assert!(matches!(
+            decode_canonical_zk_batch(&alternate_layout, 16),
+            Err(ERR_DECODE)
+        ));
 
         let mut wrong_schema = canonical.clone();
         wrong_schema[6] ^= 1; // schema starts after magic + major + minor
@@ -5576,6 +6239,7 @@ mod tests {
             ("schema", wrong_schema),
             ("flags", wrong_flags),
             ("checksum", wrong_checksum),
+            ("alternate layout", alternate_layout),
         ] {
             let (vm, host, quote) = run_vm_dispatched_zk_batch(&payload);
             assert_eq!(
@@ -5668,6 +6332,42 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn zk_batch_allocation_failure_does_not_count_a_guest_visible_response() {
+        crate::set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let payload =
+            norito::to_bytes(&vec![dummy_zk_batch_envelope()]).expect("encode canonical ZK batch");
+        let input = test_tlv(PointerType::NoritoBytes, &payload);
+        let pointer = vm
+            .alloc_input_tlv(&input)
+            .expect("allocate canonical ZK batch");
+        let aligned_used = input.len().next_multiple_of(8);
+        let remaining = usize::try_from(Memory::INPUT_SIZE)
+            .expect("INPUT size fits usize")
+            .saturating_sub(aligned_used);
+        vm.alloc_input_tlv(&vec![0_u8; remaining])
+            .expect("fill the remaining INPUT allocator");
+        vm.memory
+            .set_heap_limit(0)
+            .expect("disable heap spill allocation");
+        vm.set_register(10, pointer);
+
+        let mut host = DefaultHost::new();
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &mut vm),
+            Err(VMError::OutOfMemory)
+        );
+        assert_eq!(
+            host.zk_execution_counters(),
+            ZkExecutionCounters {
+                canonical_decodes: 1,
+                backend_invocations: 0,
+                response_allocations: 0,
+            }
+        );
     }
 
     #[test]

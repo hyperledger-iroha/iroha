@@ -64,7 +64,7 @@ use iroha_data_model::{
     },
 };
 use mv::storage::StorageReadOnly;
-use norito::{DecodeLimits, decode_from_bytes_with_limits};
+use norito::{DecodeLimits, decode_canonical_with_limits, decode_from_bytes_with_limits};
 use sorafs_manifest::pop_credentials::{
     POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopEligibilityClassV1, PopMembershipProofV1,
     verify_pop_membership_proof_v1,
@@ -477,6 +477,14 @@ fn encode_state<T: norito::core::NoritoSerialize>(
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
 
+fn encode_payload<T: norito::core::NoritoSerialize>(
+    value: &T,
+    label: &str,
+) -> Result<Vec<u8>, InstructionExecutionError> {
+    norito::encode_canonical(value)
+        .map_err(|error| invalid_parameter(format!("failed to canonicalize {label}: {error}")))
+}
+
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
@@ -506,17 +514,13 @@ where
             bytes.len()
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, PAYLOAD_LIMITS).map_err(|error| {
-        invalid_parameter(format!("invalid canonical {label} payload: {error}"))
-    })?;
-    let canonical = norito::to_bytes(&value)
-        .map_err(|error| invalid_parameter(format!("failed to canonicalize {label}: {error}")))?;
-    if canonical != bytes {
-        return Err(invalid_parameter(format!(
-            "{label} payload is not exact canonical Norito"
-        )));
-    }
-    Ok(value)
+    decode_canonical_with_limits::<T>(bytes, PAYLOAD_LIMITS).map_err(|error| {
+        if matches!(&error, norito::Error::NonCanonicalEncoding) {
+            invalid_parameter(format!("{label} payload is not exact canonical Norito"))
+        } else {
+            invalid_parameter(format!("invalid canonical {label} payload: {error}"))
+        }
+    })
 }
 
 fn validate_persisted_event(
@@ -654,23 +658,15 @@ fn decode_membership_proof(
             bytes.len()
         )));
     }
-    let proof = decode_from_bytes_with_limits::<PopMembershipProofV1>(bytes, PROOF_LIMITS)
-        .map_err(|error| {
+    decode_canonical_with_limits::<PopMembershipProofV1>(bytes, PROOF_LIMITS).map_err(|error| {
+        if matches!(&error, norito::Error::NonCanonicalEncoding) {
+            invalid_parameter("moderation PoP membership proof is not exact canonical Norito")
+        } else {
             invalid_parameter(format!(
                 "invalid canonical moderation PoP membership proof: {error}"
             ))
-        })?;
-    let canonical = norito::to_bytes(&proof).map_err(|error| {
-        invalid_parameter(format!(
-            "failed to canonicalize moderation PoP membership proof: {error}"
-        ))
-    })?;
-    if canonical != bytes {
-        return Err(invalid_parameter(
-            "moderation PoP membership proof is not exact canonical Norito",
-        ));
-    }
-    Ok(proof)
+        }
+    })
 }
 
 fn read_policy(
@@ -2499,9 +2495,7 @@ impl Execute for SubmitSorafsModerationCommit {
             ));
         }
         commit.committed_at_unix_ms = now;
-        let canonical_commit = norito::to_bytes(&commit).map_err(|error| {
-            invalid_parameter(format!("failed to canonicalize moderation commit: {error}"))
-        })?;
+        let canonical_commit = encode_payload(&commit, "moderation commit")?;
         let record = ModerationCommitRecordV1 {
             case_id: commit.context.case_id.clone(),
             round_id: commit.round_id.clone(),
@@ -2855,9 +2849,7 @@ impl Execute for SubmitSorafsModerationReveal {
         })?;
 
         reveal.revealed_at_unix_ms = now;
-        let canonical_reveal = norito::to_bytes(&reveal).map_err(|error| {
-            invalid_parameter(format!("failed to canonicalize moderation reveal: {error}"))
-        })?;
+        let canonical_reveal = encode_payload(&reveal, "moderation reveal")?;
         let record = ModerationRevealRecordV1 {
             case_id: reveal.context.case_id.clone(),
             round_id: reveal.round_id.clone(),
@@ -3493,7 +3485,7 @@ fn query_moderation_event_page(
             read_event_sequence(state_ro, current_sequence, previous.as_ref())?;
         encoded_event_bytes = encoded_event_bytes
             .checked_add(
-                norito::to_bytes(&resolved)
+                norito::encode_canonical(&resolved)
                     .map_err(|error| {
                         QueryExecutionFail::Conversion(format!(
                             "failed to encode committed moderation event: {error}"
@@ -3530,7 +3522,7 @@ fn query_moderation_event_page(
         has_more,
         next_after,
     };
-    let encoded_len = norito::to_bytes(&page)
+    let encoded_len = norito::encode_canonical(&page)
         .map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to encode committed moderation event page: {error}"
@@ -4170,7 +4162,7 @@ fn query_moderation_snapshot(
         cases: case_views,
         events,
     };
-    let encoded_len = norito::to_bytes(&snapshot)
+    let encoded_len = norito::encode_canonical(&snapshot)
         .map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to encode finalized moderation snapshot: {error}"
@@ -4512,7 +4504,14 @@ mod tests {
     }
 
     fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
-        norito::to_bytes(value).expect("encode fixture")
+        norito::encode_canonical(value).expect("encode canonical fixture")
+    }
+
+    fn encode_alternate_layout<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout fixture")
     }
 
     fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
@@ -4975,6 +4974,89 @@ mod tests {
                 .expect("selected panel")
                 .sortition_digest
         }
+    }
+
+    #[test]
+    fn moderation_payload_decoder_rejects_alternate_norito_layout() {
+        let juror = account(&keypair(0xA1));
+        let case = spec(vec![juror.clone()], 1);
+        let reveal = reveal(&case, &juror, SoraFsModerationVoteChoice::Uphold, 0xA2);
+        let commit = commit(&reveal);
+        let canonical =
+            encode_payload(&commit, "moderation commit").expect("encode canonical commit");
+        let alternate = encode_alternate_layout(&commit);
+        assert_ne!(
+            alternate, canonical,
+            "fixture must exercise a distinct advertised Norito layout"
+        );
+        decode_from_bytes_with_limits::<SoraFsModerationBallotCommitV1>(&alternate, PAYLOAD_LIMITS)
+            .expect("ordinary bounded Norito accepts the advertised alternate layout");
+
+        let error =
+            decode_payload::<SoraFsModerationBallotCommitV1>(&alternate, "moderation commit")
+                .err()
+                .expect("alternate-layout moderation payload must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("payload is not exact canonical Norito"),
+            "unexpected alternate-layout rejection: {error:?}"
+        );
+    }
+
+    #[test]
+    fn moderation_payload_identity_encoding_ignores_ambient_norito_flags() {
+        let juror = account(&keypair(0xA3));
+        let case = spec(vec![juror.clone()], 1);
+        let reveal = reveal(&case, &juror, SoraFsModerationVoteChoice::Overturn, 0xA4);
+        let commit = commit(&reveal);
+        let canonical =
+            encode_payload(&commit, "moderation commit").expect("encode canonical commit");
+        let alternate = encode_alternate_layout(&commit);
+        assert_ne!(alternate, canonical);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient_encoded = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let before =
+                norito::to_bytes(&commit).expect("encode commit under caller ambient flags");
+            let encoded = encode_payload(&commit, "moderation commit")
+                .expect("canonicalize commit under caller ambient flags");
+            let after =
+                norito::to_bytes(&commit).expect("re-encode commit under caller ambient flags");
+            assert_eq!(
+                before, after,
+                "canonical helper must restore the caller's ambient layout"
+            );
+            encoded
+        };
+        assert_eq!(ambient_encoded, canonical);
+    }
+
+    #[test]
+    fn moderation_membership_proof_decoder_rejects_alternate_norito_layout() {
+        let mut fixture = PanelFixture::new();
+        fixture.submit(1, 0, 1);
+        let proof = proof_for_appeal(&fixture.appeal());
+        let canonical = encode(&proof);
+        let alternate = encode_alternate_layout(&proof);
+        assert_ne!(
+            alternate, canonical,
+            "fixture must exercise a distinct advertised Norito layout"
+        );
+        decode_from_bytes_with_limits::<PopMembershipProofV1>(&alternate, PROOF_LIMITS)
+            .expect("ordinary bounded Norito accepts the advertised alternate layout");
+
+        let error = decode_membership_proof(&alternate)
+            .err()
+            .expect("alternate-layout moderation membership proof must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("membership proof is not exact canonical Norito"),
+            "unexpected alternate-layout proof rejection: {error:?}"
+        );
     }
 
     fn seed_activated_case(

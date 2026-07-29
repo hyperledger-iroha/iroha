@@ -91,7 +91,7 @@ _PROTOCOL_BINDINGS: dict[PrivacyProtocolIdV1, tuple[str, str]] = {
         "native-vega",
     ),
     "iroha-zk-x509-stark-p256-v0": (
-        "stark-fri-poseidon2-goldilocks",
+        "stark-fri-sha256-goldilocks",
         "native-goldilocks-stark-fri",
     ),
     "iroha-jindo-polynomial-commitment-v0": (
@@ -108,7 +108,7 @@ _PROTOCOL_BINDINGS: dict[PrivacyProtocolIdV1, tuple[str, str]] = {
         "native-fcmp-plus-plus",
     ),
     "iroha-ivm-private-note-stark-v1": (
-        "stark-fri-poseidon2-goldilocks",
+        "stark-fri-sha256-goldilocks",
         "native-goldilocks-stark-fri",
     ),
     "pq-masp-stark-v0": (
@@ -120,10 +120,10 @@ _PROTOCOL_BINDINGS: dict[PrivacyProtocolIdV1, tuple[str, str]] = {
 _CONSENSUS_LIMIT_MAXIMA = {
     "max_actions_per_transaction": 1,
     "max_actions_per_block": 2,
-    "max_proof_bytes_per_action": 8 * 1024 * 1024,
-    "max_action_bytes": 8 * 1024 * 1024,
-    "max_privacy_bytes_per_transaction": 8 * 1024 * 1024,
-    "max_privacy_bytes_per_block": 16 * 1024 * 1024,
+    "max_proof_bytes_per_action": 9 * 1024 * 1024,
+    "max_action_bytes": 9 * 1024 * 1024,
+    "max_privacy_bytes_per_transaction": 9 * 1024 * 1024,
+    "max_privacy_bytes_per_block": 18 * 1024 * 1024,
     "max_statement_and_encrypted_output_bytes_per_transaction": 256 * 1024,
     "max_nullifiers_per_action": 8,
     "max_commitments_per_action": 8,

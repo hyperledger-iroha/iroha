@@ -10,6 +10,9 @@ internal static class ToriiContractManifestJson
     private const int MaxSchemaNodes = 256;
     private const int MaxSchemaDepth = 256;
     private const int MaxBoundaryWords = 13;
+    // Mirrors ivm_abi::state_value::MAX_STATE_VALUE_NODES.
+    private const int MaxStateTypeDepth = 256;
+    private const int MaxStateTypeNodes = 256;
 
     // BEGIN GENERATED: kotodama-v1-validator-policy
     private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
@@ -91,6 +94,12 @@ internal static class ToriiContractManifestJson
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",
         "__kotodama_decimal_to_int_round",
+        "is_some",
+        "is_none",
+        "is_ok",
+        "is_err",
+        "unwrap_or",
+        "unwrap_err_or",
     };
     private static readonly HashSet<string> RetiredNumericTypeNames = new(StringComparer.Ordinal)
     {
@@ -121,7 +130,46 @@ internal static class ToriiContractManifestJson
         "Quantity",
         "number",
     };
+    private static readonly HashSet<string> StateMapKeyTypeNames = new(StringComparer.Ordinal)
+    {
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "DataSpaceId",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "NftId",
+        "DomainId",
+        "Name",
+    };
+    private static readonly HashSet<string> DynamicAccessBoundKinds = new(StringComparer.Ordinal)
+    {
+        "range",
+        "take",
+    };
+    private const uint MaxDynamicAccessKeys = 64;
     // END GENERATED: kotodama-v1-validator-policy
+    private static readonly HashSet<string> StateScalarTypeNames = new(StringComparer.Ordinal)
+    {
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "DataSpaceId",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "NftId",
+        "DomainId",
+        "Name",
+        "Json",
+    };
 
     private static readonly IReadOnlyDictionary<string, ToriiEntrypointValueKindV1> ValueKinds =
         new Dictionary<string, ToriiEntrypointValueKindV1>(StringComparer.Ordinal)
@@ -233,12 +281,15 @@ internal static class ToriiContractManifestJson
         var states = OptionalObjectList(root, "states", $"{context}.states", ParseState);
         var errorCodes = OptionalObjectList(root, "error_codes", $"{context}.error_codes", ParseErrorCode);
         var kotoba = OptionalObjectList(root, "kotoba", $"{context}.kotoba", ParseKotobaEntry);
+        var accessSetHints = OptionalObject(root, "access_set_hints", $"{context}.access_set_hints")
+            is { } access ? ParseAccessSetHints(access, $"{context}.access_set_hints") : null;
         var featuresBitmap = OptionalUInt64(root, "features_bitmap", $"{context}.features_bitmap");
         if (featuresBitmap is > 3)
         {
             throw new JsonException($"{context}.features_bitmap contains unsupported Kotodama V1 bits.");
         }
         ValidateManifestCollections(entrypoints, states, errorCodes, kotoba, context);
+        ValidateDynamicAccessHintStateMaps(accessSetHints, states, context);
 
         return new ToriiContractManifest
         {
@@ -250,8 +301,7 @@ internal static class ToriiContractManifestJson
                 "compiler_fingerprint",
                 $"{context}.compiler_fingerprint"),
             FeaturesBitmap = featuresBitmap,
-            AccessSetHints = OptionalObject(root, "access_set_hints", $"{context}.access_set_hints")
-                is { } access ? ParseAccessSetHints(access, $"{context}.access_set_hints") : null,
+            AccessSetHints = accessSetHints,
             Entrypoints = entrypoints,
             States = states,
             ErrorCodes = errorCodes,
@@ -285,20 +335,32 @@ internal static class ToriiContractManifestJson
     {
         EnsureOnly(root, context, "base_key", "key_type", "bound_kind", "max_keys");
         var baseKey = RequiredExactString(root, "base_key", $"{context}.base_key");
-        if (!baseKey.StartsWith("state:", StringComparison.Ordinal) || baseKey == "state:*")
+        if (!IsCanonicalDynamicAccessBaseKey(baseKey))
         {
-            throw new JsonException($"{context}.base_key must be a concrete state: key.");
+            throw new JsonException(
+                $"{context}.base_key must be state: followed by one canonical state declaration identifier.");
+        }
+        var keyType = RequiredExactString(root, "key_type", $"{context}.key_type");
+        if (!StateMapKeyTypeNames.Contains(keyType))
+        {
+            throw new JsonException(
+                $"{context}.key_type must be an exact canonical StateMap key type.");
+        }
+        var boundKind = RequiredExactString(root, "bound_kind", $"{context}.bound_kind");
+        if (!DynamicAccessBoundKinds.Contains(boundKind))
+        {
+            throw new JsonException($"{context}.bound_kind must be take or range.");
         }
         var maxKeys = RequiredUInt32(root, "max_keys", $"{context}.max_keys");
-        if (maxKeys == 0)
+        if (maxKeys is < 1 or > MaxDynamicAccessKeys)
         {
-            throw new JsonException($"{context}.max_keys must be positive.");
+            throw new JsonException($"{context}.max_keys must be in 1..64.");
         }
         return new ToriiContractDynamicAccessHint
         {
             BaseKey = baseKey,
-            KeyType = RequiredExactString(root, "key_type", $"{context}.key_type"),
-            BoundKind = RequiredExactString(root, "bound_kind", $"{context}.bound_kind"),
+            KeyType = keyType,
+            BoundKind = boundKind,
             MaxKeys = maxKeys,
         };
     }
@@ -967,14 +1029,19 @@ internal static class ToriiContractManifestJson
     {
         EnsureOnly(root, context, "name", "type_name");
         var name = RequiredExactString(root, "name", $"{context}.name");
+        var typeName = RequiredExactString(root, "type_name", $"{context}.type_name");
         if (!IsCanonicalDeclarationIdentifier(name))
         {
             throw new JsonException($"{context}.name must be a canonical Kotodama declaration identifier.");
         }
+        if (!IsCanonicalStateTypeName(typeName))
+        {
+            throw new JsonException($"{context}.type_name must be a canonical Kotodama V1 state type.");
+        }
         return new ToriiContractStateDescriptor
         {
             Name = name,
-            TypeName = RequiredExactString(root, "type_name", $"{context}.type_name"),
+            TypeName = typeName,
         };
     }
 
@@ -983,11 +1050,13 @@ internal static class ToriiContractManifestJson
         EnsureOnly(root, context, "namespace", "name", "code");
         var namespaceName = RequiredExactString(root, "namespace", $"{context}.namespace");
         var name = RequiredExactString(root, "name", $"{context}.name");
-        if (!IsCanonicalTypeDeclarationIdentifier(namespaceName)
-            || !IsCanonicalBoundaryIdentifier(name))
+        if (!IsCanonicalTypeDeclarationIdentifier(namespaceName))
         {
-            throw new JsonException(
-                $"{context} namespace and name must be canonical Kotodama identifiers.");
+            throw new JsonException($"{context}.namespace must be a canonical Kotodama type declaration.");
+        }
+        if (!IsCanonicalBoundaryIdentifier(name))
+        {
+            throw new JsonException($"{context}.name must be a canonical Kotodama identifier.");
         }
         var code = RequiredUInt32(root, "code", $"{context}.code");
         if (code == 0)
@@ -1087,6 +1156,79 @@ internal static class ToriiContractManifestJson
         }
     }
 
+    private static void ValidateDynamicAccessHintStateMaps(
+        ToriiContractAccessSetHints? accessSetHints,
+        IReadOnlyList<ToriiContractStateDescriptor>? states,
+        string context)
+    {
+        if (accessSetHints is null)
+        {
+            return;
+        }
+
+        var stateMapKeyTypes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var state in states ?? Array.Empty<ToriiContractStateDescriptor>())
+        {
+            if (TopLevelStateMapKeyType(state.TypeName) is { } keyType)
+            {
+                stateMapKeyTypes.Add(state.Name, keyType);
+            }
+        }
+        ValidateDynamicAccessHintList(
+            accessSetHints.DynamicReads,
+            stateMapKeyTypes,
+            $"{context}.access_set_hints.dynamic_reads");
+        ValidateDynamicAccessHintList(
+            accessSetHints.DynamicWrites,
+            stateMapKeyTypes,
+            $"{context}.access_set_hints.dynamic_writes");
+    }
+
+    private static void ValidateDynamicAccessHintList(
+        IReadOnlyList<ToriiContractDynamicAccessHint> hints,
+        IReadOnlyDictionary<string, string> stateMapKeyTypes,
+        string context)
+    {
+        var unique =
+            new HashSet<(string BaseKey, string KeyType, string BoundKind, uint MaxKeys)>();
+        foreach (var hint in hints)
+        {
+            if (!unique.Add((hint.BaseKey, hint.KeyType, hint.BoundKind, hint.MaxKeys)))
+            {
+                throw new JsonException(
+                    $"{context} contains duplicate hint `{hint.BaseKey}`.");
+            }
+            var stateName = hint.BaseKey["state:".Length..];
+            if (!stateMapKeyTypes.TryGetValue(stateName, out var expectedKeyType))
+            {
+                throw new JsonException(
+                    $"{context} hint `{hint.BaseKey}` must reference a declared top-level StateMap.");
+            }
+            if (!string.Equals(hint.KeyType, expectedKeyType, StringComparison.Ordinal))
+            {
+                throw new JsonException(
+                    $"{context} hint `{hint.BaseKey}` declares key_type `{hint.KeyType}` "
+                    + $"but its StateMap key type is `{expectedKeyType}`.");
+            }
+        }
+    }
+
+    private static string? TopLevelStateMapKeyType(string typeName)
+    {
+        const string prefix = "StateMap<";
+        if (!typeName.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+        var separator = typeName.IndexOf(", ", prefix.Length, StringComparison.Ordinal);
+        if (separator < 0)
+        {
+            return null;
+        }
+        var keyType = typeName[prefix.Length..separator];
+        return StateMapKeyTypeNames.Contains(keyType) ? keyType : null;
+    }
+
     private static void ValidateExactArguments(
         IReadOnlyList<ToriiContractEntrypointParameter> parameters,
         ToriiEntrypointArgumentSchemaV1? schema,
@@ -1159,6 +1301,7 @@ internal static class ToriiContractManifestJson
             throw new JsonException($"{context}.features_bitmap contains unsupported Kotodama V1 bits.");
         }
         ValidateManifestCollections(value.Entrypoints, value.States, value.ErrorCodes, value.Kotoba, context);
+        ValidateDynamicAccessHintStateMaps(value.AccessSetHints, value.States, context);
         return root;
     }
 
@@ -1175,17 +1318,32 @@ internal static class ToriiContractManifestJson
 
     private static JsonObject BuildDynamicHint(ToriiContractDynamicAccessHint value, string context)
     {
-        if (!value.BaseKey.StartsWith("state:", StringComparison.Ordinal)
-            || value.BaseKey == "state:*"
-            || value.MaxKeys == 0)
+        var baseKey = RequireExact(value.BaseKey, $"{context}.base_key");
+        if (!IsCanonicalDynamicAccessBaseKey(baseKey))
         {
-            throw new JsonException($"{context} must declare a positive bounded concrete state access.");
+            throw new JsonException(
+                $"{context}.base_key must be state: followed by one canonical state declaration identifier.");
+        }
+        var keyType = RequireExact(value.KeyType, $"{context}.key_type");
+        if (!StateMapKeyTypeNames.Contains(keyType))
+        {
+            throw new JsonException(
+                $"{context}.key_type must be an exact canonical StateMap key type.");
+        }
+        var boundKind = RequireExact(value.BoundKind, $"{context}.bound_kind");
+        if (!DynamicAccessBoundKinds.Contains(boundKind))
+        {
+            throw new JsonException($"{context}.bound_kind must be take or range.");
+        }
+        if (value.MaxKeys is < 1 or > MaxDynamicAccessKeys)
+        {
+            throw new JsonException($"{context}.max_keys must be in 1..64.");
         }
         return new JsonObject
         {
-            ["base_key"] = RequireExact(value.BaseKey, $"{context}.base_key"),
-            ["key_type"] = RequireExact(value.KeyType, $"{context}.key_type"),
-            ["bound_kind"] = RequireExact(value.BoundKind, $"{context}.bound_kind"),
+            ["base_key"] = baseKey,
+            ["key_type"] = keyType,
+            ["bound_kind"] = boundKind,
             ["max_keys"] = value.MaxKeys,
         };
     }
@@ -1396,21 +1554,31 @@ internal static class ToriiContractManifestJson
         {
             throw new JsonException($"{context}.name must be a canonical Kotodama declaration identifier.");
         }
+        var typeName = RequireExact(value.TypeName, $"{context}.type_name");
+        if (!IsCanonicalStateTypeName(typeName))
+        {
+            throw new JsonException($"{context}.type_name must be a canonical Kotodama V1 state type.");
+        }
         return new JsonObject
         {
             ["name"] = value.Name,
-            ["type_name"] = RequireExact(value.TypeName, $"{context}.type_name"),
+            ["type_name"] = typeName,
         };
     }
 
     private static JsonObject BuildErrorCode(ToriiContractErrorCodeDescriptor value, string context)
     {
-        if (!IsCanonicalTypeDeclarationIdentifier(value.Namespace)
-            || !IsCanonicalBoundaryIdentifier(value.Name)
-            || value.Code == 0)
+        if (!IsCanonicalTypeDeclarationIdentifier(value.Namespace))
         {
-            throw new JsonException(
-                $"{context} must contain canonical Kotodama names and a non-zero code.");
+            throw new JsonException($"{context}.namespace must be a canonical Kotodama type declaration.");
+        }
+        if (!IsCanonicalBoundaryIdentifier(value.Name))
+        {
+            throw new JsonException($"{context}.name must be a canonical Kotodama identifier.");
+        }
+        if (value.Code == 0)
+        {
+            throw new JsonException($"{context}.code must be a non-zero u32.");
         }
         return new JsonObject
         {
@@ -1829,20 +1997,201 @@ internal static class ToriiContractManifestJson
 
     private static bool IsCanonicalBoundaryIdentifier(string value)
     {
-        return HasIdentifierSyntax(value) && !Keywords.Contains(value);
+        return HasIdentifierSyntax(value)
+            && !Keywords.Contains(value)
+            && !value.StartsWith("__kotodama_link_", StringComparison.Ordinal);
     }
 
     private static bool IsCanonicalDeclarationIdentifier(string value)
     {
         return IsCanonicalBoundaryIdentifier(value)
-            && !ReservedDeclarationNames.Contains(value)
-            && !value.StartsWith("__kotodama_link_", StringComparison.Ordinal);
+            && !ReservedDeclarationNames.Contains(value);
+    }
+
+    private static bool IsCanonicalDynamicAccessBaseKey(string value)
+    {
+        const string Prefix = "state:";
+        return value.StartsWith(Prefix, StringComparison.Ordinal)
+            && IsCanonicalDeclarationIdentifier(value[Prefix.Length..]);
     }
 
     private static bool IsCanonicalTypeDeclarationIdentifier(string value)
     {
         return IsCanonicalDeclarationIdentifier(value)
             && !RetiredNumericTypeNames.Contains(value);
+    }
+
+    private static bool IsCanonicalStateTypeName(string value)
+    {
+        if (value.Length == 0)
+        {
+            return false;
+        }
+
+        var cursor = 0;
+        var nodes = 0;
+
+        bool Consume(string literal)
+        {
+            if (cursor > value.Length - literal.Length
+                || string.CompareOrdinal(value, cursor, literal, 0, literal.Length) != 0)
+            {
+                return false;
+            }
+            cursor += literal.Length;
+            return true;
+        }
+
+        string? Identifier()
+        {
+            var start = cursor;
+            if (cursor >= value.Length
+                || (value[cursor] != '_' && !IsAsciiLetter(value[cursor])))
+            {
+                return null;
+            }
+            cursor++;
+            while (cursor < value.Length
+                && (value[cursor] == '_'
+                    || IsAsciiLetter(value[cursor])
+                    || char.IsAsciiDigit(value[cursor])))
+            {
+                cursor++;
+            }
+            return value[start..cursor];
+        }
+
+        bool ListCapacity()
+        {
+            var start = cursor;
+            var capacity = 0;
+            var exceededMaximum = false;
+            while (cursor < value.Length && char.IsAsciiDigit(value[cursor]))
+            {
+                if (!exceededMaximum)
+                {
+                    capacity = capacity * 10 + value[cursor] - '0';
+                    exceededMaximum = capacity > 64;
+                }
+                cursor++;
+            }
+            if (cursor == start || (cursor - start > 1 && value[start] == '0'))
+            {
+                return false;
+            }
+            return !exceededMaximum && capacity is >= 1 and <= 64;
+        }
+
+        string? ParseType(bool allowStateMap, int depth)
+        {
+            nodes++;
+            if (depth > MaxStateTypeDepth || nodes > MaxStateTypeNodes)
+            {
+                return null;
+            }
+
+            if (Consume("("))
+            {
+                if (ParseType(false, depth + 1) is null
+                    || !Consume(", ")
+                    || ParseType(false, depth + 1) is null)
+                {
+                    return null;
+                }
+                while (Consume(", "))
+                {
+                    if (ParseType(false, depth + 1) is null)
+                    {
+                        return null;
+                    }
+                }
+                return Consume(")") ? string.Empty : null;
+            }
+
+            var name = Identifier();
+            if (name is null)
+            {
+                return null;
+            }
+            if (StateScalarTypeNames.Contains(name))
+            {
+                return name;
+            }
+            if (name == "Option")
+            {
+                return Consume("<")
+                    && ParseType(false, depth + 1) is not null
+                    && Consume(">")
+                        ? string.Empty
+                        : null;
+            }
+            if (name == "Result")
+            {
+                return Consume("<")
+                    && ParseType(false, depth + 1) is not null
+                    && Consume(", ")
+                    && ParseType(false, depth + 1) is not null
+                    && Consume(">")
+                        ? string.Empty
+                        : null;
+            }
+            if (name == "List")
+            {
+                return Consume("<")
+                    && ParseType(false, depth + 1) is not null
+                    && Consume(", ")
+                    && ListCapacity()
+                    && Consume(">")
+                        ? string.Empty
+                        : null;
+            }
+            if (name == "StateMap")
+            {
+                if (!allowStateMap || !Consume("<"))
+                {
+                    return null;
+                }
+                // Runtime reconstructs only V as StateValueSchemaV1, so the
+                // wrapper and scalar key do not consume value-schema nodes.
+                nodes--;
+                var keyType = Identifier();
+                // EmbeddedStateType depth still includes the map wrapper.
+                return keyType is not null
+                    && StateMapKeyTypeNames.Contains(keyType)
+                    && Consume(", ")
+                    && ParseType(false, depth + 1) is not null
+                    && Consume(">")
+                        ? string.Empty
+                        : null;
+            }
+            if (!IsCanonicalTypeDeclarationIdentifier(name) || !Consume("{"))
+            {
+                return null;
+            }
+            var fields = new HashSet<string>(StringComparer.Ordinal);
+            while (true)
+            {
+                var field = Identifier();
+                if (field is null
+                    || !IsCanonicalBoundaryIdentifier(field)
+                    || !fields.Add(field)
+                    || !Consume(": ")
+                    || ParseType(false, depth + 1) is null)
+                {
+                    return null;
+                }
+                if (Consume("}"))
+                {
+                    return string.Empty;
+                }
+                if (!Consume(", "))
+                {
+                    return null;
+                }
+            }
+        }
+
+        return ParseType(true, 1) is not null && cursor == value.Length;
     }
 
     private static bool IsCanonicalSchemaStructIdentifier(string value)

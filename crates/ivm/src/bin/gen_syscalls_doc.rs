@@ -4,39 +4,19 @@
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --check
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
+
+mod support;
+
+use support::{GeneratedOutput, parse_generation_mode as parse_mode, sync_generated_outputs};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";
 const END: &str = "<!-- END GENERATED SYSCALLS -->";
 const ABI_SYSCALL_GOLDEN_BEGIN: &str = "    // BEGIN GENERATED ABI V1 SYSCALL LIST";
 const ABI_SYSCALL_GOLDEN_END: &str = "    // END GENERATED ABI V1 SYSCALL LIST";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Mode {
-    Write,
-    Check,
-}
-
-fn parse_mode(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
-    let mut mode = None;
-    for arg in args {
-        let requested = match arg.as_str() {
-            "--write" => Mode::Write,
-            "--check" => Mode::Check,
-            _ => {
-                return Err(format!(
-                    "unknown argument `{arg}`; usage: --write or --check"
-                ));
-            }
-        };
-        if mode.replace(requested).is_some() {
-            return Err("select exactly one of --write or --check".to_owned());
-        }
-    }
-    mode.ok_or_else(|| "usage: --write or --check".to_owned())
-}
 
 fn guess_defaults(n: u32) -> (String, String, String) {
     let name = ivm::syscalls::syscall_name(n).unwrap_or("");
@@ -56,13 +36,15 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "u64=0/1".into();
         gas = "G_verify_proof + bytes".into();
     } else if up.contains("VRF_VERIFY_BATCH") || n == 0x67 {
-        args = "r10=&NoritoBytes(VrfVerifyBatchRequest)".into();
+        args =
+            "r10=&NoritoBytes(VrfVerifyBatchRequest), 1..=16 items, canonical frame <=65536 bytes"
+                .into();
         ret = "r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64".into();
-        gas = "G_verify + bytes".into();
+        gas = "64 + 250,000 per examined item + 5 per canonical request byte".into();
     } else if up.contains("VRF_VERIFY") || n == 0x66 {
-        args = "r10=&NoritoBytes(VrfVerifyRequest)".into();
+        args = "r10=&NoritoBytes(VrfVerifyRequest), canonical frame <=65536 bytes".into();
         ret = "r10=ptr (&Blob(32-byte output)), r11=status:u64".into();
-        gas = "G_verify + bytes".into();
+        gas = "64 + 250,000 per examined item + 5 per canonical request byte".into();
     } else if up.contains("VERIFY_PROOF") || n == 0xF6 {
         args = "r10=&NoritoBytes(OpenVerifyEnvelope)".into();
         ret = "r10=0/1, r11=status:u64".into();
@@ -286,7 +268,7 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         gas = "G_scq + query items + encoded bytes".into();
     } else if up == "CORE_QUERY_PAGE" || n == 0x01_0002 {
         args = "r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64".into();
-        ret = "r10=List<View,64> handle, r11=Option<i64> sum handle".into();
+        ret = "r10=List<View,64> handle, r11=Option<int> sum handle".into();
         gas = "G_scq + offset + query items + encoded bytes".into();
     } else if up == "JSON_BUILD" || n == 0x01_004E {
         args = "r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count".into();
@@ -426,10 +408,46 @@ fn rewrite_gas_tokens(gas_raw: &str) -> (String, Vec<String>) {
     (out_gas, gas_keys)
 }
 
-fn unescape_basic_toml_string(value: &str) -> String {
+fn is_valid_gas_token(token: &str) -> bool {
+    token.strip_prefix("G_").is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    })
+}
+
+fn is_valid_explicit_gas_formula(gas: &str) -> bool {
+    gas.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        && gas.contains(" per ")
+        && gas.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b' ' | b',' | b'+' | b'-' | b'/' | b'(' | b')')
+        })
+}
+
+fn parse_basic_toml_string(raw: &str, line_number: usize) -> Result<String, String> {
+    let value = raw
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .ok_or_else(|| {
+            format!(
+                "syscall spec line {line_number}: values must be canonical double-quoted strings"
+            )
+        })?;
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars();
     while let Some(ch) = chars.next() {
+        if ch == '"' {
+            return Err(format!(
+                "syscall spec line {line_number}: unescaped quote in basic string"
+            ));
+        }
+        if ch.is_control() {
+            return Err(format!(
+                "syscall spec line {line_number}: control character in basic string"
+            ));
+        }
         if ch != '\\' {
             out.push(ch);
             continue;
@@ -441,13 +459,149 @@ fn unescape_basic_toml_string(value: &str) -> String {
             Some('r') => out.push('\r'),
             Some('t') => out.push('\t'),
             Some(other) => {
-                out.push('\\');
-                out.push(other);
+                return Err(format!(
+                    "syscall spec line {line_number}: unsupported escape `\\{other}`"
+                ));
             }
-            None => out.push('\\'),
+            None => {
+                return Err(format!(
+                    "syscall spec line {line_number}: trailing backslash in basic string"
+                ));
+            }
         }
     }
-    out
+    Ok(out)
+}
+
+fn parse_syscall_number(value: &str, line_number: usize) -> Result<u32, String> {
+    if let Some(hex) = value.strip_prefix("0x") {
+        if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!(
+                "syscall spec line {line_number}: malformed hexadecimal syscall number `{value}`"
+            ));
+        }
+        return u32::from_str_radix(hex, 16).map_err(|error| {
+            format!(
+                "syscall spec line {line_number}: syscall number `{value}` is outside u32: {error}"
+            )
+        });
+    }
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!(
+            "syscall spec line {line_number}: malformed decimal syscall number `{value}`"
+        ));
+    }
+    value.parse::<u32>().map_err(|error| {
+        format!("syscall spec line {line_number}: syscall number `{value}` is outside u32: {error}")
+    })
+}
+
+fn finish_syscall_spec_row(
+    fields: BTreeMap<String, String>,
+    row_line: usize,
+) -> Result<(u32, String, String, String), String> {
+    let keys = fields.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let expected = ["args", "gas", "number", "ret"]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if keys != expected {
+        let missing = expected.difference(&keys).copied().collect::<Vec<_>>();
+        let unexpected = keys.difference(&expected).copied().collect::<Vec<_>>();
+        return Err(format!(
+            "syscall spec row beginning on line {row_line} has invalid fields; missing={missing:?}, unexpected={unexpected:?}"
+        ));
+    }
+
+    let number_text = fields
+        .get("number")
+        .expect("validated syscall number field");
+    let number = parse_syscall_number(number_text, row_line)?;
+    let args = fields.get("args").expect("validated args field").clone();
+    let ret = fields.get("ret").expect("validated ret field").clone();
+    let gas = fields.get("gas").expect("validated gas field").clone();
+    if args.is_empty() || ret.is_empty() || gas.is_empty() {
+        return Err(format!(
+            "syscall spec row beginning on line {row_line} must define non-empty args, ret, and gas"
+        ));
+    }
+    let (_, gas_tokens) = rewrite_gas_tokens(&gas);
+    let canonical_first_token = gas
+        .split_whitespace()
+        .next()
+        .is_some_and(is_valid_gas_token);
+    let canonical_asset_expression = canonical_first_token
+        && !gas_tokens.is_empty()
+        && gas_tokens.iter().all(|token| is_valid_gas_token(token));
+    let explicit_formula = gas_tokens.is_empty() && is_valid_explicit_gas_formula(&gas);
+    if !canonical_asset_expression && !explicit_formula {
+        return Err(format!(
+            "syscall spec row beginning on line {row_line} must use canonical G_<name> gas tokens or a bounded numeric `per` formula"
+        ));
+    }
+    Ok((number, args, ret, gas))
+}
+
+fn parse_syscall_spec(spec: &str) -> Result<BTreeMap<u32, (String, String, String)>, String> {
+    let mut map = BTreeMap::new();
+    let mut current: Option<(usize, BTreeMap<String, String>)> = None;
+
+    for (line_index, line) in spec.lines().enumerate() {
+        let line_number = line_index + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed == "[[syscall]]" {
+            if let Some((row_line, fields)) = current.take() {
+                let (number, args, ret, gas) = finish_syscall_spec_row(fields, row_line)?;
+                if map.insert(number, (args, ret, gas)).is_some() {
+                    return Err(format!(
+                        "syscall spec line {line_number}: duplicate syscall number 0x{number:06X}"
+                    ));
+                }
+            }
+            current = Some((line_number, BTreeMap::new()));
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            return Err(format!(
+                "syscall spec line {line_number}: unknown table declaration `{trimmed}`"
+            ));
+        }
+        let Some((key, raw_value)) = trimmed.split_once('=') else {
+            return Err(format!(
+                "syscall spec line {line_number}: expected `key = \"value\"`"
+            ));
+        };
+        let key = key.trim();
+        if !matches!(key, "number" | "args" | "ret" | "gas") {
+            return Err(format!(
+                "syscall spec line {line_number}: unknown field `{key}`"
+            ));
+        }
+        let Some((_, fields)) = current.as_mut() else {
+            return Err(format!(
+                "syscall spec line {line_number}: field `{key}` appears outside [[syscall]]"
+            ));
+        };
+        let value = parse_basic_toml_string(raw_value.trim(), line_number)?;
+        if fields.insert(key.to_owned(), value).is_some() {
+            return Err(format!(
+                "syscall spec line {line_number}: duplicate field `{key}`"
+            ));
+        }
+    }
+
+    let Some((row_line, fields)) = current.take() else {
+        return Err("syscall spec contains no [[syscall]] rows".to_owned());
+    };
+    let (number, args, ret, gas) = finish_syscall_spec_row(fields, row_line)?;
+    if map.insert(number, (args, ret, gas)).is_some() {
+        return Err(format!(
+            "syscall spec row beginning on line {row_line}: duplicate syscall number 0x{number:06X}"
+        ));
+    }
+    Ok(map)
 }
 
 fn escape_rust_string_literal(value: &str) -> String {
@@ -473,38 +627,86 @@ fn render_table(map: &std::collections::BTreeMap<u32, (String, String, String)>)
 
 fn render_docs(text: &str, table: &str) -> Result<String, String> {
     let replacement = format!("{BEGIN}\n{table}{END}\n");
-    let begin = text.find(BEGIN);
-    let end = text.find(END);
-    match (begin, end) {
-        (Some(begin), Some(end)) if begin < end => {
-            if text[begin + BEGIN.len()..].contains(BEGIN) || text[end + END.len()..].contains(END)
-            {
-                return Err("syscalls.md contains duplicate generated-section markers".to_owned());
-            }
-            let mut replace_end = end + END.len();
-            if text[replace_end..].starts_with('\n') {
-                replace_end += 1;
-            }
-            let mut rendered =
-                String::with_capacity(text.len() - (replace_end - begin) + replacement.len());
-            rendered.push_str(&text[..begin]);
-            rendered.push_str(&replacement);
-            rendered.push_str(&text[replace_end..]);
-            Ok(rendered)
-        }
-        (None, None) => {
-            let mut rendered = text.to_owned();
-            if !rendered.is_empty() {
-                if !rendered.ends_with('\n') {
-                    rendered.push('\n');
-                }
-                rendered.push('\n');
-            }
-            rendered.push_str(&replacement);
-            Ok(rendered)
-        }
-        _ => Err("syscalls.md contains malformed generated-section markers".to_owned()),
+    let begin_matches = text.match_indices(BEGIN).collect::<Vec<_>>();
+    let end_matches = text.match_indices(END).collect::<Vec<_>>();
+    if begin_matches.len() != 1 || end_matches.len() != 1 {
+        return Err(format!(
+            "syscalls.md must contain exactly one generated-section marker pair; begin={}, end={}",
+            begin_matches.len(),
+            end_matches.len()
+        ));
     }
+    let begin = begin_matches[0].0;
+    let end_start = end_matches[0].0;
+    if end_start <= begin {
+        return Err("syscalls.md generated-section end marker precedes begin marker".to_owned());
+    }
+    let mut replace_end = end_start + END.len();
+    if text[replace_end..].starts_with('\n') {
+        replace_end += 1;
+    }
+    let mut rendered =
+        String::with_capacity(text.len() - (replace_end - begin) + replacement.len());
+    rendered.push_str(&text[..begin]);
+    rendered.push_str(&replacement);
+    rendered.push_str(&text[replace_end..]);
+    Ok(rendered)
+}
+
+fn gas_prose_tokens(text: &str) -> BTreeSet<String> {
+    let mut tokens = BTreeSet::new();
+    for line in text.lines() {
+        if let Some(index) = line.find("Gas:") {
+            let tail = &line[index + 4..];
+            for segment in tail.split(&['+', '|', '—'][..]) {
+                let segment = segment.trim();
+                if let Some(position) = segment.find('G') {
+                    let candidate = &segment[position..];
+                    let end = candidate
+                        .char_indices()
+                        .find_map(|(index, character)| {
+                            (!(character == '_' || character.is_ascii_alphanumeric()))
+                                .then_some(index)
+                        })
+                        .unwrap_or(candidate.len());
+                    if end > 1 {
+                        tokens.insert(candidate[..end].to_owned());
+                    }
+                }
+            }
+        }
+    }
+    tokens
+}
+
+fn validate_gas_prose(text: &str, generated_tokens: &BTreeSet<String>) -> Result<(), String> {
+    let invalid_generated = generated_tokens
+        .iter()
+        .filter(|token| !is_valid_gas_token(token))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !invalid_generated.is_empty() {
+        return Err(format!(
+            "canonical syscall spec contains invalid gas tokens: {}",
+            invalid_generated.join(", ")
+        ));
+    }
+
+    let prose_tokens = gas_prose_tokens(text);
+    if prose_tokens == *generated_tokens {
+        return Ok(());
+    }
+    let prose_only = prose_tokens
+        .difference(generated_tokens)
+        .cloned()
+        .collect::<Vec<_>>();
+    let spec_only = generated_tokens
+        .difference(&prose_tokens)
+        .cloned()
+        .collect::<Vec<_>>();
+    Err(format!(
+        "syscall gas prose does not exactly match canonical spec tokens; prose_only={prose_only:?}, spec_only={spec_only:?}"
+    ))
 }
 
 fn replace_generated_section(
@@ -573,31 +775,13 @@ fn render_abi_syscall_golden_section(numbers: &[u32]) -> Result<String, String> 
     Ok(rendered)
 }
 
-fn sync_generated_file(
-    path: &Path,
-    expected: &str,
-    mode: Mode,
-    regenerate_command: &str,
-) -> Result<bool, String> {
-    let current = match fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(format!("failed to read {}: {error}", path.display())),
-    };
-    if current.as_deref() == Some(expected.as_bytes()) {
-        return Ok(false);
-    }
-    match mode {
-        Mode::Check => Err(format!(
-            "{} is out of date; run: {regenerate_command}",
-            path.display()
-        )),
-        Mode::Write => {
-            fs::write(path, expected)
-                .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
-            Ok(true)
-        }
-    }
+fn prepare_exact_outputs(
+    outputs: impl IntoIterator<Item = (PathBuf, String)>,
+) -> Result<Vec<GeneratedOutput>, String> {
+    outputs
+        .into_iter()
+        .map(|(path, expected)| GeneratedOutput::exact(path, expected))
+        .collect()
 }
 
 fn main() {
@@ -616,57 +800,12 @@ fn main() {
     // documentation. Heuristic defaults are diagnostic suggestions only.
     let spec_path = PathBuf::from(manifest_dir).join("spec/syscalls.toml");
     let spec = fs::read_to_string(&spec_path).expect("read canonical syscall spec");
-    let mut map: std::collections::BTreeMap<u32, (String, String, String)> = Default::default();
-    {
-        let s = spec.as_str();
-        // Very small, ad-hoc parser: supports arrays of tables [[syscall]] with number,args,ret,gas
-        // number accepted as hex string (e.g., "0xA4") or decimal.
-        let mut cur: Option<(u32, String, String, String)> = None;
-        for line in s.lines() {
-            let t = line.trim();
-            if t.starts_with("[[syscall]]") {
-                if let Some((n, a, r, g)) = cur.take() {
-                    assert!(
-                        map.insert(n, (a, r, g)).is_none(),
-                        "duplicate syscall spec row for 0x{n:06X}"
-                    );
-                }
-                cur = Some((0, String::new(), String::new(), String::new()));
-                continue;
-            }
-            if let Some(eq) = t.find('=') {
-                let key = t[..eq].trim();
-                let mut val = t[eq + 1..].trim().to_owned();
-                if let Some(v) = val.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
-                    val = unescape_basic_toml_string(v);
-                }
-                if let Some(tuple) = cur.as_mut() {
-                    match key {
-                        "number" => {
-                            let n = if let Some(hex) = val.strip_prefix("0x") {
-                                u32::from_str_radix(hex, 16).unwrap_or(0)
-                            } else {
-                                val.parse::<u32>().unwrap_or(0)
-                            };
-                            tuple.0 = n;
-                        }
-                        "args" => tuple.1 = val.clone(),
-                        "ret" => tuple.2 = val.clone(),
-                        "gas" => tuple.3 = val.clone(),
-                        _ => {}
-                    }
-                }
-            }
-        }
-        if let Some((n, a, r, g)) = cur.take()
-            && (n != 0 || !a.is_empty() || !r.is_empty() || !g.is_empty())
-        {
-            assert!(
-                map.insert(n, (a, r, g)).is_none(),
-                "duplicate syscall spec row for 0x{n:06X}"
-            );
-        }
-    }
+    let map = parse_syscall_spec(&spec).unwrap_or_else(|error| {
+        panic!(
+            "parse canonical syscall spec {}: {error}",
+            spec_path.display()
+        )
+    });
 
     let allowed = ivm::syscalls::abi_syscall_list()
         .iter()
@@ -732,63 +871,9 @@ fn main() {
         }
         gbuf.push_str("];\n");
 
-        // Lint prose gas tokens in docs against generated gas assets
-        let mut prose_tokens: std::collections::BTreeSet<String> = Default::default();
-        // Parse from prose lines that mention "Gas:" and extract tokens like G_name
-        for line in text.lines() {
-            if let Some(ix) = line.find("Gas:") {
-                let tail = &line[ix + 4..];
-                for seg in tail.split(&['+', '|', '—'][..]) {
-                    let s = seg.trim();
-                    if let Some(pos) = s.find('G') {
-                        let token = &s[pos..];
-                        let mut end = token.len();
-                        for (i, ch) in token.chars().enumerate() {
-                            if !(ch == '_' || ch.is_ascii_alphanumeric()) {
-                                end = i;
-                                break;
-                            }
-                        }
-                        if end > 1 {
-                            prose_tokens.insert(token[..end].to_string());
-                        }
-                    }
-                }
-            }
-        }
-        let code_tokens: std::collections::BTreeSet<String> = gas_keys.clone();
-        // Suppress warnings for known experimental/excluded tokens
-        // Add future experimental gas tokens here to avoid noisy lints until prose/spec catch up.
-        let suppress: std::collections::BTreeSet<String> = [
-            "G_verify_sig",
-            // Often generated but not always mentioned explicitly in prose sections:
-            "G_alloc",
-            "G_get_pub",
-        ]
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-        let prose_minus_code: Vec<_> = prose_tokens
-            .difference(&code_tokens)
-            .filter(|t| !suppress.contains(*t))
-            .cloned()
-            .collect();
-        let code_minus_prose: Vec<_> = code_tokens
-            .difference(&prose_tokens)
-            .filter(|t| !suppress.contains(*t))
-            .cloned()
-            .collect();
-        if !prose_minus_code.is_empty() {
-            eprintln!(
-                "[gen_syscalls_doc] Warning: prose Gas tokens not in generated assets: {}",
-                prose_minus_code.join(", ")
-            );
-        }
-        if !code_minus_prose.is_empty() {
-            eprintln!(
-                "[gen_syscalls_doc] Warning: generated Gas tokens not mentioned in prose: {}",
-                code_minus_prose.join(", ")
-            );
+        if let Err(error) = validate_gas_prose(&text, &gas_keys) {
+            eprintln!("{error}");
+            std::process::exit(1);
         }
         (buf, gbuf)
     };
@@ -832,42 +917,33 @@ fn main() {
     let code_path = abi_src_dir.join("syscalls_doc_gen.rs");
     let gas_code_path = abi_src_dir.join("gas_spec.rs");
     let regenerate_command = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write";
-    let outputs = [
-        (&code_path, generated_docs_code.as_str()),
-        (&gas_code_path, generated_gas_code.as_str()),
-        (&path, rendered_docs.as_str()),
-        (
-            &abi_syscall_golden_path,
-            rendered_abi_syscall_golden.as_str(),
-        ),
-    ];
-    let mut failures = Vec::new();
-    for (output_path, expected) in outputs {
-        match sync_generated_file(output_path, expected, mode, regenerate_command) {
-            Ok(true) => eprintln!("updated: {}", output_path.display()),
-            Ok(false) => {}
-            Err(error) => failures.push(error),
-        }
-    }
-    if !failures.is_empty() {
-        for failure in failures {
-            eprintln!("{failure}");
-        }
-        std::process::exit(1);
+    let outputs = prepare_exact_outputs([
+        (code_path, generated_docs_code),
+        (gas_code_path, generated_gas_code),
+        (path, rendered_docs),
+        (abi_syscall_golden_path, rendered_abi_syscall_golden),
+    ])
+    .unwrap_or_else(|error| panic!("prepare generated syscall outputs: {error}"));
+    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+        .unwrap_or_else(|error| panic!("{error}"));
+    for output_path in updated {
+        eprintln!("updated: {}", output_path.display());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeSet,
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
 
+    use super::support::GenerationMode as Mode;
     use super::{
-        ABI_SYSCALL_GOLDEN_BEGIN, ABI_SYSCALL_GOLDEN_END, BEGIN, END, Mode, parse_mode,
-        render_abi_syscall_golden_section, render_docs, replace_generated_section,
-        rewrite_gas_tokens, sync_generated_file,
+        ABI_SYSCALL_GOLDEN_BEGIN, ABI_SYSCALL_GOLDEN_END, BEGIN, END, parse_mode,
+        parse_syscall_spec, prepare_exact_outputs, render_abi_syscall_golden_section, render_docs,
+        replace_generated_section, rewrite_gas_tokens, sync_generated_outputs, validate_gas_prose,
     };
 
     static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
@@ -901,6 +977,102 @@ mod tests {
         assert!(parse_mode(["--no-code".to_owned()]).is_err());
     }
 
+    fn valid_spec_row(number: &str) -> String {
+        format!(
+            r#"[[syscall]]
+number = "{number}"
+args = "r10=\"value\""
+ret = "u64=0"
+gas = "G_test + bytes"
+"#
+        )
+    }
+
+    #[test]
+    fn syscall_spec_parser_accepts_only_complete_canonical_rows() {
+        let parsed = parse_syscall_spec(&valid_spec_row("0x01")).expect("parse canonical row");
+        assert_eq!(
+            parsed.get(&1),
+            Some(&(
+                "r10=\"value\"".to_owned(),
+                "u64=0".to_owned(),
+                "G_test + bytes".to_owned(),
+            ))
+        );
+        let explicit_formula = valid_spec_row("0x02")
+            .replace("G_test + bytes", "250,000 per proof + 5 per encoded byte");
+        assert!(parse_syscall_spec(&explicit_formula).is_ok());
+
+        assert!(parse_syscall_spec("").is_err());
+        assert!(parse_syscall_spec("[[other]]\n").is_err());
+        assert!(
+            parse_syscall_spec(
+                "[[syscall]]\nnumber = \"0x01\"\nargs = \"-\"\nret = \"-\"\nunknown = \"x\"\ngas = \"G_test\"\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_syscall_spec(
+                "[[syscall]]\nnumber = \"not-a-number\"\nargs = \"-\"\nret = \"-\"\ngas = \"G_test\"\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_syscall_spec(
+                "[[syscall]]\nnumber = 1\nargs = \"-\"\nret = \"-\"\ngas = \"G_test\"\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_syscall_spec(
+                "[[syscall]]\nnumber = \"1\"\nnumber = \"2\"\nargs = \"-\"\nret = \"-\"\ngas = \"G_test\"\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_syscall_spec(
+                "[[syscall]]\nnumber = \"1\"\nargs = \"\\u0041\"\nret = \"-\"\ngas = \"G_test\"\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_syscall_spec(
+                "[[syscall]]\nnumber = \"1\"\nargs = \"-\"\nret = \"-\"\ngas = \"bytes only\"\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_syscall_spec("[[syscall]]\nnumber = \"1\"\nargs = \"-\"\nret = \"-\"\n").is_err()
+        );
+
+        let duplicate = format!("{}{}", valid_spec_row("1"), valid_spec_row("0x01"));
+        assert!(parse_syscall_spec(&duplicate).is_err());
+    }
+
+    #[test]
+    fn gas_prose_must_exactly_cover_generated_tokens_without_exceptions() {
+        let generated = ["G_alloc".to_owned(), "G_test".to_owned()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let prose = "- allocation — Gas: G_alloc + bytes\n- test — Gas: G_test\n";
+        assert!(validate_gas_prose(prose, &generated).is_ok());
+        assert!(validate_gas_prose("- test — Gas: G_test\n", &generated).is_err());
+        assert!(
+            validate_gas_prose(
+                "- allocation — Gas: G_alloc\n- test — Gas: G_test\n- stray — Gas: G_extra\n",
+                &generated
+            )
+            .is_err()
+        );
+        assert!(
+            validate_gas_prose(
+                prose,
+                &["Garbage".to_owned()].into_iter().collect::<BTreeSet<_>>()
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn document_rendering_is_idempotent() {
         let table = "| Number |\n|---|\n";
@@ -911,14 +1083,10 @@ mod tests {
             rendered
         );
 
-        let without_markers = "prose\n";
-        let appended = render_docs(without_markers, table).expect("append generated section");
-        assert_eq!(
-            render_docs(&appended, table).expect("render appended section again"),
-            appended
-        );
+        assert!(render_docs("prose\n", table).is_err());
 
         assert!(render_docs(&format!("{BEGIN}\nunterminated\n"), table).is_err());
+        assert!(render_docs(&format!("{END}\n{BEGIN}\n"), table).is_err());
         assert!(
             render_docs(
                 &format!("{BEGIN}\none\n{END}\n{BEGIN}\ntwo\n{END}\n"),
@@ -974,8 +1142,10 @@ mod tests {
         let path = temp_file("asset.rs");
         fs::write(&path, "stale\n").expect("create stale generated asset");
         let before = fs::read(&path).expect("read stale generated asset");
+        let outputs = prepare_exact_outputs([(path.clone(), "current\n".to_owned())])
+            .expect("prepare generated asset");
 
-        let error = sync_generated_file(&path, "current\n", Mode::Check, "generator --write")
+        let error = sync_generated_outputs(&outputs, Mode::Check, "generator --write")
             .expect_err("check must reject stale output");
         assert!(error.contains("generator --write"));
         assert_eq!(
@@ -984,42 +1154,64 @@ mod tests {
             "check mode must not mutate stale output"
         );
 
-        assert!(
-            sync_generated_file(&path, "current\n", Mode::Write, "generator --write")
-                .expect("publish generated output")
+        assert_eq!(
+            sync_generated_outputs(&outputs, Mode::Write, "generator --write")
+                .expect("publish generated output"),
+            [path.clone()]
         );
         assert_eq!(
             fs::read_to_string(&path).expect("read published output"),
             "current\n"
         );
+        let current_outputs = prepare_exact_outputs([(path.clone(), "current\n".to_owned())])
+            .expect("prepare current generated asset");
         assert!(
-            !sync_generated_file(&path, "current\n", Mode::Write, "generator --write")
+            sync_generated_outputs(&current_outputs, Mode::Write, "generator --write")
                 .expect("repeat publication")
+                .is_empty()
         );
 
         fs::remove_file(path).expect("remove temporary generated asset");
 
         let missing_path = temp_file("missing.rs");
-        sync_generated_file(
-            &missing_path,
-            "generated\n",
-            Mode::Check,
-            "generator --write",
-        )
-        .expect_err("check must reject a missing output");
+        let missing_outputs =
+            prepare_exact_outputs([(missing_path.clone(), "generated\n".to_owned())])
+                .expect("prepare missing generated output");
+        sync_generated_outputs(&missing_outputs, Mode::Check, "generator --write")
+            .expect_err("check must reject a missing output");
         assert!(
             !missing_path.exists(),
             "check mode must not create a missing output"
         );
-        assert!(
-            sync_generated_file(
-                &missing_path,
-                "generated\n",
-                Mode::Write,
-                "generator --write",
-            )
-            .expect("create missing generated output")
+        assert_eq!(
+            sync_generated_outputs(&missing_outputs, Mode::Write, "generator --write")
+                .expect("create missing generated output"),
+            [missing_path.clone()]
         );
-        fs::remove_file(missing_path).expect("remove temporary generated asset");
+        fs::remove_file(missing_path).expect("remove generated output");
+    }
+
+    #[test]
+    fn late_invalid_destination_does_not_publish_earlier_asset() {
+        let first = temp_file("first.rs");
+        let second = temp_file("second.rs");
+        fs::write(&first, "stale\n").expect("write first generated asset");
+        fs::create_dir(&second).expect("create invalid later destination");
+        let before = fs::read(&first).expect("snapshot first generated asset");
+
+        assert!(
+            prepare_exact_outputs([
+                (first.clone(), "current\n".to_owned()),
+                (second.clone(), "generated\n".to_owned()),
+            ])
+            .is_err()
+        );
+        assert_eq!(
+            fs::read(&first).expect("read first after late failure"),
+            before
+        );
+
+        fs::remove_file(first).expect("remove first generated asset");
+        fs::remove_dir(second).expect("remove invalid destination");
     }
 }

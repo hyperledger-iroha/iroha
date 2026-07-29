@@ -1784,6 +1784,8 @@ mod tests {
             "orchard:mainnet-ready",
             "penumbra-masp:external-security-review",
             "jindo-lattice-pcs-zk:release-ready",
+            "sis-hints-anoncred-pq-v0",
+            "sis-with-hints",
             "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
             "stark/fri/boi-audited",
             "stark/fri/external-security-review",

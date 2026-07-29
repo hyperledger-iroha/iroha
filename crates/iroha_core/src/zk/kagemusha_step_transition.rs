@@ -512,7 +512,7 @@ fn put_amount(
 }
 
 fn canonical_binding_digest<T: Encode>(value: &T) -> Result<[u8; 32], String> {
-    let encoded = norito::to_bytes(value)
+    let encoded = norito::encode_canonical(value)
         .map_err(|error| format!("failed to encode Kagemusha Step binding: {error}"))?;
     Ok(iroha_zkp_halo2::poseidon::hash_bytes(&encoded))
 }
@@ -2719,6 +2719,24 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn step_binding_digest_ignores_ambient_norito_layout() {
+        let binding = "kagemusha-step-binding".to_owned();
+        let expected = canonical_binding_digest(&binding).expect("canonical binding digest");
+        let canonical = norito::encode_canonical(&binding).expect("canonical binding frame");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&binding).expect("alternate-layout binding frame"),
+            canonical
+        );
+        assert_eq!(
+            canonical_binding_digest(&binding).expect("ambient-independent binding digest"),
+            expected
+        );
+    }
 
     #[test]
     fn v4_operation_constructors_have_direct_typed_inputs() {

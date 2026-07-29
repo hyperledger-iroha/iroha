@@ -25,14 +25,12 @@ use super::{
         JINDO_DECOMPOSED_NORM_SQUARED_BOUND_V1, JINDO_RESPONSE_NORM_SQUARED_BOUND_V1,
         two_norm_squared_is_below_v1,
     },
-    parameters::{JINDO_PARAMETER_MANIFEST_V1, JINDO_PARAMETERS_V1},
+    parameters::{JINDO_PARAMETER_MANIFEST_V1, JINDO_PARAMETERS_V1, JindoGaussianWidthV1},
     ring::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
     sampling::{
-        JINDO_ECD_BLIND_STD_DEV_V1, JINDO_ECD_STD_DEV_V1, JINDO_MASK_BLIND_STD_DEV_V1,
-        JINDO_MASK_MLWE_STD_DEV_V1, JINDO_MASK_STD_DEV_V1, JINDO_MLWE_STD_DEV_V1,
-        JindoSamplingErrorV1, randomized_encode_coefficient_slots_v1,
+        JindoSamplingErrorV1, health_checked_jindo_rng_v1, randomized_encode_coefficient_slots_v1,
         sample_gaussian_polynomial_v1, sample_uniform_field_element_v1,
     },
     transcript::{JindoTranscriptErrorV1, JindoTranscriptV1},
@@ -262,6 +260,28 @@ where
     R: CryptoRng + RngCore,
 {
     let polynomial = parse_polynomial(coefficients, 0)?;
+    let mut checked_rng = health_checked_jindo_rng_v1(rng)?;
+    commit_parsed_polynomial_v1(polynomial, &mut checked_rng)
+}
+
+pub(super) fn commit_polynomial_with_checked_rng_v1<R>(
+    coefficients: &[PrivacyJindoFieldElementV1],
+    rng: &mut R,
+) -> Result<(PrivacyJindoLatticeCommitmentV1, JindoOpeningV1), JindoErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    let polynomial = parse_polynomial(coefficients, 0)?;
+    commit_parsed_polynomial_v1(polynomial, rng)
+}
+
+fn commit_parsed_polynomial_v1<R>(
+    polynomial: Zeroizing<Vec<JindoFieldElementV1>>,
+    rng: &mut R,
+) -> Result<(PrivacyJindoLatticeCommitmentV1, JindoOpeningV1), JindoErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
     let (first_row, last_row) = split_boundary_rows(&polynomial, rng)?;
 
     let mut encoded_columns = Zeroizing::new(vec![
@@ -270,7 +290,7 @@ where
     ]);
     encoded_columns[0].push(randomized_encode_coefficient_slots_v1(
         first_row.as_ref(),
-        JINDO_ECD_BLIND_STD_DEV_V1,
+        JindoGaussianWidthV1::EcdBlind,
         rng,
     )?);
     for row in 1..(JINDO_PARAMETERS_V1.rows - 1) {
@@ -278,13 +298,13 @@ where
         let end = start + JINDO_ENCODING_SLOTS_V1;
         encoded_columns[0].push(randomized_encode_coefficient_slots_v1(
             &polynomial[start..end],
-            JINDO_ECD_STD_DEV_V1,
+            JindoGaussianWidthV1::Ecd,
             rng,
         )?);
     }
     encoded_columns[0].push(randomized_encode_coefficient_slots_v1(
         last_row.as_ref(),
-        JINDO_ECD_STD_DEV_V1,
+        JindoGaussianWidthV1::Ecd,
         rng,
     )?);
 
@@ -293,30 +313,30 @@ where
         for value in mask.iter_mut() {
             *value = sample_uniform_field_element_v1(rng)?;
         }
-        let standard_deviation = if row == 0 {
-            JINDO_MASK_BLIND_STD_DEV_V1
+        let width = if row == 0 {
+            JindoGaussianWidthV1::MaskBlind
         } else {
-            JINDO_MASK_STD_DEV_V1
+            JindoGaussianWidthV1::Mask
         };
         encoded_columns[1].push(randomized_encode_coefficient_slots_v1(
             mask.as_ref(),
-            standard_deviation,
+            width,
             rng,
         )?);
     }
 
     let mut mlwe_columns = Zeroizing::new(Vec::with_capacity(JINDO_PARAMETERS_V1.columns + 1));
     for column in 0..=JINDO_PARAMETERS_V1.columns {
-        let standard_deviation = if column == JINDO_PARAMETERS_V1.columns {
-            JINDO_MASK_MLWE_STD_DEV_V1
+        let width = if column == JINDO_PARAMETERS_V1.columns {
+            JindoGaussianWidthV1::MaskMlwe
         } else {
-            JINDO_MLWE_STD_DEV_V1
+            JindoGaussianWidthV1::Mlwe
         };
         let value_count = JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank;
         mlwe_columns.push(Vec::with_capacity(value_count));
         for _ in 0..value_count {
             mlwe_columns[column].push(sample_gaussian_polynomial_v1(
-                standard_deviation,
+                width,
                 JINDO_INNER_MODULI_V1,
                 rng,
             )?);
@@ -1844,7 +1864,7 @@ mod tests {
         assert!(matches!(
             commit_polynomial_v1(&[field(1)], &mut NonCanonicalFieldRng),
             Err(JindoErrorV1::Sampling(
-                JindoSamplingErrorV1::FieldRejectionBudgetExhausted
+                JindoSamplingErrorV1::RandomnessHealthCheckFailed
             ))
         ));
     }

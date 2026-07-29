@@ -115,7 +115,7 @@ class IrohaPeerNfcAdversarialV1Test {
         val request = message(IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x51, 300)
         val payment = message(IrohaPeerPayloadKind.PAYMENT, 0x52, 300)
         val identity = IrohaPeerNfcRequestIdentityV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             session,
             request.canonicalHash,
             request.wireHash,
@@ -153,7 +153,7 @@ class IrohaPeerNfcAdversarialV1Test {
     fun `reader rejects oversize request before read or value creation`() {
         val request = message(IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x61, 300)
         val identity = IrohaPeerNfcRequestIdentityV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             session,
             request.canonicalHash,
             request.wireHash,
@@ -170,7 +170,7 @@ class IrohaPeerNfcAdversarialV1Test {
         var valueCreationCalls = 0
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNfcReaderExchangeV1.run(
-                IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.OFFLINE_NOTE),
+                IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND),
                 IrohaPeerNfcReaderTransceiverV1 { command ->
                     commands += command.type
                     when (command.type) {
@@ -204,7 +204,7 @@ class IrohaPeerNfcAdversarialV1Test {
         val commands = mutableListOf<IrohaPeerNfcCommandTypeV1>()
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNfcReaderExchangeV1.run(
-                IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.OFFLINE_NOTE),
+                IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND),
                 IrohaPeerNfcReaderTransceiverV1 { command ->
                     commands += command.type
                     IrohaPeerNfcReaderResponseV1.success(byteArrayOf(0))
@@ -223,7 +223,7 @@ class IrohaPeerNfcAdversarialV1Test {
     fun `reader rejects response longer than requested read`() {
         val request = message(IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x71, 120)
         val identity = IrohaPeerNfcRequestIdentityV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             session,
             request.canonicalHash,
             request.wireHash,
@@ -239,7 +239,7 @@ class IrohaPeerNfcAdversarialV1Test {
         val commands = mutableListOf<IrohaPeerNfcCommandTypeV1>()
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNfcReaderExchangeV1.run(
-                IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.OFFLINE_NOTE),
+                IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND),
                 IrohaPeerNfcReaderTransceiverV1 { command ->
                     commands += command.type
                     when (command.type) {
@@ -276,10 +276,8 @@ class IrohaPeerNfcAdversarialV1Test {
         kind: IrohaPeerPayloadKind,
         repeated: Int,
         count: Int,
-    ) = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-        IrohaPeerPayloadProfile.OFFLINE_NOTE,
+    ) = IrohaPeerKagemushaStructuralTestV1.message(
         kind,
-        1,
         ByteArray(count) { repeated.toByte() },
-    ))
+    )
 }

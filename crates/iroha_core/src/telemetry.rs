@@ -2848,11 +2848,6 @@ impl StateTelemetry {
         reason: AxtRejectReason,
         snapshot_version: u64,
     ) {
-        let resolved_version = if snapshot_version == 0 {
-            self.axt_policy_snapshot_version.load(Ordering::SeqCst)
-        } else {
-            snapshot_version
-        };
         {
             let mut guard = self
                 .axt_last_policy_reject
@@ -2861,7 +2856,7 @@ impl StateTelemetry {
             *guard = Some(AxtPolicyRejectSnapshot {
                 lane,
                 reason,
-                snapshot_version: resolved_version,
+                snapshot_version,
             });
         }
         if self.nexus_lane_metrics_enabled() {
@@ -3070,13 +3065,8 @@ impl StateTelemetry {
 
     /// Set the version hash for the AXT policy snapshot used when hydrating the host.
     pub fn set_axt_policy_snapshot_version(&self, snapshot: &AxtPolicySnapshot) {
-        let version = if snapshot.entries.is_empty() {
-            0
-        } else if snapshot.version != 0 {
-            snapshot.version
-        } else {
-            AxtPolicySnapshot::compute_version(&snapshot.entries)
-        };
+        debug_assert!(snapshot.validate().is_ok());
+        let version = snapshot.version;
         self.axt_policy_snapshot_version
             .store(version, Ordering::SeqCst);
         if !self.is_enabled() {
@@ -5991,13 +5981,8 @@ impl Telemetry {
         if !self.enabled.load(Ordering::Relaxed) {
             return;
         }
-        let version = if snapshot.entries.is_empty() {
-            0
-        } else if snapshot.version != 0 {
-            snapshot.version
-        } else {
-            AxtPolicySnapshot::compute_version(&snapshot.entries)
-        };
+        debug_assert!(snapshot.validate().is_ok());
+        let version = snapshot.version;
         self.metrics.axt_policy_snapshot_version.set(version);
     }
 
@@ -11148,19 +11133,30 @@ mod tests {
                 current_slot: 0,
             },
         };
+        let entries = vec![entry];
+        let policy_version = AxtPolicySnapshot::compute_version(&entries);
         telemetry.set_axt_policy_snapshot_version(&AxtPolicySnapshot {
-            version: 99,
-            entries: vec![entry],
+            version: policy_version,
+            entries,
         });
         telemetry.set_axt_proof_cache_state(dsid, "hit", [1; 32], 3, Some(4));
         let debug_status = telemetry.axt_debug_status();
-        assert_eq!(debug_status.policy_snapshot_version, 99);
+        assert_eq!(debug_status.policy_snapshot_version, policy_version);
         assert_eq!(
             debug_status.last_reject.as_ref().map(|r| r.reason),
             Some(AxtRejectReason::Expiry)
         );
         assert_eq!(debug_status.hints.len(), 1);
         assert_eq!(debug_status.cache.len(), 1);
+
+        telemetry.note_axt_policy_reject(lane, AxtRejectReason::Budget, 0);
+        let empty_snapshot_reject = telemetry
+            .axt_policy_reject_snapshot()
+            .expect("zero-version rejection recorded");
+        assert_eq!(
+            empty_snapshot_reject.snapshot_version, 0,
+            "the exact empty-snapshot version must not fall back to a cached non-zero version"
+        );
     }
 
     #[test]

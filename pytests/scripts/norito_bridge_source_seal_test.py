@@ -82,7 +82,10 @@ def test_explicit_symlink_is_rejected(source_fixture: Path) -> None:
     lock.unlink()
     lock.symlink_to("Cargo.toml")
 
-    with pytest.raises(RuntimeError, match="explicit source-seal input is symlinked: Cargo.lock"):
+    with pytest.raises(
+        RuntimeError,
+        match="selected Cargo lock must be a non-symbolic regular file",
+    ):
         SOURCE_SEAL.listed_files(source_fixture, ["Cargo.lock", "Cargo.toml"])
 
 
@@ -121,7 +124,11 @@ def test_android_inputs_and_targets_are_platform_specific(
     apple_package.write_text("// fixture\n", encoding="utf-8")
     observed_targets: list[tuple[str, ...]] = []
 
-    def dependency_roots(_root: Path, targets: tuple[str, ...]) -> set[str]:
+    def dependency_roots(
+        _root: Path,
+        targets: tuple[str, ...],
+        _lockfile_path: Path | None = None,
+    ) -> set[str]:
         observed_targets.append(tuple(targets))
         return {"bridge-src"}
 
@@ -167,7 +174,7 @@ def test_android_fingerprint_binds_each_shipping_jvm_source_tree(
     monkeypatch.setattr(
         SOURCE_SEAL,
         "local_dependency_roots",
-        lambda _root, _targets: {"bridge-src"},
+        lambda _root, _targets, _lockfile_path=None: {"bridge-src"},
     )
 
     android_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "android")
@@ -209,7 +216,7 @@ def test_android_snapshot_rejects_source_change_between_abi_builds(
     monkeypatch.setattr(
         SOURCE_SEAL,
         "seal_inputs",
-        lambda _root, platform="apple": inputs,
+        lambda _root, platform="apple", _lockfile_path=None: inputs,
     )
     snapshot_path = source_fixture / "android-source-seal.json"
     snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))
@@ -230,7 +237,7 @@ def test_android_snapshot_rejects_commit_drift_with_unchanged_selected_source(
     monkeypatch.setattr(
         SOURCE_SEAL,
         "seal_inputs",
-        lambda _root, platform="apple": inputs,
+        lambda _root, platform="apple", _lockfile_path=None: inputs,
     )
     snapshot_path = source_fixture / "android-source-seal.json"
     snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))
@@ -249,12 +256,20 @@ def test_android_snapshot_rejects_commit_drift_during_authentication(
     monkeypatch.setattr(
         SOURCE_SEAL,
         "seal_inputs",
-        lambda _root, platform="apple": ["Cargo.toml"],
+        lambda _root, platform="apple", _lockfile_path=None: ["Cargo.toml"],
     )
     commits = iter(("0" * 40, "1" * 40))
     monkeypatch.setattr(SOURCE_SEAL, "source_commit", lambda _root: next(commits))
-    monkeypatch.setattr(SOURCE_SEAL, "status", lambda _root, _inputs: "")
-    monkeypatch.setattr(SOURCE_SEAL, "fingerprint", lambda _root, _inputs: "a" * 64)
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "status",
+        lambda _root, _inputs, _lockfile_path=None: "",
+    )
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "fingerprint",
+        lambda _root, _inputs, _lockfile_path=None: "a" * 64,
+    )
 
     with pytest.raises(RuntimeError, match="source commit changed while authenticating"):
         SOURCE_SEAL.snapshot(source_fixture, "android")
@@ -266,15 +281,19 @@ def test_android_snapshot_rejects_selected_source_drift_during_authentication(
     monkeypatch.setattr(
         SOURCE_SEAL,
         "seal_inputs",
-        lambda _root, platform="apple": ["Cargo.toml"],
+        lambda _root, platform="apple", _lockfile_path=None: ["Cargo.toml"],
     )
     fingerprints = iter(("a" * 64, "b" * 64))
     monkeypatch.setattr(SOURCE_SEAL, "source_commit", lambda _root: "0" * 40)
-    monkeypatch.setattr(SOURCE_SEAL, "status", lambda _root, _inputs: "")
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "status",
+        lambda _root, _inputs, _lockfile_path=None: "",
+    )
     monkeypatch.setattr(
         SOURCE_SEAL,
         "fingerprint",
-        lambda _root, _inputs: next(fingerprints),
+        lambda _root, _inputs, _lockfile_path=None: next(fingerprints),
     )
 
     with pytest.raises(RuntimeError, match="selected source changed while authenticating"):
@@ -287,7 +306,11 @@ def test_android_snapshot_rejects_tampering(
     monkeypatch.setattr(
         SOURCE_SEAL,
         "seal_inputs",
-        lambda _root, platform="apple": ["Cargo.lock", "Cargo.toml", "bridge-src"],
+        lambda _root, platform="apple", _lockfile_path=None: [
+            "Cargo.lock",
+            "Cargo.toml",
+            "bridge-src",
+        ],
     )
     snapshot_path = source_fixture / "android-source-seal.json"
     snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))

@@ -261,6 +261,7 @@ fn batch_normalize(points: &[Point]) -> Vec<T256Affine> {
     affine
 }
 
+#[cfg(test)]
 pub(super) fn combine(commitments: &[&Commitment]) -> Result<Commitment, CommitmentError> {
     if commitments.is_empty() {
         return Err(CommitmentError::InvalidDimension);

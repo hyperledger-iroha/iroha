@@ -213,6 +213,17 @@ def _full_manifest_payload() -> Dict[str, Any]:
     }
 
 
+def _replace_dynamic_hints(
+    payload: Dict[str, Any],
+    field: str,
+    hints: list[Dict[str, Any]],
+) -> None:
+    access_set_hints = payload["access_set_hints"]
+    access_set_hints["dynamic_reads"] = []
+    access_set_hints["dynamic_writes"] = []
+    access_set_hints[field] = hints
+
+
 def test_contract_manifest_keywords_match_normative_kotodama_grammar() -> None:
     root = Path(__file__).resolve().parents[3]
     grammar = (root / "crates" / "kotodama_lang" / "grammar" / "v1.lex").read_text(encoding="utf-8")
@@ -232,25 +243,44 @@ def test_contract_manifest_keywords_match_normative_kotodama_grammar() -> None:
     )
     assert type_table is not None
     type_names = set(re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', type_table.group(1)))
-    intrinsic_names = set(
+    reserved_extra_table = re.search(
+        r"pub const V1_DECLARATION_RESERVED_EXTRA_NAMES: &\[&str\] = &\[(.*?)\];",
+        semantic,
+        re.DOTALL,
+    )
+    assert reserved_extra_table is not None
+    reserved_extra_names = set(
         re.findall(
-            r'pub\(crate\) const [A-Z0-9_]+_INTRINSIC: &str = "([^"]+)";',
-            semantic,
+            r'"([A-Za-z_][A-Za-z0-9_]*)"',
+            reserved_extra_table.group(1),
         )
     )
     assert (
         client_module._KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS
-        == type_names
-        | {
-            "AxtDescriptor",
-            "AssetHandle",
-            "ProofBlob",
-            "SoracloudRequest",
-            "SoracloudResponse",
-            "state_map_get",
-        }
-        | intrinsic_names
+        == type_names | reserved_extra_names
     )
+
+
+def test_state_map_key_type_projection_requires_one_top_level_state_map() -> None:
+    assert (
+        client_module._kotodama_v1_state_map_key_type_name(
+            "StateMap<AccountId, quantity>"
+        )
+        == "AccountId"
+    )
+    assert (
+        client_module._kotodama_v1_state_map_key_type_name(
+            "StateMap<quantity, int>"
+        )
+        == "quantity"
+    )
+    for type_name in (
+        "quantity",
+        "Option<StateMap<AccountId, quantity>>",
+        "StateMap<AccountId, Amount>",
+        "StateMap<AccountId,quantity>",
+    ):
+        assert client_module._kotodama_v1_state_map_key_type_name(type_name) is None
 
 
 def test_contract_manifest_preserves_exact_v1_interface_shape() -> None:
@@ -388,12 +418,325 @@ def test_entrypoint_rejects_retired_numeric_leaf_kinds(retired: str) -> None:
         EntrypointValueTypeV1.from_payload({"nodes": [_leaf_node(retired)]})
 
 
-@pytest.mark.parametrize("retired", ["i64", "u128", "Amount", "num", "number", "float", "money"])
+@pytest.mark.parametrize(
+    "retired", ["i64", "u128", "Amount", "amount", "num", "number", "float", "money"]
+)
 def test_manifest_rejects_retired_numeric_type_spellings(retired: str) -> None:
     payload = _full_manifest_payload()
     payload["states"][0]["type_name"] = f"StateMap<AccountId, {retired}>"
     with pytest.raises(TypeError, match="retired Kotodama numeric type"):
         ContractManifest.from_payload(payload)
+
+
+def test_manifest_allows_amount_as_struct_field_identifier() -> None:
+    payload = _full_manifest_payload()
+    payload["states"].append(
+        {"name": "TransferShape", "type_name": "Transfer{amount: quantity}"}
+    )
+
+    manifest = ContractManifest.from_payload(payload)
+
+    assert manifest.states[-1].type_name == "Transfer{amount: quantity}"
+
+
+def test_manifest_allows_amount_field_in_struct_nested_under_state_map() -> None:
+    payload = _full_manifest_payload()
+    payload["states"][0]["type_name"] = (
+        "StateMap<AccountId, Transfer{amount: quantity}>"
+    )
+
+    manifest = ContractManifest.from_payload(payload)
+
+    assert (
+        manifest.states[0].type_name
+        == "StateMap<AccountId, Transfer{amount: quantity}>"
+    )
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        "Amount: quantity",
+        "StateMap<AccountId, Amount: quantity>",
+        "Transfer{value: Result<int, Amount: quantity>}",
+        "Transfer{amount: Amount}",
+        "Amount{amount: quantity}",
+    ],
+)
+def test_manifest_does_not_exempt_retired_types_outside_struct_field_positions(
+    forged: str,
+) -> None:
+    payload = _full_manifest_payload()
+    payload["states"][0]["type_name"] = forged
+
+    with pytest.raises(TypeError, match="retired Kotodama numeric type"):
+        ContractManifest.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        "Transfer{amount: : quantity}",
+        "Transfer{amount:quantity}",
+        "Transfer{amount: quantity, amount: quantity}",
+        "Transfer{}",
+        "List<quantity, 0>",
+        "List<quantity, 65>",
+        "StateMap<Json, quantity>",
+        "Option<StateMap<AccountId, quantity>>",
+        "(quantity)",
+        "StateMap<AccountId, ΩAmount>",
+    ],
+)
+def test_manifest_rejects_noncanonical_state_type_grammar(forged: str) -> None:
+    payload = _full_manifest_payload()
+    payload["states"][0]["type_name"] = forged
+
+    with pytest.raises(
+        TypeError,
+        match="retired Kotodama numeric type|exact canonical Kotodama V1 state type",
+    ):
+        ContractManifest.from_payload(payload)
+
+
+def test_manifest_state_type_enforces_runtime_schema_boundary() -> None:
+    def wide_type(nodes: int) -> str:
+        return f"({', '.join('int' for _ in range(nodes - 1))})"
+
+    def deep_type(nodes: int) -> str:
+        return f"{'Option<' * (nodes - 1)}int{'>' * (nodes - 1)}"
+
+    for at_limit in (wide_type(256), deep_type(256)):
+        payload = _full_manifest_payload()
+        payload["states"].append({"name": "Boundary", "type_name": at_limit})
+        assert ContractManifest.from_payload(payload).states[-1].type_name == at_limit
+
+    for mapped_value in (wide_type(256), deep_type(255)):
+        payload = _full_manifest_payload()
+        mapped = f"StateMap<AccountId, {mapped_value}>"
+        payload["states"][0]["type_name"] = mapped
+        assert ContractManifest.from_payload(payload).states[0].type_name == mapped
+
+    for forged in (
+        wide_type(257),
+        deep_type(257),
+        f"StateMap<AccountId, {wide_type(257)}>",
+        f"StateMap<AccountId, {deep_type(256)}>",
+        f"StateMap<AccountId, {deep_type(257)}>",
+    ):
+        payload = _full_manifest_payload()
+        payload["states"][0]["type_name"] = forged
+        with pytest.raises(TypeError, match="exact canonical Kotodama V1 state type"):
+            ContractManifest.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        "Json",
+        "ReferendumId",
+        "Int",
+        "Quantity",
+        "Amount",
+        "amount",
+        "Foo{Amount: quantity}",
+        "Foo{Amount:quantity}",
+        "StateMap<AccountId, int>",
+        "\N{CYRILLIC CAPITAL LETTER A}mount",
+    ],
+)
+def test_manifest_rejects_noncanonical_dynamic_key_types(forged: str) -> None:
+    payload = _full_manifest_payload()
+    payload["access_set_hints"]["dynamic_reads"][0]["key_type"] = forged
+
+    with pytest.raises(TypeError, match="exact Kotodama V1 StateMap key scalar"):
+        ContractManifest.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "forged", "message"),
+    [
+        ("max_keys", 0, r"V1 range 1\.\.64"),
+        ("max_keys", 65, r"V1 range 1\.\.64"),
+        ("max_keys", 0xFFFFFFFF, r"V1 range 1\.\.64"),
+        ("base_key", "state:", "state declaration identifier"),
+        ("base_key", "state:*", "state declaration identifier"),
+        ("base_key", "state:Balances/", "state declaration identifier"),
+        ("base_key", "state:Balances/suffix", "state declaration identifier"),
+        ("base_key", "state:Balances:suffix", "state declaration identifier"),
+        ("base_key", "state:int", "state declaration identifier"),
+        ("base_key", "account:alice", "state declaration identifier"),
+        ("base_key", " state:Balances", "exact non-empty string"),
+        ("base_key", "state:Balances ", "exact non-empty string"),
+        ("bound_kind", "", "exact non-empty string"),
+        ("bound_kind", "Take", "exactly take or range"),
+        ("bound_kind", "prefix", "exactly take or range"),
+        ("bound_kind", "range ", "exact non-empty string"),
+    ],
+)
+def test_manifest_rejects_noncanonical_dynamic_access_hints(
+    field: str,
+    forged: object,
+    message: str,
+) -> None:
+    payload = _full_manifest_payload()
+    payload["access_set_hints"]["dynamic_reads"][0][field] = forged
+
+    with pytest.raises(TypeError, match=message):
+        ContractManifest.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("base_key", "key_type", "bound_kind", "max_keys"),
+    [
+        ("state:Balances", "AccountId", "take", 1),
+        ("state:amount", "quantity", "range", 64),
+    ],
+)
+def test_manifest_accepts_exact_dynamic_access_hints(
+    base_key: str,
+    key_type: str,
+    bound_kind: str,
+    max_keys: int,
+) -> None:
+    payload = _full_manifest_payload()
+    hint = payload["access_set_hints"]["dynamic_reads"][0]
+    hint.update(
+        base_key=base_key,
+        key_type=key_type,
+        bound_kind=bound_kind,
+        max_keys=max_keys,
+    )
+    if base_key == "state:amount":
+        payload["states"].append(
+            {"name": "amount", "type_name": "StateMap<quantity, int>"}
+        )
+
+    parsed = ContractManifest.from_payload(payload)
+
+    assert parsed.access_set_hints.dynamic_reads[0].base_key == base_key
+    assert parsed.access_set_hints.dynamic_reads[0].key_type == key_type
+    assert parsed.access_set_hints.dynamic_reads[0].bound_kind == bound_kind
+    assert parsed.access_set_hints.dynamic_reads[0].max_keys == max_keys
+
+
+@pytest.mark.parametrize("field", ["dynamic_reads", "dynamic_writes"])
+def test_manifest_rejects_duplicate_dynamic_access_hints_per_list(field: str) -> None:
+    payload = _full_manifest_payload()
+    hint = deepcopy(payload["access_set_hints"]["dynamic_reads"][0])
+    _replace_dynamic_hints(payload, field, [hint, deepcopy(hint)])
+
+    with pytest.raises(TypeError, match="duplicate dynamic access hint"):
+        ContractManifest.from_payload(payload)
+
+
+@pytest.mark.parametrize("field", ["dynamic_reads", "dynamic_writes"])
+def test_manifest_allows_distinct_dynamic_access_hints_per_list(field: str) -> None:
+    payload = _full_manifest_payload()
+    first = deepcopy(payload["access_set_hints"]["dynamic_reads"][0])
+    second = {**first, "bound_kind": "range", "max_keys": 2}
+    _replace_dynamic_hints(payload, field, [first, second])
+
+    parsed = ContractManifest.from_payload(payload)
+
+    assert parsed.access_set_hints is not None
+    assert len(getattr(parsed.access_set_hints, field)) == 2
+
+
+@pytest.mark.parametrize("field", ["dynamic_reads", "dynamic_writes"])
+@pytest.mark.parametrize(
+    ("state_type", "base_key", "key_type", "message"),
+    [
+        (
+            "StateMap<AccountId, quantity>",
+            "state:Missing",
+            "AccountId",
+            "declared top-level StateMap",
+        ),
+        (
+            "quantity",
+            "state:Balances",
+            "AccountId",
+            "declared top-level StateMap",
+        ),
+        (
+            "StateMap<AccountId, quantity>",
+            "state:Balances",
+            "Name",
+            "does not match declared StateMap key type AccountId",
+        ),
+    ],
+)
+def test_manifest_rejects_dynamic_hints_not_matching_declared_state_maps(
+    field: str,
+    state_type: str,
+    base_key: str,
+    key_type: str,
+    message: str,
+) -> None:
+    payload = _full_manifest_payload()
+    payload["states"] = [{"name": "Balances", "type_name": state_type}]
+    hint = {
+        "base_key": base_key,
+        "key_type": key_type,
+        "bound_kind": "take",
+        "max_keys": 1,
+    }
+    _replace_dynamic_hints(payload, field, [hint])
+
+    with pytest.raises(TypeError, match=message):
+        ContractManifest.from_payload(payload)
+
+
+@pytest.mark.parametrize("field", ["dynamic_reads", "dynamic_writes"])
+def test_manifest_accepts_state_amount_dynamic_hint(field: str) -> None:
+    payload = _full_manifest_payload()
+    payload["states"] = [
+        {"name": "amount", "type_name": "StateMap<quantity, int>"}
+    ]
+    hint = {
+        "base_key": "state:amount",
+        "key_type": "quantity",
+        "bound_kind": "range",
+        "max_keys": 64,
+    }
+    _replace_dynamic_hints(payload, field, [hint])
+
+    parsed = ContractManifest.from_payload(payload)
+
+    assert parsed.access_set_hints is not None
+    assert getattr(parsed.access_set_hints, field)[0].base_key == "state:amount"
+
+
+def test_manifest_allows_same_dynamic_hint_once_in_each_list() -> None:
+    payload = _full_manifest_payload()
+    hint = deepcopy(payload["access_set_hints"]["dynamic_reads"][0])
+    payload["access_set_hints"]["dynamic_writes"] = [deepcopy(hint)]
+
+    parsed = ContractManifest.from_payload(payload)
+
+    assert parsed.access_set_hints is not None
+    assert parsed.access_set_hints.dynamic_reads == (
+        parsed.access_set_hints.dynamic_writes
+    )
+
+
+@pytest.mark.parametrize("retired", ["Amount", "amount"])
+def test_manifest_rejects_retired_error_namespaces(retired: str) -> None:
+    payload = _full_manifest_payload()
+    payload["error_codes"][0]["namespace"] = retired
+
+    with pytest.raises(TypeError, match="canonical Kotodama identifiers"):
+        ContractManifest.from_payload(payload)
+
+
+def test_manifest_allows_amount_as_error_variant_name() -> None:
+    payload = _full_manifest_payload()
+    payload["error_codes"][0]["name"] = "amount"
+
+    manifest = ContractManifest.from_payload(payload)
+
+    assert manifest.error_codes[0].name == "amount"
 
 
 def test_entrypoint_flat_list_schema_enforces_the_exact_depth_boundary() -> None:
@@ -515,6 +858,30 @@ def test_contract_manifest_rejects_non_object_provenance() -> None:
         ContractManifest.from_payload({"provenance": "not-an-object"})
 
 
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        {"signer": "ed25519:fixture"},
+        {"signer": "ed25519:fixture", "signature": ""},
+        {
+            "signer": "ed25519:fixture",
+            "signature": "fixture-signature",
+            "algorithm": "ed25519",
+        },
+    ],
+)
+def test_contract_manifest_rejects_nonexact_provenance(
+    provenance: Dict[str, Any],
+) -> None:
+    with pytest.raises(TypeError, match="provenance|unsupported fields"):
+        ContractManifest.from_payload({"provenance": provenance})
+
+
+def test_contract_manifest_rejects_unknown_feature_bits() -> None:
+    with pytest.raises(TypeError, match="unsupported Kotodama V1 feature bits"):
+        ContractManifest.from_payload({"features_bitmap": 4})
+
+
 def test_contract_manifest_record_cross_checks_hash_conveniences() -> None:
     manifest_payload = _full_manifest_payload()
     record = ContractManifestRecord.from_payload(
@@ -527,6 +894,17 @@ def test_contract_manifest_record_cross_checks_hash_conveniences() -> None:
 
     assert record.code_hash == record.manifest.code_hash == "b" * 64
     assert record.abi_hash == record.manifest.abi_hash == "d" * 64
+
+
+def test_contract_manifest_record_rejects_unknown_top_level_fields() -> None:
+    payload: Dict[str, Any] = {
+        "manifest": _full_manifest_payload(),
+        "code_hash": "b" * 64,
+        "abi_hash": "d" * 64,
+        "legacy": True,
+    }
+    with pytest.raises(TypeError, match="unsupported fields: legacy"):
+        ContractManifestRecord.from_payload(payload)
 
 
 @pytest.mark.parametrize(
@@ -613,11 +991,76 @@ def test_contract_manifest_rejects_lifecycle_or_authorization_forgery(
 
 
 def test_contract_manifest_rejects_retired_or_ambiguous_manifest_fields() -> None:
-    for retired in ("contract_name", "contractName"):
+    for retired in (
+        "contract_name",
+        "contractName",
+        "featuresBitmap",
+        "accessSetHints",
+    ):
         payload = _full_manifest_payload()
         payload[retired] = "Legacy"
         with pytest.raises(TypeError, match="unsupported fields"):
             ContractManifest.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["access_set_hints"].__setitem__("legacy", True),
+        lambda payload: payload["access_set_hints"]["dynamic_reads"][0].__setitem__(
+            "maxKeys", 64
+        ),
+        lambda payload: payload["entrypoints"][0].__setitem__("returnType", None),
+        lambda payload: payload["entrypoints"][0]["kind"].__setitem__("legacy", None),
+        lambda payload: payload["entrypoints"][0]["params"][0].__setitem__(
+            "typeName", "struct Transfer"
+        ),
+        lambda payload: payload["entrypoints"][0]["argument_schema"].__setitem__(
+            "legacy", True
+        ),
+        lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][
+            0
+        ].__setitem__("legacy", True),
+        lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][0][
+            "ty"
+        ].__setitem__("legacy", True),
+        lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][0][
+            "ty"
+        ]["nodes"][0].__setitem__("legacy", True),
+        lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][0][
+            "ty"
+        ]["nodes"][0]["value"].__setitem__("legacy", True),
+        lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][0][
+            "ty"
+        ]["nodes"][1]["value"].__setitem__("legacy", True),
+        lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][1][
+            "ty"
+        ]["nodes"][0]["value"].__setitem__("legacy", True),
+        lambda payload: payload["entrypoints"][0]["triggers"][0].__setitem__(
+            "legacy", True
+        ),
+        lambda payload: payload["entrypoints"][0]["triggers"][0]["repeats"].__setitem__(
+            "Legacy", None
+        ),
+        lambda payload: payload["entrypoints"][0]["triggers"][0]["callback"].__setitem__(
+            "entryPoint", "transfer"
+        ),
+        lambda payload: payload["states"][0].__setitem__("typeName", "quantity"),
+        lambda payload: payload["error_codes"][0].__setitem__("errorCode", 1001),
+        lambda payload: payload["kotoba"][0].__setitem__("msgId", "transfer.denied"),
+        lambda payload: payload["kotoba"][0]["translations"][0].__setitem__(
+            "language", "en"
+        ),
+        lambda payload: payload["provenance"].__setitem__("algorithm", "ed25519"),
+    ],
+)
+def test_contract_manifest_rejects_unknown_fields_at_every_typed_layer(
+    mutate: Any,
+) -> None:
+    payload = _full_manifest_payload()
+    mutate(payload)
+    with pytest.raises(TypeError, match="unsupported fields"):
+        ContractManifest.from_payload(payload)
 
 
 def test_contract_manifest_rejects_duplicate_and_unsafe_trigger_metadata() -> None:
@@ -678,7 +1121,7 @@ def test_contract_manifest_rejects_non_null_enum_payloads() -> None:
                 "element",
                 {"nodes": [{"kind": "Leaf", "value": {"kind": "Name", "value": None}}]},
             ),
-            "only `capacity`",
+            "unsupported fields",
         ),
         (
             lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][1]["ty"][

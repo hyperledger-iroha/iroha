@@ -1,37 +1,31 @@
 # Iroha peer transport V1
 
-This document defines the transport-neutral **Retail Offline Peer V1** family:
+This document defines the transport-neutral **Kagemusha Offline Peer V1** family:
 IPM1 messages, IQR1/IRQR QR, authenticated IPN1 Nearby, and the F049 NFC
 application. The envelope carries canonical
 application bytes unchanged; QR, NFC, and Nearby are presentation or delivery
 layers around the same message.
 
-The cross-SDK golden vectors are in
-`fixtures/offline/peer_transport_v1.json`. Swift, Kotlin/JVM, and Android Java
-must reproduce the static, RFC 1950, and ordered animated-frame vectors exactly.
-`fixtures/offline/kagemusha_peer_transport_v2.json` is the distinct profile-2
-structural vector: its qualified 49-byte NRT0 request archive and resulting
-IPM1, IQR1, NFC, and authenticated Nearby bytes must also match exactly across
-all three SDKs. Its one-byte body is intentionally not semantically valid and
-must never be passed to the typed Kagemusha adapter.
+The cross-SDK golden vector is
+`fixtures/offline/kagemusha_peer_transport_v2.json`. Swift, Kotlin/JVM, and
+Android Java must reproduce its qualified 49-byte NRT0 request archive and
+resulting IPM1, IQR1, NFC, and authenticated Nearby bytes exactly. Its one-byte
+body is intentionally not semantically valid and must never be passed to the
+typed Kagemusha adapter.
 
 ## Canonical payload
 
 A canonical payload consists of:
 
-- profile `1` for Offline Note or profile `2` for a bounded handoff of the
-  mainline typed Kagemusha native archive;
+- profile `2` for a bounded handoff of the mainline typed Kagemusha native
+  archive;
 - kind `1` receive request, `2` payment, or `3` acknowledgement;
-- the profile's sole unsigned 16-bit schema version: `1` for profile `1`, or
-  `0x0102` for profile `2`; and
+- the profile's sole unsigned 16-bit schema version, `0x0102`; and
 - non-empty canonical bytes bounded to 32 KiB.
 
-Profile adapters preserve canonical bytes exactly. Profile `1` application
-bytes are opaque to IPM1 and are never normalized, trimmed, or converted.
-`IrohaPeerCanonicalTextPayloadCodecV1` is an Offline Note-only exact UTF-8
-boundary; it rejects profile `2` so text cannot bypass the typed ABI21 archive
-boundary. A signed `pk2off2:` custody-lineage payload therefore remains
-byte-identical through every rail.
+Profile adapters preserve canonical bytes exactly. There is no generic text
+payload codec, retired profile alias, or migration shim that can bypass the
+typed ABI21 archive boundary.
 
 Profile `2` supports only schema `0x0102`. Generic IPM construction and decode
 validate native-independent canonical Norito framing before accepting it:
@@ -43,13 +37,12 @@ semantic decoding to the existing typed decoder and never rebuilds Norito
 bytes. Full ABI21
 Kagemusha QR/NFC/native archives may be up to 32 MiB and continue to use their
 existing typed rails; IPM1 profile `2` is an explicit 24,576-byte bounded
-small-handoff, not a
-replacement for those rails. `peer_nfc_v1.json` is an all-retail profile-1
-fixture; NFC does not permit a mixed-profile phase policy.
+small-handoff, not a replacement for those rails. NFC does not permit a
+mixed-profile phase policy.
 
-The Retail V1 "no fallback" rule is scoped only to `IrohaPeer*V1`. The
-independent Kagemusha ABI21 bulk family remains available and is never
-negotiated, reinterpreted, or selected as fallback for Retail V1:
+The first-release "no fallback" rule admits only profile `2` / schema `0x0102`
+to `IrohaPeer*V1`. The independent Kagemusha ABI21 bulk family remains
+available and is never negotiated, reinterpreted, or selected as fallback:
 
 - Swift retains `KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
   `KagemushaNearbyExchange`;
@@ -57,7 +50,7 @@ negotiated, reinterpreted, or selected as fallback for Retail V1:
   `KagemushaNearbyEnvelopeCodec`; Android Java retains `KagemushaQrStream` and
   the corresponding NFC/Nearby Kagemusha facades; and
 - its `PKK2*`/`PKKQ1` text and Kagemusha Bonjour/Multipeer identifiers remain
-  distinct from IPM1 profile `1` and the bounded profile `2` handoff. NFC uses
+  distinct from the bounded IPM1 profile `2` handoff. NFC uses
   the sole canonical AID `F0504B45504B524E464301` on every rail.
 
 Kagemusha Nearby's authenticated binary `PKNB1` envelope has its own smaller
@@ -102,8 +95,7 @@ reduces `ceil(length / 256)`; otherwise it emits encoding `0`. A decoder accepts
 encoding `1` only as a complete stream with the canonical `78 9c` header, no
 dictionary or trailing bytes, a valid Adler-32, and exactly the declared
 decompressed length. This decision is shared by QR, NFC, and Nearby. Encoded
-bodies are bounded to 24,576 bytes for both Offline Note and the bounded
-Kagemusha handoff.
+bodies are bounded to 24,576 bytes for the Kagemusha handoff.
 Hashes and declared lengths are verified before a message is exposed.
 
 ## IQR1 text and IRQR frames
@@ -271,14 +263,14 @@ callbacks cannot spend retry budget.
 One immutable `IrohaPeerNfcProfilePolicyV1.profile` binds a session: request,
 payment, and acknowledgement must all match it. Every phase intersects local
 and peer limits, and a full IPM1 value is capped at 24,660 bytes (84-byte header
-plus the maximum Offline Note body). Android reader mode derives its
+plus the maximum Kagemusha body). Android reader mode derives its
 local limits from `IsoDep.maxTransceiveLength` and extended-APDU support. A
 261-byte short-APDU path has only 203 WRITE payload bytes after V1 metadata;
 extended-capable iOS↔iOS and Android↔Android paths may negotiate up to 4,096.
 Cross-platform peers automatically use the smaller safe value.
 The 24,660-byte NFC message value is a hard constructor ceiling, as are the
-32-KiB canonical and 24,576-byte encoded-body limits for both Offline Note and
-bounded Kagemusha handoffs. Custom policies can tighten but not expand them.
+32-KiB canonical and 24,576-byte encoded-body limits for bounded Kagemusha
+handoffs. Custom policies can tighten but not expand them.
 
 All changes in this contract are client/SDK-local. They require no backend or
 Torii endpoint change.
@@ -401,14 +393,12 @@ The checked-in first-release fixture digests are:
 
 | Fixture | SHA-256 |
 | --- | --- |
-| `peer_transport_v1.json` | `431be8c5b0bfb0be977821443d0a25659e8fa2e9b5924817c4488e8984ab1a70` |
-| `peer_nearby_v1.json` | `cdcfb6073597087ab632dea4474bd7be8aeb7ffe3a3b75aa4bc03e572c2059c8` |
-| `peer_nfc_v1.json` | `c9ee7fe20732b993f61b4f02278ed8267b0885a0a54f2536fa7ecb8c917fce16` |
+| `kagemusha_peer_transport_v2.json` | `9a3cb0be77730014694be31b3e4cea4cf8008f449ef56a3c91e51e4d25fd2939` |
 
 Verify and exercise every SDK from the repository root:
 
 ```bash
-shasum -a 256 fixtures/offline/peer_{transport,nearby,nfc}_v1.json
+shasum -a 256 fixtures/offline/kagemusha_peer_transport_v2.json
 
 (cd IrohaSwift && swift test --filter IrohaPeer)
 (cd IrohaSwift && swift test --filter KagemushaPeerTransportTests)

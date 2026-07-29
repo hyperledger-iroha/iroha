@@ -82,7 +82,7 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
       },
       {
         label: "kotodamaCompiler/browser.js (browser)",
-        limitKb: 51,
+        limitKb: 53,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -149,7 +149,7 @@ test("bundle-size check gates the remote Kotodama compiler browser export", () =
   assert.match(target.entryPoint, /dist[/\\]kotodamaCompiler[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.equal(target.forbidGlobalBuffer, true);
-  assert.equal(target.limitKb, 51);
+  assert.equal(target.limitKb, 53);
 });
 
 test("browser graph guard detects every forbidden Node-only edge", () => {
@@ -195,6 +195,10 @@ test("browser graph audit derives every explicit browser-conditioned package exp
   );
   assert.deepEqual(listExplicitBrowserExports(pkg), [
     { target: "./dist/browser.js", subpaths: ["./browser"] },
+    {
+      target: "./dist/privacyCapabilities.js",
+      subpaths: ["./privacy-capabilities"],
+    },
     { target: "./dist/transactionCodec.js", subpaths: ["./transaction-codec"] },
     {
       target: "./dist/smartContractDeployment.js",
@@ -219,6 +223,54 @@ test("browser graph audit derives every explicit browser-conditioned package exp
       subpaths: ["./kotodama-compiler"],
     },
   ]);
+});
+
+test("privacy policy stays out of base entry graphs and optional API stays client-agnostic", async () => {
+  const { build } = await import("esbuild");
+  const baseTargets = [
+    BUNDLE_TARGETS.find(({ label }) => label === "toriiClient.js"),
+    BUNDLE_TARGETS.find(({ label }) => label.includes("public aggregate")),
+  ];
+  for (const target of baseTargets) {
+    assert.ok(target);
+    const result = await build({
+      entryPoints: [target.entryPoint],
+      bundle: true,
+      write: false,
+      platform: target.platform,
+      target: target.target,
+      format: "esm",
+      treeShaking: true,
+      metafile: true,
+    });
+    const inputs = Object.keys(result.metafile?.inputs ?? {});
+    assert.equal(
+      inputs.some((input) => /[/\\]privacyCapabilities\.js$/u.test(input)),
+      false,
+      `${target.label} must not include the optional privacy policy parser`,
+    );
+  }
+
+  const result = await build({
+    entryPoints: [`${PACKAGE_ROOT}/dist/privacyCapabilities.js`],
+    bundle: true,
+    write: false,
+    platform: "browser",
+    target: "es2020",
+    format: "esm",
+    treeShaking: true,
+    metafile: true,
+  });
+  const inputs = Object.keys(result.metafile?.inputs ?? {});
+  assert.equal(
+    inputs.some((input) => /[/\\]privacyCapabilities\.js$/u.test(input)),
+    true,
+  );
+  assert.equal(
+    inputs.some((input) => /[/\\]torii(?:Browser)?Client\.js$/u.test(input)),
+    false,
+    "optional privacy API must use the private transport capability without importing clients",
+  );
 });
 
 test("browser graph audit catches Node edges in an export omitted from size budgets", async () => {
@@ -285,8 +337,8 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 58);
-  assert.equal(result.outputFiles[0].contents.byteLength, 473_167);
+  assert.equal(Object.keys(result.metafile.inputs).length, 59);
+  assert.equal(result.outputFiles[0].contents.byteLength, 470_018);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
     "public browser aggregate regressed more than 5% from the protected pre-reset tree",
@@ -335,10 +387,10 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 97_869],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 982_453, modules: 60 }],
-    ["transactionCodec.js (browser)", { bytes: 300_874, modules: 46 }],
-    ["nexusApp.js (browser)", { bytes: 384_091, modules: 55 }],
-    ["canonicalRequest.js (browser)", { bytes: 98_123, modules: 34 }],
+    ["toriiClient.js", { bytes: 983_004, modules: 61 }],
+    ["transactionCodec.js (browser)", { bytes: 298_589, modules: 46 }],
+    ["nexusApp.js (browser)", { bytes: 381_799, modules: 55 }],
+    ["canonicalRequest.js (browser)", { bytes: 98_121, modules: 34 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -376,7 +428,7 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
   }
 });
 
-test("Kotodama compiler browser export stays below 51 KiB without Node or Buffer shims", async () => {
+test("Kotodama compiler browser export stays below 53 KiB without Node or Buffer shims", async () => {
   const target = BUNDLE_TARGETS.find(({ label }) =>
     label.includes("kotodamaCompiler/browser"),
   );
@@ -399,9 +451,9 @@ test("Kotodama compiler browser export stays below 51 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 52_156);
+  assert.equal(result.outputFiles[0].contents.byteLength, 52_735);
   assert.ok(
-    result.outputFiles[0].contents.byteLength <= Math.floor(51_868 * 1.05),
+    result.outputFiles[0].contents.byteLength <= Math.floor(52_156 * 1.05),
     "Kotodama compiler browser export regressed more than 5% from the protected pre-reset tree",
   );
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);

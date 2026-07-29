@@ -22,13 +22,14 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::AccountId,
     isi::transfer::TransferAssetBatch,
-    nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
+    nexus::{AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError, DataSpaceId},
     prelude::Name,
 };
 #[cfg(test)]
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_primitives::{json::Json, numeric_abi::QuantityValueV1};
-use norito::{decode_from_bytes, json as njson, to_bytes};
+use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
+use norito::{decode_from_bytes, json as njson};
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
 
@@ -207,23 +208,56 @@ impl CoreHost {
     }
 
     /// Override the slot length and clock-skew tolerance used for AXT expiry checks.
-    pub fn with_axt_timing(mut self, slot_length_ms: NonZeroU64, max_clock_skew_ms: u64) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when a previously installed
+    /// snapshot is no longer canonical.
+    pub fn with_axt_timing(
+        mut self,
+        slot_length_ms: NonZeroU64,
+        max_clock_skew_ms: u64,
+    ) -> Result<Self, AxtPolicySnapshotValidationError> {
+        let policy = self
+            .axt_policy_snapshot
+            .as_ref()
+            .map(|snapshot| {
+                SpaceDirectoryAxtPolicy::from_policy_snapshot_with_timing(
+                    snapshot,
+                    slot_length_ms,
+                    max_clock_skew_ms,
+                )
+            })
+            .transpose()?;
         self.slot_length_ms = slot_length_ms;
         self.max_clock_skew_ms = max_clock_skew_ms;
-        self
+        if let Some(policy) = policy {
+            self.axt_policy = Arc::new(policy);
+            self.axt_proof_cache.clear();
+            self.axt_proof_cache_slot = None;
+        }
+        Ok(self)
     }
 
     /// Install a Space Directory-backed AXT policy from a replicated snapshot.
-    pub fn with_axt_policy_snapshot(mut self, snapshot: &AxtPolicySnapshot) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when the snapshot is not
+    /// canonically ordered or its version does not bind its exact entries.
+    pub fn with_axt_policy_snapshot(
+        mut self,
+        snapshot: &AxtPolicySnapshot,
+    ) -> Result<Self, AxtPolicySnapshotValidationError> {
         self.axt_policy = Arc::new(SpaceDirectoryAxtPolicy::from_policy_snapshot_with_timing(
             snapshot,
             self.slot_length_ms,
             self.max_clock_skew_ms,
-        ));
+        )?);
         self.axt_policy_snapshot = Some(snapshot.clone());
         self.axt_proof_cache.clear();
         self.axt_proof_cache_slot = None;
-        self
+        Ok(self)
     }
 
     /// Install an AXT policy derived from a [`MockWorldStateView`] snapshot and current slot.
@@ -302,15 +336,13 @@ impl CoreHost {
         let mut response_tail_gas = crate::host::state_keys_prepare_minimum(path_len, limit)?
             .saturating_sub(crate::host::state_path_gas(path_len));
         for key in self.state.keys_with_text_prefix(prefix) {
-            if key.len() > syscalls::STATE_MAX_PATH_BYTES {
-                return Err(VMError::NoritoInvalid);
-            }
             crate::host::preflight_reserved_state_scan_work_with_tail(
                 vm,
                 scan_work_gas,
                 key.len(),
                 response_tail_gas,
             )?;
+            crate::host::validate_state_path_text(key)?;
             #[cfg(test)]
             self.state_scan_examined.fetch_add(1, Ordering::Relaxed);
             scan_work_gas = scan_work_gas
@@ -362,7 +394,7 @@ impl CoreHost {
     }
 
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {
-        decode_from_bytes(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn decode_state_path_tlv(&self, vm: &IVM, pointer: u64) -> Result<(Name, usize), VMError> {
@@ -465,8 +497,7 @@ impl CoreHost {
             return Err(VMError::NoritoInvalid);
         }
         let gas = Self::axt_gas(tlv.payload.len());
-        let descriptor: axt::AxtDescriptor =
-            norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let descriptor: axt::AxtDescriptor = decode_canonical_norito(tlv.payload)?;
         axt::validate_descriptor(&descriptor)?;
         let binding = axt::compute_binding(&descriptor).map_err(|_| VMError::NoritoInvalid)?;
         self.reset_axt_proof_cache_for_slot(self.max_policy_slot());
@@ -482,8 +513,7 @@ impl CoreHost {
             return Err(VMError::NoritoInvalid);
         }
         let mut gas_len = ds_tlv.payload.len();
-        let dsid: DataSpaceId =
-            norito::decode_from_bytes(ds_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state.expected_dsids().contains(&dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -499,8 +529,9 @@ impl CoreHost {
                 return Err(VMError::NoritoInvalid);
             }
             gas_len = gas_len.saturating_add(manifest_tlv.payload.len());
-            norito::decode_from_bytes(manifest_tlv.payload).map_err(|_| VMError::NoritoInvalid)?
+            decode_canonical_norito(manifest_tlv.payload)?
         };
+        axt::validate_touch_manifest(&manifest)?;
         self.axt_policy.allow_touch(dsid, &manifest)?;
         state.record_touch(dsid, manifest)?;
         Ok(Self::axt_gas(gas_len))
@@ -514,8 +545,7 @@ impl CoreHost {
         if ds_tlv.type_id != PointerType::DataSpaceId {
             return Err(VMError::NoritoInvalid);
         }
-        let dsid: DataSpaceId =
-            norito::decode_from_bytes(ds_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state_view.expected_dsids().contains(&dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -540,11 +570,8 @@ impl CoreHost {
         if proof_tlv.type_id != PointerType::ProofBlob {
             return Err(VMError::NoritoInvalid);
         }
-        let proof: axt::ProofBlob =
-            norito::decode_from_bytes(proof_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-        if proof.payload.is_empty() || proof.expiry_slot == Some(0) {
-            return Err(VMError::NoritoInvalid);
-        }
+        let proof: axt::ProofBlob = decode_canonical_norito(proof_tlv.payload)?;
+        axt::validate_proof_blob(&proof)?;
         let expiry_with_skew = proof
             .expiry_slot
             .map(|slot| self.axt_expiry_slot_with_skew(slot, None));
@@ -557,7 +584,7 @@ impl CoreHost {
             return Err(VMError::PermissionDenied);
         }
 
-        let envelope = match norito::decode_from_bytes::<axt::AxtProofEnvelope>(&proof.payload) {
+        let envelope = match decode_canonical_norito::<axt::AxtProofEnvelope>(&proof.payload) {
             Ok(envelope) => envelope,
             Err(_) => {
                 self.cache_proof_entry(
@@ -624,16 +651,16 @@ impl CoreHost {
             return Err(VMError::NoritoInvalid);
         }
         let mut gas_len = handle_tlv.payload.len();
-        let handle: axt::AssetHandle =
-            norito::decode_from_bytes(handle_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let handle: axt::AssetHandle = decode_canonical_norito(handle_tlv.payload)?;
+        axt::validate_asset_handle(&handle)?;
 
         let intent_tlv = vm.validate_tlv(vm.register(11))?;
         if intent_tlv.type_id != PointerType::NoritoBytes {
             return Err(VMError::NoritoInvalid);
         }
         gas_len = gas_len.saturating_add(intent_tlv.payload.len());
-        let intent: axt::RemoteSpendIntent =
-            norito::decode_from_bytes(intent_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let intent: axt::RemoteSpendIntent = decode_canonical_norito(intent_tlv.payload)?;
+        axt::validate_remote_spend_intent(&intent)?;
 
         let proof: Option<axt::ProofBlob> = match vm.register(12) {
             0 => None,
@@ -643,12 +670,12 @@ impl CoreHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 gas_len = gas_len.saturating_add(proof_tlv.payload.len());
-                Some(
-                    norito::decode_from_bytes(proof_tlv.payload)
-                        .map_err(|_| VMError::NoritoInvalid)?,
-                )
+                Some(decode_canonical_norito(proof_tlv.payload)?)
             }
         };
+        if let Some(proof) = &proof {
+            axt::validate_proof_blob(proof)?;
+        }
         let resolved_amount = axt::resolve_handle_amount(&intent, proof.as_ref())
             .map_err(axt::HandleAmountResolutionError::to_vm_error)?;
         if resolved_amount.amount > handle.budget.remaining {
@@ -664,9 +691,6 @@ impl CoreHost {
             let policy = self
                 .policy_entry_for(intent.asset_dsid)
                 .ok_or(VMError::PermissionDenied)?;
-            if proof_blob.payload.is_empty() || proof_blob.expiry_slot == Some(0) {
-                return Err(VMError::NoritoInvalid);
-            }
             let expiry_with_skew = proof_blob
                 .expiry_slot
                 .map(|slot| self.axt_expiry_slot_with_skew(slot, None));
@@ -676,8 +700,7 @@ impl CoreHost {
             {
                 return Err(VMError::PermissionDenied);
             }
-            let envelope = norito::decode_from_bytes::<axt::AxtProofEnvelope>(&proof_blob.payload)
-                .map_err(|_| VMError::NoritoInvalid)?;
+            let envelope = decode_canonical_norito::<axt::AxtProofEnvelope>(&proof_blob.payload)?;
             axt::preflight_fastpq_v1_proof_envelope_for_manifest(
                 &envelope,
                 intent.asset_dsid,
@@ -787,7 +810,7 @@ impl CoreHost {
             return Err(VMError::NoritoInvalid);
         }
         let batch: TransferAssetBatch =
-            decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
         if batch.entries().is_empty() {
             return Err(VMError::DecodeError);
         }
@@ -1429,7 +1452,7 @@ impl IVMHost for CoreHost {
                     u64::try_from(selected.len()).unwrap_or(u64::MAX),
                 )?;
                 self.log_read_key(prefix.as_ref());
-                let payload = to_bytes(&selected).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(&selected)?;
                 let gas = STATE_QUERY_GAS_BASE
                     .saturating_add(scan_work_gas)
                     .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
@@ -1509,7 +1532,8 @@ impl IVMHost for CoreHost {
                     });
                 }
                 let input_len = tlv.payload.len();
-                let val: i64 = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let val: i64 =
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 vm.set_register(10, val as u64);
                 Ok(Self::numeric_payload_gas(input_len, 0))
             }
@@ -1537,7 +1561,7 @@ impl IVMHost for CoreHost {
                 let base_name = self.decode_name_payload(base_tlv.payload)?;
                 let input_len = base_tlv.payload.len().saturating_add(key_tlv.payload.len());
                 let path_name = canonical_typed_state_map_path(vm, &base_name, key_tlv.payload)?;
-                let body = to_bytes(&path_name).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&path_name)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
                 out.push(1);
@@ -1589,8 +1613,8 @@ impl IVMHost for CoreHost {
                 }
                 let input_len = tlv.payload.len();
                 let json: Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let body = encode_canonical_norito(&json)?;
                 Self::validate_codec_output_payload_len(body.len())?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -1619,8 +1643,8 @@ impl IVMHost for CoreHost {
                 let tlv = self.decode_tlv(vm, r10_before, PointerType::NoritoBytes)?;
                 let input_len = tlv.payload.len();
                 let json: Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let body = encode_canonical_norito(&json)?;
                 Self::validate_codec_output_payload_len(body.len())?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -1638,7 +1662,7 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_JSON_OBJECT => {
                 let out_json = Json::from(njson::Value::Object(njson::Map::new()));
-                let body = to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&out_json)?;
                 Self::validate_codec_output_payload_len(body.len())?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -1690,7 +1714,7 @@ impl IVMHost for CoreHost {
                 };
 
                 let json: Json =
-                    decode_from_bytes(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let mut input_len = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
                 let value: njson::Value = json
                     .try_into_any_norito()
@@ -1700,7 +1724,7 @@ impl IVMHost for CoreHost {
                     _ => return Err(VMError::DecodeError),
                 };
                 let key_name: Name =
-                    decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
 
                 let field = match syscalls::canonical_helper_syscall(number) {
                     syscalls::SYSCALL_JSON_SET_I64 => {
@@ -1725,7 +1749,7 @@ impl IVMHost for CoreHost {
                             value_tlv
                         };
                         input_len = input_len.saturating_add(value_tlv.payload.len());
-                        let account: AccountId = decode_from_bytes(value_tlv.payload)
+                        let account: AccountId = decode_canonical_norito(value_tlv.payload)
                             .map_err(|_| VMError::DecodeError)?;
                         njson::Value::from(account.to_string())
                     }
@@ -1734,7 +1758,7 @@ impl IVMHost for CoreHost {
 
                 obj.insert(key_name.to_string(), field);
                 let out_json = Json::from(njson::Value::Object(obj));
-                let body = to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&out_json)?;
                 Self::validate_codec_output_payload_len(body.len())?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -1799,7 +1823,7 @@ impl IVMHost for CoreHost {
                 };
                 let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
                 let json: Json =
-                    decode_from_bytes(v_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(v_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let input_len = v_tlv.payload.len();
                 if let Some(bytes) = self.schema.encode_json(&schema, json.get().as_bytes()) {
                     if crate::dev_env::decode_trace_enabled() {
@@ -1901,7 +1925,7 @@ impl IVMHost for CoreHost {
                         core::str::from_utf8(&min).map_err(|_| VMError::NoritoInvalid)?;
                     let json =
                         Json::from_str_norito(json_str).map_err(|_| VMError::NoritoInvalid)?;
-                    let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                    let body = encode_canonical_norito(&json)?;
                     Self::validate_codec_output_payload_len(body.len())?;
                     let gas = Self::schema_gas(input_len, body.len());
                     preflight_reserved_syscall_gas(vm, gas)?;
@@ -1968,7 +1992,7 @@ impl IVMHost for CoreHost {
                     njson::Value::Object(map)
                 };
                 let json = Json::from(&body_value);
-                let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&json)?;
                 Self::validate_codec_output_payload_len(body.len())?;
                 let gas = Self::schema_gas(input_len, body.len());
                 preflight_reserved_syscall_gas(vm, gas)?;
@@ -2004,16 +2028,9 @@ impl IVMHost for CoreHost {
                 }
                 let input_len = tlv.payload.len();
                 let name: Name =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                if to_bytes(&name)
-                    .map_err(|_| VMError::DecodeError)?
-                    .as_slice()
-                    != tlv.payload
-                {
-                    return Err(VMError::DecodeError);
-                }
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 // Build a host-owned Name TLV using the normalized form.
-                let body = to_bytes(&name).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&name)?;
                 Self::validate_codec_output_payload_len(body.len())?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
@@ -2355,7 +2372,7 @@ impl IVMHost for CoreHost {
                 let authority = AccountId::parse_encoded(ACCOUNT)
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| VMError::NoritoInvalid)?;
-                let payload = to_bytes(&authority).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(&authority)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
                 tlv.push(1);
@@ -2946,6 +2963,120 @@ mod tests {
             Ok(count_gas)
         );
         assert_eq!(vm.register(10), 2);
+    }
+
+    fn corrupt_state_path_with_oversized_canonical_frame(prefix: &str) -> String {
+        let stem = format!("{prefix}/");
+        let path = format!(
+            "{stem}{}",
+            "x".repeat(syscalls::STATE_MAX_PATH_BYTES - stem.len())
+        );
+        assert_eq!(path.len(), syscalls::STATE_MAX_PATH_BYTES);
+        assert_eq!(
+            crate::host::validate_state_path_text(&path),
+            Err(VMError::NoritoInvalid),
+            "raw-byte maximum must still reject a framed canonical Name over the bound"
+        );
+        path
+    }
+
+    fn assert_failed_state_scan_did_not_publish(
+        vm: &IVM,
+        registers_before: [u64; 3],
+        input_before: &[u8],
+        heap_before: u64,
+    ) {
+        assert_eq!(
+            [vm.register(10), vm.register(11), vm.register(12)],
+            registers_before
+        );
+        assert_eq!(
+            vm.memory
+                .inspect_region(Memory::INPUT_START, Memory::INPUT_SIZE)
+                .expect("inspect INPUT after failed scan"),
+            input_before
+        );
+        assert_eq!(vm.memory.heap_allocated_len(), heap_before);
+    }
+
+    #[test]
+    fn state_keys_rejects_selected_corrupt_framed_key_before_publication() {
+        let mut host = CoreHost::new();
+        host.insert_state_value("scan/a", b"valid");
+        let corrupt = corrupt_state_path_with_oversized_canonical_frame("scan");
+        host.state
+            .insert_unchecked_for_test(corrupt, b"corrupt".to_vec());
+        host.insert_state_value("scan/z", b"valid");
+
+        let mut vm = IVM::new(u64::MAX);
+        let prefix: Name = "scan".parse().expect("scan prefix");
+        let prefix_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(
+                PointerType::Name,
+                &encode_canonical_norito(&prefix).expect("encode scan prefix"),
+            ))
+            .expect("allocate scan prefix");
+        vm.set_register(10, prefix_ptr);
+        vm.set_register(11, 1);
+        vm.set_register(12, 1);
+        let registers_before = [prefix_ptr, 1, 1];
+        let input_before = vm
+            .memory
+            .inspect_region(Memory::INPUT_START, Memory::INPUT_SIZE)
+            .expect("inspect INPUT before failed scan")
+            .to_vec();
+        let heap_before = vm.memory.heap_allocated_len();
+
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_STATE_KEYS, &mut vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_failed_state_scan_did_not_publish(&vm, registers_before, &input_before, heap_before);
+        assert!(host.access_log.read_keys.is_empty());
+    }
+
+    #[test]
+    fn corrupt_framed_state_key_cannot_evade_pagination_or_count_validation() {
+        let mut host = CoreHost::new();
+        host.insert_state_value("scan/a", b"valid");
+        let corrupt = corrupt_state_path_with_oversized_canonical_frame("scan");
+        host.state
+            .insert_unchecked_for_test(corrupt, b"corrupt".to_vec());
+        host.insert_state_value("scan/z", b"valid");
+
+        for syscall in [syscalls::SYSCALL_STATE_KEYS, syscalls::SYSCALL_STATE_COUNT] {
+            let mut vm = IVM::new(u64::MAX);
+            let prefix: Name = "scan".parse().expect("scan prefix");
+            let prefix_ptr = vm
+                .alloc_input_tlv(&make_pointer_tlv(
+                    PointerType::Name,
+                    &encode_canonical_norito(&prefix).expect("encode scan prefix"),
+                ))
+                .expect("allocate scan prefix");
+            vm.set_register(10, prefix_ptr);
+            vm.set_register(11, u64::MAX);
+            vm.set_register(12, 0);
+            let registers_before = [prefix_ptr, u64::MAX, 0];
+            let input_before = vm
+                .memory
+                .inspect_region(Memory::INPUT_START, Memory::INPUT_SIZE)
+                .expect("inspect INPUT before failed scan")
+                .to_vec();
+            let heap_before = vm.memory.heap_allocated_len();
+
+            assert_eq!(
+                host.syscall(syscall, &mut vm),
+                Err(VMError::NoritoInvalid),
+                "syscall {syscall:#x} must validate skipped and count-only keys"
+            );
+            assert_failed_state_scan_did_not_publish(
+                &vm,
+                registers_before,
+                &input_before,
+                heap_before,
+            );
+            assert!(host.access_log.read_keys.is_empty());
+        }
     }
 
     #[test]

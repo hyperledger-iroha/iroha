@@ -2,7 +2,7 @@
 lang: az
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ hətta transkript isteğe bağlı sahələri buraxsa belə, həmişə determinis
      - `from_balance_before >= amount` (ortaq RNS parçalanması ilə diapazon gadgetı).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Hər üç tənliyin bir sıra qrupunu istehlak etməsi üçün xüsusi bir qapıya yığılmışdır.2. **Poseidon Öhdəlik Bloku**
+   - Hər üç tənliyin bir sıra qrupunu istehlak etməsi üçün xüsusi bir qapıya yığılmışdır.
+
+2. **Poseidon Öhdəlik Bloku**
    - Artıq digər qadcetlərdə istifadə olunan paylaşılan Poseidon axtarış cədvəlindən istifadə edərək `poseidon_preimage_digest`-i yenidən hesablayır. İzdə hər transfer Poseidon turu yoxdur.
 
 3. **Merkle Path Block**
@@ -96,7 +98,9 @@ hətta transkript isteğe bağlı sahələri buraxsa belə, həmişə determinis
 5. **Batch Loop**
    - Proqramlar, `transfer_asset` qurucuları dövrəsindən əvvəl `transfer_v1_batch_begin()` və sonra `transfer_v1_batch_end()` çağırır. Əhatə dairəsi aktiv olsa da, host hər bir köçürməni bufer edir və onları tək `TransferAssetBatch` kimi təkrarlayır, Poseidon/SMT kontekstini hər partiyada bir dəfə təkrar istifadə edir. Hər əlavə delta yalnız hesab və iki yarpaq yoxlamasını əlavə edir. Transkript dekoderi indi çox deltalı partiyaları qəbul edir və onları `TransferGadgetInput::deltas` kimi təqdim edir ki, planlaşdırıcı Norito-i təkrar oxumadan şahidləri qatlaya bilsin. Artıq Norito faydalı yükə malik olan müqavilələr (məsələn, CLI/SDK-lar) `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`-ə zəng etməklə əhatə dairəsini tamamilə ötürə bilər ki, bu da ev sahibinə bir sistem zəngində tam kodlaşdırılmış partiyanı verir.
 
-# Host və Prover Dəyişiklikləri| Layer | Dəyişikliklər |
+# Host və Prover Dəyişiklikləri
+
+| Layer | Dəyişikliklər |
 |-------|---------|
 | `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) əlavə edin ki, proqramlar aralıq ISIS0, plus I0104 yaymadan çoxsaylı `transfer_v1` sistem çağırışlarını mötərizə edə bilsin. (`0x2B`) əvvəlcədən kodlanmış partiyalar üçün. |
 | `ivm::host` & testlər | Əsas/Defolt hostlar əhatə dairəsi aktiv olduqda, `transfer_v1`-ni toplu əlavə kimi qəbul edir, səth `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` və saxta WSV hostu reqressiya testlərinin deterministik balansı təsdiq edə bilməsi üçün girişləri həyata keçirməzdən əvvəl bufer edir. yeniləmələr.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```Emissiya edilmiş JSON, `iroha_cli audit witness`-in indi defolt olaraq buraxdığı FASTPQ toplu artefaktlarını əks etdirir (onları sıxışdırmaq üçün `--no-fastpq-batches`-i keçin), buna görə də `scripts/fastpq/check_row_usage.py` və CI qapısı əvvəlki dəyişiklikləri təsdiqləyən zaman sintetik çəkilişləri fərqləndirə bilər.
+```
+
+Emissiya edilmiş JSON, `iroha_cli audit witness`-in indi defolt olaraq buraxdığı FASTPQ toplu artefaktlarını əks etdirir (onları sıxışdırmaq üçün `--no-fastpq-batches`-i keçin), buna görə də `scripts/fastpq/check_row_usage.py` və CI qapısı əvvəlki dəyişiklikləri təsdiqləyən zaman sintetik çəkilişləri fərqləndirə bilər.
 
 # Yayım Planı
 

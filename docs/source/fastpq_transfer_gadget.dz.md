@@ -2,7 +2,7 @@
 lang: dz
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount` (RNS བརྡལ་བཤིག་ཡོད་པའི་ ཁྱབ་ཚད་ཅན་གྱི་ཅ་ཆས་)
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - སྲོལ་སྒྲིག་གི་སྒོ་ཅིག་ནང་ བསྡུ་སྒྲིག་འབད་དེ་ སྙོམ་རྩིས་གསུམ་ཆ་ར་གིས་ གྱལ་རིམ་སྡེ་ཚན་ཅིག་ ཟ་སྤྱོད་འབདཝ་ཨིན།2. **པོ་སི་ཌོན་ཁས་བླངས་བཀག་སྡོམ།**
+   - སྲོལ་སྒྲིག་གི་སྒོ་ཅིག་ནང་ བསྡུ་སྒྲིག་འབད་དེ་ སྙོམ་རྩིས་གསུམ་ཆ་ར་གིས་ གྱལ་རིམ་སྡེ་ཚན་ཅིག་ ཟ་སྤྱོད་འབདཝ་ཨིན།
+
+2. **པོ་སི་ཌོན་ཁས་བླངས་བཀག་སྡོམ།**
    - བརྗེ་སོར་འབད་ཡོད་པའི་པོ་སི་ཌོན་འཚོལ་ཞིབ་ཐིག་ཁྲམ་ལག་ལེན་འཐབ་སྟེ་ `poseidon_preimage_digest` འདི་ གཞན་མི་ཅ་ཆས་ཚུ་ནང་ ཧེ་མ་ལས་ལག་ལེན་འཐབ་ཡོད་པའི་ བརྗེ་སོར་འབདཝ་ཨིན། བརྡ་རྟགས་ནང་ པོ་སི་ཌོན་སྐོར་རིམ་ཚུ་ བརྗེ་སོར་མེད།
 
 3. **ཚོང་ལམ་གྱི་བཀག་ཆ་**།
@@ -96,7 +98,9 @@ struct TransferDeltaTranscript {
 5. **བེཆ་ལུཔ་**
    - ལས་རིམ་ཚུ་གིས་ `transfer_v1_batch_begin()` ལུ་ `transfer_asset` གི་བསྐྱར་འཁོར་ཅིག་གི་ཧེ་མ་དང་ དེ་གི་ཤུལ་ལས་ `transfer_v1_batch_end()` ལུ་ འབོད་བརྡ་འབདཝ་ཨིན། ཁྱབ་ཚད་འདི་ ཤུགས་ལྡན་སྦེ་ཡོད་པའི་སྐབས་ ཧོསིཊི་གི་བཱ་ཕར་རེ་རེ་གིས་ སྤོ་བཤུད་རེ་རེ་བཞིན་དུ་ Kotodama གཅིག་སྦེ་ བསྐྱར་རྩེད་འབདཝ་ཨིནམ་དང་ འདི་ Poseidon/SMT སྐབས་དོན་འདི་ ཚར་རེ་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན། ཁ་སྐོང་ཌེལ་ཊ་རེ་རེ་གིས་ ཨང་རྩིས་རིག་པ་དང་ འདབ་མའི་ཞིབ་དཔྱད་གཉིས་རྐྱངམ་ཅིག་ཁ་སྐོང་འབདཝ་ཨིན། ད་ལྟོ་ ཡིག་བསྒྱུར་གྱི་ ཌི་ཀོ་ཌར་གྱིས་ སྣ་མང་ཌེལ་ཊ་གི་སྡེ་ཚན་ཚུ་ ངོས་ལེན་འབད་དེ་ Norito ཟེར་ ཕྱིར་བཏོན་འབདཝ་ཨིནམ་ལས་ འཆར་གཞི་བརྩམ་མི་འདི་གིས་ Norito ལོག་སྟེ་མ་ལྷག་པར་ དཔང་པོ་ཚུ་ བཀབ་ཚུགས། ཧེ་མ་ལས་ Norito paload ལག་ལེན་འཐབ་ཚུགས་པའི་ ཁག་འབག་ཚུ་གིས་ (དཔེར་ན་ CLI/SDKs) `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` ཟེར་སླབ་སྟེ་ གོ་སྐབས་འདི་ ཡོངས་རྫོགས་སྦེ་ བརྒལ་ཚུགས།
 
-# ཧོསཊི་དང་ བསྒྱུར་བཅོས།| བང་རིམ་ | བསྒྱུར་བཅོས་ཚུ་ |
+# ཧོསཊི་དང་ བསྒྱུར་བཅོས།
+
+| བང་རིམ་ | བསྒྱུར་བཅོས་ཚུ་ |
 |--------|--------------------------------------------------------
 | Norito | `transfer_v1_batch_begin` (Kotodama) ཁ་སྐོང་བརྐྱབ་སྟེ་ ལས་རིམ་ཚུ་གིས་ བར་མཚམས་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་སིསི་ཀཱལ་ཚུ་ ལེ་ཤ་ཅིག་ལུ་གུག་ཤད་འབད་ཚུགས། (`0x2B`) སྔོན་སྒྲིག་བཀོད་སྒྲིག་འབད་ཡོད་པའི་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ཨིན། |
 | Norito & བརྟག་དཔྱད། | ཀོར་/སྔོན་སྒྲིག་ཧོསཊི་ཚུ་གིས་ ཁྱབ་ཚད་འདི་ ཤུགས་ལྡན་སྦེ་ཡོད་པའི་སྐབས་ བེཆ་ཨེཔ་ཌི་སྦེ་བརྩི་འཇོག་འབདཝ་ཨིན། ཁ་ཐོག་ལུ་ `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, དང་ འགྱུར་ལྡོག་བརྟག་དཔྱད་ཀྱིས་ ཁས་བླངས་མ་འབད་བའི་ཧེ་མ་ ཌབ་ལུ་ཨེསི་ཝི་གི་ཐོ་བཀོད་ཚུ་ ཆ་མེད་བཏང་ཚུགས། དུས་མཐུན་བཟོ་ནི།【ཀར/ཨེ་ཝི་ཨེམ་/སི་ཨར་སི/ཀོར་_ཧོསིཊི་.1001】】】】】】】】】】】】【ཀྲེ་རེཊས/སརསི/ཧོསཏྲ་སི།:451】  】  】          】  】  】  】 ། :3713】【【【【【【【【【【བརྟག་པ/བརྟག་དཔྱད/ཝས་ཝི་_པོའིནཊར་_ཊལ་ཝརས:༢༡༩】 】  】 ཨེ་སི/ཨཝ་ཨེམ/བརྟག་དཔྱད་/ཝསི་_ཧོསཊི་_པོའིནཊར་_ཀྲལ་ཝརས:༢༨༧】།
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```འདི་ཡང་ འཕྲུལ་ཆས་འདི་གིས་ བདེན་དཔྱད་འབད་བའི་སྐབས་ལུ་ སྔོན་སྒྲིག་འབད་དེ་ `iroha_cli audit witness` གིས་ ད་ལྟོ་ `iroha_cli audit witness` གིས་ ཕྱིར་འཐེན་འབད་མི་ FASTPQ batch artifacts ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+```
+
+འདི་ཡང་ འཕྲུལ་ཆས་འདི་གིས་ བདེན་དཔྱད་འབད་བའི་སྐབས་ལུ་ སྔོན་སྒྲིག་འབད་དེ་ `iroha_cli audit witness` གིས་ ད་ལྟོ་ `iroha_cli audit witness` གིས་ ཕྱིར་འཐེན་འབད་མི་ FASTPQ batch artifacts ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
 # རྒྱུན་ལས་འཆར་གཞི།
 

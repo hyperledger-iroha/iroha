@@ -72,7 +72,8 @@ fn main() -> Result<()> {
     let mut cfg = ClientConfiguration::test();
     cfg.torii_url = "http://127.0.0.1:8080".parse()?;
     cfg.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
-    cfg.account = AccountId::from_str(&admin_account)?;
+    cfg.account = AccountId::parse_encoded(&admin_account)
+        .map(|parsed| parsed.into_account_id())?;
     cfg.key_pair = KeyPair::from_private_key(PrivateKey::from_str(&admin_private_key)?)?;
 
     let client = Client::new(cfg)?;
@@ -81,15 +82,19 @@ fn main() -> Result<()> {
     let asset_definition_id = AssetDefinitionId::from_str("7Sp2j6zDvJFnMoscAiMaWbWHRDBZ")?;
     client.submit_blocking(Register::asset_definition(
         AssetDefinition::numeric(asset_definition_id.clone()),
-    ))?;
+    ), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))?;
 
     // 2) Mint 250 units into the admin account.
-    let admin_asset = AssetId::new(asset_definition_id.clone(), AccountId::from_str(&admin_account)?);
-    client.submit_blocking(Mint::asset_quantity(250_u32, admin_asset.clone()))?;
+    let admin_asset = AssetId::new(
+        asset_definition_id.clone(),
+        AccountId::parse_encoded(&admin_account).map(|parsed| parsed.into_account_id())?,
+    );
+    client.submit_blocking(Mint::asset_quantity(250_u32, admin_asset.clone()), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))?;
 
     // 3) Transfer 50 units to the receiver.
-    let receiver_id = AccountId::from_str(&receiver_account)?;
-    client.submit_blocking(Transfer::asset_quantity(admin_asset.clone(), 50_u32, receiver_id.clone()))?;
+    let receiver_id =
+        AccountId::parse_encoded(&receiver_account).map(|parsed| parsed.into_account_id())?;
+    client.submit_blocking(Transfer::asset_quantity(admin_asset.clone(), 50_u32, receiver_id.clone()), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))?;
 
     // 4) Query the receiver balance to confirm the transfer.
     let assets = client.request(&FindAccountAssets::new(receiver_id.clone()))?;

@@ -96,6 +96,9 @@ pub enum VegaMdlError {
         /// Stable field label.
         field: &'static str,
     },
+    /// Epoch zero cannot select an authoritative issuer revision.
+    #[error("Vega issuer-record epoch must be non-zero")]
+    ZeroIssuerRecordEpoch,
     /// A canonical frame label or value does not fit its length prefix.
     #[error("Vega device-authentication frame field is too large")]
     FrameFieldTooLarge,
@@ -124,17 +127,15 @@ pub enum VegaMdlError {
         /// Inclusive maximum.
         max: u8,
     },
-    /// An input exceeds the exact closed byte bound or is empty.
-    #[error("Vega `{field}` length {actual} is outside {min}..={max}")]
+    /// An input differs from the one canonical released byte width.
+    #[error("Vega `{field}` length {actual} is not exactly {expected}")]
     InvalidInputLength {
         /// Stable input label.
         field: &'static str,
         /// Actual byte length.
         actual: usize,
-        /// Inclusive minimum.
-        min: usize,
-        /// Inclusive maximum.
-        max: usize,
+        /// Required byte length.
+        expected: usize,
     },
     /// Deterministic CBOR parsing failed.
     #[error("Vega input is not strict deterministic CBOR")]
@@ -172,12 +173,6 @@ pub enum VegaMdlError {
         /// Stable field label.
         field: &'static str,
     },
-    /// A paper-required unique field prefix was absent or repeated.
-    #[error("Vega MSO prefix `{field}` must occur exactly once")]
-    NonUniqueFieldPrefix {
-        /// Stable field label.
-        field: &'static str,
-    },
     /// A P-256 public key is malformed, non-canonical, off-curve, or identity.
     #[error("Vega `{field}` is not a valid P-256 public key")]
     InvalidP256PublicKey {
@@ -197,18 +192,19 @@ pub enum VegaMdlError {
         /// Signature role.
         role: VegaSignatureRoleV1,
     },
-    /// The birth signed-item randomizer is outside the closed size bound.
-    #[error("Vega birth-date randomizer length {actual} is outside 16..=64")]
-    InvalidBirthRandomLength {
-        /// Actual randomizer byte length.
-        actual: usize,
-    },
     /// The birth signed-item digest does not match its authenticated MSO entry.
     #[error("Vega birth-date signed-item digest mismatch")]
     BirthDateDigestMismatch,
     /// The credential is expired on the public presentation date.
     #[error("Vega credential validUntil date must be after presentation date")]
     CredentialExpired,
+    /// The issuer's signing timestamp follows the credential's activation
+    /// timestamp.
+    #[error("Vega credential signed timestamp must not follow validFrom timestamp")]
+    CredentialSignedAfterValidFrom,
+    /// The credential is not active on the public presentation date.
+    #[error("Vega credential validFrom date must not follow presentation date")]
+    CredentialNotYetValid,
     /// The private date of birth follows the presentation date.
     #[error("Vega birth date follows the presentation date")]
     BirthDateAfterPresentation,
@@ -225,6 +221,9 @@ pub enum VegaMdlError {
     /// The witness is not the one released exact deterministic-CBOR profile.
     #[error("Vega witness is not the released exact Figure 9 encoding")]
     InvalidClosedProfileEncoding,
+    /// A locally constructed proof failed the independent public verifier.
+    #[error("Vega prover self-check failed")]
+    ProverSelfCheckFailed,
     /// Canonical proof construction, decoding, or verification failed.
     #[error(transparent)]
     Proof(#[from] VegaMdlProofErrorV1),
@@ -452,14 +451,21 @@ pub fn prove_mdl_figure9_v1<R: RngCore + CryptoRng>(
     let validated = validate_mdl_witness(statement, binding, trusted_block_timestamp_ms, witness)?;
     let circuit_witness = validated.circuit_witness()?;
     let mut random_source = CoreVegaRandomSource(random);
-    prove_vega_mdl_figure9_v1(
+    let proof = prove_vega_mdl_figure9_v1(
         &binding.proof_context(),
         validated.public_inputs().as_array(),
         &circuit_witness,
         config,
         &mut random_source,
     )
-    .map_err(VegaMdlError::from)
+    .map_err(VegaMdlError::from)?;
+    verify_vega_mdl_figure9_v1(
+        &binding.proof_context(),
+        validated.public_inputs().as_array(),
+        &proof,
+    )
+    .map_err(|_| VegaMdlError::ProverSelfCheckFailed)?;
+    Ok(proof)
 }
 
 /// Verify one canonical Figure 9 proof against consensus and trusted time.
@@ -522,6 +528,11 @@ pub fn device_authentication_frame_v1(
         b"action_index",
         &binding.action_index.to_be_bytes(),
     )?;
+    append_frame_field(
+        &mut frame,
+        b"transaction_intent_digest",
+        statement.context.transaction_intent_digest.as_bytes(),
+    )?;
     append_frame_field(&mut frame, b"parameter_id", &binding.parameter_id)?;
     append_frame_field(&mut frame, b"parameter_digest", &binding.parameter_digest)?;
     append_frame_field(&mut frame, b"verifier_digest", &binding.verifier_digest)?;
@@ -534,6 +545,17 @@ pub fn device_authentication_frame_v1(
         &mut frame,
         b"engine_manifest_digest",
         &binding.engine_manifest_digest,
+    )?;
+    append_frame_field(&mut frame, b"issuer_id", statement.issuer_id.as_bytes())?;
+    append_frame_field(
+        &mut frame,
+        b"issuer_record_epoch",
+        &statement.issuer_record_epoch.to_be_bytes(),
+    )?;
+    append_frame_field(
+        &mut frame,
+        b"issuer_record_digest",
+        statement.issuer_record_digest.as_bytes(),
     )?;
     append_frame_field(&mut frame, b"document_type", VEGA_MDL_DOCUMENT_TYPE_V1)?;
     append_frame_field(&mut frame, b"namespace", VEGA_MDL_NAMESPACE_V1)?;
@@ -634,6 +656,9 @@ pub(super) fn validate_date(
 fn validate_public_statement(
     statement: &VegaExistingCredentialStatementV1,
 ) -> Result<(), VegaMdlError> {
+    if statement.issuer_record_epoch == 0 {
+        return Err(VegaMdlError::ZeroIssuerRecordEpoch);
+    }
     let _ = validate_date(statement.presentation_date, "presentation_date")?;
     if !(VEGA_MDL_MIN_PRESENTATION_YEAR_V1..=VEGA_MDL_MAX_PRESENTATION_YEAR_V1)
         .contains(&statement.presentation_date.year)
@@ -652,6 +677,15 @@ fn validate_public_statement(
         });
     }
     for (field, digest) in [
+        (
+            "transaction_intent_digest",
+            statement.context.transaction_intent_digest.as_bytes(),
+        ),
+        ("issuer_id", statement.issuer_id.as_bytes()),
+        (
+            "issuer_record_digest",
+            statement.issuer_record_digest.as_bytes(),
+        ),
         ("reader_challenge", statement.reader_challenge.as_bytes()),
         (
             "session_transcript_digest",

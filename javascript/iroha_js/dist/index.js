@@ -19,12 +19,6 @@ export {
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
 export {
-  PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
-  PRIVACY_PROTOCOL_IDS_V1,
-  PrivacyCapabilitySnapshotError,
-  parsePrivacyCapabilitySnapshotV1,
-} from "./privacyCapabilities.js";
-export {
   KotodamaDecimal,
   KotodamaInt,
   KotodamaQuantity,
@@ -145,6 +139,7 @@ export {
   sm2PublicKeyMultihash,
   buildKaigiRosterJoinProof,
   buildZkAceTransferAuthorizationV1,
+  PRIVACY_CAPABILITY_VALIDATION_STATUS_V1,
   PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
@@ -188,8 +183,8 @@ export {
   noritoEncodeInstruction,
   noritoDecodeInstruction,
   inspectSubscriptionTriggerAction,
-  noritoEncodePrivacyProofEnvelope,
-  noritoDecodePrivacyProofEnvelope,
+  noritoEncodeOpenVerifyEnvelope,
+  noritoDecodeOpenVerifyEnvelope,
   noritoEncodeContractManifestSignaturePayload,
   noritoEncodeTransactionPayloadBatch,
   noritoEncodeMultisigProposeRequest,
@@ -406,8 +401,6 @@ export {
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
-  buildRegisterPrivacyVerifierKeyInstruction,
-  buildRetirePrivacyVerifierKeyInstruction,
   buildRegisterAssetHiddenZkPoolInstruction,
   buildRegisterZkAssetInstruction,
   buildRegisterZkAceIdentityCommitmentInstruction,

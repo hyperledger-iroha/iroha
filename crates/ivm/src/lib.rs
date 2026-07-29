@@ -190,6 +190,10 @@ pub use crate::{
 pub use iroha_crypto::{MerkleProof, MerkleTree};
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 pub use ivm_abi::SyscallPolicy;
+/// Canonical Kotodama V1 dynamic state-access hint validation.
+pub use ivm_abi::access_hints;
+/// Canonical Norito framing helpers shared by ABI producers and consumers.
+pub use ivm_abi::codec;
 /// Stable V1 typed core-query tags, projections, and bounded page records.
 pub use ivm_abi::core_query;
 /// Exact schemas and typed nested-return records encoded at public contract boundaries.

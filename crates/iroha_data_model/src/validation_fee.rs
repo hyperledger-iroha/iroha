@@ -606,14 +606,15 @@ impl ValidationFeePlainElectorateSnapshotV1 {
     ///
     /// Returns a Norito encoding error when the typed payload cannot be serialized.
     pub fn checked_roster_root(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(&ValidationFeePlainElectorateSnapshotRootPayloadV1 {
-            proposal_id: self.proposal_id,
-            proposal_operator: self.proposal_operator.clone(),
-            captured_at_height: self.captured_at_height,
-            approval_gate_height: self.approval_gate_height,
-            member_count: self.member_count,
-            members: self.members.clone(),
-        })?;
+        let encoded =
+            norito::encode_canonical(&ValidationFeePlainElectorateSnapshotRootPayloadV1 {
+                proposal_id: self.proposal_id,
+                proposal_operator: self.proposal_operator.clone(),
+                captured_at_height: self.captured_at_height,
+                approval_gate_height: self.approval_gate_height,
+                member_count: self.member_count,
+                members: self.members.clone(),
+            })?;
         let mut preimage = Vec::with_capacity(
             VALIDATION_FEE_PLAIN_ELECTORATE_SNAPSHOT_ROOT_DOMAIN_V1.len() + 1 + encoded.len(),
         );
@@ -1172,7 +1173,7 @@ impl ValidationFeePolicyRegistryV1 {
     ///
     /// Returns a Norito encoding error when the registry cannot be serialized.
     pub fn snapshot_hash(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut preimage = Vec::with_capacity(
             VALIDATION_FEE_REGISTRY_SNAPSHOT_HASH_DOMAIN.len() + 1 + encoded.len(),
         );
@@ -1293,7 +1294,7 @@ impl ValidationFeePolicySnapshotCommitmentV1 {
             return Self::from_registry(evaluated_height, None);
         };
         let Some(registry) = ValidationFeePolicyRegistryV1::from_custom_parameter(custom) else {
-            let invalid_hash = norito::to_bytes(custom)
+            let invalid_hash = norito::encode_canonical(custom)
                 .map_or_else(|_| Hash::new(custom.id().to_string()), Hash::new);
             return Self {
                 version: VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1,
@@ -1331,13 +1332,11 @@ impl ValidationFeePolicyWitnessProofV1 {
             return false;
         }
         let Ok(commitment) =
-            norito::decode_from_bytes::<ValidationFeePolicySnapshotCommitmentV1>(&self.value)
+            norito::decode_canonical::<ValidationFeePolicySnapshotCommitmentV1>(&self.value)
         else {
             return false;
         };
-        if commitment.version != VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1
-            || norito::to_bytes(&commitment).ok().as_deref() != Some(self.value.as_slice())
-        {
+        if commitment.version != VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1 {
             return false;
         }
         let path = Hash::new(&self.key);
@@ -1367,12 +1366,13 @@ impl ValidationFeePolicyWitnessProofV1 {
     /// Returns an error when the stored value is not a valid canonical Norito
     /// encoding of [`ValidationFeePolicySnapshotCommitmentV1`].
     pub fn commitment(&self) -> Result<ValidationFeePolicySnapshotCommitmentV1, String> {
-        let commitment = norito::decode_from_bytes(&self.value)
-            .map_err(|error| format!("validation-fee snapshot commitment is invalid: {error}"))?;
-        if norito::to_bytes(&commitment).map_err(|error| error.to_string())? != self.value {
-            return Err("validation-fee snapshot commitment is non-canonical".into());
-        }
-        Ok(commitment)
+        norito::decode_canonical(&self.value).map_err(|error| {
+            if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                "validation-fee snapshot commitment is non-canonical".into()
+            } else {
+                format!("validation-fee snapshot commitment is invalid: {error}")
+            }
+        })
     }
 }
 
@@ -1627,7 +1627,7 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
     ///
     /// Returns a Norito encoding error if the binding cannot be encoded.
     pub fn lifecycle_seal(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut preimage = Vec::with_capacity(
             VALIDATION_FEE_PAYOUT_LIFECYCLE_SEAL_DOMAIN.len() + 1 + encoded.len(),
         );
@@ -1757,7 +1757,7 @@ impl ValidationFeePolicyV1 {
     ///
     /// Returns a Norito encoding error if the policy cannot be serialized.
     pub fn policy_hash(&self) -> Result<[u8; 32], norito::Error> {
-        let bytes = norito::to_bytes(self)?;
+        let bytes = norito::encode_canonical(self)?;
         let mut payload =
             Vec::with_capacity(VALIDATION_FEE_POLICY_HASH_DOMAIN.len() + 1 + bytes.len());
         payload.extend_from_slice(VALIDATION_FEE_POLICY_HASH_DOMAIN);
@@ -2063,6 +2063,68 @@ mod parliament_tests {
             None,
         )
         .expect("policy hash")
+    }
+
+    #[test]
+    fn validation_fee_identity_hashes_ignore_and_restore_ambient_flags() {
+        let policy = policy(1, None);
+        let binding = payout_binding();
+        let registry = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![entry(policy.clone(), 1)],
+        };
+        let proposal_operator = account(7);
+        let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+            [0x42; 32],
+            proposal_operator.clone(),
+            200,
+            100,
+            vec![ValidationFeePlainElectorateMemberV1 {
+                account_id: proposal_operator,
+                bonded_height: 100,
+                bonded_amount: 10_000_u64.into(),
+            }],
+        )
+        .expect("canonical PLAIN electorate snapshot");
+        let baseline = (
+            policy.policy_hash().expect("policy hash"),
+            binding.lifecycle_seal().expect("lifecycle seal"),
+            registry.snapshot_hash().expect("registry snapshot hash"),
+            electorate.checked_roster_root().expect("electorate root"),
+        );
+        let canonical_policy =
+            norito::encode_canonical(&policy).expect("encode canonical validation-fee policy");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_policy = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&policy).expect("encode alternate-layout validation-fee policy")
+        };
+        assert_ne!(
+            alternate_policy, canonical_policy,
+            "fixture must exercise a distinct advertised Norito layout"
+        );
+
+        let ambient = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let before =
+                norito::to_bytes(&policy).expect("encode policy under caller ambient flags");
+            let observed = (
+                policy.policy_hash().expect("ambient policy hash"),
+                binding.lifecycle_seal().expect("ambient lifecycle seal"),
+                registry.snapshot_hash().expect("ambient registry hash"),
+                electorate
+                    .checked_roster_root()
+                    .expect("ambient electorate root"),
+            );
+            let after =
+                norito::to_bytes(&policy).expect("re-encode policy under caller ambient flags");
+            assert_eq!(
+                before, after,
+                "canonical identity helpers must restore the caller's ambient layout"
+            );
+            observed
+        };
+        assert_eq!(ambient, baseline);
     }
 
     #[test]
@@ -2673,6 +2735,107 @@ mod parliament_tests {
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
+
+    fn witness_root(proof: &ValidationFeePolicyWitnessProofV1) -> Hash {
+        let path = Hash::new(&proof.key);
+        let value_hash = Hash::new(&proof.value);
+        let mut leaf_preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
+        leaf_preimage.push(0);
+        leaf_preimage.extend_from_slice(path.as_ref());
+        leaf_preimage.extend_from_slice(value_hash.as_ref());
+        let mut current = Hash::new(leaf_preimage);
+        for (level, sibling) in proof.siblings.iter().copied().enumerate() {
+            let path_bit = 255_usize.saturating_sub(level);
+            let byte = path.as_ref()[path_bit / 8];
+            let right = byte & (1_u8 << (path_bit % 8)) != 0;
+            current = if right {
+                validation_fee_ordinary_smt_node_hash(sibling, current)
+            } else {
+                validation_fee_ordinary_smt_node_hash(current, sibling)
+            };
+        }
+        current
+    }
+
+    #[test]
+    fn witness_commitment_rejects_alternate_norito_layout() {
+        let commitment = ValidationFeePolicySnapshotCommitmentV1::from_registry(17, None);
+        let canonical = norito::encode_canonical(&commitment).expect("encode canonical commitment");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&commitment).expect("encode alternate-layout commitment")
+        };
+        assert_ne!(
+            alternate, canonical,
+            "fixture must exercise a distinct advertised Norito layout"
+        );
+        norito::decode_from_bytes::<ValidationFeePolicySnapshotCommitmentV1>(&alternate)
+            .expect("ordinary Norito accepts the advertised alternate layout");
+
+        let canonical_proof = ValidationFeePolicyWitnessProofV1 {
+            key: VALIDATION_FEE_POLICY_WITNESS_KEY_V1.to_vec(),
+            value: canonical,
+            siblings: vec![
+                Hash::new(b"validation-fee witness sibling");
+                VALIDATION_FEE_POLICY_WITNESS_SIBLINGS_V1
+            ],
+        };
+        assert_eq!(
+            canonical_proof.commitment().expect("canonical commitment"),
+            commitment
+        );
+        assert!(canonical_proof.verify(witness_root(&canonical_proof)));
+
+        let alternate_proof = ValidationFeePolicyWitnessProofV1 {
+            value: alternate,
+            ..canonical_proof
+        };
+        assert_eq!(
+            alternate_proof
+                .commitment()
+                .expect_err("alternate-layout commitment must fail"),
+            "validation-fee snapshot commitment is non-canonical"
+        );
+        assert!(!alternate_proof.verify(witness_root(&alternate_proof)));
+    }
+
+    #[test]
+    fn snapshot_identity_encoding_ignores_and_restores_ambient_flags() {
+        let commitment = ValidationFeePolicySnapshotCommitmentV1::from_registry(17, None);
+        let canonical = norito::encode_canonical(&commitment).expect("encode canonical commitment");
+        let malformed_parameter = CustomParameter::new(
+            ValidationFeePolicyRegistryV1::parameter_id(),
+            Json::new("not a validation-fee registry"),
+        );
+        let baseline_invalid = ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
+            19,
+            Some(&malformed_parameter),
+        );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let (ambient_canonical, ambient_invalid) = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let before = norito::to_bytes(&commitment)
+                .expect("encode commitment under caller ambient flags");
+            let encoded = norito::encode_canonical(&commitment)
+                .expect("canonicalize commitment under caller ambient flags");
+            let invalid = ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
+                19,
+                Some(&malformed_parameter),
+            );
+            let after = norito::to_bytes(&commitment)
+                .expect("re-encode commitment under caller ambient flags");
+            assert_eq!(
+                before, after,
+                "canonical helpers must restore the caller's ambient layout"
+            );
+            (encoded, invalid)
+        };
+        assert_eq!(ambient_canonical, canonical);
+        assert_eq!(ambient_invalid, baseline_invalid);
+    }
 
     #[test]
     fn snapshot_constructors_fail_closed_for_absent_and_malformed_registry() {

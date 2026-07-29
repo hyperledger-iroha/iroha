@@ -184,7 +184,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.offlineNote),
+                profilePolicy: .sameProfile(.kagemusha),
                 limits: local,
                 transceive: { command in
                     observed.append(command)
@@ -223,7 +223,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         let observed = LockedCommands()
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.offlineNote),
+                profilePolicy: .sameProfile(.kagemusha),
                 transceive: { command in
                     observed.append(command)
                     return IrohaPeerNfcAPDUResponseV1(
@@ -260,7 +260,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         let observed = LockedCommands()
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.offlineNote),
+                profilePolicy: .sameProfile(.kagemusha),
                 transceive: { command in
                     observed.append(command)
                     switch command {
@@ -296,10 +296,13 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         count: Int
     ) throws -> IrohaPeerWireMessageV1 {
         try IrohaPeerWireMessageV1(
-            profile: .offlineNote,
+            profile: .kagemusha,
             kind: kind,
-            schemaVersion: 1,
-            canonicalPayload: Data(repeating: byte, count: count)
+            schemaVersion: 0x0102,
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
+                kind: kind,
+                payload: Data(repeating: byte, count: count)
+            )
         )
     }
 

@@ -15,8 +15,8 @@ macro_rules! impl_json_via_norito_bytes {
         $(
             impl norito::json::FastJsonWrite for $ty {
                 fn write_json(&self, out: &mut String) {
-                    let bytes = norito::to_bytes(self)
-                        .expect("Norito serialization must succeed");
+                    let bytes = norito::encode_canonical(self)
+                        .expect("canonical Norito serialization must succeed");
                     let encoded = base64::Engine::encode(
                         &base64::engine::general_purpose::STANDARD,
                         bytes,
@@ -35,9 +35,7 @@ macro_rules! impl_json_via_norito_bytes {
                         encoded.as_str(),
                     )
                         .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-                    let archived = norito::from_bytes::<$ty>(&bytes)
-                        .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-                    norito::core::NoritoDeserialize::try_deserialize(archived)
+                    norito::decode_canonical::<$ty>(&bytes)
                         .map_err(|err| norito::json::Error::Message(err.to_string()))
                 }
             }
@@ -115,8 +113,38 @@ mod tests {
     use crate::{
         domain::DomainId,
         events::data::prelude::{DataEvent, DomainEvent, MetadataChanged},
+        events::execute_trigger::ExecuteTriggerEventFilter,
         name::Name,
     };
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn event_filter_json_is_canonical_and_ambient_independent() {
+        let filter = EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new());
+        let canonical_json =
+            norito::json::to_json(&filter).expect("encode canonical event-filter JSON");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                norito::json::to_json(&filter)
+                    .expect("encode event-filter JSON under alternate ambient layout"),
+                canonical_json
+            );
+        }
+
+        let alternate_frame = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&filter).expect("encode alternate-layout event filter")
+        };
+        let encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, alternate_frame);
+        let alternate_json =
+            norito::json::to_json(&encoded).expect("encode alternate event frame as JSON string");
+        norito::json::from_json::<EventFilterBox>(&alternate_json)
+            .expect_err("alternate-layout event-filter JSON must be rejected");
+    }
 
     #[test]
     fn shared_data_event_from_arc_preserves_arc_pointer() {

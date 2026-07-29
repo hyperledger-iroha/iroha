@@ -104,10 +104,6 @@ impl WordVar {
         bits_to_lc(&self.bits_le)
     }
 
-    pub(super) fn bits_le(self) -> [Bit; 32] {
-        self.bits_le
-    }
-
     pub(super) fn to_be_bytes(self) -> [ByteVar; 4] {
         core::array::from_fn(|byte| {
             let source = 3 - byte;

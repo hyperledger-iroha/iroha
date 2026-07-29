@@ -476,7 +476,8 @@ def test_root_dockerfile_workflows_require_digest_pinned_base_refs() -> None:
         "publish_dev.yml": 1,
         "publish.yml": 3,
         "pr_docker_compose.yml": 1,
-        "publish_taira_validator.yml": 2,
+        # Taira builds once, then smokes and pushes that exact loaded image.
+        "publish_taira_validator.yml": 1,
         # One additional custom build uses Dockerfile.musl.
         "publish_custom.yml": 2,
     }

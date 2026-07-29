@@ -79,7 +79,9 @@ class RenderTairaLocalnetContainerBundleTest(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
 
-        rendered_config = (self.output_dir / "peer0.toml").read_text(encoding="utf-8")
+        rendered_config = (self.output_dir / "peer0" / "config.toml").read_text(
+            encoding="utf-8"
+        )
         self.assertRegex(rendered_config, r'address = "addr:0\.0\.0\.0:1337#[0-9A-F]{4}"')
         self.assertRegex(
             rendered_config,
@@ -107,6 +109,11 @@ class RenderTairaLocalnetContainerBundleTest(unittest.TestCase):
         rendered_env = (self.output_dir / "peer0.env").read_text(encoding="utf-8")
         self.assertIn("TAIRA_CONTAINER_NAME=taira-localnet-peer0", rendered_env)
         self.assertIn("TAIRA_IMAGE=local/taira-validator:prebuilt", rendered_env)
+        self.assertIn("TAIRA_RUNTIME_PROFILE=localnet", rendered_env)
+        self.assertIn(
+            f"TAIRA_CONFIG_BUNDLE_PATH={(self.output_dir / 'peer0').resolve()}",
+            rendered_env,
+        )
         self.assertIn("TAIRA_P2P_PORT=31337", rendered_env)
         self.assertIn("TAIRA_TORII_PORT=28080", rendered_env)
         self.assertIn("TAIRA_DOCKER_NETWORK=taira-localnet", rendered_env)
@@ -117,6 +124,40 @@ class RenderTairaLocalnetContainerBundleTest(unittest.TestCase):
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must contain at least 4 peer*.toml files", result.stderr)
+
+    def test_renderer_rejects_noncontiguous_peer_indices(self) -> None:
+        (self.bundle_dir / "peer3.toml").rename(self.bundle_dir / "peer4.toml")
+
+        result = self.run_script()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "localnet peer indices must be contiguous and start at zero",
+            result.stderr,
+        )
+
+    def test_renderer_rejects_host_port_range_overflow(self) -> None:
+        result = self.run_script("--base-torii-port", "65534")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "base Torii port range must remain within 1..65535",
+            result.stderr,
+        )
+
+    def test_renderer_rejects_overlapping_host_port_ranges(self) -> None:
+        result = self.run_script(
+            "--base-p2p-port",
+            "28080",
+            "--base-torii-port",
+            "28082",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "localnet host P2P and Torii port ranges must not overlap",
+            result.stderr,
+        )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,1954 @@
+//! Strict-positive `u64` amount proofs for FCMP++ outputs.
+//!
+//! FCMP++ proves full-chain membership and rerandomization of consumed
+//! commitments; it does not itself prove that newly created commitments encode
+//! bounded amounts.  This module supplies the missing RingCT relation with one
+//! aggregate Monero Bulletproofs+ proof.  For every output commitment `C` the
+//! proof contains both `C` and `C - H` in its ordered public statement.  A
+//! 64-bit range proof for both points proves that the hidden amount is in
+//! `1..=u64::MAX`: the first relation establishes the upper bound and the
+//! second excludes zero.
+//!
+//! The equations and Monero generator derivation are a native port of the
+//! MIT-licensed `monero-bulletproofs` implementation by Luke Parker at Serai
+//! commit `971951a1a66014fce5a943b4c78fc24c63187dbb`.  Iroha adds an explicit
+//! transcript domain, the complete typed-statement digest, and the ordered
+//! output commitments before the standard Figure-3 challenges.  Proofs cannot
+//! therefore be transplanted across pools, assets, roots, transactions, or
+//! output orderings.
+
+use std::sync::OnceLock;
+
+use curve25519_dalek::{
+    constants::ED25519_BASEPOINT_POINT,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
+    traits::{Identity as _, IsIdentity as _, MultiscalarMul as _, VartimeMultiscalarMul as _},
+};
+use p256::elliptic_curve::bigint::{Encoding as _, U256};
+use rand_core_06::{CryptoRng, RngCore};
+use sha2::{Digest as _, Sha256};
+use sha3::Keccak256;
+use zeroize::{Zeroize, Zeroizing};
+
+use super::{
+    FCMP_MAX_OUTPUTS_NATIVE_V1, FcmpNativeErrorV1, FcmpOutputTupleV1,
+    field::{
+        Field25519, decode_edwards_point, encode_field25519, field25519_from_u64,
+        field25519_is_zero, invert_field25519, monero_varint, validate_edwards_scalar,
+    },
+};
+
+/// Upstream revision used for the native Bulletproofs+ equation port.
+pub const FCMP_BP_PLUS_UPSTREAM_REVISION_V1: &str = "971951a1a66014fce5a943b4c78fc24c63187dbb";
+/// SHA-256 digest of the complete ordered Monero Bulletproofs+ generator
+/// basis used by the bounded first-release profile.
+pub const FCMP_BP_PLUS_GENERATOR_DIGEST_V1: [u8; 32] = [
+    0xd9, 0xb3, 0xb5, 0xf3, 0x69, 0xf0, 0xa5, 0x91, 0x21, 0xe0, 0xb8, 0x5b, 0xdf, 0xba, 0x17, 0x14,
+    0xd7, 0x65, 0xd0, 0xa2, 0x86, 0x7d, 0x6e, 0x9b, 0x17, 0x46, 0x4e, 0xbf, 0x84, 0x5d, 0xba, 0x13,
+];
+/// Exact hidden amount width.
+pub const FCMP_AMOUNT_BITS_V1: usize = 64;
+/// Each output contributes `C` and `C-H` to exclude zero.
+pub const FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1: usize = 2;
+/// Maximum public commitments in the strict-positive aggregate proof.
+pub const FCMP_MAX_RANGE_COMMITMENTS_V1: usize =
+    FCMP_MAX_OUTPUTS_NATIVE_V1 * FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1;
+
+const BP_PLUS_GENERATOR_DOMAIN_V1: &[u8] = b"bulletproof_plus";
+const BP_PLUS_TRANSCRIPT_DOMAIN_V1: &[u8] = b"bulletproof_plus_transcript";
+const IROHA_RANGE_BINDING_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.bp-plus.strict-positive-u64.v1";
+const GENERATOR_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.bp-plus.generator-basis.v1";
+const MAX_SCALAR_SAMPLING_ATTEMPTS_V1: usize = 128;
+const MAX_PROVER_RESTARTS_V1: usize = 128;
+
+// Monero's amount generator H.
+const MONERO_H_BYTES_V1: [u8; 32] = [
+    0x8b, 0x65, 0x59, 0x70, 0x15, 0x37, 0x99, 0xaf, 0x2a, 0xea, 0xdc, 0x9f, 0xf1, 0xad, 0xd0, 0xea,
+    0x6c, 0x72, 0x51, 0xd5, 0x41, 0x54, 0xcf, 0xa9, 0x2c, 0x17, 0x3a, 0x0d, 0xd3, 0x9c, 0x1f, 0x94,
+];
+
+#[derive(Clone)]
+struct ScalarVector(Vec<Scalar>);
+
+impl Drop for ScalarVector {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl ScalarVector {
+    fn zero(len: usize) -> Self {
+        Self(vec![Scalar::ZERO; len])
+    }
+
+    fn powers(value: Scalar, len: usize) -> Result<Self, FcmpNativeErrorV1> {
+        if len == 0 {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        let mut powers = Vec::with_capacity(len);
+        powers.push(Scalar::ONE);
+        for index in 1..len {
+            powers.push(powers[index - 1] * value);
+        }
+        Ok(Self(powers))
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn add_scalar(mut self, scalar: Scalar) -> Self {
+        for value in &mut self.0 {
+            *value += scalar;
+        }
+        self
+    }
+
+    fn sub_scalar(mut self, scalar: Scalar) -> Self {
+        for value in &mut self.0 {
+            *value -= scalar;
+        }
+        self
+    }
+
+    fn mul_scalar(mut self, scalar: Scalar) -> Self {
+        for value in &mut self.0 {
+            *value *= scalar;
+        }
+        self
+    }
+
+    fn add_vector(mut self, other: &Self) -> Result<Self, FcmpNativeErrorV1> {
+        if self.len() != other.len() {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        for (left, right) in self.0.iter_mut().zip(&other.0) {
+            *left += right;
+        }
+        Ok(self)
+    }
+
+    fn mul_vector(mut self, other: &Self) -> Result<Self, FcmpNativeErrorV1> {
+        if self.len() != other.len() {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        for (left, right) in self.0.iter_mut().zip(&other.0) {
+            *left *= right;
+        }
+        Ok(self)
+    }
+
+    fn sum(&self) -> Scalar {
+        self.0.iter().copied().sum()
+    }
+
+    fn weighted_inner_product(
+        self,
+        other: &Self,
+        weights: &Self,
+    ) -> Result<Scalar, FcmpNativeErrorV1> {
+        Ok(self.mul_vector(other)?.mul_vector(weights)?.sum())
+    }
+
+    fn split(mut self) -> Result<(Self, Self), FcmpNativeErrorV1> {
+        if self.len() <= 1 || self.len() % 2 != 0 {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        let right = self.0.split_off(self.len() / 2);
+        Ok((self, Self(right)))
+    }
+}
+
+#[derive(Clone)]
+struct PointVector(Vec<EdwardsPoint>);
+
+impl PointVector {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn split(mut self) -> Result<(Self, Self), FcmpNativeErrorV1> {
+        if self.len() <= 1 || self.len() % 2 != 0 {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        let right = self.0.split_off(self.len() / 2);
+        Ok((self, Self(right)))
+    }
+}
+
+#[derive(Clone)]
+struct BpPlusGenerators {
+    g_bold: Vec<EdwardsPoint>,
+    h_bold: Vec<EdwardsPoint>,
+}
+
+impl BpPlusGenerators {
+    fn reduce(&self, count: usize) -> Result<Self, FcmpNativeErrorV1> {
+        let count = count
+            .max(1)
+            .checked_next_power_of_two()
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+        if count > self.g_bold.len() || count > self.h_bold.len() {
+            return Err(FcmpNativeErrorV1::RangeOutputCount {
+                actual: count / FCMP_AMOUNT_BITS_V1,
+                max: FCMP_MAX_OUTPUTS_NATIVE_V1,
+            });
+        }
+        Ok(Self {
+            g_bold: self.g_bold[..count].to_vec(),
+            h_bold: self.h_bold[..count].to_vec(),
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.g_bold.len()
+    }
+}
+
+static AMOUNT_GENERATOR: OnceLock<Result<EdwardsPoint, FcmpNativeErrorV1>> = OnceLock::new();
+static BP_PLUS_GENERATORS: OnceLock<Result<BpPlusGenerators, FcmpNativeErrorV1>> = OnceLock::new();
+static BP_PLUS_TRANSCRIPT_PREFIX: OnceLock<Result<[u8; 32], FcmpNativeErrorV1>> = OnceLock::new();
+
+pub(super) fn amount_generator() -> Result<EdwardsPoint, FcmpNativeErrorV1> {
+    AMOUNT_GENERATOR
+        .get_or_init(|| decode_edwards_point(MONERO_H_BYTES_V1, false))
+        .clone()
+}
+
+fn keccak256(bytes: &[u8]) -> [u8; 32] {
+    Keccak256::digest(bytes).into()
+}
+
+fn hash_to_scalar(parts: &[&[u8]]) -> Result<Scalar, FcmpNativeErrorV1> {
+    let mut hasher = Keccak256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    let scalar = Scalar::from_bytes_mod_order(hasher.finalize().into());
+    if scalar == Scalar::ZERO {
+        return Err(FcmpNativeErrorV1::RangeChallengeZero);
+    }
+    Ok(scalar)
+}
+
+/// Monero's historical `hash_to_ec`, retained exactly for its BP+ basis.
+fn monero_hash_to_point(bytes: [u8; 32]) -> Result<EdwardsPoint, FcmpNativeErrorV1> {
+    let mut hashed_bytes = keccak256(&bytes);
+    let high_bit = hashed_bytes[31] >> 7;
+    hashed_bytes[31] &= 0x7f;
+    let mut reduced = U256::from_le_bytes(hashed_bytes);
+    if high_bit == 1 {
+        // 2^255 = 19 (mod 2^255-19).
+        reduced = reduced.wrapping_add(&U256::from(19_u8));
+    }
+    let modulus =
+        U256::from_be_hex("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
+    if reduced >= modulus {
+        reduced = reduced.wrapping_sub(&modulus);
+    }
+    let square = Field25519::new(&reduced).square();
+    let v = square + square;
+    let w = v + Field25519::ONE;
+    let a = field25519_from_u64(486_662);
+    let x_polynomial = w.square() - (a.square() * v);
+
+    // The upstream construction deliberately shadows `v` with the
+    // denominator polynomial inside this block.  Using the hash-derived
+    // `v` here instead maps to an invalid Edwards encoding.
+    let polynomial_v = x_polynomial;
+    let v3 = polynomial_v * polynomial_v * polynomial_v;
+    let uv3 = w * v3;
+    let v7 = v3 * v3 * polynomial_v;
+    let uv7 = w * v7;
+    let inverse_eight = invert_field25519(field25519_from_u64(8))
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let exponent = (-field25519_from_u64(5) * inverse_eight).retrieve();
+    let x_candidate = uv3 * uv7.pow(&exponent);
+    let x = x_candidate.square() * x_polynomial;
+
+    let first_y = w - x;
+    let alternate_y = w + x;
+    let sign = !field25519_is_zero(first_y) && !field25519_is_zero(alternate_y);
+    let z = -a * if sign { Field25519::ONE } else { v };
+    let denominator = z + w;
+    let y = (z - w)
+        * invert_field25519(denominator).ok_or(FcmpNativeErrorV1::RangeGeneratorDerivation)?;
+    let mut encoded = encode_field25519(y);
+    encoded[31] |= u8::from(sign) << 7;
+    let point = CompressedEdwardsY(encoded)
+        .decompress()
+        .ok_or(FcmpNativeErrorV1::RangeGeneratorDerivation)?
+        .mul_by_cofactor();
+    if point.is_identity() || !point.is_torsion_free() {
+        return Err(FcmpNativeErrorV1::RangeGeneratorDerivation);
+    }
+    Ok(point)
+}
+
+fn derive_bp_plus_generators() -> Result<BpPlusGenerators, FcmpNativeErrorV1> {
+    let amount = amount_generator()?;
+    let mut preimage = amount.compress().to_bytes().to_vec();
+    preimage.extend_from_slice(BP_PLUS_GENERATOR_DOMAIN_V1);
+    let count = FCMP_MAX_RANGE_COMMITMENTS_V1
+        .checked_mul(FCMP_AMOUNT_BITS_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let mut g_bold = Vec::with_capacity(count);
+    let mut h_bold = Vec::with_capacity(count);
+    for index in 0..count {
+        let doubled = index
+            .checked_mul(2)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+        let mut even = preimage.clone();
+        even.extend(monero_varint(doubled));
+        h_bold.push(monero_hash_to_point(keccak256(&even))?);
+
+        let mut odd = preimage.clone();
+        odd.extend(monero_varint(
+            doubled
+                .checked_add(1)
+                .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+        ));
+        g_bold.push(monero_hash_to_point(keccak256(&odd))?);
+    }
+    Ok(BpPlusGenerators { g_bold, h_bold })
+}
+
+fn bp_plus_generators() -> Result<&'static BpPlusGenerators, FcmpNativeErrorV1> {
+    BP_PLUS_GENERATORS
+        .get_or_init(derive_bp_plus_generators)
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+fn transcript_prefix() -> Result<[u8; 32], FcmpNativeErrorV1> {
+    BP_PLUS_TRANSCRIPT_PREFIX
+        .get_or_init(|| {
+            monero_hash_to_point(keccak256(BP_PLUS_TRANSCRIPT_DOMAIN_V1))
+                .map(|point| point.compress().to_bytes())
+        })
+        .clone()
+}
+
+/// Digest the complete Monero BP+ basis used by the FCMP profile.
+pub fn fcmp_bp_plus_generator_digest_v1() -> Result<[u8; 32], FcmpNativeErrorV1> {
+    let generators = bp_plus_generators()?;
+    let mut hasher = Sha256::new();
+    hasher.update(GENERATOR_DIGEST_DOMAIN_V1);
+    hasher.update(MONERO_H_BYTES_V1);
+    hasher.update(
+        u64::try_from(generators.len())
+            .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?
+            .to_be_bytes(),
+    );
+    for (g, h) in generators.g_bold.iter().zip(&generators.h_bold) {
+        hasher.update(g.compress().to_bytes());
+        hasher.update(h.compress().to_bytes());
+    }
+    Ok(hasher.finalize().into())
+}
+
+/// Secret opening of one newly created FCMP amount commitment.
+pub struct FcmpOutputCommitmentOpeningV1 {
+    output: FcmpOutputTupleV1,
+    amount: u64,
+    mask: Scalar,
+}
+
+impl core::fmt::Debug for FcmpOutputCommitmentOpeningV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("FcmpOutputCommitmentOpeningV1")
+            .field("output", &self.output)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Zeroize for FcmpOutputCommitmentOpeningV1 {
+    fn zeroize(&mut self) {
+        self.amount.zeroize();
+        self.mask.zeroize();
+    }
+}
+
+impl Drop for FcmpOutputCommitmentOpeningV1 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl FcmpOutputCommitmentOpeningV1 {
+    /// Construct one strict-positive `u64` commitment opening.
+    pub fn new(
+        output: FcmpOutputTupleV1,
+        amount: u64,
+        mask: [u8; 32],
+    ) -> Result<Self, FcmpNativeErrorV1> {
+        let amount = Zeroizing::new(amount);
+        let mask_bytes = Zeroizing::new(mask);
+        validate_edwards_scalar(*mask_bytes)?;
+        let mask = Zeroizing::new(
+            Option::<Scalar>::from(Scalar::from_canonical_bytes(*mask_bytes))
+                .ok_or(FcmpNativeErrorV1::ScalarEncoding)?,
+        );
+        // Zero is excluded from the amount relation itself. A zero mask is a
+        // valid Pedersen opening (although wallets should randomize masks);
+        // rejecting it only in this constructor would not create a
+        // verifier-enforced property and would make the API disagree with the
+        // proof relation.
+        if *amount == 0 {
+            return Err(FcmpNativeErrorV1::RangeWitnessOutOfRange);
+        }
+        let commitment =
+            amount_generator()? * Scalar::from(*amount) + ED25519_BASEPOINT_POINT * *mask;
+        if commitment.compress().to_bytes() != output.components().2 {
+            return Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch);
+        }
+        Ok(Self {
+            output,
+            amount: *amount,
+            mask: *mask,
+        })
+    }
+
+    /// Public tuple opened by this witness.
+    #[must_use]
+    pub const fn output(&self) -> FcmpOutputTupleV1 {
+        self.output
+    }
+
+    /// Hidden positive amount.
+    #[must_use]
+    pub const fn amount(&self) -> u64 {
+        self.amount
+    }
+
+    /// Canonical hidden commitment mask.
+    #[must_use]
+    pub fn commitment_mask(&self) -> [u8; 32] {
+        self.mask.to_bytes()
+    }
+}
+
+/// Canonical aggregate FCMP Bulletproofs+ payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FcmpRangeProofV1 {
+    a: [u8; 32],
+    wip_a: [u8; 32],
+    wip_b: [u8; 32],
+    r_answer: [u8; 32],
+    s_answer: [u8; 32],
+    delta_answer: [u8; 32],
+    l: Vec<[u8; 32]>,
+    r: Vec<[u8; 32]>,
+}
+
+fn padded_range_commitment_count(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
+    if outputs == 0 || outputs > FCMP_MAX_OUTPUTS_NATIVE_V1 {
+        return Err(FcmpNativeErrorV1::RangeOutputCount {
+            actual: outputs,
+            max: FCMP_MAX_OUTPUTS_NATIVE_V1,
+        });
+    }
+    outputs
+        .checked_mul(FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1)
+        .and_then(usize::checked_next_power_of_two)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)
+}
+
+fn range_lr_len(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
+    let generators = padded_range_commitment_count(outputs)?
+        .checked_mul(FCMP_AMOUNT_BITS_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    if !generators.is_power_of_two() {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    Ok(usize::try_from(generators.ilog2())
+        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?)
+}
+
+/// Exact aggregate range-proof byte width for `outputs`.
+pub fn fcmp_range_proof_size_v1(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
+    let lr = range_lr_len(outputs)?;
+    6_usize
+        .checked_add(
+            2_usize
+                .checked_mul(lr)
+                .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+        )
+        .and_then(|fields| fields.checked_mul(32))
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)
+}
+
+impl FcmpRangeProofV1 {
+    fn from_parts(
+        a: EdwardsPoint,
+        wip_a: EdwardsPoint,
+        wip_b: EdwardsPoint,
+        r_answer: Scalar,
+        s_answer: Scalar,
+        delta_answer: Scalar,
+        l: Vec<EdwardsPoint>,
+        r: Vec<EdwardsPoint>,
+    ) -> Result<Self, FcmpNativeErrorV1> {
+        let encode_point = |point: EdwardsPoint| {
+            if point.is_identity() || !point.is_torsion_free() {
+                Err(FcmpNativeErrorV1::RangeProofPoint)
+            } else {
+                Ok(point.compress().to_bytes())
+            }
+        };
+        Ok(Self {
+            a: encode_point(a)?,
+            wip_a: encode_point(wip_a)?,
+            wip_b: encode_point(wip_b)?,
+            r_answer: r_answer.to_bytes(),
+            s_answer: s_answer.to_bytes(),
+            delta_answer: delta_answer.to_bytes(),
+            l: l.into_iter().map(encode_point).collect::<Result<_, _>>()?,
+            r: r.into_iter().map(encode_point).collect::<Result<_, _>>()?,
+        })
+    }
+
+    /// Decode one exact fixed-shape range proof.
+    pub fn decode(bytes: &[u8], outputs: usize) -> Result<Self, FcmpNativeErrorV1> {
+        let expected = fcmp_range_proof_size_v1(outputs)?;
+        if bytes.len() != expected {
+            return Err(FcmpNativeErrorV1::RangeProofLength {
+                actual: bytes.len(),
+                expected,
+            });
+        }
+        let lr = range_lr_len(outputs)?;
+        let mut cursor = 0_usize;
+        let mut take = || -> Result<[u8; 32], FcmpNativeErrorV1> {
+            let end = cursor
+                .checked_add(32)
+                .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+            let value = bytes
+                .get(cursor..end)
+                .ok_or(FcmpNativeErrorV1::RangeProofLength {
+                    actual: bytes.len(),
+                    expected: end,
+                })?;
+            let mut array = [0_u8; 32];
+            array.copy_from_slice(value);
+            cursor = end;
+            Ok(array)
+        };
+        let a = take()?;
+        let wip_a = take()?;
+        let wip_b = take()?;
+        let r_answer = take()?;
+        let s_answer = take()?;
+        let delta_answer = take()?;
+        let mut l = Vec::with_capacity(lr);
+        let mut r = Vec::with_capacity(lr);
+        for _ in 0..lr {
+            l.push(take()?);
+        }
+        for _ in 0..lr {
+            r.push(take()?);
+        }
+        drop(take);
+        if cursor != bytes.len() {
+            return Err(FcmpNativeErrorV1::RangeProofLength {
+                actual: bytes.len(),
+                expected: cursor,
+            });
+        }
+        for point in [a, wip_a, wip_b]
+            .into_iter()
+            .chain(l.iter().copied())
+            .chain(r.iter().copied())
+        {
+            decode_edwards_point(point, false)?;
+        }
+        for scalar in [r_answer, s_answer, delta_answer] {
+            validate_edwards_scalar(scalar)?;
+        }
+        Ok(Self {
+            a,
+            wip_a,
+            wip_b,
+            r_answer,
+            s_answer,
+            delta_answer,
+            l,
+            r,
+        })
+    }
+
+    /// Encode without attacker-selected vector lengths.
+    pub fn encode(&self, outputs: usize) -> Result<Vec<u8>, FcmpNativeErrorV1> {
+        if self.l.len() != range_lr_len(outputs)? || self.r.len() != self.l.len() {
+            return Err(FcmpNativeErrorV1::RangeProofShape);
+        }
+        let mut bytes = Vec::with_capacity(fcmp_range_proof_size_v1(outputs)?);
+        for field in [
+            self.a,
+            self.wip_a,
+            self.wip_b,
+            self.r_answer,
+            self.s_answer,
+            self.delta_answer,
+        ] {
+            bytes.extend_from_slice(&field);
+        }
+        for point in &self.l {
+            bytes.extend_from_slice(point);
+        }
+        for point in &self.r {
+            bytes.extend_from_slice(point);
+        }
+        if bytes.len() != fcmp_range_proof_size_v1(outputs)? {
+            return Err(FcmpNativeErrorV1::RangeProofShape);
+        }
+        Ok(bytes)
+    }
+}
+
+#[derive(Clone)]
+struct RangeWitnessCommitment {
+    mask: Scalar,
+    amount: u64,
+}
+
+impl Zeroize for RangeWitnessCommitment {
+    fn zeroize(&mut self) {
+        self.mask.zeroize();
+        self.amount.zeroize();
+    }
+}
+
+impl Drop for RangeWitnessCommitment {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+fn strict_public_commitments(
+    outputs: &[FcmpOutputTupleV1],
+) -> Result<Vec<EdwardsPoint>, FcmpNativeErrorV1> {
+    if outputs.is_empty() || outputs.len() > FCMP_MAX_OUTPUTS_NATIVE_V1 {
+        return Err(FcmpNativeErrorV1::RangeOutputCount {
+            actual: outputs.len(),
+            max: FCMP_MAX_OUTPUTS_NATIVE_V1,
+        });
+    }
+    let amount_generator = amount_generator()?;
+    let mut commitments = Vec::with_capacity(
+        outputs
+            .len()
+            .checked_mul(FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1)
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+    );
+    for output in outputs {
+        let commitment = decode_edwards_point(output.components().2, false)?;
+        let minus_one = commitment - amount_generator;
+        // C-H is itself an external BP+ statement point. Identity would make
+        // the strict-positive relation degenerate and is never canonical.
+        if minus_one.is_identity() || !minus_one.is_torsion_free() {
+            return Err(FcmpNativeErrorV1::RangeAdjustedCommitment);
+        }
+        commitments.extend([commitment, minus_one]);
+    }
+    Ok(commitments)
+}
+
+fn strict_witness_commitments(
+    openings: &[FcmpOutputCommitmentOpeningV1],
+) -> Result<Vec<RangeWitnessCommitment>, FcmpNativeErrorV1> {
+    if openings.is_empty() || openings.len() > FCMP_MAX_OUTPUTS_NATIVE_V1 {
+        return Err(FcmpNativeErrorV1::RangeOutputCount {
+            actual: openings.len(),
+            max: FCMP_MAX_OUTPUTS_NATIVE_V1,
+        });
+    }
+    let mut witnesses = Vec::with_capacity(
+        openings
+            .len()
+            .checked_mul(FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1)
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+    );
+    for opening in openings {
+        let predecessor = opening
+            .amount
+            .checked_sub(1)
+            .ok_or(FcmpNativeErrorV1::RangeWitnessOutOfRange)?;
+        witnesses.push(RangeWitnessCommitment {
+            mask: opening.mask,
+            amount: opening.amount,
+        });
+        witnesses.push(RangeWitnessCommitment {
+            mask: opening.mask,
+            amount: predecessor,
+        });
+    }
+    Ok(witnesses)
+}
+
+fn multiexp(terms: &[(Scalar, EdwardsPoint)]) -> EdwardsPoint {
+    EdwardsPoint::multiscalar_mul(
+        terms.iter().map(|(scalar, _)| *scalar),
+        terms.iter().map(|(_, point)| *point),
+    )
+}
+
+fn multiexp_vartime(terms: &[(Scalar, EdwardsPoint)]) -> EdwardsPoint {
+    EdwardsPoint::vartime_multiscalar_mul(
+        terms.iter().map(|(scalar, _)| *scalar),
+        terms.iter().map(|(_, point)| *point),
+    )
+}
+
+fn random_nonzero_scalar(
+    rng: &mut (impl RngCore + CryptoRng),
+) -> Result<Scalar, FcmpNativeErrorV1> {
+    for _ in 0..MAX_SCALAR_SAMPLING_ATTEMPTS_V1 {
+        let mut wide = [0_u8; 64];
+        if rng.try_fill_bytes(&mut wide).is_err() {
+            wide.zeroize();
+            return Err(FcmpNativeErrorV1::RandomnessUnavailable);
+        }
+        let scalar = Scalar::from_bytes_mod_order_wide(&wide);
+        wide.zeroize();
+        if scalar != Scalar::ZERO {
+            return Ok(scalar);
+        }
+    }
+    Err(FcmpNativeErrorV1::ProverRandomnessExhausted)
+}
+
+#[derive(Clone, Copy)]
+enum TranscriptMode {
+    Iroha([u8; 32]),
+    #[cfg(test)]
+    PinnedUpstream,
+}
+
+struct RangeTranscript {
+    state: Scalar,
+}
+
+impl RangeTranscript {
+    fn new(
+        mode: TranscriptMode,
+        outputs: &[FcmpOutputTupleV1],
+        transcript_commitments: &[EdwardsPoint],
+    ) -> Result<Self, FcmpNativeErrorV1> {
+        let mut commitments_hasher = Keccak256::new();
+        for commitment in transcript_commitments {
+            commitments_hasher.update(commitment.compress().to_bytes());
+        }
+        // Monero reduces this first Keccak digest to a scalar before hashing
+        // it into the transcript prefix. Hashing the unreduced 32 bytes is a
+        // different protocol for the overwhelming majority of digests.
+        let commitments_hash = Scalar::from_bytes_mod_order(commitments_hasher.finalize().into());
+        if commitments_hash == Scalar::ZERO {
+            return Err(FcmpNativeErrorV1::RangeChallengeZero);
+        }
+        let commitments_digest = commitments_hash.to_bytes();
+        let prefix = transcript_prefix()?;
+        let state = match mode {
+            TranscriptMode::Iroha(context_hash) => {
+                let mut binding_hasher = Keccak256::new();
+                binding_hasher.update(IROHA_RANGE_BINDING_DOMAIN_V1);
+                binding_hasher.update(context_hash);
+                binding_hasher.update(
+                    u32::try_from(outputs.len())
+                        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?
+                        .to_be_bytes(),
+                );
+                for output in outputs {
+                    binding_hasher.update(output.encode());
+                }
+                let binding: [u8; 32] = binding_hasher.finalize().into();
+                hash_to_scalar(&[&prefix, &binding, &commitments_digest])?
+            }
+            #[cfg(test)]
+            TranscriptMode::PinnedUpstream => hash_to_scalar(&[&prefix, &commitments_digest])?,
+        };
+        Ok(Self { state })
+    }
+
+    fn append_a(&mut self, a: EdwardsPoint) -> Result<(Scalar, Scalar), FcmpNativeErrorV1> {
+        let a = a.compress().to_bytes();
+        let y = hash_to_scalar(&[&self.state.to_bytes(), &a])?;
+        let z = hash_to_scalar(&[&y.to_bytes()])?;
+        self.state = z;
+        Ok((y, z))
+    }
+
+    fn append_lr(
+        &mut self,
+        left: EdwardsPoint,
+        right: EdwardsPoint,
+    ) -> Result<Scalar, FcmpNativeErrorV1> {
+        let challenge = hash_to_scalar(&[
+            &self.state.to_bytes(),
+            &left.compress().to_bytes(),
+            &right.compress().to_bytes(),
+        ])?;
+        self.state = challenge;
+        Ok(challenge)
+    }
+
+    fn append_ab(&mut self, a: EdwardsPoint, b: EdwardsPoint) -> Result<Scalar, FcmpNativeErrorV1> {
+        let challenge = hash_to_scalar(&[
+            &self.state.to_bytes(),
+            &a.compress().to_bytes(),
+            &b.compress().to_bytes(),
+        ])?;
+        self.state = challenge;
+        Ok(challenge)
+    }
+}
+
+fn d_j(index: usize, commitments: usize) -> Result<ScalarVector, FcmpNativeErrorV1> {
+    if index == 0 || index > commitments {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let total = commitments
+        .checked_mul(FCMP_AMOUNT_BITS_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let mut vector = vec![Scalar::ZERO; total];
+    let start = (index - 1)
+        .checked_mul(FCMP_AMOUNT_BITS_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let powers = ScalarVector::powers(Scalar::from(2_u8), FCMP_AMOUNT_BITS_V1)?;
+    vector
+        .get_mut(start..start + FCMP_AMOUNT_BITS_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?
+        .copy_from_slice(&powers.0);
+    Ok(ScalarVector(vector))
+}
+
+struct AHatComputation {
+    y: Scalar,
+    z: Scalar,
+    d_descending_y_plus_z: ScalarVector,
+    y_mn_plus_one: Scalar,
+    z_pow: ScalarVector,
+    a_hat: EdwardsPoint,
+}
+
+fn compute_a_hat(
+    mut commitments: PointVector,
+    generators: &BpPlusGenerators,
+    transcript: &mut RangeTranscript,
+    a: EdwardsPoint,
+) -> Result<AHatComputation, FcmpNativeErrorV1> {
+    let (y, z) = transcript.append_a(a)?;
+    let a = a.mul_by_cofactor();
+    let padded = commitments
+        .len()
+        .max(1)
+        .checked_next_power_of_two()
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    commitments.0.resize(padded, EdwardsPoint::identity());
+    let mn = commitments
+        .len()
+        .checked_mul(FCMP_AMOUNT_BITS_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    if mn != generators.len() {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+
+    let z_squared = z * z;
+    let z_pow = ScalarVector::powers(z_squared, commitments.len())?.mul_scalar(z_squared);
+    let mut d = ScalarVector::zero(mn);
+    for index in 1..=commitments.len() {
+        d = d.add_vector(&d_j(index, commitments.len())?.mul_scalar(z_pow.0[index - 1]))?;
+    }
+    let ascending_y = ScalarVector::powers(y, d.len())?.mul_scalar(y);
+    let y_pows = ascending_y.sum();
+    let mut descending_y = ascending_y.clone();
+    descending_y.0.reverse();
+    let d_descending_y = d.clone().mul_vector(&descending_y)?;
+    let d_descending_y_plus_z = d_descending_y.add_scalar(z);
+    let y_mn_plus_one = descending_y
+        .0
+        .first()
+        .copied()
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?
+        * y;
+
+    let mut commitment_accumulator = EdwardsPoint::identity();
+    for (commitment, power) in commitments.0.iter().zip(&z_pow.0) {
+        commitment_accumulator += commitment * power;
+    }
+
+    let mut terms = Vec::with_capacity(
+        generators
+            .len()
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(2))
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+    );
+    for (index, d_y_z) in d_descending_y_plus_z.0.iter().copied().enumerate() {
+        terms.push((-z, generators.g_bold[index]));
+        terms.push((d_y_z, generators.h_bold[index]));
+    }
+    terms.push((y_mn_plus_one, commitment_accumulator));
+    terms.push((
+        (y_pows * z) - (d.sum() * y_mn_plus_one * z) - (y_pows * z_squared),
+        amount_generator()?,
+    ));
+    let a_hat = a + multiexp_vartime(&terms);
+    terms.zeroize();
+    Ok(AHatComputation {
+        y,
+        z,
+        d_descending_y_plus_z,
+        y_mn_plus_one,
+        z_pow,
+        a_hat,
+    })
+}
+
+struct WipWitness {
+    a: ScalarVector,
+    b: ScalarVector,
+    alpha: Scalar,
+}
+
+impl Drop for WipWitness {
+    fn drop(&mut self) {
+        self.alpha.zeroize();
+    }
+}
+
+struct WipProof {
+    l: Vec<EdwardsPoint>,
+    r: Vec<EdwardsPoint>,
+    a: EdwardsPoint,
+    b: EdwardsPoint,
+    r_answer: Scalar,
+    s_answer: Scalar,
+    delta_answer: Scalar,
+}
+
+fn wip_y_vector(y: Scalar, len: usize) -> Result<ScalarVector, FcmpNativeErrorV1> {
+    ScalarVector::powers(y, len).map(|powers| powers.mul_scalar(y))
+}
+
+fn next_wip_generators(
+    transcript: &mut RangeTranscript,
+    mut g_1: PointVector,
+    mut g_2: PointVector,
+    mut h_1: PointVector,
+    mut h_2: PointVector,
+    left: EdwardsPoint,
+    right: EdwardsPoint,
+    y_inverse_n_hat: Scalar,
+) -> Result<(Scalar, Scalar, Scalar, Scalar, PointVector, PointVector), FcmpNativeErrorV1> {
+    if g_1.len() != g_2.len() || h_1.len() != h_2.len() || g_1.len() != h_1.len() {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let challenge = transcript.append_lr(left, right)?;
+    let inverse = challenge.invert();
+    let mut g = Vec::with_capacity(g_1.len());
+    for (first, second) in g_1.0.drain(..).zip(g_2.0.drain(..)) {
+        g.push(multiexp_vartime(&[
+            (inverse, first),
+            (challenge * y_inverse_n_hat, second),
+        ]));
+    }
+    let mut h = Vec::with_capacity(h_1.len());
+    for (first, second) in h_1.0.drain(..).zip(h_2.0.drain(..)) {
+        h.push(multiexp_vartime(&[(challenge, first), (inverse, second)]));
+    }
+    Ok((
+        challenge,
+        inverse,
+        challenge * challenge,
+        inverse * inverse,
+        PointVector(g),
+        PointVector(h),
+    ))
+}
+
+fn prove_wip(
+    rng: &mut (impl RngCore + CryptoRng),
+    generators: BpPlusGenerators,
+    p: EdwardsPoint,
+    y: Scalar,
+    transcript: &mut RangeTranscript,
+    witness: WipWitness,
+) -> Result<WipProof, FcmpNativeErrorV1> {
+    #[cfg(not(debug_assertions))]
+    let _ = p;
+    if generators.len() == 0
+        || !generators.len().is_power_of_two()
+        || generators.len() != witness.a.len()
+        || witness.a.len() != witness.b.len()
+    {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let mut y_vector = wip_y_vector(y, generators.len())?;
+    let mut g_bold = PointVector(generators.g_bold);
+    let mut h_bold = PointVector(generators.h_bold);
+    let mut inverses = Vec::new();
+    let mut index = 1;
+    while index < g_bold.len() {
+        let value = y_vector
+            .0
+            .get(index - 1)
+            .copied()
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+        if value == Scalar::ZERO {
+            return Err(FcmpNativeErrorV1::RangeChallengeZero);
+        }
+        inverses.push(value.invert());
+        index = index
+            .checked_mul(2)
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        let mut terms = witness
+            .a
+            .0
+            .iter()
+            .copied()
+            .zip(g_bold.0.iter().copied())
+            .chain(witness.b.0.iter().copied().zip(h_bold.0.iter().copied()))
+            .collect::<Vec<_>>();
+        terms.push((
+            witness
+                .a
+                .clone()
+                .weighted_inner_product(&witness.b, &y_vector)?,
+            amount_generator()?,
+        ));
+        terms.push((witness.alpha, ED25519_BASEPOINT_POINT));
+        if multiexp(&terms) != p {
+            terms.zeroize();
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        terms.zeroize();
+    }
+
+    let mut a = witness.a.clone();
+    let mut b = witness.b.clone();
+    let mut alpha = witness.alpha;
+    let mut l_proof = Vec::new();
+    let mut r_proof = Vec::new();
+    let inverse_eight = Scalar::from(8_u8).invert();
+    while g_bold.len() > 1 {
+        let (a_1, a_2) = a.split()?;
+        let (b_1, b_2) = b.split()?;
+        let (g_1, g_2) = g_bold.split()?;
+        let (h_1, h_2) = h_bold.split()?;
+        let n_hat = g_1.len();
+        if n_hat == 0
+            || a_1.len() != n_hat
+            || a_2.len() != n_hat
+            || b_1.len() != n_hat
+            || b_2.len() != n_hat
+            || h_1.len() != n_hat
+            || h_2.len() != n_hat
+        {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        let y_n_hat = y_vector
+            .0
+            .get(n_hat - 1)
+            .copied()
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+        y_vector.0.truncate(n_hat);
+        let d_l = random_nonzero_scalar(rng)?;
+        let d_r = random_nonzero_scalar(rng)?;
+        let c_l = a_1.clone().weighted_inner_product(&b_2, &y_vector)?;
+        let c_r = a_2
+            .clone()
+            .mul_scalar(y_n_hat)
+            .weighted_inner_product(&b_1, &y_vector)?;
+        let y_inverse_n_hat = inverses
+            .pop()
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+
+        let left_a = a_1.clone().mul_scalar(y_inverse_n_hat);
+        let mut left_terms = left_a
+            .0
+            .iter()
+            .copied()
+            .zip(g_2.0.iter().copied())
+            .chain(b_2.0.iter().copied().zip(h_1.0.iter().copied()))
+            .collect::<Vec<_>>();
+        left_terms.push((c_l, amount_generator()?));
+        left_terms.push((d_l, ED25519_BASEPOINT_POINT));
+        let left = multiexp(&left_terms) * inverse_eight;
+        left_terms.zeroize();
+
+        let right_a = a_2.clone().mul_scalar(y_n_hat);
+        let mut right_terms = right_a
+            .0
+            .iter()
+            .copied()
+            .zip(g_1.0.iter().copied())
+            .chain(b_1.0.iter().copied().zip(h_2.0.iter().copied()))
+            .collect::<Vec<_>>();
+        right_terms.push((c_r, amount_generator()?));
+        right_terms.push((d_r, ED25519_BASEPOINT_POINT));
+        let right = multiexp(&right_terms) * inverse_eight;
+        right_terms.zeroize();
+        if left.is_identity() || right.is_identity() {
+            return Err(FcmpNativeErrorV1::RangeProofPoint);
+        }
+        l_proof.push(left);
+        r_proof.push(right);
+
+        let (challenge, inverse, challenge_squared, inverse_squared, next_g, next_h) =
+            next_wip_generators(transcript, g_1, g_2, h_1, h_2, left, right, y_inverse_n_hat)?;
+        g_bold = next_g;
+        h_bold = next_h;
+        a = a_1
+            .mul_scalar(challenge)
+            .add_vector(&a_2.mul_scalar(y_n_hat * inverse))?;
+        b = b_1
+            .mul_scalar(inverse)
+            .add_vector(&b_2.mul_scalar(challenge))?;
+        alpha += (d_l * challenge_squared) + (d_r * inverse_squared);
+    }
+
+    if g_bold.len() != 1 || h_bold.len() != 1 || a.len() != 1 || b.len() != 1 {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let r = random_nonzero_scalar(rng)?;
+    let s = random_nonzero_scalar(rng)?;
+    let delta = random_nonzero_scalar(rng)?;
+    let eta = random_nonzero_scalar(rng)?;
+    let r_y = r * y_vector.0[0];
+    let mut a_terms = vec![
+        (r, g_bold.0[0]),
+        (s, h_bold.0[0]),
+        (
+            (r_y * b.0[0]) + (s * y_vector.0[0] * a.0[0]),
+            amount_generator()?,
+        ),
+        (delta, ED25519_BASEPOINT_POINT),
+    ];
+    let proof_a = multiexp(&a_terms) * inverse_eight;
+    a_terms.zeroize();
+    let mut b_terms = vec![
+        (r_y * s, amount_generator()?),
+        (eta, ED25519_BASEPOINT_POINT),
+    ];
+    let proof_b = multiexp(&b_terms) * inverse_eight;
+    b_terms.zeroize();
+    if proof_a.is_identity() || proof_b.is_identity() {
+        return Err(FcmpNativeErrorV1::RangeProofPoint);
+    }
+    let challenge = transcript.append_ab(proof_a, proof_b)?;
+    Ok(WipProof {
+        l: l_proof,
+        r: r_proof,
+        a: proof_a,
+        b: proof_b,
+        r_answer: r + (a.0[0] * challenge),
+        s_answer: s + (b.0[0] * challenge),
+        delta_answer: eta + (delta * challenge) + (alpha * challenge * challenge),
+    })
+}
+
+fn challenge_products(challenges: &[(Scalar, Scalar)]) -> Result<Vec<Scalar>, FcmpNativeErrorV1> {
+    let len = 1_usize
+        .checked_shl(
+            u32::try_from(challenges.len())
+                .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+        )
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let mut products = vec![Scalar::ONE; len];
+    if let Some(first) = challenges.first() {
+        products[0] = first.1;
+        products[1] = first.0;
+        for (column, challenge) in challenges.iter().enumerate().skip(1) {
+            let mut slots = (1_usize
+                .checked_shl(
+                    u32::try_from(column + 1)
+                        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+                )
+                .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?)
+            .checked_sub(1)
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+            while slots > 0 {
+                products[slots] = products[slots / 2] * challenge.0;
+                products[slots - 1] = products[slots / 2] * challenge.1;
+                slots = slots.saturating_sub(2);
+            }
+        }
+    }
+    if products.iter().any(|value| *value == Scalar::ZERO) {
+        return Err(FcmpNativeErrorV1::RangeChallengeZero);
+    }
+    Ok(products)
+}
+
+fn decode_scalar(bytes: [u8; 32]) -> Result<Scalar, FcmpNativeErrorV1> {
+    validate_edwards_scalar(bytes)?;
+    Option::<Scalar>::from(Scalar::from_canonical_bytes(bytes))
+        .ok_or(FcmpNativeErrorV1::ScalarEncoding)
+}
+
+fn verify_wip(
+    generators: BpPlusGenerators,
+    p: EdwardsPoint,
+    y: Scalar,
+    transcript: &mut RangeTranscript,
+    proof: &FcmpRangeProofV1,
+) -> Result<(), FcmpNativeErrorV1> {
+    let expected_lr = usize::try_from(generators.len().ilog2())
+        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    if !generators.len().is_power_of_two()
+        || proof.l.len() != expected_lr
+        || proof.r.len() != expected_lr
+    {
+        return Err(FcmpNativeErrorV1::RangeProofShape);
+    }
+    let y_vector = wip_y_vector(y, generators.len())?;
+    let inverse_y = y.invert();
+    let mut inverse_y_powers = Vec::with_capacity(generators.len());
+    let mut running = inverse_y;
+    for _ in 0..generators.len() {
+        inverse_y_powers.push(running);
+        running *= inverse_y;
+    }
+
+    let mut l = Vec::with_capacity(proof.l.len());
+    let mut r = Vec::with_capacity(proof.r.len());
+    let mut challenges = Vec::with_capacity(proof.l.len());
+    for (left, right) in proof.l.iter().copied().zip(proof.r.iter().copied()) {
+        let left_point = decode_edwards_point(left, false)?;
+        let right_point = decode_edwards_point(right, false)?;
+        let challenge = transcript.append_lr(left_point, right_point)?;
+        challenges.push((challenge, challenge.invert()));
+        l.push(left_point.mul_by_cofactor());
+        r.push(right_point.mul_by_cofactor());
+    }
+    let proof_a = decode_edwards_point(proof.wip_a, false)?;
+    let proof_b = decode_edwards_point(proof.wip_b, false)?;
+    let challenge = transcript.append_ab(proof_a, proof_b)?;
+    let proof_a = proof_a.mul_by_cofactor();
+    let proof_b = proof_b.mul_by_cofactor();
+    let challenge_squared = challenge * challenge;
+    let products = challenge_products(&challenges)?;
+    if products.len() != generators.len() {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let r_answer = decode_scalar(proof.r_answer)?;
+    let s_answer = decode_scalar(proof.s_answer)?;
+    let delta_answer = decode_scalar(proof.delta_answer)?;
+
+    let mut terms = Vec::with_capacity(
+        4_usize
+            .checked_add(l.len().saturating_mul(2))
+            .and_then(|value| value.checked_add(generators.len().saturating_mul(2)))
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+    );
+    terms.push((-challenge_squared, p));
+    for (((challenge_i, inverse_i), left), right) in challenges.iter().copied().zip(l).zip(r) {
+        terms.push((-challenge_squared * challenge_i * challenge_i, left));
+        terms.push((-challenge_squared * inverse_i * inverse_i, right));
+    }
+    let r_e = r_answer * challenge;
+    for (index, generator) in generators.g_bold.iter().copied().enumerate() {
+        let mut scalar = products[index] * r_e;
+        if index > 0 {
+            scalar *= inverse_y_powers[index - 1];
+        }
+        terms.push((scalar, generator));
+    }
+    let s_e = s_answer * challenge;
+    for (index, generator) in generators.h_bold.iter().copied().enumerate() {
+        terms.push((s_e * products[products.len() - 1 - index], generator));
+    }
+    terms.push((-challenge, proof_a));
+    terms.push((r_answer * y_vector.0[0] * s_answer, amount_generator()?));
+    terms.push((delta_answer, ED25519_BASEPOINT_POINT));
+    terms.push((-Scalar::ONE, proof_b));
+    let valid = multiexp_vartime(&terms).is_identity();
+    terms.zeroize();
+    if !valid {
+        return Err(FcmpNativeErrorV1::RangeProofEquation);
+    }
+    Ok(())
+}
+
+fn prove_range_once(
+    rng: &mut (impl RngCore + CryptoRng),
+    mode: TranscriptMode,
+    openings: &[FcmpOutputCommitmentOpeningV1],
+) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
+    let outputs = openings
+        .iter()
+        .map(FcmpOutputCommitmentOpeningV1::output)
+        .collect::<Vec<_>>();
+    let public_commitments = strict_public_commitments(&outputs)?;
+    let mut witnesses = strict_witness_commitments(openings)?;
+    if public_commitments.len() != witnesses.len() {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let amount_generator = amount_generator()?;
+    for (point, witness) in public_commitments.iter().zip(&witnesses) {
+        let expected = amount_generator * Scalar::from(witness.amount)
+            + ED25519_BASEPOINT_POINT * witness.mask;
+        if expected != *point {
+            return Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch);
+        }
+    }
+
+    let inverse_eight = Scalar::from(8_u8).invert();
+    let transcript_commitments = public_commitments
+        .iter()
+        .map(|point| point * inverse_eight)
+        .collect::<Vec<_>>();
+    let mut transcript = RangeTranscript::new(mode, &outputs, &transcript_commitments)?;
+    let mut commitments = transcript_commitments
+        .iter()
+        .map(EdwardsPoint::mul_by_cofactor)
+        .collect::<Vec<_>>();
+    let padded_commitments = commitments
+        .len()
+        .max(1)
+        .checked_next_power_of_two()
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    commitments.resize(padded_commitments, EdwardsPoint::identity());
+    witnesses.resize_with(padded_commitments, || RangeWitnessCommitment {
+        mask: Scalar::ZERO,
+        amount: 0,
+    });
+    let generator_count = padded_commitments
+        .checked_mul(FCMP_AMOUNT_BITS_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let generators = bp_plus_generators()?.reduce(generator_count)?;
+
+    let mut a_l = Vec::with_capacity(generator_count);
+    for witness in &witnesses {
+        for bit in 0..FCMP_AMOUNT_BITS_V1 {
+            a_l.push(Scalar::from((witness.amount >> bit) & 1));
+        }
+    }
+    let a_l = ScalarVector(a_l);
+    let a_r = a_l.clone().sub_scalar(Scalar::ONE);
+    let alpha = random_nonzero_scalar(rng)?;
+    let mut a_terms = Vec::with_capacity(
+        generator_count
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
+    );
+    for (index, value) in a_l.0.iter().copied().enumerate() {
+        a_terms.push((value, generators.g_bold[index]));
+    }
+    for (index, value) in a_r.0.iter().copied().enumerate() {
+        a_terms.push((value, generators.h_bold[index]));
+    }
+    a_terms.push((alpha, ED25519_BASEPOINT_POINT));
+    let proof_a = multiexp(&a_terms) * inverse_eight;
+    a_terms.zeroize();
+    if proof_a.is_identity() {
+        return Err(FcmpNativeErrorV1::RangeProofPoint);
+    }
+
+    let AHatComputation {
+        y,
+        z,
+        d_descending_y_plus_z,
+        y_mn_plus_one,
+        z_pow,
+        a_hat,
+    } = compute_a_hat(
+        PointVector(commitments),
+        &generators,
+        &mut transcript,
+        proof_a,
+    )?;
+    let a_l = a_l.sub_scalar(z);
+    let a_r = a_r.add_vector(&d_descending_y_plus_z)?;
+    let mut alpha_hat = alpha;
+    for (index, witness) in witnesses.iter().enumerate() {
+        alpha_hat += z_pow.0[index] * witness.mask * y_mn_plus_one;
+    }
+    let wip = prove_wip(
+        rng,
+        generators,
+        a_hat,
+        y,
+        &mut transcript,
+        WipWitness {
+            a: a_l,
+            b: a_r,
+            alpha: alpha_hat,
+        },
+    )?;
+    FcmpRangeProofV1::from_parts(
+        proof_a,
+        wip.a,
+        wip.b,
+        wip.r_answer,
+        wip.s_answer,
+        wip.delta_answer,
+        wip.l,
+        wip.r,
+    )
+}
+
+fn preflight_fcmp_range_v1(
+    openings: &[FcmpOutputCommitmentOpeningV1],
+) -> Result<Vec<FcmpOutputTupleV1>, FcmpNativeErrorV1> {
+    let outputs = openings
+        .iter()
+        .map(FcmpOutputCommitmentOpeningV1::output)
+        .collect::<Vec<_>>();
+    let public_commitments = strict_public_commitments(&outputs)?;
+    let witnesses = strict_witness_commitments(openings)?;
+    if public_commitments.len() != witnesses.len() {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let amount_generator = amount_generator()?;
+    for (point, witness) in public_commitments.iter().zip(&witnesses) {
+        let expected = amount_generator * Scalar::from(witness.amount)
+            + ED25519_BASEPOINT_POINT * witness.mask;
+        if expected != *point {
+            return Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch);
+        }
+    }
+    Ok(outputs)
+}
+
+/// Produce the sole aggregate strict-positive `u64` output range proof.
+pub fn prove_fcmp_range_v1(
+    rng: &mut (impl RngCore + CryptoRng),
+    context_hash: [u8; 32],
+    openings: &[FcmpOutputCommitmentOpeningV1],
+) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
+    let outputs = preflight_fcmp_range_v1(openings)?;
+    let mut checked_rng = super::health_checked_fcmp_rng_v1(rng)?;
+    let proof = prove_fcmp_range_with_checked_rng_v1(&mut checked_rng, context_hash, openings)?;
+    verify_fcmp_range_v1(context_hash, &outputs, &proof)
+        .map_err(|_| FcmpNativeErrorV1::ProverSelfCheckFailed)?;
+    Ok(proof)
+}
+
+pub(super) fn prove_fcmp_range_with_checked_rng_v1(
+    rng: &mut (impl RngCore + CryptoRng),
+    context_hash: [u8; 32],
+    openings: &[FcmpOutputCommitmentOpeningV1],
+) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
+    retry_range_prover_v1(|| prove_range_once(rng, TranscriptMode::Iroha(context_hash), openings))
+}
+
+fn retry_range_prover_v1<T>(
+    mut prove_once: impl FnMut() -> Result<T, FcmpNativeErrorV1>,
+) -> Result<T, FcmpNativeErrorV1> {
+    for _ in 0..MAX_PROVER_RESTARTS_V1 {
+        match prove_once() {
+            Ok(proof) => return Ok(proof),
+            Err(FcmpNativeErrorV1::RangeProofPoint | FcmpNativeErrorV1::RangeChallengeZero) => {
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(FcmpNativeErrorV1::RangeProverRestartExhausted)
+}
+
+fn verify_range_with_mode(
+    mode: TranscriptMode,
+    outputs: &[FcmpOutputTupleV1],
+    proof: &FcmpRangeProofV1,
+) -> Result<(), FcmpNativeErrorV1> {
+    let public_commitments = strict_public_commitments(outputs)?;
+    let inverse_eight = Scalar::from(8_u8).invert();
+    let transcript_commitments = public_commitments
+        .iter()
+        .map(|point| point * inverse_eight)
+        .collect::<Vec<_>>();
+    let mut transcript = RangeTranscript::new(mode, outputs, &transcript_commitments)?;
+    let commitments = transcript_commitments
+        .iter()
+        .map(EdwardsPoint::mul_by_cofactor)
+        .collect::<Vec<_>>();
+    let generator_count = commitments
+        .len()
+        .max(1)
+        .checked_next_power_of_two()
+        .and_then(|count| count.checked_mul(FCMP_AMOUNT_BITS_V1))
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let generators = bp_plus_generators()?.reduce(generator_count)?;
+    let proof_a = decode_edwards_point(proof.a, false)?;
+    let AHatComputation { y, a_hat, .. } = compute_a_hat(
+        PointVector(commitments),
+        &generators,
+        &mut transcript,
+        proof_a,
+    )?;
+    verify_wip(generators, a_hat, y, &mut transcript, proof)
+}
+
+/// Verify the aggregate range proof against the ordered new commitments.
+pub fn verify_fcmp_range_v1(
+    context_hash: [u8; 32],
+    outputs: &[FcmpOutputTupleV1],
+    proof: &FcmpRangeProofV1,
+) -> Result<(), FcmpNativeErrorV1> {
+    if proof.l.len() != range_lr_len(outputs.len())? || proof.r.len() != proof.l.len() {
+        return Err(FcmpNativeErrorV1::RangeProofShape);
+    }
+    verify_range_with_mode(TranscriptMode::Iroha(context_hash), outputs, proof)
+}
+
+#[cfg(test)]
+mod tests {
+    use rand_08::{SeedableRng as _, rngs::StdRng};
+
+    use super::*;
+    use crate::privacy_engines::fcmp_plus_plus::FailingRngV1;
+
+    struct PeriodicRng {
+        period: usize,
+        cursor: usize,
+    }
+
+    const ZERO_REDUCTION_BLOCK_V1: [u8; 64] = [
+        // l, the Ed25519 scalar order, in little-endian form.
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
+        0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10,
+        // 2l in little-endian form. The complete 512-bit integer is divisible by l.
+        0xda, 0xa7, 0xeb, 0xb9, 0x34, 0xc6, 0x24, 0xb0, 0xac, 0x39, 0xef, 0x45, 0xbd, 0xf3, 0xbd,
+        0x29, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x20,
+    ];
+
+    #[derive(Default)]
+    struct ZeroReductionRng {
+        try_fill_calls: usize,
+        bytes_filled: usize,
+    }
+
+    impl RngCore for PeriodicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("FCMP++ range prover must reject the periodic prefix")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("FCMP++ range prover must reject the periodic prefix")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("FCMP++ range prover must use fallible entropy")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+            for byte in destination {
+                *byte = ((self.cursor % self.period) as u8)
+                    .wrapping_mul(59)
+                    .wrapping_add(13);
+                self.cursor += 1;
+            }
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for PeriodicRng {}
+
+    impl RngCore for ZeroReductionRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("FCMP++ range prover must use fallible entropy")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("FCMP++ range prover must use fallible entropy")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("FCMP++ range prover must use fallible entropy")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+            assert_eq!(
+                destination.len(),
+                ZERO_REDUCTION_BLOCK_V1.len(),
+                "every bounded scalar draw and the health prefix must consume one exact block"
+            );
+            destination.copy_from_slice(&ZERO_REDUCTION_BLOCK_V1);
+            self.try_fill_calls += 1;
+            self.bytes_filled += destination.len();
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for ZeroReductionRng {}
+
+    fn hex32(value: &str) -> [u8; 32] {
+        assert_eq!(value.len(), 64);
+        let mut bytes = [0_u8; 32];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+                .expect("test vector is hexadecimal");
+        }
+        bytes
+    }
+
+    fn decode_hex(value: &str) -> Vec<u8> {
+        assert_eq!(value.len() % 2, 0);
+        (0..value.len())
+            .step_by(2)
+            .map(|index| {
+                u8::from_str_radix(&value[index..index + 2], 16)
+                    .expect("test vector is hexadecimal")
+            })
+            .collect()
+    }
+
+    fn opening(ordinal: u64, amount: u64, mask: u64) -> FcmpOutputCommitmentOpeningV1 {
+        let commitment = amount_generator().expect("amount generator") * Scalar::from(amount)
+            + ED25519_BASEPOINT_POINT * Scalar::from(mask);
+        let output = FcmpOutputTupleV1::new(
+            (ED25519_BASEPOINT_POINT * Scalar::from(100 + ordinal))
+                .compress()
+                .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(200 + ordinal))
+                .compress()
+                .to_bytes(),
+            commitment.compress().to_bytes(),
+        )
+        .expect("canonical output");
+        FcmpOutputCommitmentOpeningV1::new(output, amount, Scalar::from(mask).to_bytes())
+            .expect("valid opening")
+    }
+
+    #[test]
+    fn range_rng_unavailability_fails_without_calling_infallible_rng_methods() {
+        assert_eq!(
+            prove_fcmp_range_v1(&mut FailingRngV1, [0x31; 32], &[]),
+            Err(FcmpNativeErrorV1::RangeOutputCount {
+                actual: 0,
+                max: FCMP_MAX_OUTPUTS_NATIVE_V1,
+            })
+        );
+        assert_eq!(
+            random_nonzero_scalar(&mut FailingRngV1),
+            Err(FcmpNativeErrorV1::RandomnessUnavailable)
+        );
+        assert_eq!(
+            prove_fcmp_range_v1(&mut FailingRngV1, [0x31; 32], &[opening(1, 5, 7)]),
+            Err(FcmpNativeErrorV1::RandomnessUnavailable)
+        );
+    }
+
+    #[test]
+    fn range_public_prover_rejects_every_prohibited_short_period_prefix() {
+        let opening = opening(1, 5, 7);
+        for period in [1, 2, 4, 8, 16, 32] {
+            assert_eq!(
+                prove_fcmp_range_v1(
+                    &mut PeriodicRng { period, cursor: 0 },
+                    [0x32; 32],
+                    std::slice::from_ref(&opening),
+                ),
+                Err(FcmpNativeErrorV1::RandomnessHealthCheckFailed),
+                "period-{period} range entropy was not rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_sampling_exhaustion_is_distinct_from_full_proof_restarts() {
+        assert_eq!(
+            Scalar::from_bytes_mod_order_wide(&ZERO_REDUCTION_BLOCK_V1),
+            Scalar::ZERO
+        );
+        let mut rng = ZeroReductionRng::default();
+        assert_eq!(
+            prove_fcmp_range_v1(&mut rng, [0x33; 32], &[opening(1, 5, 7)]),
+            Err(FcmpNativeErrorV1::ProverRandomnessExhausted)
+        );
+        assert_eq!(
+            rng.try_fill_calls, MAX_SCALAR_SAMPLING_ATTEMPTS_V1,
+            "the checked prefix is replayed as the first scalar attempt"
+        );
+        assert_eq!(
+            rng.bytes_filled,
+            MAX_SCALAR_SAMPLING_ATTEMPTS_V1 * ZERO_REDUCTION_BLOCK_V1.len()
+        );
+        assert_eq!(MAX_SCALAR_SAMPLING_ATTEMPTS_V1, 128);
+    }
+
+    #[test]
+    fn range_restarts_only_transcript_dependent_honest_aborts_at_a_fixed_bound() {
+        let mut attempts = 0;
+        let recovered = retry_range_prover_v1(|| {
+            attempts += 1;
+            match attempts {
+                1 => Err(FcmpNativeErrorV1::RangeProofPoint),
+                2 => Err(FcmpNativeErrorV1::RangeChallengeZero),
+                _ => Ok(23_u8),
+            }
+        })
+        .expect("third attempt succeeds");
+        assert_eq!(recovered, 23);
+        assert_eq!(attempts, 3);
+
+        for retryable in [
+            FcmpNativeErrorV1::RangeProofPoint,
+            FcmpNativeErrorV1::RangeChallengeZero,
+        ] {
+            attempts = 0;
+            assert_eq!(
+                retry_range_prover_v1::<()>(|| {
+                    attempts += 1;
+                    Err(retryable)
+                }),
+                Err(FcmpNativeErrorV1::RangeProverRestartExhausted)
+            );
+            assert_eq!(attempts, MAX_PROVER_RESTARTS_V1);
+        }
+        assert_eq!(MAX_PROVER_RESTARTS_V1, 128);
+
+        attempts = 0;
+        assert_eq!(
+            retry_range_prover_v1::<()>(|| {
+                attempts += 1;
+                Err(FcmpNativeErrorV1::RangeArithmeticInvariant)
+            }),
+            Err(FcmpNativeErrorV1::RangeArithmeticInvariant)
+        );
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn monero_hash_to_point_and_generator_basis_match_pinned_vectors() {
+        assert_eq!(
+            amount_generator()
+                .expect("pinned amount generator")
+                .compress()
+                .to_bytes(),
+            MONERO_H_BYTES_V1
+        );
+        assert_eq!(
+            monero_hash_to_point(hex32(
+                "75274bfd79bf33eb2f9ab046d34528af9a71811e7e3d55c20eb049c81ac692d8"
+            ))
+            .expect("Monero hash_to_ec")
+            .compress()
+            .to_bytes(),
+            hex32("cb93c850e36896fe6626e97c53652af6736ec3ba0641c7765d0cca2bad2352de")
+        );
+        let generators = bp_plus_generators().expect("pinned generator basis");
+        assert_eq!(generators.len(), 512);
+        assert_ne!(generators.g_bold[0], generators.h_bold[0]);
+        assert_eq!(
+            fcmp_bp_plus_generator_digest_v1().expect("basis digest"),
+            FCMP_BP_PLUS_GENERATOR_DIGEST_V1
+        );
+    }
+
+    #[test]
+    fn pinned_serai_bulletproofs_plus_vector_verifies_natively() {
+        // Generated by monero-bulletproofs at the pinned revision with
+        // ChaCha20Rng seed 0x71*32 and witnesses (mask=17, amount=9) and
+        // (mask=17, amount=8). Those are exactly C and C-H for one strict
+        // positive output with amount 9.
+        const PROOF: &str = concat!(
+            "5868bc7fc212e1d9ae5dbebc3c3fc69ae1ea0c767aeaab86a493c35eda1f518c85d08b4c96d469029dbf00a5f3161123",
+            "f8f0f537fc491b7ad86810d264ccadaa6d95e3cf6f7df084e653b1b0b71e5993304d8e29b8bb220161acc5fa05b58051",
+            "16e279fbf0d4a050f51443e04603d4c1ac0c79c4d6d42997736b99c2f19c2a0259f4ef85025d9150b92295bd89a0721f",
+            "569bca35eafd6828d50894536ee51409bd4262ce8061278ca1abf61a6adb93203b42cd683f23d7fe2cb652a54e31d700",
+            "589875f6eae58e855a404ad61cc25992746af443a338460edbd30e236cc408e7b5a60504f1eeb4c17e3e2a9442df2064",
+            "2d97c872f3d3439ccb1f26cc7dfabdadfffe16837aecbbc4e03b6618ab2f96699e9a02667d0f9f9f780cd64c99e6b8fc",
+            "22a6644da389f195e3b89f39f3449406547b337caa227340000557a1f8c56b8bfdc62d7a6c22fcd39c9a2d00c6e6de38",
+            "23002a21253fdbd8ccec1b0f53ea298c65f33ed0cc838faa8c3270872baf44ea9ca428ed095e959a1f4cec1bb90a3a35",
+            "f89baa4a4f4f35dcf05c1e1a33ffa801a8f359a362ce5df91377d0c2049ae1eb20e475f8f5cc9a5b7adc077e89ea156a",
+            "23a4db76105ee4037a8ede5d9eb9c4d9bb0198ec90320708ddea43111e86239f067956b3528d0c099938828b4872af7e",
+            "df00da63fddcba77c4ead4a6141424f9794755375ee7c4670157376a5d6453454f0f9a7ea2afa1b203cc0aeb2fc3e327",
+            "6017564e247c816ed3efb65b4806f8f57ca45e851d9cf3b10236993813ffa2254625c7509131c2c7747586094b2b86b4",
+            "363b2de00e6b7edb13cb90ff365c094806079068e4a8d5de713b81b5823fa97cc8041aa3d6f99908a220a8408a2ba508",
+            "c1d67ce76ed89047df8393296286f04a",
+        );
+        let commitment = amount_generator().expect("amount generator") * Scalar::from(9_u64)
+            + ED25519_BASEPOINT_POINT * Scalar::from(17_u64);
+        let output = FcmpOutputTupleV1::new(
+            (ED25519_BASEPOINT_POINT * Scalar::from(101_u64))
+                .compress()
+                .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(103_u64))
+                .compress()
+                .to_bytes(),
+            commitment.compress().to_bytes(),
+        )
+        .expect("canonical output");
+        let proof = FcmpRangeProofV1::decode(&decode_hex(PROOF), 1).expect("pinned proof encoding");
+        verify_range_with_mode(TranscriptMode::PinnedUpstream, &[output], &proof)
+            .expect("pinned upstream BP+ proof");
+    }
+
+    #[test]
+    fn native_standard_transcript_proof_is_upstream_compatible() {
+        let opening = opening(1, 9, 17);
+        let output = opening.output();
+        let mut rng = StdRng::seed_from_u64(0xfc_b0_000);
+        let proof = prove_range_once(&mut rng, TranscriptMode::PinnedUpstream, &[opening])
+            .expect("native standard-transcript proof");
+        verify_range_with_mode(TranscriptMode::PinnedUpstream, &[output], &proof)
+            .expect("native proof verifies");
+
+        let encoded = proof.encode(1).expect("canonical encoding");
+        let encoded_digest: [u8; 32] = Sha256::digest(&encoded).into();
+        // The corresponding 640-byte proof was parsed by pinned Serai
+        // `Bulletproof::read_plus` (after adding the two standard vector-length
+        // prefixes omitted by Monero's signature wire) and accepted by its
+        // verifier against commitments (mask=17, amount=9) and
+        // (mask=17, amount=8).
+        assert_eq!(
+            encoded_digest,
+            [
+                0x77, 0x48, 0x9e, 0x96, 0x20, 0x35, 0xd6, 0x0b, 0x04, 0xa1, 0xae, 0xf7, 0xcb, 0xda,
+                0x5d, 0xf3, 0x8d, 0x4b, 0xe6, 0x21, 0x02, 0x68, 0xb7, 0xe5, 0x2d, 0x0a, 0xfa, 0xed,
+                0x71, 0x74, 0x53, 0xc6,
+            ]
+        );
+    }
+
+    #[test]
+    fn strict_positive_u64_range_round_trips_and_binds_every_public_dimension() {
+        let openings = [opening(1, 1, 17), opening(2, u64::MAX, 19)];
+        let outputs = openings
+            .iter()
+            .map(FcmpOutputCommitmentOpeningV1::output)
+            .collect::<Vec<_>>();
+        let context = [0x52; 32];
+        let mut rng = StdRng::seed_from_u64(0xfc_b0_001);
+        let proof =
+            prove_fcmp_range_v1(&mut rng, context, &openings).expect("valid aggregate proof");
+        assert_eq!(
+            proof
+                .encode(outputs.len())
+                .expect("canonical encoding")
+                .len(),
+            fcmp_range_proof_size_v1(outputs.len()).expect("fixed size")
+        );
+        verify_fcmp_range_v1(context, &outputs, &proof).expect("valid aggregate proof");
+
+        let mut wrong_context = context;
+        wrong_context[0] ^= 1;
+        assert!(verify_fcmp_range_v1(wrong_context, &outputs, &proof).is_err());
+
+        let mut reordered = outputs.clone();
+        reordered.swap(0, 1);
+        assert!(verify_fcmp_range_v1(context, &reordered, &proof).is_err());
+
+        let substituted = opening(3, 2, 23).output();
+        let mut changed = outputs.clone();
+        changed[1] = substituted;
+        assert!(verify_fcmp_range_v1(context, &changed, &proof).is_err());
+
+        let encoded = proof.encode(outputs.len()).expect("canonical encoding");
+        for offset in [0, 32, 64, 96, encoded.len() / 2, encoded.len() - 1] {
+            let mut mutation = encoded.clone();
+            mutation[offset] ^= 1;
+            assert!(
+                FcmpRangeProofV1::decode(&mutation, outputs.len())
+                    .and_then(|proof| verify_fcmp_range_v1(context, &outputs, &proof))
+                    .is_err(),
+                "mutated range field at byte {offset} was accepted"
+            );
+        }
+        assert!(FcmpRangeProofV1::decode(&encoded[..encoded.len() - 1], outputs.len()).is_err());
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(FcmpRangeProofV1::decode(&trailing, outputs.len()).is_err());
+    }
+
+    #[test]
+    fn zero_overflow_opening_substitution_and_balancing_points_fail_closed() {
+        let valid = opening(1, 7, 29);
+        assert_eq!(
+            FcmpOutputCommitmentOpeningV1::new(valid.output(), 0, Scalar::from(29_u64).to_bytes())
+                .expect_err("zero amount is outside the strict range"),
+            FcmpNativeErrorV1::RangeWitnessOutOfRange
+        );
+        assert_eq!(
+            FcmpOutputCommitmentOpeningV1::new(valid.output(), 7, Scalar::from(31_u64).to_bytes())
+                .expect_err("mask substitution must not open C"),
+            FcmpNativeErrorV1::RangeCommitmentOpeningMismatch
+        );
+        assert!(u64::MAX.checked_add(1).is_none());
+
+        let zero_mask_commitment =
+            amount_generator().expect("amount generator") * Scalar::from(2_u64);
+        let zero_mask_output = FcmpOutputTupleV1::new(
+            (ED25519_BASEPOINT_POINT * Scalar::from(271_u64))
+                .compress()
+                .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(277_u64))
+                .compress()
+                .to_bytes(),
+            zero_mask_commitment.compress().to_bytes(),
+        )
+        .expect("canonical zero-mask commitment");
+        FcmpOutputCommitmentOpeningV1::new(zero_mask_output, 2, Scalar::ZERO.to_bytes())
+            .expect("zero masks are part of the verifier relation");
+
+        let context = [0x53; 32];
+        let mut rng = StdRng::seed_from_u64(0xfc_b0_002);
+        let proof =
+            prove_fcmp_range_v1(&mut rng, context, &[valid]).expect("valid strict-positive proof");
+
+        // C = mask*G + 2^64*H is the first integer outside the u64 range.
+        let two_pow_64 = (0..64).fold(Scalar::ONE, |value, _| value + value);
+        let overflow_commitment = ED25519_BASEPOINT_POINT * Scalar::from(37_u64)
+            + amount_generator().expect("amount generator") * two_pow_64;
+        let overflow = FcmpOutputTupleV1::new(
+            (ED25519_BASEPOINT_POINT * Scalar::from(301_u64))
+                .compress()
+                .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(302_u64))
+                .compress()
+                .to_bytes(),
+            overflow_commitment.compress().to_bytes(),
+        )
+        .expect("canonical arbitrary commitment");
+        assert!(verify_fcmp_range_v1(context, &[overflow], &proof).is_err());
+
+        // A transaction can always manufacture a public point that makes a
+        // group-balance equation hold. It cannot manufacture its bounded
+        // opening or transplant a proof for a different point.
+        let arbitrary_balancing = FcmpOutputTupleV1::new(
+            (ED25519_BASEPOINT_POINT * Scalar::from(401_u64))
+                .compress()
+                .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(402_u64))
+                .compress()
+                .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(987_654_u64))
+                .compress()
+                .to_bytes(),
+        )
+        .expect("canonical arbitrary group point");
+        assert!(verify_fcmp_range_v1(context, &[arbitrary_balancing], &proof).is_err());
+
+        let c_equals_h = FcmpOutputTupleV1::new(
+            (ED25519_BASEPOINT_POINT * Scalar::from(501_u64))
+                .compress()
+                .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(502_u64))
+                .compress()
+                .to_bytes(),
+            amount_generator()
+                .expect("amount generator")
+                .compress()
+                .to_bytes(),
+        )
+        .expect("C itself is canonical");
+        assert_eq!(
+            strict_public_commitments(&[c_equals_h]).expect_err("C-H identity is forbidden"),
+            FcmpNativeErrorV1::RangeAdjustedCommitment
+        );
+    }
+}

@@ -34,8 +34,19 @@ const RECOVERY_ENTROPY_LENGTH_TO_WORD_COUNT = new Map([
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 7;
-export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21;
+export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024;
+export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1 = Object.freeze({
+  VALID: 0,
+  NULL_POINTER: 1,
+  EMPTY: 2,
+  ARCHIVE_TOO_LARGE: 3,
+  DECODE_RESOURCE_LIMIT: 4,
+  SCHEMA_MISMATCH: 5,
+  NON_CANONICAL: 6,
+  MALFORMED_ARCHIVE: 7,
+  INVALID_SNAPSHOT: 8,
+});
 const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
 const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0";
 const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1";
@@ -49,30 +60,6 @@ const U64_MAX = (1n << 64n) - 1n;
 const U64_MAX_DECIMAL_DIGITS = U64_MAX.toString(10).length;
 const U128_MAX = (1n << 128n) - 1n;
 const U128_MAX_DECIMAL_DIGITS = U128_MAX.toString(10).length;
-const PRIVACY_NORITO_HEADER_BYTES = 40;
-const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
-const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
-const PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20;
-const PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
-const PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE = 0x50;
-const PRIVACY_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
-const PRIVACY_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
-const PRIVACY_NORITO_MAGIC = Buffer.from("NRT0", "ascii");
-const PRIVACY_CRC64_TABLE = (() => {
-  const table = new Array(256);
-  for (let index = 0; index < 256; index += 1) {
-    let crc = BigInt(index);
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        (crc & 1n) !== 0n
-          ? (crc >> 1n) ^ PRIVACY_CRC64_REFLECTED_POLY
-          : crc >> 1n;
-    }
-    table[index] = crc;
-  }
-  return table;
-})();
-
 export const CRYPTO_ALGORITHMS = Object.freeze({
   ED25519: "ed25519",
   SECP256K1: "secp256k1",
@@ -892,8 +879,9 @@ function hasPrivacyNativeSurface(native) {
   return (
     native &&
     Number.isInteger(abiVersion) &&
-    abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION &&
-    typeof native.privacyCapabilitiesV1 === "function"
+    abiVersion === PRIVACY_REQUIRED_BRIDGE_ABI_VERSION &&
+    typeof native.privacyCapabilitiesV1 === "function" &&
+    typeof native.privacyValidateCapabilitiesV1 === "function"
   );
 }
 
@@ -908,7 +896,7 @@ function privacyNativeProbeReturnsBytes(native, operation) {
   let result;
   try {
     result = native[operation]();
-    privacyNativeOutputToBuffer(result, operation, { clearSource: true });
+    privacyNativeOutputToBuffer(native, result, operation, { clearSource: true });
     return true;
   } catch {
     return false;
@@ -962,7 +950,7 @@ function toPrivacyArchiveBuffer(value, name) {
   );
 }
 
-function privacyNativeOutputToBuffer(result, operation, options = {}) {
+function privacyNativeOutputToBuffer(native, result, operation, options = {}) {
   let output;
   if (result === undefined || result === null) {
     throw new Error(`native ${operation} returned no output`);
@@ -978,115 +966,25 @@ function privacyNativeOutputToBuffer(result, operation, options = {}) {
     if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
       throw new Error(`native ${operation} returned oversized output`);
     }
-    assertPrivacyNoritoArchive(
+    const validationStatus = invokePrivacyNative(
+      native,
+      "privacyValidateCapabilitiesV1",
       output,
-      operation,
-      "native",
-      privacyExpectedResultSchemaByte(operation),
     );
+    if (
+      validationStatus !==
+      PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID
+    ) {
+      throw new Error(
+        `native ${operation} returned an invalid typed privacy capability archive`,
+      );
+    }
     return Buffer.from(output);
   } finally {
     if (options.clearSource === true && output) {
       output.fill(0);
     }
   }
-}
-
-function privacyCrc64(payload) {
-  let crc = PRIVACY_CRC64_MASK;
-  for (const byte of payload) {
-    const index = Number((crc ^ BigInt(byte)) & 0xffn);
-    crc = PRIVACY_CRC64_TABLE[index] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ PRIVACY_CRC64_MASK);
-}
-
-function assertPrivacyNoritoArchive(
-  output,
-  operation,
-  context = "native",
-  expectedSchemaByte,
-) {
-  const fail = () => {
-    if (context === "request") {
-      throw new Error(`${operation} must be a valid Norito V1 archive`);
-    }
-    throw new Error(`native ${operation} returned invalid Norito V1 archive`);
-  };
-  if (
-    !Number.isInteger(expectedSchemaByte) ||
-    expectedSchemaByte < 0 ||
-    expectedSchemaByte > 0xff
-  ) {
-    if (context === "request") {
-      throw new Error(`${operation} must use the privacy request schema`);
-    }
-    throw new Error(`native ${operation} returned unexpected privacy result schema`);
-  }
-  if (output.length < PRIVACY_NORITO_HEADER_BYTES) {
-    fail();
-  }
-  if (!output.subarray(0, 4).equals(PRIVACY_NORITO_MAGIC)) {
-    fail();
-  }
-  if (output[4] !== 0 || output[5] !== 0) {
-    fail();
-  }
-  if (output[22] !== 0) {
-    fail();
-  }
-  const flags = output[39];
-  if (
-    (flags & ~PRIVACY_NORITO_SUPPORTED_FLAGS_MASK) !== 0 ||
-    ((flags & PRIVACY_NORITO_FIELD_BITSET_FLAG) !== 0 &&
-      (flags & PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS) !==
-        PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS)
-  ) {
-    fail();
-  }
-  const payloadLengthBig = output.readBigUInt64LE(23);
-  if (payloadLengthBig > BigInt(Number.MAX_SAFE_INTEGER)) {
-    fail();
-  }
-  const payloadLength = Number(payloadLengthBig);
-  if (payloadLength === 0) {
-    if (context === "request") {
-      throw new Error(`${operation} must contain a non-empty privacy request payload`);
-    }
-    throw new Error(`native ${operation} returned empty privacy result payload`);
-  }
-  const minimumLength = PRIVACY_NORITO_HEADER_BYTES + payloadLength;
-  if (output.length < minimumLength) {
-    fail();
-  }
-  const paddingLength = output.length - minimumLength;
-  if (paddingLength > PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES) {
-    fail();
-  }
-  const padding = output.subarray(
-    PRIVACY_NORITO_HEADER_BYTES,
-    PRIVACY_NORITO_HEADER_BYTES + paddingLength,
-  );
-  if (padding.some((byte) => byte !== 0)) {
-    fail();
-  }
-  const payload = output.subarray(PRIVACY_NORITO_HEADER_BYTES + paddingLength);
-  if (privacyCrc64(payload) !== output.readBigUInt64LE(31)) {
-    fail();
-  }
-  if (output.subarray(6, 22).some((byte) => byte !== expectedSchemaByte)) {
-    if (context === "request") {
-      throw new Error(`${operation} must use the privacy request schema`);
-    }
-    throw new Error(`native ${operation} returned unexpected privacy result schema`);
-  }
-}
-
-function privacyExpectedResultSchemaByte(operation) {
-  if (operation !== "privacyCapabilitiesV1") {
-    throw new Error(`native ${operation} is not a supported privacy capability operation`);
-  }
-  return PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE;
 }
 
 function invokePrivacyNative(native, operation, ...args) {
@@ -1108,7 +1006,7 @@ export function isPrivacyNativeAvailable() {
 export function privacyCapabilitiesV1() {
   const native = ensurePrivacyNative(resolveNativeBinding(), "privacyCapabilitiesV1");
   const result = invokePrivacyNative(native, "privacyCapabilitiesV1");
-  return privacyNativeOutputToBuffer(result, "privacyCapabilitiesV1");
+  return privacyNativeOutputToBuffer(native, result, "privacyCapabilitiesV1");
 }
 
 /**

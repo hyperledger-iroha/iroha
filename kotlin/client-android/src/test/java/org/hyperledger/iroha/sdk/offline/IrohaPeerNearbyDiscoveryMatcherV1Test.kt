@@ -12,10 +12,10 @@ class IrohaPeerNearbyDiscoveryMatcherV1Test {
     @Test
     fun `bootstrap sender adopts exact nonzero receiver context`() {
         val sender = IrohaPeerNearbyDiscoveryContextV1.senderBootstrap(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
         )
         val receiver = IrohaPeerNearbyDiscoveryContextV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.RECEIVER,
             ByteArray(16) { (it + 1).toByte() },
             ByteArray(32) { (it + 2).toByte() },
@@ -33,7 +33,7 @@ class IrohaPeerNearbyDiscoveryMatcherV1Test {
     @Test
     fun `bootstrap never selects another bootstrap or wrong role`() {
         val sender = IrohaPeerNearbyDiscoveryContextV1.senderBootstrap(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
         )
         assertNull(IrohaPeerNearbyDiscoveryMatcherV1.selectLocalContext(
             sender,
@@ -41,7 +41,7 @@ class IrohaPeerNearbyDiscoveryMatcherV1Test {
             IrohaPeerNearbyRoleV1.RECEIVER,
         ))
         val nonzeroSender = IrohaPeerNearbyDiscoveryContextV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             ByteArray(16) { 1 },
             ByteArray(32) { 2 },
@@ -481,12 +481,10 @@ class IrohaPeerNfcReceiverApduBridgeV1Test {
         kind: IrohaPeerPayloadKind,
         byte: Int,
         count: Int,
-    ) = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-        IrohaPeerPayloadProfile.OFFLINE_NOTE,
+    ) = IrohaPeerKagemushaStructuralAndroidTestV1.message(
         kind,
-        1,
         ByteArray(count) { byte.toByte() },
-    ))
+    )
 
     private fun unusedAdmission() = IrohaPeerNfcDurableAdmissionHandlerV1 { _, _ ->
         error("No BEGIN_PAYMENT is expected in this commit-only test")

@@ -30,15 +30,26 @@ public enum PrivacyCapabilityBridgeError: Error, Equatable, Sendable {
     case unknownProtocol
 }
 
+/// Stable ABI-21 result of validating one typed privacy capability archive.
+public enum PrivacyCapabilityValidationStatusV1: Int32, CaseIterable, Sendable {
+    case valid = 0
+    case nullPointer = 1
+    case empty = 2
+    case archiveTooLarge = 3
+    case decodeResourceLimit = 4
+    case schemaMismatch = 5
+    case nonCanonical = 6
+    case malformedArchive = 7
+    case invalidSnapshot = 8
+}
+
 /// Capability-only native privacy surface.
 ///
 /// Generic proof request/build/verify dispatch is intentionally absent. Each proof protocol owns
 /// its typed API; this bridge only transports `PrivacyCapabilitySnapshotV1`.
 public enum PrivacyNativeBridge {
     public static let requiredBridgeABIVersion: UInt32 = 21
-    public static let nativeArchiveMaximumBytes = 64 * 1024 * 1024
-
-    private static let capabilitySchemaByte: UInt8 = 0x50
+    public static let nativeArchiveMaximumBytes = 256 * 1024
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isPrivacyNativeAvailable
@@ -59,13 +70,10 @@ public enum PrivacyNativeBridge {
     }
 
     static func requireCapabilitiesArchiveV1(_ archive: Data) throws -> Data {
-        guard archive.count <= nativeArchiveMaximumBytes,
-              NoritoNativeBridge.isValidPrivacyNoritoArchive(archive),
-              NoritoNativeBridge.hasNonEmptyPrivacyNoritoPayload(archive),
-              NoritoNativeBridge.hasPrivacyNoritoSchema(
-                  archive,
-                  expectedSchemaByte: capabilitySchemaByte
-              ) else {
+        guard !archive.isEmpty,
+              archive.count <= nativeArchiveMaximumBytes,
+              NoritoNativeBridge.shared.privacyCapabilityValidationStatusV1(archive)
+                == PrivacyCapabilityValidationStatusV1.valid.rawValue else {
             throw PrivacyCapabilityBridgeError.invalidArchive
         }
         return Data(archive)

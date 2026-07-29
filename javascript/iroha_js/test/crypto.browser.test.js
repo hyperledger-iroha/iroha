@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   buildKaigiRosterJoinProof,
   buildZkAceTransferAuthorizationV1,
@@ -126,7 +126,7 @@ test("browser crypto covers the package root crypto export surface", () => {
   );
 });
 
-test("browser package wiring keeps privacy catalogs on mapped crypto stubs", () => {
+test("browser package wiring omits the retired privacy catalog module", () => {
   const packageJson = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
@@ -137,16 +137,10 @@ test("browser package wiring keeps privacy catalogs on mapped crypto stubs", () 
     ["src", "../src/privacyAlgorithms.js"],
     ["dist", "../dist/privacyAlgorithms.js"],
   ]) {
-    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
-    assert.match(
-      source,
-      /^import \{ isPrivacyNativeAvailable \} from "\.\/crypto\.js";/m,
-      `${label} privacy catalog must route bridge detection through browser-mapped crypto.js`,
-    );
-    assert.doesNotMatch(
-      source,
-      /iroha_js_host|__IROHA_NATIVE_BINDING__|privacyCapabilitiesV1|privacyBuildProofV1|privacyVerifyProofV1/,
-      `${label} privacy catalog must not call native privacy FFI directly`,
+    assert.equal(
+      existsSync(new URL(relativePath, import.meta.url)),
+      false,
+      `${label} privacy catalog must remain deleted`,
     );
   }
 });

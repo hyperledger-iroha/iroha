@@ -2,13 +2,15 @@
 
 use thiserror::Error;
 
+#[cfg(test)]
+use super::{VegaCurveError, VegaT256PointV1 as Point, VegaTranscriptError, VegaTranscriptV1};
 use super::{
-    VegaCurveError, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, VegaTranscriptError,
-    VegaTranscriptV1,
+    VegaT256ScalarV1 as Scalar,
     algebra::{AlgebraError, eq_evals, inner_product, log2_exact},
     commitment::{Commitment, CommitmentError, CommitmentKey, msm},
 };
 
+#[cfg(test)]
 const IPA_PROTOCOL_NAME: &[u8] = b"inner product argument (linear)";
 
 /// Failure while proving or verifying a canonical Hyrax opening.
@@ -16,6 +18,7 @@ const IPA_PROTOCOL_NAME: &[u8] = b"inner product argument (linear)";
 pub(super) enum HyraxError {
     #[error("Vega Hyrax dimensions do not match the fixed opening shape")]
     InvalidDimension,
+    #[cfg(test)]
     #[error("Vega Hyrax inner-product equation failed")]
     InvalidInnerProductProof,
     #[error("Vega Hyrax direct opening does not match its commitment")]
@@ -24,12 +27,15 @@ pub(super) enum HyraxError {
     Algebra(#[from] AlgebraError),
     #[error(transparent)]
     Commitment(#[from] CommitmentError),
+    #[cfg(test)]
     #[error(transparent)]
     Curve(#[from] VegaCurveError),
+    #[cfg(test)]
     #[error(transparent)]
     Transcript(#[from] VegaTranscriptError),
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct InnerProductArgument {
     pub(super) delta: Point,
@@ -39,28 +45,33 @@ pub(super) struct InnerProductArgument {
     pub(super) z_beta: Scalar,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct EvaluationArgument {
     pub(super) inner_product: InnerProductArgument,
 }
 
+#[cfg(test)]
 pub(super) struct InnerProductRandomness<'a> {
     pub(super) d_vec: &'a [Scalar],
     pub(super) r_delta: Scalar,
     pub(super) r_beta: Scalar,
 }
 
+#[cfg(test)]
 struct InnerProductInstance {
     comm_a: Point,
     comm_c: Point,
 }
 
+#[cfg(test)]
 struct InnerProductWitness<'a> {
     a_vec: &'a [Scalar],
     r_a: Scalar,
     r_c: Scalar,
 }
 
+#[cfg(test)]
 pub(super) fn prove_inner_product(
     key: &CommitmentKey,
     evaluation_key: &CommitmentKey,
@@ -121,6 +132,7 @@ pub(super) fn prove_inner_product(
     })
 }
 
+#[cfg(test)]
 pub(super) fn verify_inner_product(
     key: &CommitmentKey,
     evaluation_key: &CommitmentKey,
@@ -167,6 +179,7 @@ pub(super) fn verify_inner_product(
     Ok(())
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prove_evaluation(
     key: &CommitmentKey,
@@ -209,6 +222,7 @@ pub(super) fn prove_evaluation(
     Ok(EvaluationArgument { inner_product })
 }
 
+#[cfg(test)]
 pub(super) fn verify_evaluation(
     key: &CommitmentKey,
     evaluation_key: &CommitmentKey,
@@ -324,6 +338,7 @@ pub(super) fn verify_direct(
     Ok(inner_product(values, &right_weights)?)
 }
 
+#[cfg(test)]
 fn absorb_inner_product_instance(
     instance: &InnerProductInstance,
     transcript: &mut VegaTranscriptV1,
@@ -336,6 +351,7 @@ fn absorb_inner_product_instance(
     Ok(())
 }
 
+#[cfg(test)]
 fn bind_rows(
     key: &CommitmentKey,
     commitment: &Commitment,

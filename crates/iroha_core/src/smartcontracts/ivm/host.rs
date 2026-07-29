@@ -71,9 +71,10 @@ use iroha_data_model::{
     nexus::{
         AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
         AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
-        AxtProofEnvelope as ModelAxtProofEnvelope, AxtProofFragment, AxtRejectContext,
-        AxtRejectReason, AxtReplayRecord, AxtTouchFragment, AxtTouchSpec as ModelAxtTouchSpec,
-        ProofBlob as ModelProofBlob, TouchManifest as ModelTouchManifest,
+        AxtPolicySnapshotValidationError, AxtProofEnvelope as ModelAxtProofEnvelope,
+        AxtProofFragment, AxtRejectContext, AxtRejectReason, AxtReplayRecord, AxtTouchFragment,
+        AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
+        TouchManifest as ModelTouchManifest,
     },
     parameter::{Parameters, system::ivm_metadata},
     permission::Permissions,
@@ -116,6 +117,7 @@ use iroha_primitives::{
 };
 #[cfg(test)]
 use ivm::VMError;
+use ivm::codec::{decode_canonical_norito, encode_canonical_norito};
 use ivm::{
     self, CoreHost as IvmCodecHost, IVM, PointerType,
     analysis::{self, AmxLimits, ProgramAnalysis},
@@ -131,7 +133,7 @@ use mv::storage::StorageReadOnly;
 use norito::{
     NoritoDeserialize,
     core::{Archived, DecodeFromSlice, Header, NoritoSerialize},
-    decode_from_bytes, json,
+    json,
     streaming::CapabilityFlags,
 };
 
@@ -535,6 +537,7 @@ struct PreparedVerifyingKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostExecutionClass {
     Generic,
+    StateFreeGeneric,
     Contract,
     View,
     IvmProvedContract,
@@ -544,10 +547,15 @@ enum HostExecutionClass {
 
 impl HostExecutionClass {
     fn ensure_syscall_allowed(self, number: u32) -> Result<(), ivm::VMError> {
-        if matches!(self, Self::Generic)
+        if matches!(self, Self::Generic | Self::StateFreeGeneric)
             && !crate::smartcontracts::ivm::cache::is_generic_syscall_allowed(number)
         {
             return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
+        }
+        if matches!(self, Self::StateFreeGeneric | Self::LocalContractDebug)
+            && ivm::syscalls::is_axt_syscall(number)
+        {
+            return Err(ivm::VMError::PermissionDenied);
         }
         if matches!(self, Self::View | Self::LocalViewDebug)
             && matches!(
@@ -639,7 +647,7 @@ pub struct CoreHostImpl<QS> {
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     // Snapshots for state-read syscalls
     zk_roots: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>,
-    zk_elections: BTreeMap<String, (bool, Vec<u64>)>,
+    zk_elections: BTreeMap<String, (u32, bool, Vec<u64>)>,
     vrf_epoch_seeds: BTreeMap<u64, [u8; 32]>,
     // Registry snapshot of verifying keys.
     verifying_keys: BTreeMap<VerifyingKeyId, Arc<VerifyingKeyRecord>>,
@@ -687,6 +695,17 @@ pub struct CoreHostImpl<QS> {
 
 /// Core host variant without query support (default for VM-attached hosts).
 pub type CoreHost = CoreHostImpl<NoQueryState>;
+
+/// Errors returned while constructing a core host from a state snapshot.
+#[derive(Debug, thiserror::Error)]
+pub enum CoreHostStateError {
+    /// The world-state ZK registry is internally inconsistent.
+    #[error("invalid ZK snapshot state: {0}")]
+    ZkSnapshot(ivm::VMError),
+    /// The world-state AXT policy snapshot is not canonical.
+    #[error("invalid AXT policy snapshot: {0}")]
+    AxtPolicySnapshot(AxtPolicySnapshotValidationError),
+}
 
 /// Marker query slot for hosts that do not run queries.
 #[derive(Default, Copy, Clone)]
@@ -2320,12 +2339,12 @@ impl HostExecutionArtifacts {
         })?;
         bytes.extend_from_slice(execution_identity.as_ref());
         for queued in queued {
-            let authority = norito::to_bytes(&queued.authority).map_err(|error| {
+            let authority = encode_canonical_norito(&queued.authority).map_err(|error| {
                 ValidationFail::InternalError(format!(
                     "failed to encode queued authority for call_hash seed: {error}"
                 ))
             })?;
-            let instruction = norito::to_bytes(&queued.instruction).map_err(|error| {
+            let instruction = encode_canonical_norito(&queued.instruction).map_err(|error| {
                 ValidationFail::InternalError(format!(
                     "failed to encode queued instruction for call_hash seed: {error}"
                 ))
@@ -2528,12 +2547,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
 
         let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::NoritoBytes)?;
-        decode_from_bytes(tlv.payload)
-            .or_else(|_| {
-                let owned = tlv.payload.to_vec();
-                decode_from_bytes(&owned)
-            })
-            .map_err(|_| ivm::VMError::DecodeError)
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn soracloud_operation_for_syscall(number: u32) -> Option<SoracloudHostOperationV1> {
@@ -2617,7 +2631,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .ok_or(ivm::VMError::UnknownSyscall(number))?;
         let tlv = Self::decode_pointer_tlv(vm, vm.register(10), PointerType::SoracloudRequest)?;
         let request: SoracloudHostRequestEnvelopeV1 =
-            decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
         request.validate().map_err(|_| ivm::VMError::DecodeError)?;
         if request.operation != expected
             || !Self::soracloud_payload_matches_operation(&request.payload, expected)
@@ -2733,16 +2747,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     /// Construct a host from a state snapshot, hydrating config, ZK snapshots, and AXT policy.
-    pub fn from_state(authority: AccountId, state: &crate::state::State) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreHostStateError`] when the state contains an inconsistent
+    /// ZK registry or a non-canonical AXT policy snapshot.
+    pub fn from_state(
+        authority: AccountId,
+        state: &crate::state::State,
+    ) -> Result<Self, CoreHostStateError> {
         let view = state.view();
-        let snapshot = view.axt_policy_snapshot();
         let mut host = Self::new(authority);
         host.set_crypto_config(Arc::clone(&view.crypto));
         host.set_zk_config(&view.zk);
         host.set_chain_id(&view.chain_id);
         host.set_block_height(u64::try_from(view.height()).unwrap_or(u64::MAX));
-        host.set_axt_timing(view.nexus.axt);
-        host.hydrate_axt_replay_ledger(&view);
+        host.hydrate_axt_state(&view)
+            .map_err(CoreHostStateError::AxtPolicySnapshot)?;
         host.set_durable_state_snapshot_from_world(view.world());
         host.set_public_inputs_from_parameters(view.world().parameters());
         host.set_vrf_epoch_seeds_from_world(view.world());
@@ -2750,10 +2771,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(&view),
         );
         host.set_zk_snapshots_from_world(view.world(), &view.zk)
-            .expect("valid ZK snapshot state");
-        host = host.with_axt_policy_snapshot(&snapshot);
+            .map_err(CoreHostStateError::ZkSnapshot)?;
         host.set_amx_limits(Self::amx_limits_from_config(&view.pipeline));
-        host
+        Ok(host)
     }
 
     /// Create host with an account snapshot for iteration helpers.
@@ -2994,6 +3014,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         // authority, even in release builds where a debug assertion would not
         // protect the boundary.
         self.clear_contract_runtime_binding();
+    }
+
+    /// Bind this host to a generic program running without a live state view.
+    ///
+    /// The generic ABI surface remains unchanged, but AXT is rejected by this
+    /// execution class because its policy, replay ledger, and completion
+    /// persistence all require one coherent world-state snapshot.
+    pub(crate) fn set_state_free_generic_execution(&mut self) {
+        self.clear_contract_runtime_binding();
+        self.execution_class = HostExecutionClass::StateFreeGeneric;
     }
 
     /// Scope SCCP recording to an authenticated top-level `IvmProved` contract execution.
@@ -3301,64 +3331,140 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     /// Override the configured AXT timing (slot length + skew tolerance).
-    pub fn set_axt_timing(&mut self, timing: iroha_config::parameters::actual::NexusAxt) {
+    ///
+    /// A successful timing replacement aborts any active AXT envelope. The
+    /// guest must issue `AXT_BEGIN` again before recording proofs under the new
+    /// timing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] without changing the host
+    /// when an installed snapshot is no longer canonical.
+    pub fn set_axt_timing(
+        &mut self,
+        timing: iroha_config::parameters::actual::NexusAxt,
+    ) -> Result<(), AxtPolicySnapshotValidationError> {
+        let policy = self
+            .axt_policy_snapshot
+            .as_ref()
+            .map(|snapshot| {
+                ivm::axt::SnapshotAxtPolicy::new_with_timing(
+                    snapshot,
+                    timing.slot_length_ms,
+                    timing.max_clock_skew_ms,
+                )
+            })
+            .transpose()?;
         self.axt_timing = timing;
-        if let Some(snapshot) = self.axt_policy_snapshot.clone() {
-            self.refresh_axt_policy_snapshot(&snapshot);
+        if let (Some(snapshot), Some(policy)) = (self.axt_policy_snapshot.clone(), policy) {
+            self.install_validated_axt_policy_snapshot(&snapshot, policy);
+        } else {
+            self.abort_active_axt_envelope_for_policy_change();
+            self.clear_axt_proof_cache();
         }
+        self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
+        Ok(())
     }
 
     /// Set the AXT timing configuration and return the updated host (builder style).
-    #[must_use]
-    pub fn with_axt_timing(mut self, timing: iroha_config::parameters::actual::NexusAxt) -> Self {
-        self.axt_timing = timing;
-        self
+    ///
+    /// A successful timing replacement aborts any active AXT envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when an installed snapshot
+    /// is no longer canonical.
+    pub fn with_axt_timing(
+        mut self,
+        timing: iroha_config::parameters::actual::NexusAxt,
+    ) -> Result<Self, AxtPolicySnapshotValidationError> {
+        self.set_axt_timing(timing)?;
+        Ok(self)
     }
 
     /// Override the default allow-all AXT policy (e.g., in tests or when wiring UAID manifests).
+    ///
+    /// Replacing the policy aborts any active AXT envelope.
     #[must_use]
     pub fn with_axt_policy(mut self, policy: Arc<dyn ivm::axt::AxtPolicy>) -> Self {
+        self.abort_active_axt_envelope_for_policy_change();
         self.axt_policy = policy;
         self.axt_policy_snapshot = None;
-        for (dsid, entry) in core::mem::take(Arc::make_mut(&mut self.axt_proof_cache)) {
-            self.clear_axt_proof_cache_state(dsid, &entry);
-        }
-        self.axt_proof_cache_slot = None;
+        self.clear_axt_proof_cache();
         self
     }
 
     /// Override the default AXT policy using a Space Directory snapshot.
-    #[must_use]
-    pub fn with_axt_policy_snapshot(mut self, snapshot: &AxtPolicySnapshot) -> Self {
-        self.axt_policy = Arc::new(ivm::axt::SnapshotAxtPolicy::new_with_timing(
+    ///
+    /// A successful snapshot replacement aborts any active AXT envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when the snapshot is not
+    /// canonically ordered or its version does not bind its exact entries.
+    pub fn with_axt_policy_snapshot(
+        mut self,
+        snapshot: &AxtPolicySnapshot,
+    ) -> Result<Self, AxtPolicySnapshotValidationError> {
+        let policy = ivm::axt::SnapshotAxtPolicy::new_with_timing(
             snapshot,
             self.axt_timing.slot_length_ms,
             self.axt_timing.max_clock_skew_ms,
-        ));
+        )?;
+        self.install_validated_axt_policy_snapshot(snapshot, policy);
+        Ok(self)
+    }
+
+    fn install_validated_axt_policy_snapshot(
+        &mut self,
+        snapshot: &AxtPolicySnapshot,
+        policy: ivm::axt::SnapshotAxtPolicy,
+    ) {
+        self.abort_active_axt_envelope_for_policy_change();
+        self.axt_policy = Arc::new(policy);
         self.axt_policy_snapshot = Some(snapshot.clone());
+        self.clear_axt_proof_cache();
+        self.axt_proof_cache_slot = Self::policy_current_slot(snapshot);
+    }
+
+    fn clear_axt_proof_cache(&mut self) {
         for (dsid, entry) in core::mem::take(Arc::make_mut(&mut self.axt_proof_cache)) {
             self.clear_axt_proof_cache_state(dsid, &entry);
         }
-        self.axt_proof_cache_slot = Self::policy_current_slot(snapshot);
-        self
+        self.axt_proof_cache_slot = None;
+    }
+
+    /// Drop an in-progress envelope when its proof-validation assumptions change.
+    ///
+    /// Proofs already recorded in the envelope were accepted under the previous
+    /// policy and timing. Keeping them across a replacement would allow a
+    /// mixed-policy envelope to commit.
+    fn abort_active_axt_envelope_for_policy_change(&mut self) {
+        self.axt_state = None;
     }
 
     /// Refresh the active AXT policy snapshot without rebuilding the host.
     ///
-    /// This is used when manifest sets rotate mid-envelope or after a restart so proof
-    /// cache entries and policy roots stay in sync with WSV.
-    pub fn refresh_axt_policy_snapshot(&mut self, snapshot: &AxtPolicySnapshot) {
-        self.axt_policy = Arc::new(ivm::axt::SnapshotAxtPolicy::new_with_timing(
+    /// A successful refresh clears proof caches and aborts any active AXT
+    /// envelope. The guest must issue `AXT_BEGIN` again before recording proofs
+    /// under the refreshed policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] without changing the host
+    /// when the supplied snapshot is not canonical.
+    pub fn refresh_axt_policy_snapshot(
+        &mut self,
+        snapshot: &AxtPolicySnapshot,
+    ) -> Result<(), AxtPolicySnapshotValidationError> {
+        let policy = ivm::axt::SnapshotAxtPolicy::new_with_timing(
             snapshot,
             self.axt_timing.slot_length_ms,
             self.axt_timing.max_clock_skew_ms,
-        ));
-        self.axt_policy_snapshot = Some(snapshot.clone());
-        for (dsid, entry) in core::mem::take(Arc::make_mut(&mut self.axt_proof_cache)) {
-            self.clear_axt_proof_cache_state(dsid, &entry);
-        }
-        self.axt_proof_cache_slot = Self::policy_current_slot(snapshot);
+        )?;
+        self.install_validated_axt_policy_snapshot(snapshot, policy);
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
+        Ok(())
     }
 
     /// Attach static AMX program analysis for budget enforcement.
@@ -3781,8 +3887,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry.as_ref() {
-            if let Some(lane) = lane {
-                telemetry.note_axt_policy_reject(lane, reason, ctx.snapshot_version);
+            if let (Some(lane), Some(snapshot_version)) = (lane, ctx.snapshot_version) {
+                telemetry.note_axt_policy_reject(lane, reason, snapshot_version);
             }
             if let (Some(dsid), Some(lane), Some(min_handle_era), Some(min_sub_nonce)) =
                 (dataspace, lane, next_min_handle_era, next_min_sub_nonce)
@@ -3793,7 +3899,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         iroha_logger::warn!(
             target = "iroha::axt",
             reason = reason.label(),
-            snapshot_version = ctx.snapshot_version,
+            snapshot_version = ?ctx.snapshot_version,
             ?dataspace,
             ?lane,
             detail = %ctx.detail,
@@ -3971,32 +4077,33 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Hydrate ZK snapshots (roots, elections, verifying keys) from a world view.
     ///
     /// # Errors
-    /// Returns an error if the verifying key registry contains inconsistent entries.
+    /// Returns an error if an election shape or verifying key registry entry is inconsistent.
     pub(crate) fn set_zk_snapshots_from_world(
         &mut self,
         world: &impl WorldReadOnly,
         zk_cfg: &iroha_config::parameters::actual::Zk,
     ) -> Result<(), ivm::VMError> {
-        self.set_zk_root_history_cap(zk_cfg.root_history_cap);
-        self.set_zk_empty_root_policy(zk_cfg.empty_root_on_empty, zk_cfg.merkle_depth);
+        let mut elections = BTreeMap::new();
+        for (id, st) in world.elections().iter() {
+            iroha_data_model::isi::zk::validate_election_tally_v1(st.options, st.tally.len())
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            elections.insert(id.clone(), (st.options, st.finalized, st.tally.clone()));
+        }
 
         let mut roots = BTreeMap::new();
         for (ad, st) in world.zk_assets().iter() {
             roots.insert(ad.clone(), st.root_history.clone());
         }
-        self.set_zk_roots_snapshot(roots);
-
-        let mut elections = BTreeMap::new();
-        for (id, st) in world.elections().iter() {
-            elections.insert(id.clone(), (st.finalized, st.tally.clone()));
-        }
-        self.set_zk_elections_snapshot(elections);
 
         let mut vks = BTreeMap::new();
         for (id, rec) in world.verifying_keys().iter() {
             vks.insert(id.clone(), rec.clone());
         }
         self.set_verifying_keys(vks)?;
+        self.set_zk_root_history_cap(zk_cfg.root_history_cap);
+        self.set_zk_empty_root_policy(zk_cfg.empty_root_on_empty, zk_cfg.merkle_depth);
+        self.set_zk_roots_snapshot(roots);
+        self.set_zk_elections_snapshot(elections)?;
         Ok(())
     }
 
@@ -4063,6 +4170,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
             if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
+                || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                    &rec.circuit_id,
+                )
             {
                 return Err(ivm::VMError::NoritoInvalid);
             }
@@ -4239,6 +4349,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
+        if raw.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+            || !iroha_data_model::zk::open_verify_circuit_id_is_portable(raw)
+            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                raw,
+            )
+        {
+            return None;
+        }
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return None;
@@ -4262,6 +4380,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
+        let is_admissible = |circuit_id: &str| {
+            circuit_id.len() <= iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+                && iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+                && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                    circuit_id,
+                )
+        };
+        if !is_admissible(record_id) || !is_admissible(env_id) {
+            return false;
+        }
         if backend == "halo2/ipa" {
             match (
                 Self::normalize_halo2_circuit_id(record_id),
@@ -4315,10 +4443,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if proof_len_bytes > self.stark_config.max_proof_bytes {
                 return Err(ivm::host::ERR_PROOF_LEN);
             }
-            if let Ok(open) = norito::decode_from_bytes::<iroha_data_model::zk::StarkFriOpenProofV1>(
-                &env.proof_bytes,
-            ) && open.envelope_bytes.len() > self.stark_config.max_proof_bytes
-            {
+            let open: iroha_data_model::zk::StarkFriOpenProofV1 =
+                decode_canonical_norito(&env.proof_bytes).map_err(|_| ivm::host::ERR_DECODE)?;
+            if open.envelope_bytes.len() > self.stark_config.max_proof_bytes {
                 return Err(ivm::host::ERR_PROOF_LEN);
             }
         } else if proof_len_bytes > self.halo2_config.max_proof_bytes {
@@ -4532,9 +4659,29 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         .ok)
     }
 
-    /// Install a read-only snapshot of elections (finalized flag and tally) for state-read syscalls.
-    pub fn set_zk_elections_snapshot(&mut self, map: BTreeMap<String, (bool, Vec<u64>)>) {
+    /// Install a validated read-only snapshot of elections for state-read syscalls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ivm::VMError::NoritoInvalid`] without replacing the current snapshot when an
+    /// election has an out-of-range option count or a mismatched tally length.
+    pub fn set_zk_elections_snapshot(
+        &mut self,
+        map: BTreeMap<String, (u32, bool, Vec<u64>)>,
+    ) -> Result<(), ivm::VMError> {
+        Self::validate_zk_elections_snapshot(&map)?;
         self.zk_elections = map;
+        Ok(())
+    }
+
+    fn validate_zk_elections_snapshot(
+        map: &BTreeMap<String, (u32, bool, Vec<u64>)>,
+    ) -> Result<(), ivm::VMError> {
+        for (options, _, tally) in map.values() {
+            iroha_data_model::isi::zk::validate_election_tally_v1(*options, tally.len())
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        }
+        Ok(())
     }
 
     /// Configure the cap for recent shielded Merkle roots returned by `ZK_ROOTS_GET`.
@@ -4652,7 +4799,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             written: 0,
             max: payload_limit,
         };
-        if value.serialize(&mut writer).is_err() {
+        let serialization = {
+            let _canonical_flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            value.serialize(&mut writer)
+        };
+        if serialization.is_err() {
             self.instruction_queue_violation = Some(HostOutputBudgetViolation::EncodedBytes {
                 attempted: limits.max_bytes.saturating_add(1),
                 limit: limits.max_bytes,
@@ -5358,13 +5510,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn vote_get_tally_response(
         &self,
         request: &ivm::zk_verify::VoteGetTallyRequest,
-    ) -> ivm::zk_verify::VoteGetTallyResponse {
-        let (finalized, tally) = self
-            .zk_elections
-            .get(&request.election_id)
-            .cloned()
-            .unwrap_or_default();
-        ivm::zk_verify::VoteGetTallyResponse { finalized, tally }
+    ) -> Result<ivm::zk_verify::VoteGetTallyResponse, ivm::VMError> {
+        let Some((options, finalized, tally)) = self.zk_elections.get(&request.election_id) else {
+            return Ok(ivm::zk_verify::VoteGetTallyResponse {
+                finalized: false,
+                tally: Vec::new(),
+            });
+        };
+        iroha_data_model::isi::zk::validate_election_tally_v1(*options, tally.len())
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        Ok(ivm::zk_verify::VoteGetTallyResponse {
+            finalized: *finalized,
+            tally: tally.clone(),
+        })
     }
 
     fn vrf_epoch_seed_response(
@@ -5582,14 +5740,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn decode_name_payload(payload: &[u8]) -> Result<Name, ivm::VMError> {
-        match decode_from_bytes(payload) {
-            Ok(name) => Ok(name),
-            Err(_) => {
-                // Some Norito decoders depend on aligned/owned buffers; fall back to a copy.
-                let owned = payload.to_vec();
-                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
-            }
-        }
+        decode_canonical_norito(payload).map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn decode_durable_state_path_payload(
@@ -5684,17 +5835,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// by the current syscall policy, or the Norito payload cannot be decoded.
     pub fn decode_tlv_typed<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
     where
-        T: for<'de> NoritoDeserialize<'de>,
+        T: norito::codec::Decode + norito::codec::Encode,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
-        match decode_from_bytes(tlv.payload) {
-            Ok(value) => Ok(value),
-            Err(_) => {
-                // Fall back to decoding from an owned buffer to avoid alignment quirks.
-                let owned = tlv.payload.to_vec();
-                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
-            }
-        }
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn decode_quantity(vm: &IVM, ptr: u64) -> Result<Quantity, ivm::VMError> {
@@ -5716,15 +5860,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn decode_query_key<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
     where
-        T: for<'de> NoritoDeserialize<'de>,
+        T: norito::codec::Decode + norito::codec::Encode,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
-        decode_from_bytes(tlv.payload)
-            .or_else(|_| {
-                let owned = tlv.payload.to_vec();
-                decode_from_bytes(&owned)
-            })
-            .map_err(|_| ivm::VMError::DecodeError)
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn decode_contract_instance_lookup(
@@ -5759,15 +5898,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Returns an error if the pointer is invalid for the active ABI policy or the payload fails to decode.
     pub fn decode_tlv_json(vm: &IVM, ptr: u64) -> Result<Json, ivm::VMError> {
         let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Json)?;
-
-        match decode_from_bytes(tlv.payload) {
-            Ok(value) => Ok(value),
-            Err(_) => {
-                // Some payloads decode successfully only after re-buffering.
-                let owned = tlv.payload.to_vec();
-                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
-            }
-        }
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn permission_from_name(name: &Name) -> Permission {
@@ -5953,9 +6084,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn decode_header<T>(payload: &[u8]) -> Result<T, ivm::VMError>
     where
-        T: for<'de> NoritoDeserialize<'de>,
+        T: norito::codec::Decode + norito::codec::Encode,
     {
-        decode_from_bytes(payload).map_err(|_| ivm::VMError::NoritoInvalid)
+        decode_canonical_norito(payload).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
     fn expect_tlv(vm: &IVM, ptr: u64, expected: PointerType) -> Result<ivm::Tlv<'_>, ivm::VMError> {
@@ -6077,14 +6208,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map(|binding| binding.policy)
     }
 
-    fn current_axt_policy_version(&self) -> u64 {
-        self.axt_policy_snapshot.as_ref().map_or(0, |snapshot| {
-            if snapshot.version != 0 {
-                snapshot.version
-            } else {
-                AxtPolicySnapshot::compute_version(&snapshot.entries)
-            }
-        })
+    fn current_axt_policy_version(&self) -> Option<u64> {
+        self.axt_policy_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.version)
     }
 
     fn prune_axt_replay_ledger(&mut self, current_slot: u64) {
@@ -6108,16 +6235,42 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         expiry_slot.max(retention_cap)
     }
 
-    pub(crate) fn hydrate_axt_replay_ledger(&mut self, state: &impl StateReadOnly) {
+    /// Atomically hydrate AXT timing, policy, and replay state from one immutable snapshot.
+    ///
+    /// Policy construction and replay-ledger projection complete before the
+    /// host is mutated. Entries already expired at the snapshot's current AXT
+    /// slot are omitted. A successful replacement aborts any active envelope,
+    /// because its proofs were admitted under the previous policy or timing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] without changing the host
+    /// when the state projects a non-canonical AXT policy snapshot.
+    pub fn hydrate_axt_state(
+        &mut self,
+        state: &impl StateReadOnly,
+    ) -> Result<(), AxtPolicySnapshotValidationError> {
+        let timing = state.nexus().axt;
+        let snapshot = state.axt_policy_snapshot();
+        let policy = ivm::axt::SnapshotAxtPolicy::new_with_timing(
+            &snapshot,
+            timing.slot_length_ms,
+            timing.max_clock_skew_ms,
+        )?;
         let current_slot = current_axt_slot_for_state(state);
-        let retention_slots = self.axt_timing.replay_retention_slots.get();
-        Arc::make_mut(&mut self.axt_replay_ledger).clear();
+        let retention_slots = timing.replay_retention_slots.get();
+        let mut replay_ledger = BTreeMap::new();
         for (key, entry) in state.world().axt_replay_ledger().iter() {
             if !entry.is_expired(current_slot, retention_slots) {
-                Arc::make_mut(&mut self.axt_replay_ledger).insert(*key, *entry);
+                replay_ledger.insert(*key, *entry);
             }
         }
-        self.prune_axt_replay_ledger(current_slot);
+
+        self.axt_timing = timing;
+        self.axt_replay_ledger = Arc::new(replay_ledger);
+        self.install_validated_axt_policy_snapshot(&snapshot, policy);
+        self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
+        Ok(())
     }
 
     fn verify_fastpq_envelope_binding(
@@ -6265,7 +6418,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
 
         let envelope =
-            norito::decode_from_bytes::<ModelAxtProofEnvelope>(&proof.payload).map_err(|err| {
+            decode_canonical_norito::<ModelAxtProofEnvelope>(&proof.payload).map_err(|err| {
                 self.record_axt_reject(
                     AxtRejectReason::Proof,
                     Some(dsid),
@@ -6820,7 +6973,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let min_out_envelope = ivm::numeric_tlv::encode_quantity(&min_out)?;
 
         let schema = Self::quantity2_argument_schema();
-        let schema_bytes = norito::to_bytes(&schema).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let schema_bytes = Self::encode_norito_payload(&schema)?;
         let record = EntrypointArgumentRecordV1 {
             schema_hash: entrypoint_argument_schema_hash_v1(&schema_bytes),
             atoms: vec![
@@ -6828,7 +6981,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 EntrypointValueAtomV1::Pointer(min_out_envelope),
             ],
         };
-        let record_bytes = norito::to_bytes(&record).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let record_bytes = Self::encode_norito_payload(&record)?;
         let record_pointer = Self::alloc_norito_bytes(vm, &record_bytes)?;
         vm.set_register(12, record_pointer);
 
@@ -7953,6 +8106,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn norito_encoded_len_exact<T: NoritoSerialize>(value: &T) -> Option<u64> {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let payload_len = NoritoSerialize::encoded_len_exact(value)?;
         let header_len = Header::SIZE;
         let align = mem::align_of::<Archived<T>>();
@@ -7987,7 +8142,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn encode_norito_payload<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, ivm::VMError> {
-        norito::to_bytes(value).map_err(|_| ivm::VMError::NoritoInvalid)
+        encode_canonical_norito(value)
     }
 
     fn encode_amount_payload(value: &Quantity) -> Result<Vec<u8>, ivm::VMError> {
@@ -8163,7 +8318,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         T: NoritoSerialize + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
     {
         let decoded: Option<T> =
-            decode_from_bytes(payload).map_err(|_| ivm::VMError::DecodeError)?;
+            decode_canonical_norito(payload).map_err(|_| ivm::VMError::DecodeError)?;
         let prepared = decoded.map(prepare).transpose()?;
         if prepared
             .as_ref()
@@ -8217,7 +8372,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             metrics.projection_payload_bytes = u64::try_from(payload.len()).unwrap_or(u64::MAX);
         }
         let decoded: QueryPageV1<T> =
-            decode_from_bytes(payload).map_err(|_| ivm::VMError::DecodeError)?;
+            decode_canonical_norito(payload).map_err(|_| ivm::VMError::DecodeError)?;
         let (items, next_offset) = decoded.into_parts();
         let elements = items
             .into_iter()
@@ -8761,7 +8916,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn decode_opaque_instruction(vm: &IVM) -> Result<InstructionBox, ivm::VMError> {
         let pointer = vm.register(10);
         let tlv = Self::decode_pointer_tlv(vm, pointer, PointerType::NoritoBytes)?;
-        norito::decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::NoritoInvalid)
+        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
     fn effect_authority(&self) -> AccountId {
@@ -8931,7 +9086,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let tlv = Self::expect_tlv(vm, vm.register(10), PointerType::NoritoBytes)?;
         let batch: TransferAssetBatch =
-            decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
         if batch.entries().is_empty() {
             return Err(ivm::VMError::DecodeError);
         }
@@ -9014,6 +9169,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             gas_len = gas_len.saturating_add(manifest_tlv.payload.len());
             Self::decode_header(manifest_tlv.payload)?
         };
+        axt::validate_touch_manifest(&manifest)?;
         let gas = Self::axt_gas(gas_len);
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         if let Err(err) = self.axt_policy.allow_touch(dsid, &manifest) {
@@ -9107,20 +9263,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
         let gas = Self::axt_verify_gas(proof_tlv.payload.len());
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-        let mut proof_payload = proof_tlv.payload;
-        let proof: ProofBlob = decode_from_bytes(proof_payload)
-            .or_else(|_| ProofBlob::decode(&mut proof_payload))
-            .map_err(|_err| {
-                self.record_axt_reject_detail(
-                    AxtRejectReason::Proof,
-                    Some(dsid),
-                    Some(policy.target_lane),
-                    "proof payload failed to decode",
-                    None,
-                    None,
-                );
-                ivm::VMError::NoritoInvalid
-            })?;
+        let proof: ProofBlob = decode_canonical_norito(proof_tlv.payload).map_err(|_err| {
+            self.record_axt_reject_detail(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                "proof payload failed to decode",
+                None,
+                None,
+            );
+            ivm::VMError::NoritoInvalid
+        })?;
+        axt::validate_proof_blob(&proof)?;
         self.validate_axt_proof(dsid, &proof, policy)?;
         Ok(gas)
     }
@@ -9465,6 +9619,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     "proof payload failed to decode",
                 );
             })?;
+            axt::validate_proof_blob(&blob)?;
             Some(blob)
         };
         let gas = Self::axt_gas(gas_len);
@@ -9475,6 +9630,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     axt::HandleAmountResolutionError::MissingAmount => (
                         AxtRejectReason::Budget,
                         "intent amount is hidden and proof has no committed amount",
+                    ),
+                    axt::HandleAmountResolutionError::InvalidProofEnvelope => (
+                        AxtRejectReason::Proof,
+                        "proof payload is not a canonical AXT proof envelope",
                     ),
                     axt::HandleAmountResolutionError::Mismatch => (
                         AxtRejectReason::Budget,
@@ -9538,6 +9697,24 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             self.validate_axt_proof(intent.asset_dsid, blob, policy)?;
         }
 
+        if let Err(error) = axt::validate_asset_handle(&handle) {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle fields are not canonical or usable",
+            );
+            return Err(error);
+        }
+        if let Err(error) = axt::validate_remote_spend_intent(&intent) {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "remote spend intent fields are not canonical or usable",
+            );
+            return Err(error);
+        }
         let usage = axt::HandleUsage {
             handle,
             intent,
@@ -9732,7 +9909,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             touches,
             proofs,
             handles,
-            commit_height: Some(commit_height),
+            commit_height,
         }
     }
 
@@ -10864,8 +11041,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
                 let request: scode::RegisterSmartContractCode =
-                    norito::decode_from_bytes(tlv.payload)
-                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
                 let instr = InstructionBox::from(request);
                 Ok(self.queue_instruction(instr))
             }
@@ -11104,8 +11280,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if gas > gas_remaining {
                     return Err(ivm::VMError::OutOfGas);
                 }
-                let response_bytes =
-                    norito::to_bytes(&response).map_err(|_| ivm::VMError::DecodeError)?;
+                let response_bytes = Self::encode_norito_payload(&response)
+                    .map_err(|_| ivm::VMError::DecodeError)?;
                 let payload_len = Self::len_to_u32(response_bytes.len())?;
                 let mut out = Vec::with_capacity(7 + response_bytes.len() + Hash::LENGTH);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -11139,8 +11315,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 let account_id =
                     state_ref.resolve_account_alias(&self.authority, &alias_literal)?;
-                let payload =
-                    norito::to_bytes(&account_id).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let payload = Self::encode_norito_payload(&account_id)?;
                 let payload_len_u64 = u64::try_from(payload.len()).unwrap_or(u64::MAX);
                 let gas = Self::query_gas_cost(&gas_ctx, 1, payload_len_u64);
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -11220,8 +11395,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             type_id: PointerType::Json as u16,
                         });
                     }
-                    let payload =
-                        norito::to_bytes(args).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    let payload = Self::encode_norito_payload(args)?;
                     let payload_len = Self::len_to_u32(payload.len())?;
                     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
                     out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -11457,7 +11631,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let mut first_error: Option<u64> = None;
                 for env in envs {
                     let mut status = 0u8;
-                    let payload = if let Ok(bytes) = norito::to_bytes(&env) {
+                    let payload = if let Ok(bytes) = Self::encode_norito_payload(&env) {
                         bytes
                     } else {
                         first_error.get_or_insert(ivm::host::ERR_DECODE);
@@ -11499,7 +11673,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     return Ok(gas);
                 }
 
-                let body = norito::to_bytes(&statuses)
+                let body = Self::encode_norito_payload(&statuses)
                     .map_err(|_| ivm::VMError::metered(gas, ivm::VMError::NoritoInvalid))?;
                 let output_bytes = 7_usize
                     .saturating_add(body.len())
@@ -11535,11 +11709,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let ptr = vm.register(10);
                 let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
                 let input_len = req_tlv.payload.len();
-                let req: ivm::zk_verify::RootsGetRequest =
-                    norito::decode_from_bytes(req_tlv.payload)
-                        .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let req: ivm::zk_verify::RootsGetRequest = decode_canonical_norito(req_tlv.payload)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let resp = self.roots_get_response(&req)?;
-                let body = norito::to_bytes(&resp).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let body = Self::encode_norito_payload(&resp)?;
                 let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                 let body_len = Self::len_to_u32(body.len())?;
@@ -11560,10 +11733,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
                 let input_len = req_tlv.payload.len();
                 let req: ivm::zk_verify::VoteGetTallyRequest =
-                    norito::decode_from_bytes(req_tlv.payload)
+                    decode_canonical_norito(req_tlv.payload)
                         .map_err(|_| ivm::VMError::NoritoInvalid)?;
-                let resp = self.vote_get_tally_response(&req);
-                let body = norito::to_bytes(&resp).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let resp = self.vote_get_tally_response(&req)?;
+                let body = Self::encode_norito_payload(&resp)?;
                 let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                 let body_len = Self::len_to_u32(body.len())?;
@@ -11596,7 +11769,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     vm.set_register(11, ERR_TYPE);
                     return Ok(gas);
                 }
-                let req: VrfEpochSeedRequest = match norito::decode_from_bytes(tlv.payload) {
+                let req: VrfEpochSeedRequest = match decode_canonical_norito(tlv.payload) {
                     Ok(req) => req,
                     Err(_) => {
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -11607,7 +11780,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 };
 
                 let resp = self.vrf_epoch_seed_response(&req);
-                let body = norito::to_bytes(&resp).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let body = Self::encode_norito_payload(&resp)?;
                 let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                 let body_len = Self::len_to_u32(body.len())?;
@@ -11844,8 +12017,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // Historical len-prefixed payloads are no longer emitted.
             ivm::syscalls::SYSCALL_GET_AUTHORITY | ivm::syscalls::SYSCALL_SYSVAR_AUTHORITY => {
                 // Encode authority payload
-                let payload =
-                    norito::to_bytes(&self.authority).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let payload = Self::encode_norito_payload(&self.authority)?;
                 let payload_len = Self::len_to_u32(payload.len())?;
                 // Build TLV envelope (AccountId: type_id=1, version=1)
                 let type_id: u16 = 1;
@@ -11869,7 +12041,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     .as_ref()
                     .map(|context| &context.contract_subject)
                     .ok_or(ivm::VMError::PermissionDenied)?;
-                let payload = norito::to_bytes(subject).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let payload = Self::encode_norito_payload(subject)?;
                 let ptr = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
                 vm.set_register(10, ptr);
                 Ok(Self::sysvar_gas(payload.len()))
@@ -11898,8 +12070,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     vm.set_register(10, 0);
                     return Ok(Self::sysvar_gas(0));
                 };
-                let payload = norito::to_bytes(&context.contract_address)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let payload = Self::encode_norito_payload(&context.contract_address)?;
                 let ptr = Self::alloc_norito_bytes(vm, &payload)?;
                 vm.set_register(10, ptr);
                 Ok(Self::sysvar_gas(payload.len()))
@@ -12409,6 +12580,19 @@ seiyaku ReadOnlyBinding {
                 .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
             Ok(())
         );
+        for syscall in [
+            ivm_sys::SYSCALL_AXT_BEGIN,
+            ivm_sys::SYSCALL_AXT_TOUCH,
+            ivm_sys::SYSCALL_AXT_COMMIT,
+            ivm_sys::SYSCALL_VERIFY_DS_PROOF,
+            ivm_sys::SYSCALL_USE_ASSET_HANDLE,
+        ] {
+            assert_eq!(
+                host.execution_class.ensure_syscall_allowed(syscall),
+                Err(ivm::VMError::PermissionDenied),
+                "state-free local debug calls must reject AXT syscall 0x{syscall:02x}"
+            );
+        }
 
         host.set_local_contract_debug_view_execution();
         assert_eq!(host.execution_class, HostExecutionClass::LocalViewDebug);
@@ -12444,6 +12628,45 @@ seiyaku ReadOnlyBinding {
             host.ensure_execution_artifacts_are_committable().is_err(),
             "changing execution class must not clear local-debug provenance"
         );
+    }
+
+    #[test]
+    fn state_free_generic_execution_rejects_axt_without_narrowing_generic_v1() {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        host.set_state_free_generic_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::StateFreeGeneric);
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Ok(())
+        );
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_GET),
+            Err(ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm_sys::SYSCALL_STATE_GET,
+            })
+        );
+        for syscall in [
+            ivm_sys::SYSCALL_AXT_BEGIN,
+            ivm_sys::SYSCALL_AXT_TOUCH,
+            ivm_sys::SYSCALL_AXT_COMMIT,
+            ivm_sys::SYSCALL_VERIFY_DS_PROOF,
+            ivm_sys::SYSCALL_USE_ASSET_HANDLE,
+        ] {
+            assert_eq!(
+                host.execution_class.ensure_syscall_allowed(syscall),
+                Err(ivm::VMError::PermissionDenied),
+                "state-free generic execution must reject AXT syscall 0x{syscall:02x}"
+            );
+            assert!(
+                ivm::syscalls::is_generic_program_syscall_allowed(
+                    ivm::SyscallPolicy::AbiV1,
+                    syscall
+                ),
+                "live-state generic ABI V1 execution must retain AXT syscall 0x{syscall:02x}"
+            );
+        }
     }
 
     #[test]
@@ -13058,7 +13281,9 @@ seiyaku PrivilegedBinding {
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
         let authority = ALICE_ID.clone();
-        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13128,7 +13353,9 @@ seiyaku PrivilegedBinding {
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
         let authority = ALICE_ID.clone();
-        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13167,7 +13394,8 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority)
             .with_axt_policy_snapshot(&snapshot)
-            .with_axt_timing(timing);
+            .and_then(|host| host.with_axt_timing(timing))
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13204,7 +13432,9 @@ seiyaku PrivilegedBinding {
         let mut current_slot = 9;
         let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13274,7 +13504,9 @@ seiyaku PrivilegedBinding {
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13313,7 +13545,9 @@ seiyaku PrivilegedBinding {
         snapshot.entries[0].policy.min_sub_nonce = 0;
         snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13395,7 +13629,9 @@ seiyaku PrivilegedBinding {
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13477,7 +13713,9 @@ seiyaku PrivilegedBinding {
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13564,7 +13802,10 @@ seiyaku PrivilegedBinding {
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         let mut host = CoreHost::new(authority)
             .with_axt_policy_snapshot(&snapshot)
-            .with_axt_timing(iroha_config::parameters::actual::NexusAxt::default());
+            .and_then(|host| {
+                host.with_axt_timing(iroha_config::parameters::actual::NexusAxt::default())
+            })
+            .expect("canonical policy snapshot");
         host.set_telemetry(telemetry.clone());
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -13589,7 +13830,8 @@ seiyaku PrivilegedBinding {
         current_slot += 1;
         let rotated_root = [0x22; 32];
         let rotated_snapshot = make_policy_snapshot(dsid, rotated_root, current_slot);
-        host.refresh_axt_policy_snapshot(&rotated_snapshot);
+        host.refresh_axt_policy_snapshot(&rotated_snapshot)
+            .expect("canonical rotated snapshot");
         let cleared_snapshot = telemetry.axt_proof_cache_status_snapshot();
         assert_eq!(cleared_snapshot.len(), 1);
         let cleared = &cleared_snapshot[0];
@@ -13642,7 +13884,10 @@ seiyaku PrivilegedBinding {
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         let mut host = CoreHost::new(authority.clone())
             .with_axt_policy_snapshot(&snapshot)
-            .with_axt_timing(iroha_config::parameters::actual::NexusAxt::default());
+            .and_then(|host| {
+                host.with_axt_timing(iroha_config::parameters::actual::NexusAxt::default())
+            })
+            .expect("canonical policy snapshot");
         host.set_telemetry(telemetry.clone());
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -13725,7 +13970,7 @@ seiyaku PrivilegedBinding {
         assert_eq!(ctx.lane, Some(LaneId::new(1)));
         assert_eq!(
             ctx.snapshot_version,
-            AxtPolicySnapshot::compute_version(&snapshot.entries)
+            Some(AxtPolicySnapshot::compute_version(&snapshot.entries))
         );
         assert_eq!(ctx.next_min_handle_era, Some(5));
         assert_eq!(ctx.next_min_sub_nonce, Some(3));
@@ -13749,7 +13994,10 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone())
             .with_axt_policy_snapshot(&snapshot)
-            .with_axt_timing(iroha_config::parameters::actual::NexusAxt::default());
+            .and_then(|host| {
+                host.with_axt_timing(iroha_config::parameters::actual::NexusAxt::default())
+            })
+            .expect("canonical policy snapshot");
 
         let manifest = TouchManifest {
             read: Vec::new(),
@@ -13819,13 +14067,14 @@ seiyaku PrivilegedBinding {
             .expect("reject context captured");
         assert_eq!(ctx.next_min_handle_era, Some(5));
         assert_eq!(ctx.next_min_sub_nonce, Some(2));
-        assert_eq!(ctx.snapshot_version, snapshot.version);
+        assert_eq!(ctx.snapshot_version, Some(snapshot.version));
 
         let mut refreshed = snapshot.clone();
         refreshed.entries[0].policy.min_handle_era = 9;
         refreshed.entries[0].policy.min_sub_nonce = 4;
         refreshed.version = AxtPolicySnapshot::compute_version(&refreshed.entries);
-        host.refresh_axt_policy_snapshot(&refreshed);
+        host.refresh_axt_policy_snapshot(&refreshed)
+            .expect("canonical refreshed snapshot");
 
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -13858,7 +14107,7 @@ seiyaku PrivilegedBinding {
             .expect("refreshed reject context captured");
         assert_eq!(refreshed_ctx.next_min_handle_era, Some(9));
         assert_eq!(refreshed_ctx.next_min_sub_nonce, Some(4));
-        assert_eq!(refreshed_ctx.snapshot_version, refreshed.version);
+        assert_eq!(refreshed_ctx.snapshot_version, Some(refreshed.version));
     }
 
     #[test]
@@ -13872,7 +14121,9 @@ seiyaku PrivilegedBinding {
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 12);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -13921,7 +14172,9 @@ seiyaku PrivilegedBinding {
         let manifest_root = [0x44; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 20);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let digest: [u8; 32] = Hash::new(manifest_root).into();
 
         host.cache_proof_entry(
@@ -13946,13 +14199,102 @@ seiyaku PrivilegedBinding {
     }
 
     #[test]
+    fn axt_timing_change_without_snapshot_clears_defensive_cache_state() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(22);
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let binding = axt::compute_binding(&descriptor).expect("axt binding");
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        host.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
+        host.cache_proof_entry(
+            dsid,
+            [0x22; 32],
+            Some(30),
+            Some(20),
+            Some([0x44; 32]),
+            true,
+            AXT_PROOF_CACHE_MISS,
+        );
+        assert!(host.axt_policy_snapshot.is_none());
+        assert_eq!(host.axt_proof_cache_slot, Some(20));
+
+        let timing = iroha_config::parameters::actual::NexusAxt {
+            max_clock_skew_ms: host.axt_timing.max_clock_skew_ms.saturating_add(1),
+            ..host.axt_timing
+        };
+        host.set_axt_timing(timing)
+            .expect("timing without a snapshot is valid");
+
+        assert!(host.axt_state.is_none());
+        assert!(host.axt_proof_cache.is_empty());
+        assert!(host.axt_proof_cache_slot.is_none());
+    }
+
+    #[test]
+    fn rejected_axt_timing_change_is_fully_non_mutating() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(23);
+        let mut snapshot = make_policy_snapshot(dsid, [0x23; 32], 20);
+        let expected_version = snapshot.version;
+        snapshot.version = expected_version.wrapping_add(1);
+        let advertised_version = snapshot.version;
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let binding = axt::compute_binding(&descriptor).expect("axt binding");
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        host.axt_policy_snapshot = Some(snapshot);
+        host.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
+        host.cache_proof_entry(
+            dsid,
+            [0x23; 32],
+            Some(30),
+            Some(20),
+            Some([0x23; 32]),
+            true,
+            AXT_PROOF_CACHE_MISS,
+        );
+        let timing_before = host.axt_timing;
+        let state_before = Arc::clone(host.axt_state.as_ref().expect("active AXT envelope"));
+        let cache_before = Arc::clone(&host.axt_proof_cache);
+        let slot_before = host.axt_proof_cache_slot;
+        let replacement = iroha_config::parameters::actual::NexusAxt {
+            max_clock_skew_ms: timing_before.max_clock_skew_ms.saturating_add(1),
+            ..timing_before
+        };
+
+        assert!(matches!(
+            host.set_axt_timing(replacement),
+            Err(AxtPolicySnapshotValidationError::VersionMismatch {
+                expected,
+                actual,
+            }) if expected == expected_version && actual == advertised_version
+        ));
+        assert_eq!(host.axt_timing, timing_before);
+        assert!(Arc::ptr_eq(
+            host.axt_state.as_ref().expect("active envelope preserved"),
+            &state_before
+        ));
+        assert!(Arc::ptr_eq(&host.axt_proof_cache, &cache_before));
+        assert_eq!(host.axt_proof_cache_slot, slot_before);
+    }
+
+    #[test]
     fn axt_proof_cache_snapshot_exposes_entries() {
         crate::test_alias::ensure();
         let dsid = DataSpaceId::new(21);
         let manifest_root = [0x77; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 15);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let descriptor = axt::AxtDescriptor {
             dsids: vec![dsid],
             touches: Vec::new(),
@@ -13982,7 +14324,9 @@ seiyaku PrivilegedBinding {
         let manifest_root = [0x55; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 30);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
         let digest: [u8; 32] = Hash::new(manifest_root).into();
 
         host.cache_proof_entry(
@@ -14023,7 +14367,8 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority)
             .with_axt_policy_snapshot(&snapshot)
-            .with_axt_timing(timing);
+            .and_then(|host| host.with_axt_timing(timing))
+            .expect("canonical policy snapshot");
         let digest: [u8; 32] = Hash::new(manifest_root).into();
 
         host.cache_proof_entry(
@@ -14045,6 +14390,125 @@ seiyaku PrivilegedBinding {
         assert!(
             host.axt_proof_cache.is_empty(),
             "cache should expire once the TTL window elapses"
+        );
+    }
+
+    #[test]
+    fn hydrate_axt_state_installs_one_consistent_state_snapshot() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::UNIVERSAL;
+        let lane = LaneId::new(0);
+        let manifest_root = [0x6A; 32];
+        let timing = iroha_config::parameters::actual::NexusAxt {
+            slot_length_ms: NonZeroU64::new(7).expect("slot length"),
+            max_clock_skew_ms: 3,
+            proof_cache_ttl_slots: NonZeroU64::new(2).expect("proof cache ttl"),
+            replay_retention_slots: NonZeroU64::new(4).expect("replay retention"),
+        };
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.axt = timing;
+        let state =
+            State::new_with_nexus_for_testing(World::new(), nexus, LiveQueryStore::start_test());
+        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let committed =
+            crate::block::ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.creation_time_ms = 7;
+            })
+            .commit_unchecked()
+            .unpack(|_| {});
+        {
+            let mut state_block = state.block(committed.as_ref().header());
+            let _events = state_block.apply_without_execution(&committed, Vec::new());
+            state_block
+                .commit()
+                .expect("commit one block to establish AXT slot one");
+        }
+        state
+            .kura()
+            .store_block(committed)
+            .expect("store AXT slot fixture block");
+
+        let live_key = AxtHandleReplayKey::from_parts([0x11; 32], 1, 1, lane);
+        let expired_key = AxtHandleReplayKey::from_parts([0x22; 32], 1, 2, lane);
+        let live_record = AxtReplayRecord {
+            dataspace: dsid,
+            used_slot: 1,
+            retain_until_slot: 9,
+        };
+        let expired_record = AxtReplayRecord {
+            dataspace: dsid,
+            used_slot: 0,
+            retain_until_slot: 0,
+        };
+        {
+            let mut world = state.world.block();
+            world.axt_policies.insert(
+                dsid,
+                AxtPolicyEntry {
+                    manifest_root,
+                    target_lane: lane,
+                    min_handle_era: 3,
+                    min_sub_nonce: 5,
+                    current_slot: u64::MAX,
+                },
+            );
+            world.axt_replay_ledger.insert(live_key, live_record);
+            world.axt_replay_ledger.insert(expired_key, expired_record);
+            world.commit();
+        }
+        let view = state.view();
+        assert_eq!(
+            view.world().axt_replay_ledger().get(&expired_key),
+            Some(&expired_record),
+            "the source view must retain the expired control so host-side filtering is tested"
+        );
+        let expected_snapshot = view.axt_policy_snapshot();
+        assert_eq!(expected_snapshot.entries.len(), 1);
+        assert_eq!(expected_snapshot.entries[0].policy.current_slot, 1);
+
+        let authority: AccountId = fixture_account("alice");
+        let (descriptor, binding) = axt::AxtDescriptor::builder()
+            .dataspace(dsid)
+            .build_with_binding()
+            .expect("active AXT descriptor");
+        let mut host = CoreHost::new(authority);
+        host.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
+        host.cache_proof_entry(
+            dsid,
+            Hash::new(b"stale proof cache").into(),
+            Some(20),
+            Some(1),
+            Some(manifest_root),
+            true,
+            AXT_PROOF_CACHE_HIT,
+        );
+        assert!(!host.axt_proof_cache.is_empty());
+
+        host.hydrate_axt_state(&view)
+            .expect("hydrate canonical AXT state");
+
+        assert_eq!(host.axt_timing, timing);
+        assert_eq!(host.axt_policy_snapshot.as_ref(), Some(&expected_snapshot));
+        assert_eq!(
+            host.current_axt_policy_version(),
+            Some(expected_snapshot.version)
+        );
+        assert_eq!(host.axt_replay_ledger.get(&live_key), Some(&live_record));
+        assert!(!host.axt_replay_ledger.contains_key(&expired_key));
+        assert!(
+            host.axt_state.is_none(),
+            "hydration must abort an active envelope"
+        );
+        assert!(
+            host.axt_proof_cache.is_empty(),
+            "hydration must clear proofs admitted under the prior snapshot"
+        );
+        assert_eq!(
+            host.axt_proof_cache_slot,
+            Some(1),
+            "the cleared cache must be rebound to the installed policy slot"
         );
     }
 
@@ -14087,8 +14551,11 @@ seiyaku PrivilegedBinding {
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
         let snapshot = test_policy_snapshot(dsid, policy);
-        let mut host =
-            CoreHost::from_state(authority.clone(), &state).with_axt_policy_snapshot(&snapshot);
+        let host =
+            CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
+        let mut host = host
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
 
         let handle = AssetHandle {
             scope: vec!["transfer".into()],
@@ -14158,7 +14625,8 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone())
             .with_axt_policy_snapshot(&snapshot)
-            .with_axt_timing(timing);
+            .and_then(|host| host.with_axt_timing(timing))
+            .expect("canonical policy snapshot");
 
         let binding = AxtBinding::new([0xAB; 32]);
         let handle = AssetHandle {
@@ -14236,7 +14704,8 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone())
             .with_axt_policy_snapshot(&snapshot)
-            .with_axt_timing(timing);
+            .and_then(|host| host.with_axt_timing(timing))
+            .expect("canonical policy snapshot");
 
         let binding_bytes = [0xCD; 32];
         let replay_key = AxtHandleReplayKey {
@@ -14349,8 +14818,11 @@ seiyaku PrivilegedBinding {
         state.prune_axt_replay_ledger_for_tests(retention_slots, retention_slots);
         let authority: AccountId = fixture_account("alice");
         let snapshot = test_policy_snapshot(dsid, policy);
-        let mut host =
-            CoreHost::from_state(authority.clone(), &state).with_axt_policy_snapshot(&snapshot);
+        let host =
+            CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
+        let mut host = host
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
 
         let handle = AssetHandle {
             scope: vec!["transfer".into()],
@@ -16121,6 +16593,7 @@ mod tests {
     use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter},
+        privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
@@ -16177,6 +16650,75 @@ mod tests {
 
     fn test_state_value_gas(path: &Name, value_len: usize) -> u64 {
         ivm::host::state_value_gas(norito_blob(path).len(), value_len)
+    }
+
+    #[test]
+    fn host_codec_bytes_hash_gas_and_lengths_ignore_ambient_layout() {
+        let value = vec!["first".to_owned(), "second".to_owned()];
+        let canonical =
+            CoreHost::encode_norito_payload(&value).expect("encode canonical host payload");
+        let canonical_hash = Hash::new(&canonical);
+        let canonical_gas = CoreHost::state_query_gas(canonical.len());
+        assert_eq!(
+            CoreHost::norito_encoded_len_exact(&value),
+            Some(u64::try_from(canonical.len()).expect("fixture length fits u64"))
+        );
+        let canonical_retained_bytes = {
+            let mut host = CoreHost::new(ALICE_ID.clone());
+            host.set_output_limits(HostOutputLimits::new(1, usize::MAX));
+            assert!(host.try_reserve_serialized_output(&value, 1));
+            host.retained_output_bytes()
+        };
+
+        let name: Name = "state/first".parse().expect("valid state path");
+        let canonical_name = CoreHost::encode_norito_payload(&name).expect("encode canonical Name");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before = norito::to_bytes(&value).expect("encode payload under ambient layout");
+        assert_ne!(ambient_before, canonical);
+        let alternate_name = norito::to_bytes(&name).expect("encode Name under alternate layout");
+        assert_ne!(alternate_name, canonical_name);
+
+        let encoded_under_ambient =
+            CoreHost::encode_norito_payload(&value).expect("encode host payload canonically");
+        assert_eq!(encoded_under_ambient, canonical);
+        assert_eq!(Hash::new(&encoded_under_ambient), canonical_hash);
+        assert_eq!(
+            CoreHost::state_query_gas(encoded_under_ambient.len()),
+            canonical_gas
+        );
+        assert_eq!(
+            CoreHost::norito_encoded_len_exact(&value),
+            Some(u64::try_from(canonical.len()).expect("fixture length fits u64"))
+        );
+        let retained_under_ambient = {
+            let mut host = CoreHost::new(ALICE_ID.clone());
+            host.set_output_limits(HostOutputLimits::new(1, usize::MAX));
+            assert!(host.try_reserve_serialized_output(&value, 1));
+            host.retained_output_bytes()
+        };
+        assert_eq!(retained_under_ambient, canonical_retained_bytes);
+        assert_eq!(
+            CoreHost::decode_name_payload(&canonical_name)
+                .expect("decode canonical Name under ambient layout"),
+            name
+        );
+        assert_eq!(
+            CoreHost::decode_name_payload(&alternate_name),
+            Err(ivm::VMError::DecodeError)
+        );
+        assert_eq!(
+            norito::to_bytes(&value).expect("re-encode payload under ambient layout"),
+            ambient_before,
+            "canonical helpers must restore the caller's ambient layout"
+        );
+
+        drop(ambient);
+        assert_eq!(
+            norito::to_bytes(&value).expect("encode payload after ambient guard"),
+            canonical
+        );
     }
 
     fn exact_return_type(
@@ -26412,6 +26954,71 @@ seiyaku DurableOwner {
     }
 
     #[test]
+    fn set_verifying_keys_rejects_reserved_privacy_ids_during_state_rehydration() {
+        crate::test_alias::ensure();
+        let active = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.canonical_label();
+        let retired = PRIVACY_RETIRED_PROTOCOL_LABELS_V1[0];
+        for (case, circuit_id) in [("active", active), ("retired", retired)] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let record = active_vk_record(
+                commitment, [0x42; 32], backend, circuit_id, "core", vk_bytes,
+            );
+            let map = BTreeMap::from([(VerifyingKeyId::new(backend, "vk"), record)]);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "{case} privacy circuit id {circuit_id:?} must not rehydrate"
+            );
+            assert!(host.verifying_keys.is_empty());
+            assert!(host.prepared_verifying_keys.is_empty());
+        }
+
+        for (case, circuit_id) in [
+            ("leading-whitespace", format!(" {active}")),
+            ("trailing-whitespace", format!("{retired} ")),
+            ("uppercase", active.to_ascii_uppercase()),
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let record = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                &circuit_id,
+                "core",
+                vk_bytes,
+            );
+            let map = BTreeMap::from([(VerifyingKeyId::new(backend, "vk"), record)]);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "{case} non-portable privacy alias {circuit_id:?} must not rehydrate"
+            );
+            assert!(host.verifying_keys.is_empty());
+            assert!(host.prepared_verifying_keys.is_empty());
+        }
+
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let backend = "halo2/ipa";
+        let vk_bytes = vec![1, 2, 3, 4];
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let near_miss = format!("generic-{active}");
+        let record = active_vk_record(
+            commitment, [0x42; 32], backend, &near_miss, "core", vk_bytes,
+        );
+        host.set_verifying_keys(BTreeMap::from([(
+            VerifyingKeyId::new(backend, "vk"),
+            record,
+        )]))
+        .expect("portable near-miss circuit id must rehydrate");
+        assert_eq!(host.verifying_keys.len(), 1);
+        assert_eq!(host.prepared_verifying_keys.len(), 1);
+    }
+
+    #[test]
     fn set_verifying_keys_rejects_malformed_registry_ids() {
         crate::test_alias::ensure();
         const OVERSIZED_VERIFYING_KEY_FIELD_BYTES: usize = 257;
@@ -26784,6 +27391,7 @@ seiyaku DurableOwner {
             "verange",
             "zk-ams",
             "zk-x509",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints",
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
@@ -27034,7 +27642,7 @@ seiyaku DurableOwner {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
 
@@ -27108,7 +27716,8 @@ seiyaku DurableOwner {
             "a pre-guard scoped shadow remains physically stored but inaccessible"
         );
 
-        let mut generic_host = CoreHost::from_state(fixture_account("bob"), &state);
+        let mut generic_host = CoreHost::from_state(fixture_account("bob"), &state)
+            .expect("canonical state snapshots");
         vm.set_register(10, path_ptr);
         vm.set_register(11, value_ptr);
         assert_eq!(
@@ -27186,7 +27795,8 @@ seiyaku DurableOwner {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let mut host = CoreHost::from_state(fixture_account("alice"), &state);
+        let mut host = CoreHost::from_state(fixture_account("alice"), &state)
+            .expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
@@ -27531,7 +28141,8 @@ seiyaku DurableOwner {
                 .find(|entrypoint| entrypoint.name == "main")
                 .expect("credit-reader main entrypoint")
                 .entry_pc;
-        let mut contract_host = CoreHost::from_state(authority.clone(), &state);
+        let mut contract_host =
+            CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
         contract_host.set_contract_runtime_context(Some(context.clone()));
         let mut contract_vm = IVM::new(u64::MAX);
         contract_vm.set_host(contract_host);
@@ -27553,7 +28164,7 @@ seiyaku DurableOwner {
             "Kotodama state quantity must preserve the exact native consensus value"
         );
 
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(10_000);
         vm.load_program(&code)
@@ -27735,7 +28346,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
@@ -27990,7 +28601,7 @@ seiyaku DurableOwner {
             LiveQueryStore::start_test(),
         );
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(u64::MAX);
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
@@ -28047,7 +28658,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(u64::MAX);
 
@@ -28090,7 +28701,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
@@ -28156,7 +28767,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
@@ -28402,7 +29013,7 @@ seiyaku DurableOwner {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
 
@@ -28475,7 +29086,7 @@ seiyaku DurableOwner {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(10_000);
@@ -28581,7 +29192,7 @@ seiyaku DurableOwner {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
 
@@ -28676,7 +29287,7 @@ seiyaku DurableOwner {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
 
@@ -28837,7 +29448,8 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority.clone(), &state);
+        let mut host =
+            CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let contract = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -28914,7 +29526,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         let mut vm = IVM::new(10_000);
 
         let req = ivm::vrf::VrfEpochSeedRequest {
@@ -28985,7 +29597,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         let mut vm = IVM::new(10_000);
 
         let req = ivm::vrf::VrfEpochSeedRequest {
@@ -29049,6 +29661,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let mut world = World::new();
         let mut election = ElectionState::default();
+        election.options = 3;
         election.finalized = true;
         election.tally = vec![2, 1, 0];
         world.elections.insert("election-1".to_string(), election);
@@ -29110,6 +29723,119 @@ seiyaku DurableOwner {
     }
 
     #[test]
+    fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let mut valid = BTreeMap::new();
+        valid.insert("valid".to_string(), (1, false, vec![0]));
+        host.set_zk_elections_snapshot(valid)
+            .expect("one-option election is valid");
+
+        for (id, options, tally) in [
+            ("zero-options", 0, Vec::new()),
+            ("zero-tally", 64, Vec::new()),
+            ("long-tally", 64, vec![0; 65]),
+            ("oversized", 65, vec![0; 65]),
+        ] {
+            let mut invalid = BTreeMap::new();
+            invalid.insert(id.to_string(), (options, false, tally));
+            assert_eq!(
+                host.set_zk_elections_snapshot(invalid),
+                Err(ivm::VMError::NoritoInvalid)
+            );
+            assert!(
+                host.zk_elections.contains_key("valid"),
+                "failed replacement must preserve the prior snapshot"
+            );
+        }
+
+        let mut maximum = BTreeMap::new();
+        maximum.insert("maximum".to_string(), (64, true, vec![1; 64]));
+        host.set_zk_elections_snapshot(maximum)
+            .expect("64-option election is valid");
+        let response = host
+            .vote_get_tally_response(&ivm::zk_verify::VoteGetTallyRequest {
+                election_id: "maximum".to_string(),
+            })
+            .expect("bounded response");
+        assert!(response.finalized);
+        assert_eq!(response.tally.len(), 64);
+
+        for (id, options, tally) in [
+            ("response-zero-options", 0, Vec::new()),
+            ("response-zero-tally", 64, Vec::new()),
+            ("response-long-tally", 64, vec![0; 65]),
+            ("response-oversized", 65, vec![0; 65]),
+        ] {
+            let tally_len = tally.len();
+            host.zk_elections
+                .insert(id.to_string(), (options, false, tally));
+            assert_eq!(
+                host.vote_get_tally_response(&ivm::zk_verify::VoteGetTallyRequest {
+                    election_id: id.to_string(),
+                }),
+                Err(ivm::VMError::NoritoInvalid)
+            );
+            assert_eq!(
+                host.zk_elections
+                    .get(id)
+                    .expect("corrupt fixture remains intact")
+                    .2
+                    .len(),
+                tally_len,
+                "response rejection must not truncate the stored tally"
+            );
+        }
+    }
+
+    #[test]
+    fn zk_snapshot_hydration_enforces_v1_election_boundaries() {
+        crate::test_alias::ensure();
+        for (options, tally_len, valid) in [
+            (0, 0, false),
+            (64, 0, false),
+            (64, 64, true),
+            (64, 65, false),
+            (65, 65, false),
+        ] {
+            let mut world = World::new();
+            let election = ElectionState {
+                options,
+                tally: vec![0; tally_len],
+                ..ElectionState::default()
+            };
+            world.elections.insert("candidate".to_string(), election);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new_for_testing(world, kura, query);
+            let view = state.view();
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let mut prior = BTreeMap::new();
+            prior.insert("prior".to_string(), (1, true, vec![9]));
+            host.set_zk_elections_snapshot(prior)
+                .expect("seed prior snapshot");
+
+            let result = host.set_zk_snapshots_from_world(view.world(), &view.zk);
+            if valid {
+                result.expect("64-option, 64-counter snapshot is valid");
+                assert_eq!(
+                    host.zk_elections.get("candidate").cloned(),
+                    Some((64, false, vec![0; 64]))
+                );
+                assert!(!host.zk_elections.contains_key("prior"));
+            } else {
+                assert_eq!(result, Err(ivm::VMError::NoritoInvalid));
+                assert_eq!(
+                    host.zk_elections.get("prior").cloned(),
+                    Some((1, true, vec![9]))
+                );
+                assert!(!host.zk_elections.contains_key("candidate"));
+            }
+        }
+    }
+
+    #[test]
     fn from_state_hydrates_zk_snapshots() {
         crate::test_alias::ensure();
         let mut world = World::new();
@@ -29123,6 +29849,7 @@ seiyaku DurableOwner {
         world.zk_assets.insert(asset_def_id.clone(), zk_state);
 
         let mut election = ElectionState::default();
+        election.options = 2;
         election.finalized = true;
         election.tally = vec![1, 2];
         world.elections.insert("election-1".to_string(), election);
@@ -29155,7 +29882,7 @@ seiyaku DurableOwner {
             )
         };
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
 
         assert_eq!(host.zk_gas_schedule(), expected_zk_gas_schedule);
         assert_eq!(host.default.zk_gas_schedule(), expected_zk_gas_schedule);
@@ -29171,11 +29898,12 @@ seiyaku DurableOwner {
                 .unwrap_or_default(),
             vec![[1u8; 32], [2u8; 32]]
         );
-        let (finalized, tally) = host
-            .zk_elections
-            .get("election-1")
-            .cloned()
-            .unwrap_or((false, Vec::new()));
+        let (options, finalized, tally) =
+            host.zk_elections
+                .get("election-1")
+                .cloned()
+                .unwrap_or((0, false, Vec::new()));
+        assert_eq!(options, 2);
         assert!(finalized);
         assert_eq!(tally, vec![1, 2]);
         assert!(host.verifying_keys.contains_key(&vk_id));
@@ -29983,10 +30711,10 @@ seiyaku DurableOwner {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_string(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };

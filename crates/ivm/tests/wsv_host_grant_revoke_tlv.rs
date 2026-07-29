@@ -69,7 +69,7 @@ fn grant_revoke_permission_with_tlv() {
     // Step 1: grant ReadAccountAssets(alice) to bob via Name TLV
     let subj = make_account_tlv(&bob);
     vm.memory.preload_input(0, &subj).expect("preload input");
-    let perm_name = make_raw_tlv(
+    let perm_name = make_tlv(
         PointerType::Name as u16,
         format!("read_assets:{alice_literal}").as_bytes(),
     );
@@ -104,15 +104,15 @@ fn grant_revoke_permission_with_tlv() {
         .into_quantity();
     assert_eq!(value, Quantity::from(50_u64));
 
-    // Step 3: revoke the same permission via Json TLV
+    // Step 3: revoke the same permission via the same canonical Name TLV.
     let subj = make_account_tlv(&bob);
-    let perm_json = make_tlv(
-        PointerType::Json as u16,
-        format!("{{\"type\":\"read_assets\",\"target\":\"{alice_literal}\"}}").as_bytes(),
+    let perm_name = make_tlv(
+        PointerType::Name as u16,
+        format!("read_assets:{alice_literal}").as_bytes(),
     );
     vm.memory.preload_input(0, &subj).expect("preload input");
     vm.memory
-        .preload_input(subj.len() as u64 + 8, &perm_json)
+        .preload_input(subj.len() as u64 + 8, &perm_name)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + subj.len() as u64 + 8);

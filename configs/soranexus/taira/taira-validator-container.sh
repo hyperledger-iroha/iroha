@@ -9,9 +9,9 @@ Commands:
   config   Print the resolved `docker run` command.
   up       Pull the image when missing, replace any existing container, and start it.
   down     Remove the container if it exists.
-  reset    Stop the container and wipe the configured storage directory.
+  reset    Stop the container and wipe configured mutable state directories.
   restart  Recreate the container.
-  pull     Pull the configured image tag.
+  pull     Pull the configured immutable image reference.
   status   Show `docker ps` status for the configured container.
   logs     Show container logs.
 EOF
@@ -22,7 +22,11 @@ env_file=""
 while (($#)); do
     case "$1" in
         --env-file)
-            env_file="${2:-}"
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                printf '%s\n' '--env-file requires one non-empty path' >&2
+                exit 1
+            fi
+            env_file="$2"
             shift 2
             ;;
         -h|--help)
@@ -46,22 +50,27 @@ if [[ -z "$env_file" ]]; then
     env_file="/etc/default/taira-validator-container.compose.env"
 fi
 
-if [[ -f "$env_file" ]]; then
-    # The env file is an operator-managed shell fragment containing only
-    # variable assignments and comments.
-    set -a
-    # shellcheck disable=SC1090
-    . "$env_file"
-    set +a
+if [[ ! -f "$env_file" || -L "$env_file" || ! -r "$env_file" ]]; then
+    printf 'missing, unreadable, or symlinked Taira environment file: %s\n' \
+        "$env_file" >&2
+    exit 1
 fi
+# The env file is an operator-managed shell fragment containing only
+# variable assignments and comments.
+set -a
+# shellcheck disable=SC1090
+. "$env_file"
+set +a
 
 TAIRA_CONTAINER_NAME="${TAIRA_CONTAINER_NAME:-taira-validator-1}"
-TAIRA_IMAGE="${TAIRA_IMAGE:-hyperledger/iroha:taira-latest}"
-TAIRA_CONFIG_PATH="${TAIRA_CONFIG_PATH:-/etc/iroha/taira-validator-1/config.toml}"
+TAIRA_IMAGE="${TAIRA_IMAGE:-}"
+TAIRA_CONFIG_BUNDLE_PATH="${TAIRA_CONFIG_BUNDLE_PATH:-/etc/iroha/taira-validator}"
 TAIRA_STORAGE_PATH="${TAIRA_STORAGE_PATH:-/var/lib/iroha/taira-validator-1}"
+TAIRA_KAGEMUSHA_ARTIFACT_PATH="${TAIRA_KAGEMUSHA_ARTIFACT_PATH:-/var/lib/iroha/taira-validator/kagemusha/v4}"
 TAIRA_P2P_PORT="${TAIRA_P2P_PORT:-1337}"
 TAIRA_TORII_PORT="${TAIRA_TORII_PORT:-18080}"
 TAIRA_RUST_LOG="${TAIRA_RUST_LOG:-info}"
+TAIRA_RUNTIME_PROFILE="${TAIRA_RUNTIME_PROFILE:-production}"
 TAIRA_INROU_PORTABLE_ACCEL="${TAIRA_INROU_PORTABLE_ACCEL:-auto}"
 TAIRA_EXPOSE_KVM="${TAIRA_EXPOSE_KVM:-auto}"
 TAIRA_GENESIS_PATH="${TAIRA_GENESIS_PATH:-}"
@@ -69,11 +78,45 @@ TAIRA_SIGNED_GENESIS_PATH="${TAIRA_SIGNED_GENESIS_PATH:-}"
 TAIRA_SORAFS_SITE_BINDINGS_PATH="${TAIRA_SORAFS_SITE_BINDINGS_PATH:-}"
 TAIRA_DOCKER_NETWORK="${TAIRA_DOCKER_NETWORK:-}"
 
+case "$TAIRA_RUNTIME_PROFILE" in
+    production|localnet) ;;
+    *)
+        printf 'TAIRA_RUNTIME_PROFILE must be exactly production or localnet\n' >&2
+        exit 1
+        ;;
+esac
+CONTAINER_CONFIG_ROOT="/etc/iroha/taira-validator"
+CONTAINER_CONFIG_PATH="${CONTAINER_CONFIG_ROOT}/config.toml"
+CONTAINER_KAGEMUSHA_ARTIFACT_PATH="/var/lib/iroha/taira-validator/kagemusha/v4"
+TAIRA_CONFIG_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/config.toml"
+TAIRA_RUNTIME_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/runtime"
+TAIRA_MANIFEST_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/manifests"
+TAIRA_KAGEMUSHA_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/kagemusha"
+TAIRA_GOVERNANCE_MANIFEST_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/manifests/governance.manifest.json"
+TAIRA_ONBOARDING_SIGNER_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/runtime/onboarding-signer.key"
+TAIRA_FAUCET_SIGNER_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/runtime/faucet-signer.key"
+TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/kagemusha/release-policy.norito"
+TAIRA_SORAFS_ADMISSION_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/sorafs_admission"
+
 require_file() {
     local path="$1"
     local label="$2"
-    if [[ ! -f "$path" ]]; then
-        printf 'missing %s at %s\n' "$label" "$path" >&2
+    if [[ ! -f "$path" || -L "$path" || ! -r "$path" || ! -s "$path" ]]; then
+        printf 'missing, empty, unreadable, or symlinked %s at %s\n' "$label" "$path" >&2
+        exit 1
+    fi
+}
+
+validate_image_reference() {
+    if [[ -z "$TAIRA_IMAGE" ]]; then
+        printf 'TAIRA_IMAGE must identify the admitted validator image\n' >&2
+        exit 1
+    fi
+    if [[ "$TAIRA_RUNTIME_PROFILE" == "production" ]] \
+        && [[ ! "$TAIRA_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        && [[ ! "$TAIRA_IMAGE" =~ ^[a-z0-9][a-z0-9._/:+-]*@sha256:[0-9a-f]{64}$ ]]; then
+        printf '%s\n' \
+            'production TAIRA_IMAGE must be an immutable image ID or repository@sha256 digest' >&2
         exit 1
     fi
 }
@@ -81,8 +124,44 @@ require_file() {
 require_directory() {
     local path="$1"
     local label="$2"
-    if [[ ! -d "$path" ]]; then
-        printf 'missing %s at %s\n' "$label" "$path" >&2
+    if [[ ! -d "$path" || -L "$path" ]]; then
+        printf 'missing or symlinked %s at %s\n' "$label" "$path" >&2
+        exit 1
+    fi
+}
+
+require_canonical_directory() {
+    local path="$1"
+    local label="$2"
+    local physical_path
+
+    require_directory "$path" "$label"
+    case "$path" in
+        /*) ;;
+        *)
+            printf '%s must use an absolute path: %s\n' "$label" "$path" >&2
+            exit 1
+            ;;
+    esac
+    physical_path="$(
+        cd "$path"
+        pwd -P
+    )"
+    if [[ "$physical_path" != "$path" ]]; then
+        printf '%s must use its canonical physical path: %s\n' "$label" "$path" >&2
+        exit 1
+    fi
+}
+
+require_disjoint_directories() {
+    local left="$1"
+    local left_label="$2"
+    local right="$3"
+    local right_label="$4"
+
+    if [[ "$left" == "$right" || "$left" == "$right/"* || "$right" == "$left/"* ]]; then
+        printf '%s and %s must not be equal or nested: %s / %s\n' \
+            "$left_label" "$right_label" "$left" "$right" >&2
         exit 1
     fi
 }
@@ -102,21 +181,63 @@ config_declares_container_site_bindings() {
 docker_cmd=(docker)
 
 build_run_args() {
+    validate_image_reference
+    require_canonical_directory "$TAIRA_CONFIG_BUNDLE_PATH" "Taira config bundle"
     require_file "$TAIRA_CONFIG_PATH" "Taira config"
-    require_directory "$TAIRA_STORAGE_PATH" "Taira storage directory"
+    require_canonical_directory "$TAIRA_STORAGE_PATH" "Taira storage directory"
+    require_disjoint_directories \
+        "$TAIRA_CONFIG_BUNDLE_PATH" "Taira config bundle" \
+        "$TAIRA_STORAGE_PATH" "Taira storage directory"
+    case "$TAIRA_RUNTIME_PROFILE" in
+        production)
+            container_torii_port=18080
+            require_canonical_directory "$TAIRA_RUNTIME_PATH" "Taira runtime directory"
+            require_canonical_directory "$TAIRA_MANIFEST_PATH" "Taira manifest directory"
+            require_canonical_directory "$TAIRA_KAGEMUSHA_PATH" "Taira Kagemusha policy directory"
+            require_file "$TAIRA_GOVERNANCE_MANIFEST_PATH" "Taira governance manifest"
+            require_file "$TAIRA_ONBOARDING_SIGNER_PATH" "Taira onboarding signer"
+            require_file "$TAIRA_FAUCET_SIGNER_PATH" "Taira faucet signer"
+            require_file "$TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH" "Taira Kagemusha release policy"
+            require_canonical_directory "$TAIRA_SORAFS_ADMISSION_PATH" "Taira SoraFS admission directory"
+            require_canonical_directory "$TAIRA_KAGEMUSHA_ARTIFACT_PATH" "Taira Kagemusha artifact directory"
+            require_disjoint_directories \
+                "$TAIRA_CONFIG_BUNDLE_PATH" "Taira config bundle" \
+                "$TAIRA_KAGEMUSHA_ARTIFACT_PATH" "Taira Kagemusha artifact directory"
+            require_disjoint_directories \
+                "$TAIRA_STORAGE_PATH" "Taira storage directory" \
+                "$TAIRA_KAGEMUSHA_ARTIFACT_PATH" "Taira Kagemusha artifact directory"
+            ;;
+        localnet)
+            container_torii_port=8080
+            ;;
+        *)
+            printf 'TAIRA_RUNTIME_PROFILE must be exactly production or localnet\n' >&2
+            exit 1
+            ;;
+    esac
 
     docker_run_args=(
         run -d
         --name "$TAIRA_CONTAINER_NAME"
         --restart unless-stopped
         --init
+        --workdir "$CONTAINER_CONFIG_ROOT"
         -e "RUST_LOG=$TAIRA_RUST_LOG"
         -e "IROHA_INROU_PORTABLE_ACCEL=$TAIRA_INROU_PORTABLE_ACCEL"
+        -e "IROHA_TAIRA_CONFIG=$CONTAINER_CONFIG_PATH"
+        -e "TAIRA_RUNTIME_PROFILE=$TAIRA_RUNTIME_PROFILE"
+        -e "TAIRA_IMAGE_REFERENCE=$TAIRA_IMAGE"
         -p "${TAIRA_P2P_PORT}:1337"
-        -p "${TAIRA_TORII_PORT}:8080"
-        -v "${TAIRA_CONFIG_PATH}:/config/config.toml:ro"
+        -p "${TAIRA_TORII_PORT}:${container_torii_port}"
+        -v "${TAIRA_CONFIG_BUNDLE_PATH}:${CONTAINER_CONFIG_ROOT}:ro"
         -v "${TAIRA_STORAGE_PATH}:/storage"
     )
+    if [[ "$TAIRA_RUNTIME_PROFILE" == "production" ]]; then
+        docker_run_args+=(
+            -e "IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR=$CONTAINER_KAGEMUSHA_ARTIFACT_PATH"
+            -v "${TAIRA_KAGEMUSHA_ARTIFACT_PATH}:${CONTAINER_KAGEMUSHA_ARTIFACT_PATH}"
+        )
+    fi
 
     if [[ "$TAIRA_EXPOSE_KVM" == "1" || "$TAIRA_EXPOSE_KVM" == "true" ]]; then
         docker_run_args+=(--device /dev/kvm)
@@ -170,6 +291,7 @@ image_exists() {
 }
 
 do_pull() {
+    validate_image_reference
     "${docker_cmd[@]}" pull "$TAIRA_IMAGE"
 }
 
@@ -179,24 +301,65 @@ do_down() {
     fi
 }
 
-resolve_storage_path() {
-    mkdir -p "$TAIRA_STORAGE_PATH"
-    (
-        cd "$TAIRA_STORAGE_PATH"
+resolve_state_path() {
+    local path="$1"
+    local physical_path
+
+    if [[ -L "$path" ]]; then
+        printf 'refusing symlinked state directory: %s\n' "$path" >&2
+        exit 1
+    fi
+    case "$path" in
+        /*) ;;
+        *)
+            printf 'refusing relative state directory: %s\n' "$path" >&2
+            exit 1
+            ;;
+    esac
+    case "$path" in
+        /|/bin|/bin/*|/boot|/boot/*|/dev|/dev/*|/etc|/etc/*|/lib|/lib/*|/lib64|/lib64/*|/proc|/proc/*|/root|/root/*|/run|/run/*|/sbin|/sbin/*|/sys|/sys/*|/usr|/usr/*|/home|/opt|/srv|/tmp|/var|/var/lib|/var/lib/iroha)
+            printf 'refusing broad system state directory: %s\n' "$path" >&2
+            exit 1
+            ;;
+    esac
+    mkdir -p "$path"
+    physical_path="$(
+        cd "$path"
         pwd -P
-    )
+    )"
+    if [[ "$physical_path" != "$path" ]]; then
+        printf 'state directory must use its canonical physical path: %s\n' "$path" >&2
+        exit 1
+    fi
+    printf '%s\n' "$physical_path"
 }
 
 do_reset() {
     local storage_real
+    local config_real
+    local kagemusha_real=""
+
+    require_canonical_directory "$TAIRA_CONFIG_BUNDLE_PATH" "Taira config bundle"
+    config_real="$TAIRA_CONFIG_BUNDLE_PATH"
+    storage_real="$(resolve_state_path "$TAIRA_STORAGE_PATH")"
+    require_disjoint_directories \
+        "$config_real" "Taira config bundle" \
+        "$storage_real" "Taira storage directory"
+    if [[ "$TAIRA_RUNTIME_PROFILE" == "production" ]]; then
+        kagemusha_real="$(resolve_state_path "$TAIRA_KAGEMUSHA_ARTIFACT_PATH")"
+        require_disjoint_directories \
+            "$config_real" "Taira config bundle" \
+            "$kagemusha_real" "Taira Kagemusha artifact directory"
+        require_disjoint_directories \
+            "$storage_real" "Taira storage directory" \
+            "$kagemusha_real" "Taira Kagemusha artifact directory"
+    fi
 
     do_down
-    storage_real="$(resolve_storage_path)"
-    if [[ -z "$storage_real" || "$storage_real" == "/" ]]; then
-        printf 'refusing to wipe invalid storage directory: %s\n' "$storage_real" >&2
-        exit 1
+    find "$storage_real" -xdev -mindepth 1 -depth -delete
+    if [[ -n "$kagemusha_real" ]]; then
+        find "$kagemusha_real" -xdev -mindepth 1 -depth -delete
     fi
-    find "$storage_real" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 }
 
 do_up() {

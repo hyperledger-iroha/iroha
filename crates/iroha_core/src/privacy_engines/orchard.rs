@@ -1,4 +1,4 @@
-//! First-release Orchard V3 action-bundle verifier.
+//! First-release Orchard V3 action-bundle prover and verifier.
 //!
 //! The integration deliberately exposes no caller-selected Orchard protocol or
 //! circuit version. Every bundle is reconstructed as `orchard_v3`, every proof
@@ -11,65 +11,167 @@ use incrementalmerkletree::{Position, frontier::Frontier};
 use nonempty::NonEmpty;
 use orchard::{
     Action, Anchor, Bundle, Proof,
-    bundle::{Authorized, BundleVersion, Flags},
-    circuit::{OrchardCircuitVersion, VerifyingKey},
+    builder::{Builder, BundleType},
+    bundle::{Authorization, Authorized, BundleVersion, Flags},
+    circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
+    keys::{FullViewingKey, SpendAuthorizingKey},
     note::{ExtractedNoteCommitment, Nullifier, TransmittedNoteCiphertext},
     primitives::redpallas::{self, Binding, SpendAuth},
     tree::MerkleHashOrchard,
-    value::ValueCommitment,
+    value::{NoteValue, ValueCommitment},
 };
+pub use orchard::{
+    keys::{Scope, SpendingKey},
+    note::Note,
+    tree::MerklePath,
+};
+use rand::SeedableRng as _;
+use rand_core_06::{CryptoRng as CryptoRng06, RngCore as RngCore06};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 /// Maximum Orchard actions admitted by the first-release Taira profile.
-pub(crate) const ORCHARD_MAX_ACTIONS_V1: usize = 2;
+pub const ORCHARD_MAX_ACTIONS_V1: usize = 2;
 /// Exact pinned upstream Orchard crate version.
-pub(crate) const ORCHARD_UPSTREAM_CRATE_VERSION_V1: &str = "0.15.4";
+pub const ORCHARD_UPSTREAM_CRATE_VERSION_V1: &str = "0.15.4";
 /// Exact pinned upstream source revision.
-pub(crate) const ORCHARD_UPSTREAM_REVISION_V1: &str = "9d07047d32c4787e1b7964b4cf4fa0286c93824c";
+pub const ORCHARD_UPSTREAM_REVISION_V1: &str = "9d07047d32c4787e1b7964b4cf4fa0286c93824c";
 /// SHA-256 of the pinned upstream Post-NU6.3 circuit description.
-pub(crate) const ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1: &str =
+pub const ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1: &str =
     "8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90";
 /// Magic and version for the sole first-release Orchard authorization wire.
-pub(crate) const ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1: [u8; 4] = *b"ORC1";
+pub const ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1: [u8; 4] = *b"ORC1";
 /// Complete native-engine profile descriptor.
-pub(crate) const ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|protocol=orchard-v3|pool=orchard|circuit=PostNu6_3|upstream=orchard-0.15.4@9d07047d32c4787e1b7964b4cf4fa0286c93824c|circuit_description_sha256=8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90|critical_deps=halo2-proofs-0.3.4:halo2-gadgets-0.5.0:incrementalmerkletree-0.8.2:pasta-curves-0.5.2:reddsa-0.5.2|flags=spends-enabled:outputs-enabled:cross-address-disabled|actions=1..2|halo2_proof_bytes=2720+2272*actions|authorization_wire=ORC1:u8-action-count:halo2-proof:ordered-64-byte-spend-signatures:64-byte-binding-signature|sighash=sha256-framed-public-bundle-v1|legacy=unrepresentable";
+pub(crate) const ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|protocol=orchard-v3|pool=orchard|circuit=PostNu6_3|upstream=orchard-0.15.4@9d07047d32c4787e1b7964b4cf4fa0286c93824c|circuit_description_sha256=8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90|critical_deps=halo2-proofs-0.3.4:halo2-gadgets-0.5.0:incrementalmerkletree-0.8.2:pasta-curves-0.5.2:reddsa-0.5.2|producer=native-builder:nonempty-spend-or-wallet-change:PostNu6_3:self-verified|prover_rng=fallible-64-byte-entropy:constant-and-repeated-half-reject:sha256-domain-seeded-StdRng|flags=spends-enabled:outputs-enabled:cross-address-disabled|actions=1..2|halo2_proof_bytes=2720+2272*actions|authorization_wire=ORC1:u8-action-count:halo2-proof:ordered-64-byte-spend-signatures:64-byte-binding-signature|sighash=sha256-framed-public-bundle-v1|legacy=unrepresentable";
 
 const SIGHASH_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.bundle-sighash.v1";
+const PROVER_RNG_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.prover-rng.v1";
 const ORCHARD_AUTHORIZATION_HEADER_BYTES_V1: usize = ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1.len() + 1;
 const ORCHARD_REDPALLAS_SIGNATURE_BYTES_V1: usize = 64;
-const ORCHARD_TREE_DEPTH_V1: u8 = 32;
+/// Exact note-commitment membership depth of the first-release Orchard pool.
+pub const ORCHARD_TREE_DEPTH_V1: u8 = 32;
+const ORCHARD_PROVER_ENTROPY_BYTES_V1: usize = 64;
 
 /// Exact public data for one Orchard V3 action.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OrchardActionPublicV1 {
+pub struct OrchardActionPublicV1 {
     /// Canonical Pallas-base nullifier encoding.
-    pub(crate) nullifier: [u8; 32],
+    pub nullifier: [u8; 32],
     /// Canonical non-identity randomized RedPallas verification key.
-    pub(crate) randomized_key: [u8; 32],
+    pub randomized_key: [u8; 32],
     /// Canonical extracted note commitment.
-    pub(crate) note_commitment: [u8; 32],
+    pub note_commitment: [u8; 32],
     /// Canonical non-identity ephemeral Pallas public key.
-    pub(crate) ephemeral_key: [u8; 32],
+    pub ephemeral_key: [u8; 32],
     /// Exact Orchard encrypted-note ciphertext.
-    pub(crate) encrypted_note: [u8; 580],
+    pub encrypted_note: [u8; 580],
     /// Exact Orchard outgoing ciphertext.
-    pub(crate) outgoing_ciphertext: [u8; 80],
+    pub outgoing_ciphertext: [u8; 80],
     /// Canonical Pallas value commitment.
-    pub(crate) value_commitment: [u8; 32],
+    pub value_commitment: [u8; 32],
 }
 
 /// Exact public data for one first-release Orchard V3 bundle.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OrchardBundlePublicV1 {
+pub struct OrchardBundlePublicV1 {
     /// Normalized Iroha transaction-intent digest.
-    pub(crate) transaction_intent_digest: [u8; 32],
+    pub transaction_intent_digest: [u8; 32],
     /// Canonical Orchard note-commitment-tree anchor.
-    pub(crate) anchor: [u8; 32],
+    pub anchor: [u8; 32],
     /// Signed public Orchard value balance.
-    pub(crate) value_balance: i64,
+    pub value_balance: i64,
     /// Non-empty ordered Orchard actions.
-    pub(crate) actions: Vec<OrchardActionPublicV1>,
+    pub actions: Vec<OrchardActionPublicV1>,
+}
+
+/// One wallet-owned note and authentication path consumed by the native prover.
+///
+/// The spending key is intentionally omitted from `Debug`; callers transfer
+/// ownership into the prover so the integration does not retain an additional
+/// long-lived copy.
+pub struct OrchardSpendProverInputV1 {
+    spending_key: SpendingKey,
+    note: Note,
+    merkle_path: MerklePath,
+}
+
+impl core::fmt::Debug for OrchardSpendProverInputV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OrchardSpendProverInputV1")
+            .field("spending_key", &"<redacted>")
+            .field("note", &"<redacted>")
+            .field("merkle_path_position", &self.merkle_path.position())
+            .finish()
+    }
+}
+
+impl OrchardSpendProverInputV1 {
+    /// Construct one native spend from an Orchard key, note, and depth-32 path.
+    #[must_use]
+    pub fn new(spending_key: SpendingKey, note: Note, merkle_path: MerklePath) -> Self {
+        Self {
+            spending_key,
+            note,
+            merkle_path,
+        }
+    }
+}
+
+/// One wallet-controlled change output consumed by the native prover.
+///
+/// Post-NU6.3 Orchard disables cross-address transfers, so retained shielded
+/// value is represented only as wallet-owned change. Withdrawn value is exposed
+/// through the bundle's signed public value balance.
+pub struct OrchardChangeProverInputV1 {
+    spending_key: SpendingKey,
+    scope: Scope,
+    diversifier_index: u32,
+    value: u64,
+    memo: [u8; 512],
+}
+
+impl core::fmt::Debug for OrchardChangeProverInputV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OrchardChangeProverInputV1")
+            .field("spending_key", &"<redacted>")
+            .field("scope", &self.scope)
+            .field("diversifier_index", &self.diversifier_index)
+            .field("value", &self.value)
+            .field("memo", &"<redacted>")
+            .finish()
+    }
+}
+
+impl OrchardChangeProverInputV1 {
+    /// Construct wallet-controlled change at one ZIP-32 diversifier index.
+    #[must_use]
+    pub fn new(
+        spending_key: SpendingKey,
+        scope: Scope,
+        diversifier_index: u32,
+        value: u64,
+        memo: [u8; 512],
+    ) -> Self {
+        Self {
+            spending_key,
+            scope,
+            diversifier_index,
+            value,
+            memo,
+        }
+    }
+}
+
+/// Complete public statement and canonical ORC1 authorization emitted by the prover.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrchardProvedBundleV1 {
+    /// Proof-independent public bundle reconstructed by validators.
+    pub public: OrchardBundlePublicV1,
+    /// Exact Halo2 proof and ordered RedPallas signatures in the ORC1 wire.
+    pub authorization: Vec<u8>,
 }
 
 /// Canonical compact representation of one Orchard note-commitment frontier.
@@ -87,7 +189,7 @@ pub(crate) struct OrchardFrontierPartsV1 {
 
 /// Failure returned by the native first-release Orchard verifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub(crate) enum OrchardNativeErrorV1 {
+pub enum OrchardNativeErrorV1 {
     /// The normalized transaction-intent digest was the zero sentinel.
     #[error("Orchard transaction-intent digest must be non-zero")]
     ZeroTransactionIntentDigest,
@@ -168,6 +270,69 @@ pub(crate) enum OrchardNativeErrorV1 {
     /// The Post-NU6.3 Halo2 proof failed.
     #[error("Orchard Post-NU6.3 Halo2 action proof is invalid")]
     Halo2Proof,
+}
+
+/// Failure returned by the sole first-release native Orchard producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum OrchardProverErrorV1 {
+    /// The transaction-level binding digest used by proof and signatures was zero.
+    #[error("Orchard transaction-intent digest must be non-zero")]
+    ZeroTransactionIntentDigest,
+    /// The requested anchor was not a canonical Pallas-base encoding.
+    #[error("Orchard prover anchor is not canonical")]
+    AnchorEncoding,
+    /// No real spend or wallet-controlled change was requested.
+    #[error("Orchard prover request must contain at least one spend or change output")]
+    EmptyOperation,
+    /// The requested action count cannot fit the closed first-release profile.
+    #[error("Orchard prover action count {actual} is outside 1..={max}")]
+    ActionCount {
+        /// Number of real actions requested before padding.
+        actual: usize,
+        /// Compiled first-release maximum.
+        max: usize,
+    },
+    /// The requested padding floor cannot fit the closed first-release profile.
+    #[error("Orchard prover minimum action count {actual} is outside 1..={max}")]
+    MinimumActionCount {
+        /// Caller-supplied padding floor.
+        actual: u8,
+        /// Compiled first-release maximum.
+        max: usize,
+    },
+    /// A spend was not owned by its key or did not authenticate to the anchor.
+    #[error("Orchard spend {index} is inconsistent with its key, note, path, or anchor")]
+    SpendInput {
+        /// Ordered spend-input index.
+        index: usize,
+    },
+    /// A wallet-controlled change output was inconsistent with its key or profile.
+    #[error("Orchard change output {index} is inconsistent with its key or profile")]
+    ChangeInput {
+        /// Ordered change-output index.
+        index: usize,
+    },
+    /// Operating-system or injected entropy was unavailable.
+    #[error("Orchard prover randomness is unavailable")]
+    RandomnessUnavailable,
+    /// Entropy repeated a prohibited constant or equal-prefix pattern.
+    #[error("Orchard prover randomness failed its health checks")]
+    RandomnessHealth,
+    /// The upstream fixed-profile builder rejected the bounded request.
+    #[error("Orchard fixed-profile bundle construction failed")]
+    BundleConstruction,
+    /// The pinned Post-NU6.3 Halo2 prover failed.
+    #[error("Orchard Post-NU6.3 Halo2 proof construction failed")]
+    Halo2Proof,
+    /// One or more real or fabricated spends could not be authorized.
+    #[error("Orchard RedPallas authorization failed")]
+    Authorization,
+    /// The producer emitted an unexpected action count or wire length.
+    #[error("Orchard producer violated its closed-profile output shape")]
+    OutputShape,
+    /// The independently reconstructed production verifier rejected the result.
+    #[error("Orchard producer self-check failed")]
+    SelfCheck,
 }
 
 /// Failure while restoring or advancing the authoritative Orchard frontier.
@@ -323,7 +488,7 @@ pub(crate) fn append_orchard_commitments_v1(
 
 /// Return the unique first-release authorization-wire size for `action_count`.
 #[must_use]
-pub(crate) fn orchard_authorization_wire_size_v1(action_count: usize) -> Option<usize> {
+pub fn orchard_authorization_wire_size_v1(action_count: usize) -> Option<usize> {
     let halo2_proof = Proof::expected_proof_size(action_count);
     ORCHARD_AUTHORIZATION_HEADER_BYTES_V1
         .checked_add(halo2_proof)?
@@ -396,7 +561,7 @@ fn append_field(hasher: &mut Sha256, field: &[u8]) {
 /// remaining framing independently binds every Orchard public action byte and
 /// its order, including ciphertexts that are not Halo2 public inputs.
 #[must_use]
-pub(crate) fn derive_orchard_bundle_sighash_v1(bundle: &OrchardBundlePublicV1) -> [u8; 32] {
+pub fn derive_orchard_bundle_sighash_v1(bundle: &OrchardBundlePublicV1) -> [u8; 32] {
     let mut hasher = Sha256::new();
     append_field(&mut hasher, SIGHASH_DOMAIN_V1);
     append_field(&mut hasher, &bundle.transaction_intent_digest);
@@ -423,6 +588,111 @@ pub(crate) fn derive_orchard_bundle_sighash_v1(bundle: &OrchardBundlePublicV1) -
 fn orchard_v3_verifying_key() -> &'static VerifyingKey {
     static VERIFYING_KEY: OnceLock<VerifyingKey> = OnceLock::new();
     VERIFYING_KEY.get_or_init(|| VerifyingKey::build(OrchardCircuitVersion::PostNu6_3))
+}
+
+fn orchard_v3_proving_key() -> &'static ProvingKey {
+    static PROVING_KEY: OnceLock<ProvingKey> = OnceLock::new();
+    PROVING_KEY.get_or_init(|| ProvingKey::build(OrchardCircuitVersion::PostNu6_3))
+}
+
+struct OrchardUpstreamRngV1(rand::rngs::StdRng);
+
+impl RngCore06 for OrchardUpstreamRngV1 {
+    fn next_u32(&mut self) -> u32 {
+        rand::RngCore::next_u32(&mut self.0)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        rand::RngCore::next_u64(&mut self.0)
+    }
+
+    fn fill_bytes(&mut self, destination: &mut [u8]) {
+        rand::RngCore::fill_bytes(&mut self.0, destination);
+    }
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+        self.fill_bytes(destination);
+        Ok(())
+    }
+}
+
+impl CryptoRng06 for OrchardUpstreamRngV1 {}
+
+fn constant_bytes(bytes: &[u8]) -> bool {
+    bytes
+        .first()
+        .is_some_and(|first| bytes.iter().all(|byte| byte == first))
+}
+
+fn seeded_upstream_rng_v1<R: rand::TryRngCore>(
+    randomness: &mut R,
+) -> Result<OrchardUpstreamRngV1, OrchardProverErrorV1> {
+    let mut entropy = Zeroizing::new([0_u8; ORCHARD_PROVER_ENTROPY_BYTES_V1]);
+    randomness
+        .try_fill_bytes(&mut *entropy)
+        .map_err(|_| OrchardProverErrorV1::RandomnessUnavailable)?;
+    let (left, right) = entropy.split_at(ORCHARD_PROVER_ENTROPY_BYTES_V1 / 2);
+    if constant_bytes(left) || constant_bytes(right) || left == right {
+        return Err(OrchardProverErrorV1::RandomnessHealth);
+    }
+
+    let mut hasher = Sha256::new();
+    append_field(&mut hasher, PROVER_RNG_DOMAIN_V1);
+    append_field(&mut hasher, &entropy[..]);
+    let seed: [u8; 32] = hasher.finalize().into();
+    Ok(OrchardUpstreamRngV1(rand::rngs::StdRng::from_seed(seed)))
+}
+
+fn public_from_bundle_v1<T: Authorization>(
+    bundle: &Bundle<T, i64>,
+    transaction_intent_digest: [u8; 32],
+) -> OrchardBundlePublicV1 {
+    let actions = bundle
+        .actions()
+        .iter()
+        .map(|action| OrchardActionPublicV1 {
+            nullifier: action.nullifier().to_bytes(),
+            randomized_key: <[u8; 32]>::from(action.rk()),
+            note_commitment: action.cmx().to_bytes(),
+            ephemeral_key: action.encrypted_note().epk_bytes,
+            encrypted_note: action.encrypted_note().enc_ciphertext,
+            outgoing_ciphertext: action.encrypted_note().out_ciphertext,
+            value_commitment: action.cv_net().to_bytes(),
+        })
+        .collect();
+    OrchardBundlePublicV1 {
+        transaction_intent_digest,
+        anchor: bundle.anchor().to_bytes(),
+        value_balance: *bundle.value_balance(),
+        actions,
+    }
+}
+
+fn encode_authorized_bundle_v1(
+    bundle: &Bundle<Authorized, i64>,
+    transaction_intent_digest: [u8; 32],
+) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
+    let public = public_from_bundle_v1(bundle, transaction_intent_digest);
+    let expected = orchard_authorization_wire_size_v1(public.actions.len())
+        .ok_or(OrchardProverErrorV1::OutputShape)?;
+    let mut authorization = Vec::with_capacity(expected);
+    authorization.extend_from_slice(&ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1);
+    authorization
+        .push(u8::try_from(public.actions.len()).map_err(|_| OrchardProverErrorV1::OutputShape)?);
+    authorization.extend_from_slice(bundle.authorization().proof().as_ref());
+    for action in bundle.actions().iter() {
+        authorization.extend_from_slice(&<[u8; 64]>::from(action.authorization()));
+    }
+    authorization.extend_from_slice(&<[u8; 64]>::from(
+        bundle.authorization().binding_signature(),
+    ));
+    if authorization.len() != expected {
+        return Err(OrchardProverErrorV1::OutputShape);
+    }
+    Ok(OrchardProvedBundleV1 {
+        public,
+        authorization,
+    })
 }
 
 fn parse_action(
@@ -456,13 +726,170 @@ fn parse_action(
     .map_err(|_| OrchardNativeErrorV1::ActionEncoding { index })
 }
 
+/// Construct one complete Post-NU6.3 Orchard bundle with injected fallible entropy.
+///
+/// `minimum_action_count` is the privacy-padding floor and must be one or two.
+/// Every real spend and every wallet-controlled change consumes one action
+/// because the pinned V3 profile disables cross-address transfers.
+///
+/// # Errors
+///
+/// Rejects malformed anchors, empty or oversized requests, inconsistent
+/// key/note/path tuples, invalid change ownership, entropy failure or obvious
+/// repeated entropy, value-balance overflow, proving/signing failure, and any
+/// artifact rejected by the independent production verifier.
+pub fn prove_orchard_bundle_v1_with_rng<R: rand::TryRngCore>(
+    transaction_intent_digest: [u8; 32],
+    anchor: [u8; 32],
+    spends: Vec<OrchardSpendProverInputV1>,
+    changes: Vec<OrchardChangeProverInputV1>,
+    minimum_action_count: u8,
+    randomness: &mut R,
+) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
+    if transaction_intent_digest == [0; 32] {
+        return Err(OrchardProverErrorV1::ZeroTransactionIntentDigest);
+    }
+    let anchor = Option::<Anchor>::from(Anchor::from_bytes(anchor))
+        .ok_or(OrchardProverErrorV1::AnchorEncoding)?;
+    let requested_actions =
+        spends
+            .len()
+            .checked_add(changes.len())
+            .ok_or(OrchardProverErrorV1::ActionCount {
+                actual: usize::MAX,
+                max: ORCHARD_MAX_ACTIONS_V1,
+            })?;
+    if requested_actions == 0 {
+        return Err(OrchardProverErrorV1::EmptyOperation);
+    }
+    if requested_actions > ORCHARD_MAX_ACTIONS_V1 {
+        return Err(OrchardProverErrorV1::ActionCount {
+            actual: requested_actions,
+            max: ORCHARD_MAX_ACTIONS_V1,
+        });
+    }
+    if minimum_action_count == 0 || usize::from(minimum_action_count) > ORCHARD_MAX_ACTIONS_V1 {
+        return Err(OrchardProverErrorV1::MinimumActionCount {
+            actual: minimum_action_count,
+            max: ORCHARD_MAX_ACTIONS_V1,
+        });
+    }
+    let expected_actions = requested_actions.max(usize::from(minimum_action_count));
+
+    let version = BundleVersion::orchard_v3();
+    let mut builder = Builder::new(
+        BundleType::Transactional {
+            bundle_required: true,
+            pad_to_minimum: Some(minimum_action_count),
+        },
+        version,
+        Flags::CROSS_ADDRESS_DISABLED,
+        anchor,
+    )
+    .map_err(|_| OrchardProverErrorV1::BundleConstruction)?;
+    let mut signing_keys = Vec::with_capacity(requested_actions);
+
+    for (
+        index,
+        OrchardSpendProverInputV1 {
+            spending_key,
+            note,
+            merkle_path,
+        },
+    ) in spends.into_iter().enumerate()
+    {
+        let viewing_key = FullViewingKey::from(&spending_key);
+        let signing_key = SpendAuthorizingKey::from(&spending_key);
+        builder
+            .add_spend(viewing_key, note, merkle_path)
+            .map_err(|_| OrchardProverErrorV1::SpendInput { index })?;
+        signing_keys.push(signing_key);
+    }
+    for (
+        index,
+        OrchardChangeProverInputV1 {
+            spending_key,
+            scope,
+            diversifier_index,
+            value,
+            memo,
+        },
+    ) in changes.into_iter().enumerate()
+    {
+        let viewing_key = FullViewingKey::from(&spending_key);
+        let recipient = viewing_key.address_at(diversifier_index, scope);
+        let outgoing_viewing_key = viewing_key.to_ovk(scope);
+        let signing_key = SpendAuthorizingKey::from(&spending_key);
+        builder
+            .add_change_output(
+                viewing_key,
+                Some(outgoing_viewing_key),
+                recipient,
+                NoteValue::from_raw(value),
+                memo,
+            )
+            .map_err(|_| OrchardProverErrorV1::ChangeInput { index })?;
+        signing_keys.push(signing_key);
+    }
+
+    // The pinned upstream Orchard crate consumes the rand-core 0.6 traits and
+    // exposes infallible `fill_bytes` internally. Seed one in-memory CSPRNG only
+    // after all deterministic input checks, so operating-system entropy failure
+    // remains a typed error and cannot become a panic halfway through proving.
+    let mut upstream_rng = seeded_upstream_rng_v1(randomness)?;
+    let (unsigned, _) = builder
+        .build::<i64>(&mut upstream_rng)
+        .map_err(|_| OrchardProverErrorV1::BundleConstruction)?
+        .ok_or(OrchardProverErrorV1::BundleConstruction)?;
+    if unsigned.actions().len() != expected_actions
+        || unsigned.actions().len() > ORCHARD_MAX_ACTIONS_V1
+    {
+        return Err(OrchardProverErrorV1::OutputShape);
+    }
+    let proven = unsigned
+        .create_proof(orchard_v3_proving_key(), &mut upstream_rng)
+        .map_err(|_| OrchardProverErrorV1::Halo2Proof)?;
+    let public = public_from_bundle_v1(&proven, transaction_intent_digest);
+    let sighash = derive_orchard_bundle_sighash_v1(&public);
+    let authorized = proven
+        .apply_signatures(&mut upstream_rng, sighash, &signing_keys)
+        .map_err(|_| OrchardProverErrorV1::Authorization)?;
+    let proved = encode_authorized_bundle_v1(&authorized, transaction_intent_digest)?;
+    verify_orchard_bundle_v1(&proved.public, &proved.authorization)
+        .map_err(|_| OrchardProverErrorV1::SelfCheck)?;
+    Ok(proved)
+}
+
+/// Construct one complete Post-NU6.3 Orchard bundle using operating-system entropy.
+///
+/// # Errors
+///
+/// Returns the same closed set of typed failures as
+/// [`prove_orchard_bundle_v1_with_rng`].
+pub fn prove_orchard_bundle_v1(
+    transaction_intent_digest: [u8; 32],
+    anchor: [u8; 32],
+    spends: Vec<OrchardSpendProverInputV1>,
+    changes: Vec<OrchardChangeProverInputV1>,
+    minimum_action_count: u8,
+) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
+    prove_orchard_bundle_v1_with_rng(
+        transaction_intent_digest,
+        anchor,
+        spends,
+        changes,
+        minimum_action_count,
+        &mut rand::rngs::OsRng,
+    )
+}
+
 /// Verify one complete first-release Orchard V3 bundle.
 ///
 /// # Errors
 ///
 /// Returns a typed failure for malformed encodings, count/size violations,
 /// invalid RedPallas signatures, or an invalid Post-NU6.3 Halo2 proof.
-pub(crate) fn verify_orchard_bundle_v1(
+pub fn verify_orchard_bundle_v1(
     public: &OrchardBundlePublicV1,
     proof_bytes: &[u8],
 ) -> Result<(), OrchardNativeErrorV1> {
@@ -523,69 +950,13 @@ pub(crate) mod tests {
     use std::sync::OnceLock;
 
     use orchard::{
-        Anchor, Bundle,
+        Anchor,
         builder::{Builder, BundleType},
-        bundle::{Authorization, Authorized, BundleVersion},
-        circuit::{OrchardCircuitVersion, ProvingKey},
+        bundle::BundleVersion,
     };
     use rand_08::{SeedableRng as _, rngs::StdRng};
 
     use super::*;
-
-    fn proving_key() -> &'static ProvingKey {
-        static PROVING_KEY: OnceLock<ProvingKey> = OnceLock::new();
-        PROVING_KEY.get_or_init(|| ProvingKey::build(OrchardCircuitVersion::PostNu6_3))
-    }
-
-    fn unsigned_public<T: Authorization>(
-        bundle: &Bundle<T, i64>,
-        transaction_intent_digest: [u8; 32],
-    ) -> OrchardBundlePublicV1 {
-        assert_eq!(bundle.flags(), &Flags::CROSS_ADDRESS_DISABLED);
-        let actions = bundle
-            .actions()
-            .iter()
-            .map(|action| OrchardActionPublicV1 {
-                nullifier: action.nullifier().to_bytes(),
-                randomized_key: <[u8; 32]>::from(action.rk()),
-                note_commitment: action.cmx().to_bytes(),
-                ephemeral_key: action.encrypted_note().epk_bytes,
-                encrypted_note: action.encrypted_note().enc_ciphertext,
-                outgoing_ciphertext: action.encrypted_note().out_ciphertext,
-                value_commitment: action.cv_net().to_bytes(),
-            })
-            .collect();
-        OrchardBundlePublicV1 {
-            transaction_intent_digest,
-            anchor: bundle.anchor().to_bytes(),
-            value_balance: *bundle.value_balance(),
-            actions,
-        }
-    }
-
-    fn raw_bundle(
-        bundle: &Bundle<Authorized, i64>,
-        transaction_intent_digest: [u8; 32],
-    ) -> (OrchardBundlePublicV1, Vec<u8>) {
-        let public = unsigned_public(bundle, transaction_intent_digest);
-        let mut authorization = Vec::with_capacity(
-            orchard_authorization_wire_size_v1(public.actions.len()).expect("bounded wire size"),
-        );
-        authorization.extend_from_slice(&ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1);
-        authorization.push(u8::try_from(public.actions.len()).expect("bounded action count"));
-        authorization.extend_from_slice(bundle.authorization().proof().as_ref());
-        for action in bundle.actions().iter() {
-            authorization.extend_from_slice(&<[u8; 64]>::from(action.authorization()));
-        }
-        authorization.extend_from_slice(&<[u8; 64]>::from(
-            bundle.authorization().binding_signature(),
-        ));
-        assert_eq!(
-            authorization.len(),
-            orchard_authorization_wire_size_v1(public.actions.len()).expect("bounded wire size")
-        );
-        (public, authorization)
-    }
 
     pub(crate) fn build_fixture(
         action_count: u8,
@@ -610,18 +981,20 @@ pub(crate) mod tests {
             .expect("bundle required")
             .0;
         let proven = unsigned
-            .create_proof(proving_key(), &mut rng)
+            .create_proof(orchard_v3_proving_key(), &mut rng)
             .expect("create Post-NU6.3 proof");
 
         // Sign the exact Iroha framing rather than an unbound caller
         // message. Signatures are applied after deriving it from the
         // proof-independent public action bytes.
-        let raw = unsigned_public(&proven, transaction_intent_digest);
+        let raw = public_from_bundle_v1(&proven, transaction_intent_digest);
         let sighash = derive_orchard_bundle_sighash_v1(&raw);
         let authorized = proven
             .apply_signatures(&mut rng, sighash, &[])
             .expect("apply canonical Orchard signatures");
-        raw_bundle(&authorized, transaction_intent_digest)
+        let proved = encode_authorized_bundle_v1(&authorized, transaction_intent_digest)
+            .expect("encode canonical Orchard authorization");
+        (proved.public, proved.authorization)
     }
 
     pub(crate) fn fixture() -> &'static (OrchardBundlePublicV1, Vec<u8>) {
@@ -632,6 +1005,128 @@ pub(crate) mod tests {
     fn two_action_fixture() -> &'static (OrchardBundlePublicV1, Vec<u8>) {
         static FIXTURE: OnceLock<(OrchardBundlePublicV1, Vec<u8>)> = OnceLock::new();
         FIXTURE.get_or_init(|| build_fixture(2, [0xB8; 32], [0x55; 32]))
+    }
+
+    #[derive(Clone, Copy)]
+    enum ProverEntropyModeV1 {
+        Healthy,
+        Constant,
+        RepeatedPrefix,
+        Fail,
+    }
+
+    #[derive(Debug)]
+    struct ProverEntropyErrorV1;
+
+    impl core::fmt::Display for ProverEntropyErrorV1 {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            formatter.write_str("injected Orchard prover entropy failure")
+        }
+    }
+
+    struct ProverEntropyRngV1(ProverEntropyModeV1);
+
+    impl rand::TryRngCore for ProverEntropyRngV1 {
+        type Error = ProverEntropyErrorV1;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            let mut bytes = [0_u8; 4];
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u32::from_le_bytes(bytes))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            let mut bytes = [0_u8; 8];
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u64::from_le_bytes(bytes))
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            match self.0 {
+                ProverEntropyModeV1::Healthy => {
+                    for (index, byte) in destination.iter_mut().enumerate() {
+                        *byte = (index as u8).wrapping_mul(73).wrapping_add(19);
+                    }
+                    Ok(())
+                }
+                ProverEntropyModeV1::Constant => {
+                    destination.fill(0xA5);
+                    Ok(())
+                }
+                ProverEntropyModeV1::RepeatedPrefix => {
+                    for (index, byte) in destination.iter_mut().enumerate() {
+                        *byte = ((index % (ORCHARD_PROVER_ENTROPY_BYTES_V1 / 2)) as u8)
+                            .wrapping_mul(29)
+                            .wrapping_add(7);
+                    }
+                    Ok(())
+                }
+                ProverEntropyModeV1::Fail => {
+                    let partial = destination.len() / 2;
+                    destination
+                        .iter_mut()
+                        .take(partial)
+                        .enumerate()
+                        .for_each(|(index, byte)| *byte = index as u8);
+                    Err(ProverEntropyErrorV1)
+                }
+            }
+        }
+    }
+
+    struct PanicEntropyRngV1;
+
+    impl rand::TryRngCore for PanicEntropyRngV1 {
+        type Error = ProverEntropyErrorV1;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            panic!("deterministically invalid input reached entropy")
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            panic!("deterministically invalid input reached entropy")
+        }
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            panic!("deterministically invalid input reached entropy")
+        }
+    }
+
+    fn spending_key(seed: u8) -> SpendingKey {
+        (1_u8..=u8::MAX)
+            .find_map(|counter| {
+                let mut bytes = [seed; 32];
+                bytes[0] = counter;
+                bytes[15] = counter.rotate_left(3);
+                bytes[31] = seed ^ counter.rotate_right(1);
+                Option::<SpendingKey>::from(SpendingKey::from_bytes(bytes))
+            })
+            .expect("at least one deterministic Orchard spending key")
+    }
+
+    fn change_input(seed: u8, value: u64) -> OrchardChangeProverInputV1 {
+        OrchardChangeProverInputV1::new(
+            spending_key(seed),
+            Scope::External,
+            u32::from(seed),
+            value,
+            [seed; 512],
+        )
+    }
+
+    fn production_prover_fixture() -> &'static OrchardProvedBundleV1 {
+        static FIXTURE: OnceLock<OrchardProvedBundleV1> = OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            prove_orchard_bundle_v1_with_rng(
+                [0x6A; 32],
+                orchard_empty_root_v1(),
+                Vec::new(),
+                vec![change_input(0x31, 17)],
+                ORCHARD_MAX_ACTIONS_V1 as u8,
+                &mut ProverEntropyRngV1(ProverEntropyModeV1::Healthy),
+            )
+            .expect("production Orchard prover")
+        })
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
@@ -671,6 +1166,133 @@ pub(crate) mod tests {
                 "d5468c1031aee6e4692cd046a408fd18c0f283829eb40be657f513d8c4b2cc30".to_owned(),
             )
         );
+    }
+
+    #[test]
+    fn production_prover_builds_change_signs_encodes_and_self_verifies() {
+        let proved = production_prover_fixture();
+        assert_eq!(proved.public.actions.len(), ORCHARD_MAX_ACTIONS_V1);
+        assert_eq!(proved.public.value_balance, -17);
+        assert_eq!(
+            proved.authorization.len(),
+            orchard_authorization_wire_size_v1(ORCHARD_MAX_ACTIONS_V1)
+                .expect("maximum-action wire")
+        );
+        verify_orchard_bundle_v1(&proved.public, &proved.authorization)
+            .expect("production output independently verifies");
+
+        let mut changed_public = proved.public.clone();
+        changed_public.actions[0].encrypted_note[317] ^= 0x80;
+        assert!(verify_orchard_bundle_v1(&changed_public, &proved.authorization).is_err());
+
+        let mut changed_authorization = proved.authorization.clone();
+        let middle = changed_authorization.len() / 2;
+        changed_authorization[middle] ^= 1;
+        assert!(verify_orchard_bundle_v1(&proved.public, &changed_authorization).is_err());
+    }
+
+    #[test]
+    fn production_prover_rejects_invalid_shape_before_requesting_entropy() {
+        let anchor = orchard_empty_root_v1();
+        let mut panic_rng = PanicEntropyRngV1;
+        assert_eq!(
+            prove_orchard_bundle_v1_with_rng(
+                [0; 32],
+                anchor,
+                Vec::new(),
+                vec![change_input(1, 1)],
+                1,
+                &mut panic_rng,
+            )
+            .expect_err("zero transaction digest"),
+            OrchardProverErrorV1::ZeroTransactionIntentDigest
+        );
+        assert_eq!(
+            prove_orchard_bundle_v1_with_rng(
+                [1; 32],
+                [u8::MAX; 32],
+                Vec::new(),
+                vec![change_input(1, 1)],
+                1,
+                &mut panic_rng,
+            )
+            .expect_err("non-canonical anchor"),
+            OrchardProverErrorV1::AnchorEncoding
+        );
+        assert_eq!(
+            prove_orchard_bundle_v1_with_rng(
+                [1; 32],
+                anchor,
+                Vec::new(),
+                Vec::new(),
+                1,
+                &mut panic_rng,
+            )
+            .expect_err("empty operation"),
+            OrchardProverErrorV1::EmptyOperation
+        );
+        assert_eq!(
+            prove_orchard_bundle_v1_with_rng(
+                [1; 32],
+                anchor,
+                Vec::new(),
+                vec![change_input(1, 1), change_input(2, 2), change_input(3, 3),],
+                1,
+                &mut panic_rng,
+            )
+            .expect_err("three requested actions"),
+            OrchardProverErrorV1::ActionCount {
+                actual: 3,
+                max: ORCHARD_MAX_ACTIONS_V1,
+            }
+        );
+        for minimum in [0, 3, u8::MAX] {
+            assert_eq!(
+                prove_orchard_bundle_v1_with_rng(
+                    [1; 32],
+                    anchor,
+                    Vec::new(),
+                    vec![change_input(1, 1)],
+                    minimum,
+                    &mut panic_rng,
+                )
+                .expect_err("invalid padding floor"),
+                OrchardProverErrorV1::MinimumActionCount {
+                    actual: minimum,
+                    max: ORCHARD_MAX_ACTIONS_V1,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn production_prover_randomness_failures_are_typed_and_fail_closed() {
+        let anchor = orchard_empty_root_v1();
+        for (mode, expected) in [
+            (
+                ProverEntropyModeV1::Fail,
+                OrchardProverErrorV1::RandomnessUnavailable,
+            ),
+            (
+                ProverEntropyModeV1::Constant,
+                OrchardProverErrorV1::RandomnessHealth,
+            ),
+            (
+                ProverEntropyModeV1::RepeatedPrefix,
+                OrchardProverErrorV1::RandomnessHealth,
+            ),
+        ] {
+            let error = prove_orchard_bundle_v1_with_rng(
+                [0x71; 32],
+                anchor,
+                Vec::new(),
+                vec![change_input(0x41, 9)],
+                1,
+                &mut ProverEntropyRngV1(mode),
+            )
+            .expect_err("unhealthy entropy must not produce an artifact");
+            assert_eq!(error, expected);
+        }
     }
 
     #[test]

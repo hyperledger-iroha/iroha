@@ -1412,6 +1412,14 @@ where
     (norito::codec::Encode::encode(&query) == payload).then_some(query)
 }
 
+fn encode_stored_query_revalidation_request(request: &QueryRequest) -> Result<Vec<u8>, Error> {
+    norito::encode_canonical(request).map_err(|error| {
+        Error::Conversion(format!(
+            "failed to encode stored-query authorization request: {error}"
+        ))
+    })
+}
+
 // NOTE: This trait is currently unused. Iterable query execution of erased
 // `QueryBox<QueryOutputBatchBox>` is performed in `ValidQueryRequest::execute`
 // via registry-based dispatch (`iter_query_inner::<T>`), followed by
@@ -3857,13 +3865,7 @@ impl ValidQueryRequest {
         stored_start_budget: Option<u64>,
     ) -> Result<QueryResponse, Error> {
         let revalidation_archive = matches!(&self.request, QueryRequest::Start(_))
-            .then(|| {
-                norito::to_bytes(&self.request).map_err(|error| {
-                    Error::Conversion(format!(
-                        "failed to encode stored-query authorization request: {error}"
-                    ))
-                })
-            })
+            .then(|| encode_stored_query_revalidation_request(&self.request))
             .transpose()?;
         let response = self.execute_stored_inner(
             live_query_store,
@@ -6603,6 +6605,26 @@ mod tests {
         assert!(
             decode_iter_query_payload_exact::<FindDomains>(&other_parameterized_payload).is_none(),
             "another query variant's payload must not become a global domain query"
+        );
+    }
+
+    #[test]
+    fn stored_query_revalidation_archive_ignores_ambient_norito_layout() {
+        let request = block_request_with_payload(Vec::new()).request;
+        let canonical = encode_stored_query_revalidation_request(&request)
+            .expect("encode canonical stored-query request");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&request).expect("encode alternate-layout stored-query request"),
+            canonical,
+            "fixture must exercise a distinct ambient Norito layout"
+        );
+        assert_eq!(
+            encode_stored_query_revalidation_request(&request)
+                .expect("encode stored-query request under alternate ambient layout"),
+            canonical
         );
     }
 

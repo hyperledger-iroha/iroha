@@ -21,7 +21,12 @@ use iroha_primitives::{
     json::Json,
     numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
 };
-use ivm::{IVM, PointerType, list::ListLayoutV1, sum::SumLayoutV1};
+use ivm::{
+    IVM, PointerType,
+    codec::{decode_canonical_norito, encode_canonical_norito},
+    list::ListLayoutV1,
+    sum::SumLayoutV1,
+};
 use norito::{
     codec::{Decode, Encode},
     json::{self, Map, Value},
@@ -260,27 +265,11 @@ fn decode_canonical<T>(
 where
     T: Decode + Encode,
 {
-    let value = norito::decode_from_bytes(payload).map_err(|error| {
-        EntrypointReturnDecodeError::InvalidValue {
-            register,
-            kind,
-            reason: error.to_string(),
-        }
-    })?;
-    let canonical =
-        norito::to_bytes(&value).map_err(|error| EntrypointReturnDecodeError::InvalidValue {
-            register,
-            kind,
-            reason: error.to_string(),
-        })?;
-    if canonical != payload {
-        return Err(EntrypointReturnDecodeError::InvalidValue {
-            register,
-            kind,
-            reason: "non-canonical Norito payload".to_owned(),
-        });
-    }
-    Ok(value)
+    decode_canonical_norito(payload).map_err(|error| EntrypointReturnDecodeError::InvalidValue {
+        register,
+        kind,
+        reason: error.to_string(),
+    })
 }
 
 fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
@@ -1220,7 +1209,7 @@ fn collect_node(
 
 fn schema_hash(schema: &EntrypointValueTypeV1) -> Result<[u8; 32], EntrypointReturnDecodeError> {
     let schema =
-        norito::to_bytes(schema).map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?;
+        encode_canonical_norito(schema).map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?;
     Ok(entrypoint_return_schema_hash_v1(&schema))
 }
 
@@ -1231,17 +1220,22 @@ fn exact_record_bytes(
     let max_bytes = max_bytes.min(MAX_ENTRYPOINT_RETURN_RECORD_BYTES);
     // The bare length walk allocates no output buffer. It prevents an already
     // materialized adversarial record from forcing an oversized framed encode.
-    let bare_bytes = record.encoded_len();
+    let bare_bytes = {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        record.encoded_len()
+    };
     if bare_bytes > max_bytes {
         return Err(EntrypointReturnDecodeError::RecordTooLarge {
             bytes: bare_bytes,
             max_bytes,
         });
     }
-    let encoded =
-        norito::to_bytes(record).map_err(|error| EntrypointReturnDecodeError::RecordEncoding {
+    let encoded = encode_canonical_norito(record).map_err(|error| {
+        EntrypointReturnDecodeError::RecordEncoding {
             reason: error.to_string(),
-        })?;
+        }
+    })?;
     if encoded.len() > max_bytes {
         return Err(EntrypointReturnDecodeError::RecordTooLarge {
             bytes: encoded.len(),
@@ -1806,7 +1800,7 @@ pub fn decode_entrypoint_return_record(
             max_bytes: MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
         });
     }
-    let record: EntrypointReturnRecordV1 = norito::decode_from_bytes(payload).map_err(|error| {
+    let record: EntrypointReturnRecordV1 = decode_canonical_norito(payload).map_err(|error| {
         EntrypointReturnDecodeError::RecordEncoding {
             reason: error.to_string(),
         }
@@ -1950,6 +1944,83 @@ mod tests {
                 EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::String),
             ],
         }
+    }
+
+    #[test]
+    fn return_record_codec_is_ambient_independent_and_rejects_alternate_layout() {
+        let schema = leaf(EntrypointValueKindV1::Blob);
+        let canonical_schema =
+            encode_canonical_norito(&schema).expect("encode canonical return schema");
+        let canonical_schema_hash = entrypoint_return_schema_hash_v1(&canonical_schema);
+        let record = EntrypointReturnRecordV1 {
+            schema_hash: canonical_schema_hash,
+            atoms: vec![EntrypointValueAtomV1::Pointer(test_tlv(
+                PointerType::Blob,
+                b"canonical return payload",
+            ))],
+        };
+        let canonical_record = exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
+            .expect("encode canonical return record");
+        let canonical_record_hash = Hash::new(&canonical_record);
+        let length_probe_record = EntrypointReturnRecordV1 {
+            schema_hash: canonical_schema_hash,
+            atoms: vec![
+                EntrypointValueAtomV1::Pointer(test_tlv(
+                    PointerType::Blob,
+                    b"length-sensitive return payload",
+                ));
+                16
+            ],
+        };
+        let canonical_length_probe =
+            exact_record_bytes(&length_probe_record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
+                .expect("encode canonical return-record length probe");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate_record =
+            norito::to_bytes(&record).expect("encode alternate-layout return record");
+        assert_ne!(alternate_record, canonical_record);
+        let ambient_before = norito::to_bytes(&schema).expect("encode schema under ambient layout");
+
+        assert_eq!(
+            schema_hash(&schema).expect("hash schema canonically"),
+            canonical_schema_hash
+        );
+        let encoded_under_ambient = exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
+            .expect("encode record canonically under ambient layout");
+        assert_eq!(encoded_under_ambient, canonical_record);
+        assert_eq!(Hash::new(&encoded_under_ambient), canonical_record_hash);
+        assert!(
+            length_probe_record.encoded_len() > canonical_length_probe.len(),
+            "alternate bare length must exceed the canonical framed limit for this probe"
+        );
+        assert_eq!(
+            exact_record_bytes(&length_probe_record, canonical_length_probe.len())
+                .expect("canonical length admission must ignore ambient layout"),
+            canonical_length_probe
+        );
+        assert_eq!(
+            decode_entrypoint_return_record(&schema, &canonical_record)
+                .expect("decode canonical record under ambient layout"),
+            record
+        );
+        assert!(matches!(
+            decode_entrypoint_return_record(&schema, &alternate_record),
+            Err(EntrypointReturnDecodeError::RecordEncoding { .. })
+        ));
+        assert_eq!(
+            norito::to_bytes(&schema).expect("re-encode schema under ambient layout"),
+            ambient_before,
+            "canonical helpers must restore the caller's ambient layout"
+        );
+
+        drop(ambient);
+        assert_eq!(
+            norito::to_bytes(&record).expect("encode record after ambient guard"),
+            canonical_record
+        );
     }
 
     #[test]

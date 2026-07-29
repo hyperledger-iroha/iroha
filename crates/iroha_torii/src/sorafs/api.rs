@@ -18768,6 +18768,7 @@ fn asset_escrow_kind_label(kind: AssetEscrowKind) -> &'static str {
     match kind {
         AssetEscrowKind::Marketplace => "marketplace",
         AssetEscrowKind::Lock => "lock",
+        AssetEscrowKind::Conditional => "conditional",
     }
 }
 
@@ -36326,6 +36327,19 @@ mod advert_tests {
             mismatches
                 .iter()
                 .any(|item| item.contains("remaining_amount"))
+        );
+    }
+
+    #[test]
+    fn asset_escrow_kind_labels_cover_the_closed_enum() {
+        assert_eq!(
+            asset_escrow_kind_label(AssetEscrowKind::Marketplace),
+            "marketplace"
+        );
+        assert_eq!(asset_escrow_kind_label(AssetEscrowKind::Lock), "lock");
+        assert_eq!(
+            asset_escrow_kind_label(AssetEscrowKind::Conditional),
+            "conditional"
         );
     }
 

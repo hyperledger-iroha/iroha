@@ -444,48 +444,23 @@ await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
 
 ## Native Privacy Bridge
 
-`Hyperledger.Iroha.Privacy.PrivacyNative` exposes the privacy FFI surface as
-generic raw Norito archives: `CapabilitiesV1()`, `BuildProofV1(requestArchive)`,
-and `VerifyProofV1(requestArchive)`. Approved typed proof-builder aliases for
-admitted production privacy entrypoints, including
-`BuildZkAceAuthorizationProofV1(requestArchive)`, dispatch through the same
-production archive paths and remain fail-closed while the privacy rows are
-gated. Planned catalog entrypoints stay unexported until their production gates
-pass. Native availability requires ABI 7 or later, the privacy
-capability/build/verify symbols, and successful Norito probe outputs whose
-operation-specific result schema bytes match the called entry point.
+`Hyperledger.Iroha.Privacy.PrivacyNative` is capability-only.
+`CapabilitiesV1()` returns a CRC-checked canonical
+`PrivacyCapabilitySnapshotV1` Norito archive. `PrivacyProtocolsV1.All` exposes
+the closed `PrivacyProtocolIdV1` enum in exact wire order. Native availability
+requires ABI 21 and only the capability and zeroizing-free symbols. Generic
+request/build/verify dispatch and free-form algorithm selectors are absent;
+proofs use protocol-specific typed APIs.
 
-All privacy request and response payloads must stay as raw Norito archives. C#
-validates archive magic, length, CRC, the 64 MiB native size cap, and the
-operation-specific result schema before returning bytes to callers, and clears
-bounded native output buffers before releasing them on both success and bridge
-error paths; managed temporary copies of invalid native output are cleared
-before validation errors are rethrown. Managed temporary copies of proof
-request selector text, public inputs, witnesses, proofs, request archives, and
-probe archives are zeroed after native dispatch or sanitized native-call
-failure. Proof request selector text
-(`algorithmId`, `entrypoint`, and `vkRef`) must be exact, non-empty, free of
-whitespace/control characters, and at most 1024 UTF-8 bytes before native
-dispatch. Capability
-metadata reports `privacy-production-gate-v1`, keeps `ProductionReady = false`,
-and remains fail-closed with missing production gates and no audit references
-until real proving, verification, chain admission, witness privacy checks,
-deterministic testing, negative/adversarial testing, replay/nullifier rejection
-testing, parser/verifier fuzzing, performance gates, and external audit signoff
-are complete.
-
-`PrivacyProofRequestV1(...)` performs managed preflight before loading the
-native bridge: `publicInputs` must be non-empty, `witness` and `proof` are
-capped at 33,554,432 bytes, and diagnostics name the offending component (for
-example, `proof must not exceed 33554432 bytes`).
-
-C# also exposes the deterministic privacy FFI status/error-code contract for
-diagnostics and cross-language parity: `StatusError`, `ErrorNullPointer`,
-`ErrorMalformedNorito`, `ErrorUnsupportedAlgorithm`,
-`ErrorProductionDisabled`, and `ErrorInvalidRequest`. The stable wire values
-are `status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
-`unsupported_algorithm = 3`, `production_disabled = 4`, and
-`invalid_request = 5`; treat them as sanitized status metadata, not proof success.
+The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
+`anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
+`iroha-zk-x509-stark-p256-v0`,
+`iroha-jindo-polynomial-commitment-v0`,
+`iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
+`monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
+`pq-masp-stark-v0`. `ParseCanonicalLabel` rejects aliases, retired IDs, case
+changes, and whitespace normalization.
 
 ## Native SoraFS Reference Validation
 

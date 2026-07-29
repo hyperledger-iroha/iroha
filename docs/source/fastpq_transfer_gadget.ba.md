@@ -2,7 +2,7 @@
 lang: ba
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -11,8 +11,6 @@ translator: machine-google-reviewed
 ---
 
 % FastPQ тапшырыу гаджет дизайн
-
-#
 
 Хәҙерге FASTPQ планлаштырыусы `TransferAsset` инструкцияһында ҡатнашҡан һәр примитив операцияны теркәй, тимәк, һәр күсермә баланс арифметика, хеш-рауттар һәм SMT яңыртыу өсөн түләй. Ҡайһы бер осраҡта был гаджет индерәбеҙ, был гаджет индерәбеҙ, ул тик минималь арифметик/эш тикшерелеүҙәрен тикшерә, ә хост канонлы хәл күсеүен башҡарыуҙы дауам итә.
 
@@ -50,11 +48,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +82,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount` (диапазонлы гаджет менән уртаҡ RNS тарҡалыу).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Өс тигеҙләмәләр ҙә бер рәт төркөмөн ҡуллана.2. **Позедон йөкләмәһе блок**
+   - Өс тигеҙләмәләр ҙә бер рәт төркөмөн ҡуллана.
+
+2. **Позедон йөкләмәһе блок**
    - `poseidon_preimage_digest` перекомпьютерҙар башҡа гаджеттарҙа ҡулланылған дөйөм Посейдон эҙләү таблицаһын ҡулланып. Эҙҙә Посейдон раундтары буйынса бер ниндәй ҙә юҡ.
 
 3. **Меркл юл блогы**
@@ -96,7 +96,9 @@ struct TransferDeltaTranscript {
 5. **Платка **
    - Программалар `transfer_v1_batch_begin()` тип атала, `transfer_asset` төҙөүселәр һәм `transfer_v1_batch_end()` иллюзияһына тиклем. Әммә даирәһе әүҙем хост буферҙары һәр күсерергә һәм уларҙы бер `TransferAssetBatch` тип реплей, ҡабаттан ҡулланыу Посейдон/SMT контекст бер тапҡыр партияһына. Һәр өҫтәмә дельта тик арифметика һәм ике япраҡ тикшерелгән өҫтәй. Стенограмма хәҙер күп дефицит партиялар ҡабул итә һәм уларҙы `TransferGadgetInput::deltas` тип өҫкә күтәрә, шуға күрә планлаштырыусы шаһиттарҙы ҡабатлап, Norito ҡабаттан уҡымай ала. Norito файҙалы йөк ҡулайлы (мәҫәлән, CLI/SDKs) булған килешәүҙәр, `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` шылтыратып, масштабты тулыһынса үткәреп ебәрә ала, был хостҡа бер syscall-да тулыһынса кодланған партияны ҡулға ала.
 
-# Хост & Ҡәҙерле үҙгәрештәр| Ҡатлам | Үҙгәрештәр |
+# Хост & Ҡәҙерле үҙгәрештәр
+
+| Ҡатлам | Үҙгәрештәр |
 |------|---------|
 | `ivm::syscalls` | Өҫтәү `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) шуға күрә программалар йәйә бер нисә `transfer_v1` syscalls арауыҡ ISIs сығармай, плюс `transfer_v1_batch_apply` (`0x2B`) алдан кодланған партиялар өсөн. |
 | `ivm::host` һәм һынауҙар | Core/Default хужалары дауалау `transfer_v1` партия ҡушымтаһы булараҡ, шул уҡ ваҡытта даирәһе әүҙем, өҫтө `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, һәм макет WSV хост буферҙары яҙмалар, шулай итеп, регрессия һынауҙары раҫлай ала детерминистик баланс . Яңыртыуҙар.【крат/вм/срк/core_host.rs. 1001】【крат/вм/срк/хост.р. р. :3713】【крат/вм/тестар/wsv_host_pointer_rs:219】【краттар/вм/тестар/wsv_host_pointer_rs:287】
@@ -125,11 +127,13 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```FASTPQ партия артефакттарын көҙгө JSON, `iroha_cli audit witness` хәҙер ғәҙәттәгесә сығара (уларҙы баҫтырыу өсөн `--no-fastpq-batches` үткән), шуға күрә Kotodama һәм CI ҡапҡаһы синтетик йүгереүҙе алдан снимоктарға ҡаршы айыра ала, ҡасан раҫлаусы планлаштырыусы үҙгәрештәр.
+```
+
+FASTPQ партия артефакттарын көҙгө JSON, `iroha_cli audit witness` хәҙер ғәҙәттәгесә сығара (уларҙы баҫтырыу өсөн `--no-fastpq-batches` үткән), шуға күрә Kotodama һәм CI ҡапҡаһы синтетик йүгереүҙе алдан снимоктарға ҡаршы айыра ала, ҡасан раҫлаусы планлаштырыусы үҙгәрештәр.
 
 # рулет планы
 
-**ТФ-1 (Транскрипт сантехника)**: ✅ `StateTransaction::record_transfer_transcripts` хәҙер `TransferAsset`/партия өсөн Norito стенограммалары сығарыла, `sumeragi::witness::record_fastpq_transcript` уларҙы донъя шаһиты эсендә һаҡлай, һәм Kotodama. төҙөү `fastpq_batches` менән асыҡ `public_inputs` операторҙар һәм иҫбатлаусылар һыҙаты (ҡулланыу `--no-fastpq-batches`, әгәр һеҙгә кәрәк нәҙеге сығыу).【креттар/ироха_ядро/срк/штат.rs:8801】【крат/ироха_ядро/срк/сумераги/шаһит . .rs:280】【крат/ироха_ядро/src/Fastpq/мод.р. 157】【крат/ироха_кли/срк/аудит.р.
+1. **ТФ-1 (Транскрипт сантехника)**: ✅ `StateTransaction::record_transfer_transcripts` хәҙер `TransferAsset`/партия өсөн Norito стенограммалары сығарыла, `sumeragi::witness::record_fastpq_transcript` уларҙы донъя шаһиты эсендә һаҡлай, һәм Kotodama. төҙөү `fastpq_batches` менән асыҡ `public_inputs` операторҙар һәм иҫбатлаусылар һыҙаты (ҡулланыу `--no-fastpq-batches`, әгәр һеҙгә кәрәк нәҙеге сығыу).【креттар/ироха_ядро/срк/штат.rs:8801】【крат/ироха_ядро/срк/сумераги/шаһит . .rs:280】【крат/ироха_ядро/src/Fastpq/мод.р. 157】【крат/ироха_кли/срк/аудит.р.
 2. **ТФ-2 (Гаджет тормошҡа ашырыу)**: ✅ `gadgets::transfer` хәҙер күп деталь транскрипттарын раҫлай (баланс арифметик + Poseidon distest), синтездар парлы SMT иҫбатлауҙары ҡасан хужалар уларҙы үткәрмәй, структуралы шаһиттарҙы фашлай `TransferGadgetPlan`, һәм `trace::build_trace` ептәре был шаһиттарҙы `Trace::transfer_witnesses`-ҡа тиклем, шул уҡ ваҡытта SMT бағаналарын иҫбатлауҙарҙан тултыра. `fastpq_row_bench` 65536-рәтле регрессия жгутын тота, шуға күрә планлаштырыусылар трек рәт ҡулланыу рәтендә реплей Norito . 1】【крат/фаспq_rover/src/src. rcte.1】【кровер/src/src/src/src/bin/fastpq_row_bech.rs. 1】.
 3. **ТФ-3 (Партия ярҙамсыһы)**: Партия syscall + Kotodama төҙөүсе, шул иҫәптән хост кимәлендә эҙмә-эҙлекле ҡушымта һәм гаджет иллюминаторы.
 4. **ТФ-4 (Телеметрия & docs)**: Яңыртыу `fastpq_plan.md`, `fastpq_migration_guide.md`, һәм приборҙар таҡтаһы схемалары ер өҫтө бүлергә тапшырыу рәттәре ҡаршы башҡа гаджеттар.

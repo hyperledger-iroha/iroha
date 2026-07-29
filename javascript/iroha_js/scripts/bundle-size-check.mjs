@@ -20,7 +20,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner; the
-    // current V1 tree measures 972,745 bytes (+2.83%). The 969 KiB ceiling remains
+    // current V1 tree measures 983,004 bytes (+3.91%). The 969 KiB ceiling remains
     // below a 5% regression from that documented predecessor.
     limitKb: 969,
   }),
@@ -31,7 +31,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes; current V1 is 300,874 bytes (+3.57%).
+    // pre-reset tree measured 290,498 bytes; current V1 is 298,589 bytes (+2.79%).
     // The 297 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 297,
     forbidNodeInputs: true,
@@ -43,7 +43,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree and 384,091 bytes in current V1 (+3.42%). The 380 KiB ceiling
+    // pre-reset tree and 381,799 bytes in current V1 (+2.80%). The 380 KiB ceiling
     // remains below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
@@ -54,7 +54,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,123 bytes
+    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,121 bytes
     // (+0.26%). The 100 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 100,
     forbidNodeInputs: true,
@@ -75,10 +75,11 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // Pinned-esbuild baseline is 51,640 bytes (50.4 KiB); 51 KiB leaves 584
-    // bytes (1.13%) while covering artifact/CNTR validation and the complete
-    // remote compiler transport boundary.
-    limitKb: 51,
+    // Pinned-esbuild predecessor is 52,156 bytes. Exact V1 manifest state-type,
+    // feature-bit, and dynamic-access validation produces 52,735 bytes
+    // (+1.11%); the 53 KiB ceiling keeps this required boundary hardening
+    // below the release-wide 5% regression limit.
+    limitKb: 53,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -88,7 +89,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner; current V1 is 473,167 bytes (+3.29%). The 469 KiB
+    // same pinned runner; current V1 is 470,018 bytes (+2.61%). The 469 KiB
     // ceiling remains below a 5% predecessor regression.
     limitKb: 469,
     forbidNodeInputs: true,

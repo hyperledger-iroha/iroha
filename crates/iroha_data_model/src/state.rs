@@ -41,8 +41,8 @@ macro_rules! impl_state_json_via_norito_bytes {
         $(
             impl JsonSerialize for $ty {
                 fn json_serialize(&self, out: &mut String) {
-                    let bytes = norito::to_bytes(self)
-                        .expect("Norito serialization must succeed");
+                    let bytes = norito::encode_canonical(self)
+                        .expect("canonical Norito serialization must succeed");
                     let encoded = base64::Engine::encode(
                         &STANDARD,
                         bytes,
@@ -61,9 +61,7 @@ macro_rules! impl_state_json_via_norito_bytes {
                         encoded.as_str(),
                     )
                         .map_err(|err| json::Error::Message(err.to_string()))?;
-                    let archived = norito::from_bytes::<$ty>(&bytes)
-                        .map_err(|err| json::Error::Message(err.to_string()))?;
-                    norito::core::NoritoDeserialize::try_deserialize(archived)
+                    norito::decode_canonical::<$ty>(&bytes)
                         .map_err(|err| json::Error::Message(err.to_string()))
                 }
             }
@@ -265,6 +263,35 @@ mod tests {
     fn checked_account_id() -> AccountId {
         let keypair = KeyPair::try_random().expect("generate checked state fixture keypair");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn state_key_json_is_canonical_and_ambient_independent() {
+        let key = CanonicalStateKey::Domain(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+        );
+        let canonical_json = norito::json::to_json(&key).expect("encode canonical state-key JSON");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                norito::json::to_json(&key)
+                    .expect("encode state-key JSON under alternate ambient layout"),
+                canonical_json
+            );
+        }
+
+        let alternate_frame = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&key).expect("encode alternate-layout state key")
+        };
+        let encoded = base64::Engine::encode(&STANDARD, alternate_frame);
+        let alternate_json =
+            norito::json::to_json(&encoded).expect("encode alternate state frame as JSON string");
+        norito::json::from_json::<CanonicalStateKey>(&alternate_json)
+            .expect_err("alternate-layout state-key JSON must be rejected");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 lang: ka
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -19,7 +19,7 @@ translator: machine-google-reviewed
 - ** ფარგლები **: ერთჯერადი გადარიცხვები და მცირე პარტიები, რომლებიც ემიტირებულია არსებული Kotodama/IVM `TransferAsset` syscall ზედაპირის მეშვეობით.
 - **მიზანი**: ამოიღეთ FFT/LDE სვეტის ნაკვალევი დიდი მოცულობის გადარიცხვებისთვის საძიებო ცხრილების გაზიარებით და თითო გადატანის არითმეტიკის დაშლით კომპაქტურ შეზღუდვის ბლოკად.
 
-#არქიტექტურა
+# არქიტექტურა
 
 ```
 Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount` (დიაპაზონის გაჯეტი საერთო RNS დაშლით).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - შეფუთულია მორგებულ კარიბჭეში, ასე რომ სამივე განტოლება მოიხმარს ერთ მწკრივ ჯგუფს.2. **პოსეიდონის ვალდებულების ბლოკი**
+   - შეფუთულია მორგებულ კარიბჭეში, ასე რომ სამივე განტოლება მოიხმარს ერთ მწკრივ ჯგუფს.
+
+2. **პოსეიდონის ვალდებულების ბლოკი**
    - ხელახლა გამოითვლება `poseidon_preimage_digest` პოსეიდონის საძიებო ცხრილის გამოყენებით, რომელიც უკვე გამოიყენება სხვა გაჯეტებში. არავითარი ტრანსფერი პოსეიდონის რაუნდები კვალში.
 
 3. **მერკლის ბილიკის ბლოკი**
@@ -96,7 +98,9 @@ struct TransferDeltaTranscript {
 5. **Batch Loop**
    - პროგრამები იძახებენ `transfer_v1_batch_begin()`-ს `transfer_asset` მშენებლების მარყუჟამდე და `transfer_v1_batch_end()`-ის შემდეგ. სანამ ფარგლები აქტიურია, მასპინძელი ბუფერს უკეთებს თითოეულ გადაცემას და იმეორებს მათ როგორც `TransferAssetBatch`, ხელახლა იყენებს Poseidon/SMT კონტექსტს თითო პარტიაში ერთხელ. ყოველი დამატებითი დელტა ამატებს მხოლოდ არითმეტიკას და ორ ფოთლის შემოწმებას. ტრანსკრიპტის დეკოდერი ახლა იღებს მრავალ დელტა პარტიებს და აფენს მათ როგორც `TransferGadgetInput::deltas`, რათა დამგეგმავმა შეძლოს მოწმეების დაკეცვა Norito ხელახლა წაკითხვის გარეშე. კონტრაქტებს, რომლებსაც უკვე აქვთ Norito მოსახერხებელი დატვირთვა (მაგ., CLI/SDK-ები), შეუძლიათ მთლიანად გამოტოვონ ფარგლები `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`-ზე დარეკვით, რომელიც გადასცემს მასპინძელს სრულად დაშიფრულ პარტიას ერთ syscall-ში.
 
-# მასპინძლის და პროვერის ცვლილებები| ფენა | ცვლილებები |
+# მასპინძლის და პროვერის ცვლილებები
+
+| ფენა | ცვლილებები |
 |-------|---------|
 | `ivm::syscalls` | დაამატეთ `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`), რათა პროგრამებმა შეძლონ მრავალჯერადი `transfer_v1` სისტემის ფრჩხილი შუალედური ISI-ების გამოცემის გარეშე, პლუს ISI0000000001 (`0x2B`) წინასწარ კოდირებული პარტიებისთვის. |
 | `ivm::host` & ტესტები | ძირითადი/ნაგულისხმევი მასპინძლები განიხილავენ `transfer_v1`-ს, როგორც სერიულ დანართს, სანამ სფერო აქტიურია, ზედაპირული `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` და იმიტირებული WSV ჰოსტი ბუფერებს ჩანაწერებს ჩადენამდე, ასე რომ რეგრესიის ტესტებმა შეიძლება დაამტკიცონ დეტერმინისტული ბალანსი განახლებები.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```ემიტირებული JSON ასახავს FASTPQ სერიის არტეფაქტებს, რომლებსაც `iroha_cli audit witness` ახლა ასხივებს ნაგულისხმევად (გაავლეთ `--no-fastpq-batches` მათ დასათრგუნად), ასე რომ, `scripts/fastpq/check_row_usage.py` და CI კარიბჭეს შეუძლია განასხვავოს სინთეზური გაშვებული ნახატები წინა ვალიდაციის დროს.
+```
+
+ემიტირებული JSON ასახავს FASTPQ სერიის არტეფაქტებს, რომლებსაც `iroha_cli audit witness` ახლა ასხივებს ნაგულისხმევად (გაავლეთ `--no-fastpq-batches` მათ დასათრგუნად), ასე რომ, `scripts/fastpq/check_row_usage.py` და CI კარიბჭეს შეუძლია განასხვავოს სინთეზური გაშვებული ნახატები წინა ვალიდაციის დროს.
 
 # გავრცელების გეგმა
 

@@ -49,6 +49,39 @@ function sortAndDeduplicate(strings) {
   return values.filter((value, index) => index === 0 || values[index - 1] !== value);
 }
 
+const RUST_WHITESPACE_AT_EDGE = /^\p{White_Space}+|\p{White_Space}+$/gu;
+
+function trimRustWhitespace(value) {
+  return value.replace(RUST_WHITESPACE_AT_EDGE, "");
+}
+
+function containsUnpairedSurrogate(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sortAndDeduplicateUtf8(strings) {
+  const entries = [...strings].map((value) => ({
+    value,
+    utf8: Buffer.from(value, "utf8"),
+  }));
+  entries.sort((left, right) => Buffer.compare(left.utf8, right.utf8));
+  return entries
+    .filter((entry, index) => index === 0 || entries[index - 1].value !== entry.value)
+    .map((entry) => entry.value);
+}
+
 function normalizeStringList(input, context) {
   const items = [];
   const values = Array.from(input ?? []);
@@ -57,9 +90,15 @@ function normalizeStringList(input, context) {
     if (typeof value !== "string") {
       throw new TypeError(`${context}[${index}] must be a string`);
     }
-    items.push(value);
+    if (containsUnpairedSurrogate(value)) {
+      throw new TypeError(`${context}[${index}] must contain only Unicode scalar values`);
+    }
+    const normalized = trimRustWhitespace(value);
+    if (normalized.length > 0) {
+      items.push(normalized);
+    }
   }
-  return sortAndDeduplicate(items);
+  return sortAndDeduplicateUtf8(items);
 }
 
 function canonicalizeDataspaceIds(input) {

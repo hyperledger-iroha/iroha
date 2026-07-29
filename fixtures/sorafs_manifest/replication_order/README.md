@@ -5,7 +5,7 @@ Reference replication order fixture set used by SDKs, Torii smoke tests, and the
 
 Companion assets produced from the same fixture run live alongside this directory and keep the replication order, PDP fixture set, PoR proof set, and governance audit log in sync:
 
-- `../por/` — contains `challenge_v1.*`, `proof_v1.*`, and `verdict_v1.*` (generated with `cargo run -p sorafs_manifest --bin generate_por_fixtures`) so harnesses can exercise the full request→proof→verdict flow.
+- `../por/` — contains `challenge_v1.*`, `proof_v1.*`, and `verdict_v1.*` (generated with `cargo run -p sorafs_manifest --bin generate_por_fixtures -- --write`) so harnesses can exercise the full request→proof→verdict flow.
 - `../pdp/` — contains PDP commitment, challenge, proof, and negative fixtures generated with `cargo run -p sorafs_manifest --bin generate_pdp_fixtures`.
 - `../governance/` — wraps the proof verdict in a `GovernanceLogNode` (`node_v1.*`) for pipeline and dashboard ingestion.
 

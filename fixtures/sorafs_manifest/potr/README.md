@@ -9,5 +9,5 @@ for the SF-11 reference validator.
 Regenerate both files with:
 
 ```sh
-cargo run -p sorafs_manifest --bin generate_por_fixtures
+cargo run -p sorafs_manifest --bin generate_por_fixtures -- --write
 ```

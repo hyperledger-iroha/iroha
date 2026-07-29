@@ -138,8 +138,7 @@ examples-inspect: examples-run
 	ivm_tool inspect target/examples/nft.to
 
 docs-syscalls:
-	@python3 scripts/gen_syscall_doc.py > docs/source/ivm_syscalls_generated.md
-	@python3 scripts/gen_syscall_doc.py --sync-localized
+	@python3 scripts/gen_syscall_doc.py --write
 	@echo "Generated docs/source/ivm_syscalls_generated.md"
 
 docs-da-threat-model:

@@ -31,7 +31,7 @@ use super::{
 };
 use crate::privacy_engines::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
-    TranscriptV1, random_nonzero_scalar,
+    TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
 
 /// Closed suite for the complete payment proof.
@@ -199,6 +199,58 @@ pub struct AnonymousPgcPaymentWitnessV1<'a> {
     pub sender_secret: &'a SecretScalarV1,
 }
 
+fn payment_proof_decode_limits(
+    statement: &AnonymousPgcPaymentStatementV1<'_>,
+    payload_len: usize,
+) -> Result<norito::DecodeLimits, AnonymousPgcError> {
+    let anonymity_set_size = statement.anonymity_set_size();
+    let recipient_count = statement.recipient_count();
+    let decoy_count = anonymity_set_size
+        .checked_sub(recipient_count)
+        .and_then(|remaining| remaining.checked_sub(1))
+        .ok_or(AnonymousPgcError::InvalidPaymentProofShape)?;
+    let recipient_pairs = pair_count(recipient_count)?;
+    let decoy_pairs = pair_count(decoy_count)?;
+    let max_sequence_elements = [
+        anonymity_set_size,
+        recipient_count,
+        recipient_pairs,
+        decoy_count,
+        decoy_pairs,
+    ]
+    .into_iter()
+    .max()
+    .ok_or(AnonymousPgcError::InvalidPaymentProofShape)?;
+    let outer_elements = anonymity_set_size
+        .checked_add(recipient_count)
+        .and_then(|total| total.checked_add(recipient_pairs))
+        .and_then(|total| total.checked_add(decoy_count))
+        .and_then(|total| total.checked_add(decoy_pairs))
+        .ok_or(AnonymousPgcError::InvalidPaymentProofShape)?;
+    let selection_elements = anonymity_set_size
+        .checked_mul(3)
+        .and_then(|per_selection| {
+            recipient_count
+                .checked_add(decoy_count)
+                .and_then(|selections| per_selection.checked_mul(selections))
+        })
+        .ok_or(AnonymousPgcError::InvalidPaymentProofShape)?;
+    let sender_elements = anonymity_set_size
+        .checked_mul(5)
+        .ok_or(AnonymousPgcError::InvalidPaymentProofShape)?;
+    let max_total_elements = outer_elements
+        .checked_add(selection_elements)
+        .and_then(|total| total.checked_add(sender_elements))
+        .ok_or(AnonymousPgcError::InvalidPaymentProofShape)?;
+    Ok(norito::DecodeLimits::new(
+        max_sequence_elements,
+        payload_len,
+        max_total_elements,
+        MAX_PGC_PAYMENT_PROOF_BYTES_V1.saturating_mul(4),
+        32,
+    ))
+}
+
 /// Canonical well-formedness proof for one transfer ciphertext.
 #[derive(
     Clone,
@@ -239,9 +291,9 @@ pub struct PgcBalanceConservationProofV1 {
 )]
 #[norito(decode_from_slice)]
 pub struct PgcUnsignedRangeProofV1 {
-    bit_commitments: Vec<CompressedPointV1>,
-    branch_challenges: Vec<CanonicalScalarV1>,
-    branch_responses: Vec<CanonicalScalarV1>,
+    bit_commitments: [CompressedPointV1; RANGE_BITS],
+    branch_challenges: [CanonicalScalarV1; RANGE_BITS * 2],
+    branch_responses: [CanonicalScalarV1; RANGE_BITS * 2],
 }
 
 /// Proof that the hidden value in a Pedersen commitment is nonzero.
@@ -380,8 +432,11 @@ impl AnonymousPgcPaymentProofV1 {
                 max: MAX_PGC_PAYMENT_PROOF_BYTES_V1,
             });
         }
-        let proof = norito::codec::decode_exact_from_slice::<Self>(bytes)
-            .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
+        let proof = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+            bytes,
+            payment_proof_decode_limits(statement, bytes.len())?,
+        )
+        .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
         if proof.encode().as_slice() != bytes {
             return Err(AnonymousPgcError::InvalidNoritoEncoding);
         }
@@ -450,12 +505,6 @@ impl PgcBalanceConservationProofV1 {
 
 impl PgcUnsignedRangeProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
-        if self.bit_commitments.len() != RANGE_BITS
-            || self.branch_challenges.len() != RANGE_BITS * 2
-            || self.branch_responses.len() != RANGE_BITS * 2
-        {
-            return Err(AnonymousPgcError::InvalidPaymentRangeProofShape);
-        }
         for point in &self.bit_commitments {
             let _ = point.to_projective()?;
         }
@@ -985,15 +1034,21 @@ where
                 real_masks[bit] + challenges[bit * 2 + selected] * bit_blindings[bit];
         }
         let proof = PgcUnsignedRangeProofV1 {
-            bit_commitments,
+            bit_commitments: bit_commitments
+                .try_into()
+                .map_err(|_| AnonymousPgcError::InvalidPaymentRangeProofShape)?,
             branch_challenges: challenges
                 .into_iter()
                 .map(CanonicalScalarV1::from_scalar)
-                .collect(),
+                .collect::<Vec<_>>()
+                .try_into()
+                .map_err(|_| AnonymousPgcError::InvalidPaymentRangeProofShape)?,
             branch_responses: responses
                 .into_iter()
                 .map(CanonicalScalarV1::from_scalar)
-                .collect(),
+                .collect::<Vec<_>>()
+                .try_into()
+                .map_err(|_| AnonymousPgcError::InvalidPaymentRangeProofShape)?,
         };
         proof.validate()?;
         return Ok(proof);
@@ -2126,6 +2181,7 @@ where
     super::validate_binding(&statement.transcript_binding)?;
     let (recipient_indices, decoy_indices, post_balance) =
         validate_payment_witness(statement, witness)?;
+    let mut checked_rng = health_checked_p256_rng_v1(rng)?;
     let mut well_formed = Vec::with_capacity(statement.anonymity_set_size());
     for index in 0..statement.anonymity_set_size() {
         well_formed.push(prove_well_formed(
@@ -2133,7 +2189,7 @@ where
             index,
             payment_value_scalar(witness.transfer_values[index])?,
             witness.transfer_randomness[index].expose_scalar(),
-            rng,
+            &mut checked_rng,
         )?);
     }
     let aggregate_randomness = sum_scalars(
@@ -2142,7 +2198,8 @@ where
             .iter()
             .map(SecretScalarV1::expose_scalar),
     );
-    let balance_conservation = prove_balance_conservation(statement, aggregate_randomness, rng)?;
+    let balance_conservation =
+        prove_balance_conservation(statement, aggregate_randomness, &mut checked_rng)?;
 
     let mut recipients = Vec::with_capacity(recipient_indices.len());
     let mut recipient_blindings = Vec::with_capacity(recipient_indices.len());
@@ -2155,7 +2212,7 @@ where
             index,
             value,
             witness.transfer_randomness[index].expose_scalar(),
-            rng,
+            &mut checked_rng,
         )?;
         recipients.push(proof);
         recipient_blindings.push(index_blinding);
@@ -2170,7 +2227,7 @@ where
         &recipient_index_commitments,
         &recipient_indices,
         &recipient_blindings,
-        rng,
+        &mut checked_rng,
     )?;
 
     let mut decoys = Vec::with_capacity(decoy_indices.len());
@@ -2181,7 +2238,7 @@ where
             u32::try_from(ordinal).map_err(|_| AnonymousPgcError::InvalidPaymentProofShape)?,
             index,
             witness.transfer_randomness[index].expose_scalar(),
-            rng,
+            &mut checked_rng,
         )?;
         decoys.push(proof);
         decoy_blindings.push(index_blinding);
@@ -2196,7 +2253,7 @@ where
         &decoy_index_commitments,
         &decoy_indices,
         &decoy_blindings,
-        rng,
+        &mut checked_rng,
     )?;
 
     let sender_value = witness.transfer_values[witness.sender_index];
@@ -2209,7 +2266,7 @@ where
         witness.transfer_randomness[witness.sender_index].expose_scalar(),
         sender_magnitude,
         post_balance,
-        rng,
+        &mut checked_rng,
     )?;
 
     let proof = AnonymousPgcPaymentProofV1 {
@@ -2230,6 +2287,7 @@ where
             max: MAX_PGC_PAYMENT_PROOF_BYTES_V1,
         });
     }
+    verify_payment(statement, &proof).map_err(|_| AnonymousPgcError::ProverSelfCheckFailed)?;
     Ok(proof)
 }
 
@@ -2362,6 +2420,33 @@ mod tests {
     }
 
     impl CryptoRng for KatRng {}
+
+    struct PartialFailureRng;
+
+    impl RngCore for PartialFailureRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("PGC payment must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("PGC payment must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("PGC payment must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            for (index, byte) in destination.iter_mut().take(19).enumerate() {
+                *byte = index as u8;
+            }
+            Err(RngError::new(
+                "injected partial Anonymous-PGC payment entropy failure",
+            ))
+        }
+    }
+
+    impl CryptoRng for PartialFailureRng {}
 
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
@@ -2763,6 +2848,21 @@ mod tests {
     }
 
     #[test]
+    fn complete_payment_rejects_partial_entropy_failure_before_proof_emission() {
+        let fixture = Fixture::new();
+        assert!(matches!(
+            prove_payment(
+                &fixture.statement(),
+                &fixture.witness(),
+                &mut PartialFailureRng,
+            ),
+            Err(AnonymousPgcError::P256(
+                P256EngineError::RandomnessUnavailable
+            ))
+        ));
+    }
+
+    #[test]
     fn mutating_each_proof_family_is_rejected() {
         let fixture = Fixture::new();
         let statement = fixture.statement();
@@ -2994,6 +3094,28 @@ mod tests {
             AnonymousPgcPaymentProofV1::decode_exact(&unknown.encode(), &statement),
             Err(AnonymousPgcError::UnsupportedPaymentProofVersion { .. })
         ));
+
+        let mut oversized_count = proof.clone();
+        oversized_count
+            .decoy_distinctness
+            .push(oversized_count.decoy_distinctness[0]);
+        let oversized = oversized_count.encode();
+        assert!(matches!(
+            AnonymousPgcPaymentProofV1::decode_exact(&oversized, &statement),
+            Err(AnonymousPgcError::InvalidNoritoEncoding)
+        ));
+        let encoded_count = 79_u64.to_le_bytes();
+        let count_offset = oversized
+            .windows(encoded_count.len())
+            .position(|window| window == encoded_count)
+            .expect("oversized decoy-pair count is present in canonical wire");
+        let mut forged = oversized;
+        forged[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            AnonymousPgcPaymentProofV1::decode_exact(&forged, &statement),
+            Err(AnonymousPgcError::InvalidNoritoEncoding)
+        ));
+
         let mut wrong_shape = proof;
         wrong_shape.recipients.pop();
         assert!(matches!(

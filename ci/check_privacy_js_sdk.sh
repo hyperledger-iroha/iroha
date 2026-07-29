@@ -3,6 +3,38 @@ set -euo pipefail
 
 ROOT_DIR="${PRIVACY_JS_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
+PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The JavaScript checks do not invoke Cargo, but they share the privacy SDK
+# guard boundary. Preserve a developer's workspace lock when one exists and,
+# on a clean checkout, fail if any test creates the ignored root Cargo.lock.
+# shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
+source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
+WORKSPACE_CARGO_LOCKFILE="${ROOT_DIR}/Cargo.lock"
+WORKSPACE_CARGO_LOCK_STATE="$(
+  privacy_sdk_capture_optional_file_state \
+    "${WORKSPACE_CARGO_LOCKFILE}" \
+    "workspace Cargo.lock" \
+    "${PYTHON_BIN}"
+)"
+
+cleanup_privacy_js_sdk_lock_state() {
+  local status=$?
+  trap - EXIT HUP INT TERM
+  if ! privacy_sdk_assert_optional_file_state \
+    "${WORKSPACE_CARGO_LOCKFILE}" \
+    "${WORKSPACE_CARGO_LOCK_STATE}" \
+    "workspace Cargo.lock" \
+    "${PYTHON_BIN}"; then
+    status=1
+  fi
+  exit "${status}"
+}
+trap cleanup_privacy_js_sdk_lock_state EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 node_candidate_path() {
   local candidate="$1"

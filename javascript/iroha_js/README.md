@@ -170,35 +170,23 @@ boundaries.
 
 ## Native Privacy Bridge
 
-The privacy native surface is intentionally exposed as a generic raw Norito
-archive bridge: `isPrivacyNativeAvailable()`, `privacyCapabilitiesV1()`,
-`privacyBuildProofV1(requestArchive)`, and
-`privacyVerifyProofV1(requestArchive)`. The JS SDK does not expose
-algorithm-specific production proof builders while the privacy rows remain
-gated. Native availability requires native bridge ABI 6 or later plus successful
-`capabilities`, `build`, and `verify` probes whose operation-specific result
-schema bytes match the called entry point.
+The first-release native surface is capability-only:
+`isPrivacyNativeAvailable()` and `privacyCapabilitiesV1()`. The latter returns
+the canonical Norito `PrivacyCapabilitySnapshotV1` archive. The generic
+request/build/verify dispatcher and its free-form algorithm aliases do not
+exist; proving is exposed only by protocol-specific typed APIs.
 
-All privacy request and response payloads must stay as raw Norito archives.
-JavaScript validates archive magic, length, CRC, the 64 MiB native size cap, and
-the operation-specific result schema before returning bytes to callers.
-`getPrivacyCapabilities()` reports `privacy-production-gate-v1`, keeps
-`productionReady = false`, and remains fail-closed with missing production
-gates and no audit references until real proving, verification, chain
-admission, witness privacy checks, deterministic testing, negative/adversarial
-testing, replay/nullifier rejection testing, parser/verifier fuzzing,
-performance gates, and external audit signoff are complete.
-
-JavaScript also exposes the deterministic privacy FFI status/error-code contract
-for diagnostics and cross-language parity:
-`PRIVACY_FFI_STATUS_ERROR`, `PRIVACY_FFI_ERROR_NULL_POINTER`,
-`PRIVACY_FFI_ERROR_MALFORMED_NORITO`,
-`PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM`,
-`PRIVACY_FFI_ERROR_PRODUCTION_DISABLED`, and
-`PRIVACY_FFI_ERROR_INVALID_REQUEST`. The stable wire values are
-`status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
-`unsupported_algorithm = 3`, `production_disabled = 4`, and
-`invalid_request = 5`; treat them as sanitized status metadata, not proof success.
+`PRIVACY_PROTOCOL_IDS_V1` is the closed registry of exactly twelve identities,
+in wire order: `zk-ace-pq-authorization-v0`,
+`anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
+`iroha-zk-x509-stark-p256-v0`,
+`iroha-jindo-polynomial-commitment-v0`,
+`iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
+`monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
+`pq-masp-stark-v0`. Capability JSON parsing requires the exact version,
+fields, row count, and ordering. Unknown fields, aliases, duplicates,
+case-folded labels, and whitespace-normalized labels fail closed.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)

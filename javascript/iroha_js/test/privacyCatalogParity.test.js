@@ -1,8 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import * as sourceApi from "../src/index.js";
 import * as distApi from "../dist/index.js";
+import * as sourcePrivacyApi from "../src/privacyCapabilities.js";
+import * as distPrivacyApi from "../dist/privacyCapabilities.js";
 import {
   PRIVACY_PROTOCOL_IDS_V1 as SOURCE_IDS,
   PrivacyCapabilitySnapshotError as SourceSnapshotError,
@@ -14,19 +18,25 @@ import {
   parsePrivacyCapabilitySnapshotV1 as parseDistSnapshot,
 } from "../dist/privacyCapabilities.js";
 
-const EXPECTED_PROTOCOL_IDS = Object.freeze([
-  "zk-ace-pq-authorization-v0",
-  "anonymous-pgc-k-out-of-n-v1",
-  "verange-transparent-range-v1",
-  "iroha-zk-ams-v1",
-  "vega-existing-credential-zk-v0",
-  "iroha-zk-x509-stark-p256-v0",
-  "iroha-jindo-polynomial-commitment-v0",
-  "iroha-bootle-lantern-anoncred-v1",
-  "orchard-halo2-actions-v1",
-  "monero-fcmp-plus-plus-v1",
-  "iroha-ivm-private-note-stark-v1",
-  "pq-masp-stark-v0",
+const MATRIX_TEXT = readFileSync(
+  new URL("../../../fixtures/privacy/exact12_v1.tsv", import.meta.url),
+  "utf8",
+);
+const MATRIX_ROWS = MATRIX_TEXT
+  .split("\n")
+  .filter((line) => line.length > 0 && !line.startsWith("#"))
+  .map((line) => line.split("\t"));
+const rows = (kind) => MATRIX_ROWS.filter((row) => row[0] === kind);
+const PROTOCOL_ROWS = Object.freeze(rows("protocol"));
+const TYPED_ENVELOPE_ROWS = Object.freeze(rows("typed-envelope"));
+const RETIRED_PROTOCOL_IDS = Object.freeze(rows("retired").map((row) => row[1]));
+const EXPECTED_PROTOCOL_IDS = Object.freeze(PROTOCOL_ROWS.map((row) => row[2]));
+const MATRIX_ROW_KINDS = Object.freeze([
+  "matrix-version",
+  "registry-sha256",
+  "protocol",
+  "typed-envelope",
+  "retired",
 ]);
 
 const RETIRED_EXPORTS = Object.freeze([
@@ -36,10 +46,22 @@ const RETIRED_EXPORTS = Object.freeze([
   "getPrivacyCriteria",
   "validatePrivacyAlgorithmDescriptor",
   "buildPrivacyProofEnvelope",
+  "noritoEncodePrivacyProofEnvelope",
+  "noritoDecodePrivacyProofEnvelope",
+  "buildRegisterPrivacyVerifierKeyInstruction",
+  "buildRetirePrivacyVerifierKeyInstruction",
   "buildZkAtPolicyProofV1",
   "buildZkAtDevProofFixture",
+  "buildZkAmsAdmissionBatchProofV0",
+  "buildZkAmsAdmissionDevProofFixture",
+  "buildVegaCredentialPredicateProofV0",
+  "buildVegaCredentialDevProofFixture",
   "buildSilentThresholdCredentialShowingProofV0",
   "buildSilentThresholdCredentialDevProofFixture",
+  "buildZkX509IdentityProofV0",
+  "buildZkX509IdentityDevProofFixture",
+  "buildJindoLatticeProofV0",
+  "buildJindoLatticeDevProofFixture",
   "buildSisHintsAnonymousCredentialProofV0",
   "buildSisHintsCredentialDevProofFixture",
   "buildPenumbraSpendProofV1",
@@ -56,10 +78,10 @@ function snapshot() {
       current_limits: {
         max_actions_per_transaction: 1,
         max_actions_per_block: 2,
-        max_proof_bytes_per_action: 8 * 1024 * 1024,
-        max_action_bytes: 8 * 1024 * 1024,
-        max_privacy_bytes_per_transaction: 8 * 1024 * 1024,
-        max_privacy_bytes_per_block: 16 * 1024 * 1024,
+        max_proof_bytes_per_action: 9 * 1024 * 1024,
+        max_action_bytes: 9 * 1024 * 1024,
+        max_privacy_bytes_per_transaction: 9 * 1024 * 1024,
+        max_privacy_bytes_per_block: 18 * 1024 * 1024,
         max_statement_and_encrypted_output_bytes_per_transaction: 256 * 1024,
         max_nullifiers_per_action: 8,
         max_commitments_per_action: 8,
@@ -85,21 +107,64 @@ test("source and checked dist expose exactly the canonical 12 protocol ids", () 
   assert.equal(new Set(DIST_IDS).size, 12);
 });
 
+test("the shared exact12 matrix binds order, routes, typed envelopes, and retired ids", () => {
+  assert.equal(MATRIX_TEXT.endsWith("\n"), true);
+  assert.equal(MATRIX_TEXT.includes("\r"), false);
+  assert.equal(MATRIX_TEXT.slice(0, -1).split("\n").every(Boolean), true);
+  assert.equal(
+    MATRIX_ROWS.every((row) => MATRIX_ROW_KINDS.includes(row[0])),
+    true,
+  );
+  assert.deepEqual(rows("matrix-version"), [["matrix-version", "1"]]);
+  assert.equal(PROTOCOL_ROWS.length, 12);
+  assert.deepEqual(
+    PROTOCOL_ROWS.map((row) => row[1]),
+    Array.from({ length: 12 }, (_, index) => String(index)),
+  );
+  assert.equal(new Set(EXPECTED_PROTOCOL_IDS).size, 12);
+  const registryDigest = createHash("sha256")
+    .update(EXPECTED_PROTOCOL_IDS.map((value) => `${value}\n`).join(""))
+    .digest("hex");
+  assert.deepEqual(rows("registry-sha256"), [["registry-sha256", registryDigest]]);
+  assert.deepEqual(
+    TYPED_ENVELOPE_ROWS.map((row) => row.slice(1, 4)),
+    PROTOCOL_ROWS.map((row) => row.slice(2, 5)),
+  );
+  assert.equal(TYPED_ENVELOPE_ROWS.length, 12);
+  for (const row of TYPED_ENVELOPE_ROWS) {
+    assert.equal(row.length, 6);
+    for (const digest of row.slice(4)) {
+      assert.match(digest, /^[0-9a-f]{64}$/u);
+      assert.notEqual(digest, "0".repeat(64));
+    }
+  }
+  assert.equal(new Set(RETIRED_PROTOCOL_IDS).size, RETIRED_PROTOCOL_IDS.length);
+  assert.equal(
+    RETIRED_PROTOCOL_IDS.every((value) => !EXPECTED_PROTOCOL_IDS.includes(value)),
+    true,
+  );
+});
+
 test("source and checked dist parse the same closed capability snapshot", () => {
   assert.deepEqual(parseSourceSnapshot(snapshot()), parseDistSnapshot(snapshot()));
 });
 
 test("aliases, unknown protocol ids, and unknown fields fail closed in both builds", () => {
+  const hostileProtocolIds = [
+    "",
+    "unknown-privacy-protocol-v1",
+    ...RETIRED_PROTOCOL_IDS,
+    "ZK-ACE-PQ-AUTHORIZATION-V0",
+    " zk-ace-pq-authorization-v0",
+    "zk-ace-pq-authorization-v0 ",
+    "zk-ace‑pq-authorization-v0",
+    "zk-аce-pq-authorization-v0",
+    "zk-ace-pq-authorization-v0\u0000",
+  ];
   const hostileCases = [
-    (value) => {
-      value.protocols[3].protocol_id.protocol = "zk-ams-recursive-admission-v0";
-    },
-    (value) => {
-      value.protocols[5].protocol_id.protocol = "zk-x509-onchain-identity-v0";
-    },
-    (value) => {
-      value.protocols[0].protocol_id.protocol = "ZK-ACE";
-    },
+    ...hostileProtocolIds.map((protocol) => (value) => {
+      value.protocols[0].protocol_id.protocol = protocol;
+    }),
     (value) => {
       value.protocols[0].unexpected = true;
     },
@@ -121,5 +186,38 @@ test("retired catalog and research-builder exports are absent", () => {
   for (const name of RETIRED_EXPORTS) {
     assert.equal(Object.hasOwn(sourceApi, name), false, `source export ${name}`);
     assert.equal(Object.hasOwn(distApi, name), false, `dist export ${name}`);
+  }
+});
+
+test("privacy capability policy is available only from the optional subpath", () => {
+  const expectedOptionalExports = [
+    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+    "PRIVACY_PROTOCOL_IDS_V1",
+    "PrivacyCapabilitySnapshotError",
+    "getPrivacyCapabilitiesV1",
+    "parsePrivacyCapabilitySnapshotV1",
+  ];
+  for (const [label, rootApi] of [
+    ["source root", sourceApi],
+    ["dist root", distApi],
+  ]) {
+    for (const name of [
+      "getPrivacyCapabilitiesV1",
+      "parsePrivacyCapabilitySnapshotV1",
+      "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+      "PRIVACY_PROTOCOL_IDS_V1",
+      "PrivacyCapabilitySnapshotError",
+    ]) {
+      assert.equal(Object.hasOwn(rootApi, name), false, `${label} export ${name}`);
+    }
+  }
+  for (const [label, privacyApi] of [
+    ["source optional API", sourcePrivacyApi],
+    ["dist optional API", distPrivacyApi],
+  ]) {
+    assert.deepEqual(Object.keys(privacyApi).sort(), expectedOptionalExports, label);
+    for (const name of expectedOptionalExports) {
+      assert.notEqual(privacyApi[name], undefined, `${label} export ${name}`);
+    }
   }
 });

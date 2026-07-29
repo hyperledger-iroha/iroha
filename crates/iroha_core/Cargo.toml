@@ -90,6 +90,10 @@ kaigi_privacy_mocks = []
 zk-halo2 = ["dep:kaigi_zk"]
 zk-groth16 = []
 zk-stark = []
+# Non-shipping native privacy release evidence. This is deliberately not a
+# default feature and is forwarded only by `iroha_test_network`; `irohad`
+# cannot enable deterministic fixture constructors or the evidence API.
+privacy-release-evidence = ["zk-stark", "json", "iroha_data_model/test-fixtures"]
 # Transparent Halo2 (IPA over Pasta). Default-on.
 zk-halo2-ipa = ["zk-ipa-native"]
 # Native IPA polynomial-opening verifier (no external halo2 libs). Default-on.
@@ -182,8 +186,10 @@ sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 settlement_router = { path = "../settlement_router" }
 iroha_sccp = { path = "../iroha_sccp" }
 tracing = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+soranet_pq = { workspace = true }
+chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core", "zeroize"] }
 rayon = { workspace = true }
 base64 = { workspace = true }
 rust_decimal = { workspace = true }
@@ -226,7 +232,7 @@ blake2 = { workspace = true }
 iroha_file_mmap = { path = "../iroha_file_mmap" }
 ciborium = { version = "0.2.2", default-features = false, features = ["std"] }
 x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve"] }
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve", "expose-field"] }
 der-parser = "10.0.0"
 signature = { version = "2.2.0", default-features = false, features = ["std"] }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }

@@ -7,5 +7,7 @@ mod concurrency;
 mod extra_functional;
 #[path = "observer_sync.rs"]
 mod observer_sync;
+#[path = "privacy_exact12_jindo_network.rs"]
+mod privacy_exact12_jindo_network;
 #[path = "sccp_route_governance.rs"]
 mod sccp_route_governance;

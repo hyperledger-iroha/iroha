@@ -95,12 +95,12 @@ Notes
   and returns a compiler-owned `Option<View>` handle. `CORE_QUERY_PAGE`
   (`0x010002`) accepts the same tag with `offset >= 0` and `limit` in `1..=64`,
   and returns `List<View, 64>` plus `Option<int>` continuation handles. The
-  host orders canonical IDs, performs one ledger query, encodes only the exact
-  projection once with Norito, and the guest decodes it once. The precise view
-  and `QueryPage<T>` field layouts are normative in
-  `docs/source/kotodama_grammar.md`; those layouts and stable entity tags are
-  bound into the ABI hash. Query families outside these five remain explicit
-  `NoritoBytes` specialist APIs.
+  host orders canonical IDs, performs one ledger query, decodes its canonical
+  Norito response exactly once, and materializes only the requested projection
+  into guest handles. The precise view and `QueryPage<T>` field layouts are
+  normative in `docs/source/kotodama_grammar.md`; those layouts and stable
+  entity tags are bound into the ABI hash. Query families outside these five
+  remain explicit `NoritoBytes` specialist APIs.
 - Exact gas constants (`G_*`) are defined by the active gas schedule; see `ivm.md`.
 
 Errors

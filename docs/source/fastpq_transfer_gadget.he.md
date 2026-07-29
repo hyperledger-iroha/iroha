@@ -2,7 +2,7 @@
 lang: he
 direction: rtl
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T10:01:27.059307+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount` (גאדג'ט טווח עם פירוק RNS משותף).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - ארוז בשער מותאם אישית כך שכל שלוש המשוואות צורכות קבוצת שורה אחת.2. **בלום מחויבות פוסידון**
+   - ארוז בשער מותאם אישית כך שכל שלוש המשוואות צורכות קבוצת שורה אחת.
+
+2. **בלום מחויבות פוסידון**
    - מחשב מחדש את `poseidon_preimage_digest` באמצעות טבלת החיפוש המשותפת של Poseidon שכבר נעשה בה שימוש בגאדג'טים אחרים. אין סיבובי פוסידון לכל העברה.
 
 3. **Merkle Path Block**
@@ -96,7 +98,9 @@ struct TransferDeltaTranscript {
 5. **לולאה אצווה**
    - תוכניות קוראים `transfer_v1_batch_begin()` לפני לולאה של בוני `transfer_asset` ו-`transfer_v1_batch_end()` לאחר מכן. בעוד ה-scope פעיל, המארח מאחסן כל העברה ומפעיל אותם מחדש כ-`TransferAssetBatch` יחיד, תוך שימוש חוזר בהקשר של Poseidon/SMT פעם אחת בכל אצווה. כל דלתא נוספת מוסיפה רק את החשבון ושני המחאות עלים. מפענח התמלול מקבל כעת קבוצות מרובות דלתא ומציג אותן כ-`TransferGadgetInput::deltas` כך שהמתכנן יכול לקפל עדים מבלי לקרוא מחדש את Norito. חוזים שכבר יש להם מטען Norito בהישג יד (למשל, CLI/SDKs) יכולים לדלג על ההיקף לחלוטין על ידי קריאה ל-`transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`, אשר מוסרת למארח אצווה מקודדת במלואה ב-syscall אחת.
 
-# שינויים במארחים ומספקים| שכבה | שינויים |
+# שינויים במארחים ומספקים
+
+| שכבה | שינויים |
 |-------|--------|
 | `ivm::syscalls` | הוסף `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) כך שתוכניות יוכלו לכלול מספר שיחות `transfer_v1` מבלי לפלוט Kotodama ביניים, פלוס Kotodama. (`0x2B`) עבור אצוות מקודדות מראש. |
 | `ivm::host` ובדיקות | מארחי ליבה/ברירת מחדל מתייחסים ל-`transfer_v1` כתוספת אצווה בזמן שה-scope פעיל, משטחים `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, ומארח ה-WSV המדומה מאחסן ערכים לפני ביצוע כך שמבחני רגרסיה יכולים לקבוע איזון דטרמיניסטי עדכונים.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```ה-JSON הנפלט משקף את חפצי האצווה של FASTPQ ש-`iroha_cli audit witness` פולט כעת כברירת מחדל (עבר את `--no-fastpq-batches` כדי לדכא אותם), כך ש-`scripts/fastpq/check_row_usage.py` ושער ה-CI יכולים להבדיל בין הריצות הסינתטיות לשינויים תקפים של תכניות תוכנית תקפות.
+```
+
+ה-JSON הנפלט משקף את חפצי האצווה של FASTPQ ש-`iroha_cli audit witness` פולט כעת כברירת מחדל (עבר את `--no-fastpq-batches` כדי לדכא אותם), כך ש-`scripts/fastpq/check_row_usage.py` ושער ה-CI יכולים להבדיל בין הריצות הסינתטיות לשינויים תקפים של תכניות תוכנית תקפות.
 
 # תוכנית השקה
 

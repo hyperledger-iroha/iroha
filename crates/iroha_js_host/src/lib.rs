@@ -147,7 +147,11 @@ use iroha_data_model::{
     parameter::{CustomParameter, Parameter},
     peer::{Peer, PeerId},
     permission::Permission,
-    privacy::{PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1},
+    privacy::{
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
+        PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1,
+        validate_privacy_capability_archive_v1,
+    },
     proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId},
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
@@ -288,7 +292,7 @@ const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 /// a stale native module happens to expose similarly named privacy functions.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
-    21
+    PRIVACY_BRIDGE_ABI_VERSION_V1
 }
 
 fn validation_fee_fixed_hash(value: &Uint8Array, label: &str) -> napi::Result<[u8; 32]> {
@@ -2423,7 +2427,7 @@ pub struct JsTouchManifest {
     pub manifest_json: String,
 }
 
-/// Canonicalise a touch manifest by sorting and deduplicating keys.
+/// Canonicalise a touch manifest by trimming keys, dropping blanks, then sorting and deduplicating.
 #[napi]
 pub fn axt_touch_manifest(read: Vec<String>, write: Vec<String>) -> napi::Result<JsTouchManifest> {
     ensure_packed_struct_disabled();
@@ -2518,8 +2522,17 @@ pub fn axt_build_descriptor(
 #[napi]
 pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
     ensure_packed_struct_disabled();
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let descriptor: AxtDescriptor = decode_from_bytes(descriptor_bytes.as_ref())
         .map_err(|err| norito_to_napi(format!("{err}")))?;
+    let canonical = norito::to_bytes(&descriptor).map_err(norito_to_napi)?;
+    if canonical.as_slice() != descriptor_bytes.as_ref() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "AXT descriptor bytes must use the canonical Norito V1 layout",
+        ));
+    }
     validate_descriptor(&descriptor).map_err(|err| norito_to_napi(format!("{err}")))?;
     let binding_bytes = compute_descriptor_binding(&descriptor).map_err(norito_to_napi)?;
     Ok(Buffer::from(binding_bytes.to_vec()))
@@ -12156,28 +12169,6 @@ pub fn sign_transaction(bytes: Uint8Array, secret: Uint8Array) -> napi::Result<B
     Ok(Buffer::from(Encode::encode(&signed)))
 }
 
-const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
-const PRIVACY_NORITO_SCHEMA_START: usize = 6;
-const PRIVACY_NORITO_SCHEMA_END: usize = 22;
-const PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE: u8 = 0x50;
-
-#[cfg(test)]
-fn privacy_patch_archive_schema_hash(bytes: &mut [u8], schema_hash: [u8; 16]) -> bool {
-    let Some(schema) = bytes.get_mut(PRIVACY_NORITO_SCHEMA_START..PRIVACY_NORITO_SCHEMA_END) else {
-        return false;
-    };
-    schema.copy_from_slice(&schema_hash);
-    true
-}
-
-fn privacy_patch_archive_repeated_schema_byte(bytes: &mut [u8], schema_byte: u8) -> bool {
-    let Some(schema) = bytes.get_mut(PRIVACY_NORITO_SCHEMA_START..PRIVACY_NORITO_SCHEMA_END) else {
-        return false;
-    };
-    schema.fill(schema_byte);
-    true
-}
-
 fn privacy_capabilities() -> PrivacyCapabilitySnapshotV1 {
     let snapshot = committed_privacy_capability_snapshot_v1(
         0,
@@ -12196,26 +12187,30 @@ fn privacy_capabilities() -> PrivacyCapabilitySnapshotV1 {
     snapshot
 }
 
-fn encode_privacy_archive<T>(value: &T, context: &str, schema_byte: u8) -> napi::Result<Buffer>
-where
-    T: norito::NoritoSerialize,
-{
-    let mut bytes = norito::to_bytes(value).map_err(|err| {
+fn encode_privacy_archive(
+    value: &PrivacyCapabilitySnapshotV1,
+    context: &str,
+) -> napi::Result<Buffer> {
+    let mut bytes = norito::encode_canonical(value).map_err(|err| {
         napi::Error::new(napi::Status::GenericFailure, format!("{context}: {err}"))
     })?;
-    if !privacy_patch_archive_repeated_schema_byte(&mut bytes, schema_byte) {
-        bytes.fill(0);
-        return Err(napi::Error::new(
-            napi::Status::GenericFailure,
-            format!("{context}: encoded privacy archive is missing a Norito schema slot"),
-        ));
-    }
-    if bytes.len() > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES {
+    if bytes.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
         bytes.fill(0);
         return Err(napi::Error::new(
             napi::Status::GenericFailure,
             format!(
-                "{context}: encoded privacy archive exceeds {PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes"
+                "{context}: encoded privacy archive exceeds {PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1} bytes"
+            ),
+        ));
+    }
+    let status = validate_privacy_capability_archive_v1(&bytes);
+    if !status.is_valid() {
+        bytes.fill(0);
+        return Err(napi::Error::new(
+            napi::Status::GenericFailure,
+            format!(
+                "{context}: native archive validation failed with status {}",
+                status.code()
             ),
         ));
     }
@@ -12225,11 +12220,13 @@ where
 #[napi]
 /// Return the canonical typed Norito V1 privacy capability snapshot.
 pub fn privacy_capabilities_v1() -> napi::Result<Buffer> {
-    encode_privacy_archive(
-        &privacy_capabilities(),
-        "encode privacy capabilities",
-        PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
-    )
+    encode_privacy_archive(&privacy_capabilities(), "encode privacy capabilities")
+}
+
+#[napi]
+/// Validate an untrusted canonical typed Norito V1 privacy capability snapshot.
+pub fn privacy_validate_capabilities_v1(archive: Uint8Array) -> i32 {
+    validate_privacy_capability_archive_v1(archive.as_ref()).code()
 }
 
 /// Result of signing a transaction via the native helper.
@@ -13774,6 +13771,87 @@ pub fn build_precommit_trigger_action(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn axt_touch_manifest_trims_drops_and_orders_unicode_paths() {
+        let bmp_private_use = "\u{e000}/bmp-private-use";
+        let astral = "\u{10000}/astral";
+        let manifest = axt_touch_manifest(
+            vec![
+                String::new(),
+                " \t\n".to_owned(),
+                "\u{85}".to_owned(),
+                "\u{3000}".to_owned(),
+                format!(" {astral} "),
+                bmp_private_use.to_owned(),
+                astral.to_owned(),
+            ],
+            vec!["\u{2003}write/path\u{202f}".to_owned(), "\r\n".to_owned()],
+        )
+        .expect("canonical touch manifest");
+        let decoded: TouchManifest =
+            json::from_json(&manifest.manifest_json).expect("decode touch manifest JSON");
+
+        assert_eq!(
+            decoded.read,
+            vec![bmp_private_use.to_owned(), astral.to_owned()]
+        );
+        assert_eq!(decoded.write, vec!["write/path".to_owned()]);
+    }
+
+    #[test]
+    fn axt_compute_binding_rejects_alternate_norito_layout() {
+        let descriptor = AxtDescriptorBuilder::new()
+            .dataspace(DataSpaceId::new(7))
+            .touch(
+                DataSpaceId::new(7),
+                ["read/path".to_owned()],
+                ["write/path".to_owned()],
+            )
+            .build()
+            .expect("valid AXT descriptor");
+        let canonical = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::to_bytes(&descriptor).expect("encode canonical descriptor")
+        };
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&descriptor).expect("encode alternate-layout descriptor")
+        };
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            decode_from_bytes::<AxtDescriptor>(&alternate)
+                .expect("ordinary Norito accepts its advertised layout"),
+            descriptor
+        );
+
+        let canonical_binding =
+            axt_compute_binding(Buffer::from(canonical.clone())).expect("canonical descriptor");
+        let error = match axt_compute_binding(Buffer::from(alternate)) {
+            Ok(_) => panic!("alternate Norito layout must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert!(error.reason.contains("canonical Norito V1 layout"));
+
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before = norito::to_bytes(&descriptor).expect("encode ambient descriptor");
+        let ambient_binding = axt_compute_binding(Buffer::from(canonical))
+            .expect("canonical descriptor under alternate ambient flags");
+        assert_eq!(
+            ambient_binding.to_vec(),
+            canonical_binding.to_vec(),
+            "canonical binding must be independent of ambient Norito flags"
+        );
+        assert_eq!(
+            norito::to_bytes(&descriptor).expect("encode after canonical binding"),
+            ambient_before,
+            "canonical decoding must restore the caller's ambient layout"
+        );
+    }
+
+    #[test]
     fn validation_fee_hash_roles_distinguish_raw_digests_from_iroha_hashes() {
         let hash = Uint8Array::from(vec![0x02; 32]);
         assert_eq!(
@@ -14875,17 +14953,24 @@ seiyaku Privacy {
 
     #[test]
     fn privacy_capability_napi_archive_round_trips_the_typed_snapshot() {
-        let mut bytes = privacy_capabilities_v1()
+        let bytes = privacy_capabilities_v1()
             .expect("encode N-API privacy snapshot")
             .to_vec();
-        assert!(privacy_patch_archive_schema_hash(
-            &mut bytes,
-            <PrivacyCapabilitySnapshotV1 as norito::NoritoSerialize>::schema_hash(),
-        ));
+        assert_eq!(
+            privacy_validate_capabilities_v1(Uint8Array::from(bytes.clone())),
+            iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+        );
         let snapshot: PrivacyCapabilitySnapshotV1 =
             norito::decode_from_bytes(&bytes).expect("decode N-API privacy snapshot");
         snapshot.validate().expect("N-API capability snapshot");
         assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);
+
+        let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("encode one-byte fake");
+        one_byte_fake[6..22].copy_from_slice(&bytes[6..22]);
+        assert_ne!(
+            privacy_validate_capabilities_v1(Uint8Array::from(one_byte_fake)),
+            iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+        );
     }
 
     fn disable_packed_struct_once() {

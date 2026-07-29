@@ -99,7 +99,13 @@ public final class ContractManifestJsonParser {
           "__kotodama_quantity_div_round",
           "__kotodama_quantity_ratio_round",
           "__kotodama_decimal_to_int_trunc",
-          "__kotodama_decimal_to_int_round");
+          "__kotodama_decimal_to_int_round",
+          "is_some",
+          "is_none",
+          "is_ok",
+          "is_err",
+          "unwrap_or",
+          "unwrap_err_or");
   private static final Set<String> RETIRED_NUMERIC_TYPE_NAMES =
       set(
           "i8",
@@ -128,7 +134,45 @@ public final class ContractManifestJsonParser {
           "money",
           "Quantity",
           "number");
+  private static final Set<String> STATE_MAP_KEY_TYPE_NAMES =
+      set(
+          "int",
+          "decimal",
+          "quantity",
+          "bool",
+          "string",
+          "bytes",
+          "DataSpaceId",
+          "AccountId",
+          "AssetDefinitionId",
+          "AssetId",
+          "NftId",
+          "DomainId",
+          "Name");
+  private static final Set<String> DYNAMIC_ACCESS_BOUND_KINDS =
+      set(
+          "range",
+          "take");
+  private static final BigInteger MAX_DYNAMIC_ACCESS_KEYS = BigInteger.valueOf(64);
   // END GENERATED: kotodama-v1-validator-policy
+  private static final Set<String> STATE_SCALAR_TYPE_NAMES =
+      set(
+          "int",
+          "decimal",
+          "quantity",
+          "bool",
+          "string",
+          "bytes",
+          "DataSpaceId",
+          "AccountId",
+          "AssetDefinitionId",
+          "AssetId",
+          "NftId",
+          "DomainId",
+          "Name",
+          "Json");
+  private static final int MAX_STATE_TYPE_DEPTH = 256;
+  private static final int MAX_STATE_TYPE_NODES = 256;
   private static final Map<String, ContractManifest.ValueKindV1> VALUE_KINDS = valueKinds();
 
   private ContractManifestJsonParser() {}
@@ -245,6 +289,7 @@ public final class ContractManifestJsonParser {
       }
       unique(names, "manifest.states");
     }
+    validateDynamicAccessHintStateMaps(accessSetHints, states);
     if (errorCodes != null) {
       final List<String> paths = new ArrayList<>();
       final List<String> codes = new ArrayList<>();
@@ -309,24 +354,107 @@ public final class ContractManifestJsonParser {
         root, set("base_key", "key_type", "bound_kind", "max_keys"), "dynamic access hint");
     final String baseKey =
         exactString(required(root, "base_key", "dynamic access hint"), "dynamic access hint.base_key");
+    final String stateName =
+        baseKey.startsWith("state:") ? baseKey.substring("state:".length()) : "";
     check(
-        baseKey.startsWith("state:") && !"state:*".equals(baseKey),
-        "dynamic access hint.base_key must be a concrete state: key");
+        baseKey.startsWith("state:") && canonicalDeclarationIdentifier(stateName),
+        "dynamic access hint.base_key must be state: followed by one canonical state declaration"
+            + " identifier");
+    final String keyType =
+        exactString(
+            required(root, "key_type", "dynamic access hint"), "dynamic access hint.key_type");
+    check(
+        STATE_MAP_KEY_TYPE_NAMES.contains(keyType),
+        "dynamic access hint.key_type must be an exact canonical StateMap key type");
+    final String boundKind =
+        exactString(
+            required(root, "bound_kind", "dynamic access hint"),
+            "dynamic access hint.bound_kind");
+    check(
+        DYNAMIC_ACCESS_BOUND_KINDS.contains(boundKind),
+        "dynamic access hint.bound_kind must be `take` or `range`");
     final long maxKeys =
         unsignedInteger(
                 required(root, "max_keys", "dynamic access hint"),
-                MAX_U32,
+                MAX_DYNAMIC_ACCESS_KEYS,
                 "dynamic access hint.max_keys")
             .longValueExact();
-    check(maxKeys > 0, "dynamic access hint.max_keys must be positive");
+    check(maxKeys > 0, "dynamic access hint.max_keys must be in 1..64");
     return new ContractManifest.DynamicAccessHint(
         baseKey,
-        exactString(
-            required(root, "key_type", "dynamic access hint"), "dynamic access hint.key_type"),
-        exactString(
-            required(root, "bound_kind", "dynamic access hint"),
-            "dynamic access hint.bound_kind"),
+        keyType,
+        boundKind,
         maxKeys);
+  }
+
+  private static void validateDynamicAccessHintStateMaps(
+      final ContractManifest.AccessSetHints accessSetHints,
+      final List<ContractManifest.StateDescriptor> states) {
+    if (accessSetHints == null) {
+      return;
+    }
+    final Map<String, String> stateMapKeyTypes = new HashMap<>();
+    if (states != null) {
+      for (final ContractManifest.StateDescriptor state : states) {
+        final String keyType = topLevelStateMapKeyType(state.typeName());
+        if (keyType != null) {
+          stateMapKeyTypes.put(state.name(), keyType);
+        }
+      }
+    }
+    validateDynamicAccessHintList(
+        "manifest.access_set_hints.dynamic_reads",
+        accessSetHints.dynamicReads(),
+        stateMapKeyTypes);
+    validateDynamicAccessHintList(
+        "manifest.access_set_hints.dynamic_writes",
+        accessSetHints.dynamicWrites(),
+        stateMapKeyTypes);
+  }
+
+  private static void validateDynamicAccessHintList(
+      final String field,
+      final List<ContractManifest.DynamicAccessHint> hints,
+      final Map<String, String> stateMapKeyTypes) {
+    final Set<List<Object>> unique = new HashSet<>();
+    for (final ContractManifest.DynamicAccessHint hint : hints) {
+      check(
+          unique.add(
+              Arrays.asList(
+                  hint.baseKey(), hint.keyType(), hint.boundKind(), hint.maxKeys())),
+          field + " must not contain duplicate hints for `" + hint.baseKey() + "`");
+      final String stateName = hint.baseKey().substring("state:".length());
+      final String expectedKeyType = stateMapKeyTypes.get(stateName);
+      check(
+          expectedKeyType != null,
+          field
+              + " hint `"
+              + hint.baseKey()
+              + "` must reference a declared top-level StateMap");
+      check(
+          hint.keyType().equals(expectedKeyType),
+          field
+              + " hint `"
+              + hint.baseKey()
+              + "` declares key_type `"
+              + hint.keyType()
+              + "` but its StateMap key type is `"
+              + expectedKeyType
+              + "`");
+    }
+  }
+
+  private static String topLevelStateMapKeyType(final String typeName) {
+    final String prefix = "StateMap<";
+    if (!typeName.startsWith(prefix)) {
+      return null;
+    }
+    final int separator = typeName.indexOf(", ", prefix.length());
+    if (separator < 0) {
+      return null;
+    }
+    final String keyType = typeName.substring(prefix.length(), separator);
+    return STATE_MAP_KEY_TYPE_NAMES.contains(keyType) ? keyType : null;
   }
 
   private static ContractManifest.EntrypointDescriptor parseEntrypoint(
@@ -400,7 +528,7 @@ public final class ContractManifestJsonParser {
     }
     check(exactArguments, "entrypoint descriptor argument schema does not exactly match params");
     final String returnType =
-        optionalExactString(root, "return_type", "entrypoint descriptor.return_type");
+        optionalTypeName(root, "return_type", "entrypoint descriptor.return_type");
     final ContractManifest.ValueTypeV1 returnSchema =
         root.containsKey("return_schema") && root.get("return_schema") != null
             ? parseValueType(object(root.get("return_schema"), "entrypoint descriptor.return_schema"))
@@ -495,8 +623,10 @@ public final class ContractManifestJsonParser {
         "entrypoint parameter.name must be a canonical Kotodama identifier");
     return new ContractManifest.EntrypointParameter(
         name,
-        exactString(
-            required(root, "type_name", "entrypoint parameter"),
+        currentTypeName(
+            exactString(
+                required(root, "type_name", "entrypoint parameter"),
+                "entrypoint parameter.type_name"),
             "entrypoint parameter.type_name"));
   }
 
@@ -1067,10 +1197,13 @@ public final class ContractManifestJsonParser {
     check(
         canonicalDeclarationIdentifier(name),
         "state descriptor.name must be a canonical Kotodama identifier");
-    return new ContractManifest.StateDescriptor(
-        name,
+    final String typeName =
         exactString(
-            required(root, "type_name", "state descriptor"), "state descriptor.type_name"));
+            required(root, "type_name", "state descriptor"), "state descriptor.type_name");
+    check(
+        new StateTypeNameParser(typeName).parse(),
+        "state descriptor.type_name must be a canonical Kotodama V1 state type");
+    return new ContractManifest.StateDescriptor(name, typeName);
   }
 
   private static ContractManifest.ErrorCodeDescriptor parseErrorCode(
@@ -1372,6 +1505,228 @@ public final class ContractManifestJsonParser {
 
   private static boolean canonicalTypeDeclarationIdentifier(final String value) {
     return canonicalDeclarationIdentifier(value) && !RETIRED_NUMERIC_TYPE_NAMES.contains(value);
+  }
+
+  private static final class StateTypeNameParser {
+    private static final String AGGREGATE_TYPE = "aggregate";
+
+    private final String value;
+    private int cursor;
+    private int nodes;
+
+    private StateTypeNameParser(final String value) {
+      this.value = value;
+    }
+
+    private boolean parse() {
+      return !value.isEmpty() && parseType(true, 1) != null && cursor == value.length();
+    }
+
+    private String parseType(final boolean allowStateMap, final int depth) {
+      nodes++;
+      if (depth > MAX_STATE_TYPE_DEPTH || nodes > MAX_STATE_TYPE_NODES) {
+        return null;
+      }
+
+      if (consume("(")) {
+        if (parseType(false, depth + 1) == null || !consume(", ")) {
+          return null;
+        }
+        if (parseType(false, depth + 1) == null) {
+          return null;
+        }
+        while (consume(", ")) {
+          if (parseType(false, depth + 1) == null) {
+            return null;
+          }
+        }
+        return consume(")") ? AGGREGATE_TYPE : null;
+      }
+
+      final String name = identifier();
+      if (name == null) {
+        return null;
+      }
+      if (STATE_SCALAR_TYPE_NAMES.contains(name)) {
+        return name;
+      }
+      if ("Option".equals(name)) {
+        if (!consume("<") || parseType(false, depth + 1) == null || !consume(">")) {
+          return null;
+        }
+        return AGGREGATE_TYPE;
+      }
+      if ("Result".equals(name)) {
+        if (!consume("<")
+            || parseType(false, depth + 1) == null
+            || !consume(", ")
+            || parseType(false, depth + 1) == null
+            || !consume(">")) {
+          return null;
+        }
+        return AGGREGATE_TYPE;
+      }
+      if ("List".equals(name)) {
+        if (!consume("<")
+            || parseType(false, depth + 1) == null
+            || !consume(", ")
+            || !listCapacity()
+            || !consume(">")) {
+          return null;
+        }
+        return AGGREGATE_TYPE;
+      }
+      if ("StateMap".equals(name)) {
+        if (!allowStateMap || !consume("<")) {
+          return null;
+        }
+        // The map wrapper and scalar key are outside the stored value schema
+        // node budget, but the wrapper still counts in CNTR descriptor depth.
+        nodes--;
+        final String keyType = identifier();
+        if (!STATE_MAP_KEY_TYPE_NAMES.contains(keyType)
+            || !consume(", ")
+            || parseType(false, depth + 1) == null
+            || !consume(">")) {
+          return null;
+        }
+        return AGGREGATE_TYPE;
+      }
+
+      if (!canonicalTypeDeclarationIdentifier(name) || !consume("{")) {
+        return null;
+      }
+      final Set<String> fields = new HashSet<>();
+      while (true) {
+        final String field = identifier();
+        if (field == null
+            || !canonicalSourceIdentifier(field)
+            || field.startsWith("__kotodama_link_")
+            || !fields.add(field)
+            || !consume(": ")) {
+          return null;
+        }
+        if (parseType(false, depth + 1) == null) {
+          return null;
+        }
+        if (consume("}")) {
+          return AGGREGATE_TYPE;
+        }
+        if (!consume(", ")) {
+          return null;
+        }
+      }
+    }
+
+    private boolean consume(final String literal) {
+      if (!value.startsWith(literal, cursor)) {
+        return false;
+      }
+      cursor += literal.length();
+      return true;
+    }
+
+    private String identifier() {
+      if (cursor >= value.length() || !isTypeIdentifierStart(value.charAt(cursor))) {
+        return null;
+      }
+      final int start = cursor++;
+      while (cursor < value.length() && isTypeIdentifierPart(value.charAt(cursor))) {
+        cursor++;
+      }
+      return value.substring(start, cursor);
+    }
+
+    private boolean listCapacity() {
+      final int start = cursor;
+      int capacity = 0;
+      while (cursor < value.length()) {
+        final char character = value.charAt(cursor);
+        if (character < '0' || character > '9') {
+          break;
+        }
+        capacity = Math.min(65, capacity * 10 + character - '0');
+        cursor++;
+      }
+      if (cursor == start || cursor - start > 1 && value.charAt(start) == '0') {
+        return false;
+      }
+      return capacity >= 1 && capacity <= 64;
+    }
+  }
+
+  private static String optionalTypeName(
+      final Map<String, Object> root, final String key, final String path) {
+    final String value = optionalExactString(root, key, path);
+    return value == null ? null : currentTypeName(value, path);
+  }
+
+  private static String currentTypeName(final String value, final String path) {
+    final List<Integer> braceGenericDepths = new ArrayList<>();
+    int genericDepth = 0;
+    int index = 0;
+    while (index < value.length()) {
+      final char character = value.charAt(index);
+      if (character == '{') {
+        braceGenericDepths.add(genericDepth);
+        index++;
+      } else if (character == '}') {
+        if (!braceGenericDepths.isEmpty()) {
+          braceGenericDepths.remove(braceGenericDepths.size() - 1);
+        }
+        index++;
+      } else if (character == '<') {
+        genericDepth++;
+        index++;
+      } else if (character == '>') {
+        genericDepth = Math.max(0, genericDepth - 1);
+        index++;
+      } else if (isTypeIdentifierStart(character)) {
+        final int start = index++;
+        while (index < value.length() && isTypeIdentifierPart(value.charAt(index))) {
+          index++;
+        }
+        final String identifier = value.substring(start, index);
+        int next = index;
+        while (next < value.length() && Character.isWhitespace(value.charAt(next))) {
+          next++;
+        }
+        int afterColon = next + 1;
+        while (afterColon < value.length()
+            && Character.isWhitespace(value.charAt(afterColon))) {
+          afterColon++;
+        }
+        int previous = start - 1;
+        while (previous >= 0 && Character.isWhitespace(value.charAt(previous))) {
+          previous--;
+        }
+        final boolean isStructField =
+            !braceGenericDepths.isEmpty()
+                && braceGenericDepths.get(braceGenericDepths.size() - 1) == genericDepth
+                && previous >= 0
+                && (value.charAt(previous) == '{' || value.charAt(previous) == ',')
+                && next < value.length()
+                && value.charAt(next) == ':'
+                && (afterColon >= value.length() || value.charAt(afterColon) != ':');
+        check(
+            isStructField || !RETIRED_NUMERIC_TYPE_NAMES.contains(identifier),
+            path + " must not use retired Kotodama numeric type name `" + identifier + "`");
+      } else {
+        check(
+            character <= 0x7f,
+            path + " must use ASCII Kotodama type identifiers");
+        index++;
+      }
+    }
+    return value;
+  }
+
+  private static boolean isTypeIdentifierStart(final char value) {
+    return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z';
+  }
+
+  private static boolean isTypeIdentifierPart(final char value) {
+    return isTypeIdentifierStart(value) || value >= '0' && value <= '9';
   }
 
   private static boolean canonicalEntrypointName(final String value) {

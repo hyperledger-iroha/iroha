@@ -23,18 +23,25 @@ use once_cell::sync::Lazy;
 use thiserror::Error;
 
 use super::{
-    MAX_VEGA_PROOF_BYTES_V1, VegaPointWireV1, VegaScalarWireV1, VegaT256ScalarV1 as Scalar,
+    MAX_VEGA_PROOF_BYTES_V1, VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
+    VEGA_MDL_BIRTH_RANDOM_BYTES_V1, VEGA_MDL_FULL_DATE_TEXT_BYTES_V1,
+    VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1,
+    VEGA_MDL_MAX_PRESENTATION_YEAR_V1, VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1,
+    VEGA_MDL_MIN_PRESENTATION_YEAR_V1, VEGA_MDL_MSO_PAYLOAD_BYTES_V1,
+    VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1, VegaPointWireV1, VegaScalarWireV1,
+    VegaT256ScalarV1 as Scalar,
     circuit::{CircuitError, MAX_CIRCUIT_ROWS},
     commitment::{
         COMMITMENT_WORKER_STACK_BYTES, Commitment, CommitmentError, CommitmentKey,
         MAX_COMMITMENT_WORKERS,
     },
+    date::{RFC3339_SECONDS_PER_DAY_V1, RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1},
     figure9::{VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaMdlFigure9WitnessV1, synthesize_figure9},
     figure9_layout::FIGURE9_LAYOUT,
     nifs::NovaNifs,
-    r1cs::{Instance, RelaxedInstance, RelaxedWitness, Shape, Witness},
+    r1cs::{Instance, RelaxedInstance, RelaxedWitness, Shape, SparseMatrix, Witness},
     spartan::RelaxedSpartanProof,
-    sponge::keccak256,
+    sponge::{Keccak256, keccak256},
     sumcheck::{CompressedUnivariate, SumcheckProof},
     transcript::VegaTranscriptV1,
     validate_proof_byte_cap_v1,
@@ -44,6 +51,15 @@ use super::{
 pub const VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1: &[u8] = b"vega-existing-credential-zk-v0";
 /// Exact internal Microsoft transcript persona.
 pub const VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1: &[u8] = b"neutronnova_prove";
+/// Keccak-256 digest of the complete canonical Figure 9 relation.
+///
+/// The framed preimage contains every sparse A/B/C entry with its canonical
+/// T256 coefficient, all exact dimensions, the fixed issuer and birth
+/// templates and masks, layout ranges, and the closed semantic constants.
+pub const VEGA_MDL_CANONICAL_RELATION_DIGEST_V1: [u8; 32] = [
+    0xf3, 0x27, 0xbb, 0x5b, 0x0a, 0xa3, 0xa0, 0x94, 0x18, 0xa7, 0xc0, 0x62, 0xca, 0xc8, 0x11, 0x96,
+    0xcd, 0xfb, 0x65, 0xc5, 0x62, 0x59, 0xe9, 0x01, 0x95, 0xf8, 0x09, 0x83, 0xda, 0x53, 0x07, 0xe3,
+];
 /// Keccak-256 digest of the exact first-release Figure 9 compiled profile.
 ///
 /// Keeping this value in the executable manifest lets capability discovery and
@@ -52,8 +68,8 @@ pub const VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1: &[u8] = b"neutronnova_prove";
 /// independently recompute the digest once the canonical shape is already
 /// required and fail closed if the compiled relation has drifted.
 pub const VEGA_MDL_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0xe2, 0xbc, 0xbb, 0x62, 0x0c, 0x66, 0x47, 0x20, 0xe4, 0x8a, 0x91, 0x3a, 0x13, 0xd7, 0x21, 0x61,
-    0x56, 0x74, 0xe2, 0x12, 0x71, 0x21, 0x28, 0x1a, 0x30, 0x39, 0x7d, 0x3c, 0x0f, 0x2d, 0x88, 0x33,
+    0xfd, 0x97, 0xbb, 0x0f, 0x9d, 0x67, 0x36, 0x77, 0x18, 0x2f, 0x0b, 0x87, 0x34, 0x60, 0x9c, 0x7c,
+    0x03, 0x47, 0x80, 0x63, 0x24, 0xee, 0x64, 0xc3, 0x74, 0xcc, 0xc6, 0xa7, 0xa1, 0x5e, 0xe4, 0x73,
 ];
 
 const PROOF_VERSION: u8 = 1;
@@ -61,6 +77,9 @@ const COMMITMENT_KEY_COLUMNS: usize = 1024;
 const COMMITMENT_KEY_LABEL: &[u8] = b"iroha.vega.figure9.hyrax-t256.v1";
 const PROFILE_DESCRIPTOR: &[u8] = b"iroha.vega.figure9.mdl-age.v1";
 const PINNED_SOURCE_COMMIT: &[u8] = b"c0ee259053cd12eaf43ed71b5cde375452b3ee4d";
+const CANONICAL_RELATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha.vega.figure9.canonical-r1cs-relation.v1";
+const CANONICAL_RELATION_LAYOUT_SCHEMA_V1: &[u8] = b"issuer-birth-digest|issuer-device-x|issuer-device-y|issuer-signed-rfc3339|issuer-valid-from-rfc3339|issuer-valid-until-rfc3339|birth-random|birth-full-date";
+const CANONICAL_RELATION_SEMANTIC_SCHEMA_V1: &[u8] = b"issuer-sig-structure-bytes|mso-payload-bytes|birth-item-bytes|birth-random-bytes|full-date-text-bytes|rfc3339-utc-seconds-text-bytes|min-presentation-year|max-presentation-year|min-age-threshold|max-age-threshold|figure9-public-inputs|rfc3339-seconds-per-day|rfc3339-timestamp-order-slack-bits";
 const MAX_CHAIN_ID_BYTES: usize = 255;
 const RANDOM_HEALTH_RETRIES: usize = 16;
 const COMMITMENT_WORKER_HEAP_BOUND_BYTES: usize = 256 * 1024;
@@ -275,6 +294,45 @@ impl VegaMdlProofDimensionsV1 {
             inner_sumcheck_rounds,
         })
     }
+
+    fn proof_decode_limits(
+        self,
+        payload_len: usize,
+    ) -> Result<norito::DecodeLimits, VegaMdlProofErrorV1> {
+        let max_sequence_elements = [
+            self.witness_commitment_points,
+            self.error_commitment_points,
+            self.outer_sumcheck_rounds,
+            self.inner_sumcheck_rounds,
+            self.commitment_columns,
+        ]
+        .into_iter()
+        .max()
+        .ok_or(VegaMdlProofErrorV1::InvalidCompiledProfile)?;
+        let max_total_elements = self
+            .witness_commitment_points
+            .checked_mul(2)
+            .and_then(|total| {
+                self.error_commitment_points
+                    .checked_mul(2)
+                    .and_then(|points| total.checked_add(points))
+            })
+            .and_then(|total| total.checked_add(self.outer_sumcheck_rounds))
+            .and_then(|total| total.checked_add(self.inner_sumcheck_rounds))
+            .and_then(|total| {
+                self.commitment_columns
+                    .checked_mul(2)
+                    .and_then(|openings| total.checked_add(openings))
+            })
+            .ok_or(VegaMdlProofErrorV1::InvalidCompiledProfile)?;
+        Ok(norito::DecodeLimits::new(
+            max_sequence_elements,
+            payload_len,
+            max_total_elements,
+            MAX_VEGA_PROOF_BYTES_V1.saturating_mul(8),
+            16,
+        ))
+    }
 }
 
 /// Return the exact compiled Figure 9 dimensions.
@@ -288,10 +346,16 @@ pub fn vega_mdl_proof_dimensions_v1() -> Result<VegaMdlProofDimensionsV1, VegaMd
     VegaMdlProofDimensionsV1::from_shape(&shape)
 }
 
+/// Return the pinned digest of the complete canonical Figure 9 R1CS relation.
+#[must_use]
+pub const fn vega_mdl_canonical_relation_digest_v1() -> [u8; 32] {
+    VEGA_MDL_CANONICAL_RELATION_DIGEST_V1
+}
+
 /// Return the Keccak-256 digest of the exact compiled Figure 9 profile frame.
 ///
-/// The frame binds the pinned source revision, proof version, circuit template
-/// lengths, full R1CS dimensions, Hyrax commitment shape, sumcheck schedule,
+/// The frame binds the pinned source revision, proof version, complete
+/// canonical relation digest, Hyrax commitment shape, sumcheck schedule,
 /// commitment-key derivation label, and native proof-byte cap. Governance uses
 /// this digest as an input to its parameter and verifier manifests so a binary
 /// cannot activate a profile whose compiled proof relation has drifted.
@@ -304,8 +368,9 @@ pub const fn vega_mdl_compiled_profile_digest_v1() -> [u8; 32] {
 ///
 /// The supplied random source is consumed directly; callers cannot supply or
 /// reuse an already-built relaxed mask object. Every field element is sampled
-/// by reducing an independent 64-byte wide string. A nonzero health sample and
-/// nonzero commitment blindings reject an all-zero or stuck source.
+/// by reducing an independent 64-byte wide string. Two distinct nonzero health
+/// samples and nonzero commitment blindings reject an all-zero or constant
+/// source before any witness-dependent proof material is committed.
 ///
 /// # Errors
 ///
@@ -337,9 +402,9 @@ pub fn prove_vega_mdl_figure9_v1<R: VegaRandomSourceV1>(
     let dimensions = VegaMdlProofDimensionsV1::from_shape(&shape)?;
     let key = commitment_key(config.worker_count())?;
 
-    // A consumed nonzero health draw detects the most common catastrophic RNG
-    // failure before allocating a full masking assignment.
-    let _health = sample_nonzero_scalar(random)?;
+    // Consumed distinct nonzero draws detect the most common catastrophic RNG
+    // failures before allocating a full masking assignment.
+    validate_random_health(random)?;
 
     let regular_blindings = sample_nonzero_scalars(random, dimensions.witness_commitment_points)?;
     let regular_witness = Witness {
@@ -416,8 +481,11 @@ pub fn verify_vega_mdl_figure9_v1(
     let shape = canonical_shape()?;
     let dimensions = VegaMdlProofDimensionsV1::from_shape(&shape)?;
     let key = commitment_key(1)?;
-    let proof = norito::codec::decode_exact_from_slice::<VegaMdlProofWireV1>(proof_bytes)
-        .map_err(|_| VegaMdlProofErrorV1::InvalidProofEncoding)?;
+    let proof = norito::codec::decode_exact_from_slice_with_limits::<VegaMdlProofWireV1>(
+        proof_bytes,
+        dimensions.proof_decode_limits(proof_bytes.len())?,
+    )
+    .map_err(|_| VegaMdlProofErrorV1::InvalidProofEncoding)?;
     proof.validate_shape(dimensions)?;
     if norito::codec::encode_adaptive(&proof) != proof_bytes {
         return Err(VegaMdlProofErrorV1::InvalidProofEncoding);
@@ -741,6 +809,18 @@ fn sample_nonzero_scalar<R: VegaRandomSourceV1>(
     Err(VegaMdlProofErrorV1::DegenerateRandomness)
 }
 
+fn validate_random_health<R: VegaRandomSourceV1>(
+    random: &mut R,
+) -> Result<(), VegaMdlProofErrorV1> {
+    let first = sample_nonzero_scalar(random)?;
+    for _ in 0..RANDOM_HEALTH_RETRIES {
+        if sample_nonzero_scalar(random)? != first {
+            return Ok(());
+        }
+    }
+    Err(VegaMdlProofErrorV1::DegenerateRandomness)
+}
+
 fn sample_scalars<R: VegaRandomSourceV1>(
     random: &mut R,
     count: usize,
@@ -810,9 +890,176 @@ fn context_frame(
     Ok(frame)
 }
 
+struct CanonicalRelationMaterialV1<'a> {
+    dimensions: [usize; 4],
+    matrices: [&'a SparseMatrix; 3],
+    issuer_template: &'a [u8],
+    issuer_fixed: &'a [bool],
+    birth_template: &'a [u8],
+    birth_fixed: &'a [bool],
+    layout_ranges: [core::ops::Range<usize>; 8],
+    layout_schema: &'a [u8],
+    semantic_schema: &'a [u8],
+    semantics: [u64; 13],
+}
+
+fn canonical_relation_digest(shape: &Shape) -> Result<[u8; 32], VegaMdlProofErrorV1> {
+    let material = CanonicalRelationMaterialV1 {
+        dimensions: [
+            shape.constraint_count(),
+            shape.variable_count(),
+            shape.public_input_count(),
+            shape.columns(),
+        ],
+        matrices: [&shape.a, &shape.b, &shape.c],
+        issuer_template: &FIGURE9_LAYOUT.issuer_template,
+        issuer_fixed: &FIGURE9_LAYOUT.issuer_fixed,
+        birth_template: &FIGURE9_LAYOUT.birth_template,
+        birth_fixed: &FIGURE9_LAYOUT.birth_fixed,
+        layout_ranges: [
+            FIGURE9_LAYOUT.issuer_birth_digest.clone(),
+            FIGURE9_LAYOUT.issuer_device_x.clone(),
+            FIGURE9_LAYOUT.issuer_device_y.clone(),
+            FIGURE9_LAYOUT.issuer_signed_datetime.clone(),
+            FIGURE9_LAYOUT.issuer_valid_from_datetime.clone(),
+            FIGURE9_LAYOUT.issuer_valid_until_datetime.clone(),
+            FIGURE9_LAYOUT.birth_random.clone(),
+            FIGURE9_LAYOUT.birth_date.clone(),
+        ],
+        layout_schema: CANONICAL_RELATION_LAYOUT_SCHEMA_V1,
+        semantic_schema: CANONICAL_RELATION_SEMANTIC_SCHEMA_V1,
+        semantics: [
+            relation_usize_to_u64(VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1)?,
+            relation_usize_to_u64(VEGA_MDL_MSO_PAYLOAD_BYTES_V1)?,
+            relation_usize_to_u64(VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1)?,
+            relation_usize_to_u64(VEGA_MDL_BIRTH_RANDOM_BYTES_V1)?,
+            relation_usize_to_u64(VEGA_MDL_FULL_DATE_TEXT_BYTES_V1)?,
+            relation_usize_to_u64(VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1)?,
+            u64::from(VEGA_MDL_MIN_PRESENTATION_YEAR_V1),
+            u64::from(VEGA_MDL_MAX_PRESENTATION_YEAR_V1),
+            u64::from(VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1),
+            u64::from(VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1),
+            relation_usize_to_u64(VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1)?,
+            RFC3339_SECONDS_PER_DAY_V1,
+            relation_usize_to_u64(RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1)?,
+        ],
+    };
+    canonical_relation_digest_from_material(&material)
+}
+
+fn canonical_relation_digest_from_material(
+    material: &CanonicalRelationMaterialV1<'_>,
+) -> Result<[u8; 32], VegaMdlProofErrorV1> {
+    let mut hash = Keccak256::new();
+    hash_relation_field(&mut hash, 0, CANONICAL_RELATION_DIGEST_DOMAIN_V1)?;
+
+    let mut dimensions = Vec::with_capacity(4 * 8);
+    for value in material.dimensions {
+        dimensions.extend_from_slice(&relation_usize_to_u64(value)?.to_be_bytes());
+    }
+    hash_relation_field(&mut hash, 1, &dimensions)?;
+    hash_relation_matrix(&mut hash, 2, material.matrices[0])?;
+    hash_relation_matrix(&mut hash, 3, material.matrices[1])?;
+    hash_relation_matrix(&mut hash, 4, material.matrices[2])?;
+    hash_relation_field(&mut hash, 5, material.issuer_template)?;
+    hash_relation_mask(&mut hash, 6, material.issuer_fixed)?;
+    hash_relation_field(&mut hash, 7, material.birth_template)?;
+    hash_relation_mask(&mut hash, 8, material.birth_fixed)?;
+    hash_relation_field(&mut hash, 9, material.layout_schema)?;
+
+    let mut ranges = Vec::with_capacity(8 * 2 * 8);
+    for range in &material.layout_ranges {
+        ranges.extend_from_slice(&relation_usize_to_u64(range.start)?.to_be_bytes());
+        ranges.extend_from_slice(&relation_usize_to_u64(range.end)?.to_be_bytes());
+    }
+    hash_relation_field(&mut hash, 10, &ranges)?;
+    hash_relation_field(&mut hash, 11, material.semantic_schema)?;
+
+    let mut semantics = Vec::with_capacity(material.semantics.len() * 8);
+    for value in material.semantics {
+        semantics.extend_from_slice(&value.to_be_bytes());
+    }
+    hash_relation_field(&mut hash, 12, &semantics)?;
+    Ok(hash.finalize())
+}
+
+fn hash_relation_matrix(
+    hash: &mut Keccak256,
+    tag: u8,
+    matrix: &SparseMatrix,
+) -> Result<(), VegaMdlProofErrorV1> {
+    const MATRIX_HEADER_BYTES: usize = 3 * 8;
+    const MATRIX_ENTRY_BYTES: usize = 8 + 8 + 32;
+    let payload_len = matrix
+        .entry_count()
+        .checked_mul(MATRIX_ENTRY_BYTES)
+        .and_then(|entries| entries.checked_add(MATRIX_HEADER_BYTES))
+        .ok_or(VegaMdlProofErrorV1::InvalidCompiledProfile)?;
+    hash_relation_field_header(hash, tag, payload_len)?;
+    for value in [matrix.rows(), matrix.columns(), matrix.entry_count()] {
+        hash.update(&relation_usize_to_u64(value)?.to_be_bytes());
+    }
+    for (row, column, coefficient) in matrix.canonical_entries() {
+        let mut entry = [0_u8; MATRIX_ENTRY_BYTES];
+        entry[..8].copy_from_slice(&relation_usize_to_u64(row)?.to_be_bytes());
+        entry[8..16].copy_from_slice(&relation_usize_to_u64(column)?.to_be_bytes());
+        entry[16..].copy_from_slice(&coefficient.to_be_bytes());
+        hash.update(&entry);
+    }
+    Ok(())
+}
+
+fn hash_relation_mask(
+    hash: &mut Keccak256,
+    tag: u8,
+    mask: &[bool],
+) -> Result<(), VegaMdlProofErrorV1> {
+    hash_relation_field_header(hash, tag, mask.len())?;
+    for value in mask {
+        hash.update(&[u8::from(*value)]);
+    }
+    Ok(())
+}
+
+fn hash_relation_field(
+    hash: &mut Keccak256,
+    tag: u8,
+    value: &[u8],
+) -> Result<(), VegaMdlProofErrorV1> {
+    hash_relation_field_header(hash, tag, value.len())?;
+    hash.update(value);
+    Ok(())
+}
+
+fn hash_relation_field_header(
+    hash: &mut Keccak256,
+    tag: u8,
+    value_len: usize,
+) -> Result<(), VegaMdlProofErrorV1> {
+    hash.update(&[tag]);
+    hash.update(&relation_usize_to_u64(value_len)?.to_be_bytes());
+    Ok(())
+}
+
+fn relation_usize_to_u64(value: usize) -> Result<u64, VegaMdlProofErrorV1> {
+    u64::try_from(value).map_err(|_| VegaMdlProofErrorV1::InvalidCompiledProfile)
+}
+
 fn profile_frame(
     shape: &Shape,
     dimensions: VegaMdlProofDimensionsV1,
+) -> Result<Vec<u8>, VegaMdlProofErrorV1> {
+    let relation_digest = canonical_relation_digest(shape)?;
+    if relation_digest != VEGA_MDL_CANONICAL_RELATION_DIGEST_V1 {
+        return Err(VegaMdlProofErrorV1::InvalidCompiledProfile);
+    }
+    profile_frame_with_relation_digest(shape, dimensions, relation_digest)
+}
+
+fn profile_frame_with_relation_digest(
+    shape: &Shape,
+    dimensions: VegaMdlProofDimensionsV1,
+    relation_digest: [u8; 32],
 ) -> Result<Vec<u8>, VegaMdlProofErrorV1> {
     let mut profile = Vec::with_capacity(512);
     push_frame_field(&mut profile, 0, PROFILE_DESCRIPTOR)?;
@@ -846,6 +1093,7 @@ fn profile_frame(
         .collect::<Vec<_>>();
     push_frame_field(&mut profile, 19, &outer_indices)?;
     push_frame_field(&mut profile, 20, &inner_indices)?;
+    push_frame_field(&mut profile, 21, &relation_digest)?;
     Ok(profile)
 }
 
@@ -917,6 +1165,7 @@ fn wire_to_scalars(scalars: &[VegaScalarWireV1]) -> Result<Vec<Scalar>, VegaMdlP
 mod tests {
     use super::*;
     use crate::vega::figure9::tests::baseline_signed_fixture;
+    use crate::vega::r1cs::R1csError;
 
     struct ZeroRandom;
 
@@ -935,6 +1184,15 @@ mod tests {
         }
     }
 
+    struct ConstantRandom(u8);
+
+    impl VegaRandomSourceV1 for ConstantRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1> {
+            destination.fill(self.0);
+            Ok(())
+        }
+    }
+
     /// Deterministic conformance tape only; never a production CSPRNG.
     struct TapeRandom(u64);
 
@@ -949,6 +1207,40 @@ mod tests {
                 chunk.copy_from_slice(&value.to_le_bytes()[..chunk.len()]);
             }
             Ok(())
+        }
+    }
+
+    fn relation_digest_test_shape(
+        a_entries: &[(usize, usize, Scalar)],
+    ) -> Result<Shape, R1csError> {
+        let a = SparseMatrix::new(2, 3, a_entries)?;
+        let b = SparseMatrix::new(2, 3, &[(0, 1, Scalar::one())])?;
+        let c = SparseMatrix::new(2, 3, &[(0, 2, Scalar::one())])?;
+        Shape::new(2, 1, 1, a, b, c)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn relation_digest_test_material<'a>(
+        shape: &'a Shape,
+        dimensions: [usize; 4],
+        issuer_template: &'a [u8],
+        issuer_fixed: &'a [bool],
+        birth_template: &'a [u8],
+        birth_fixed: &'a [bool],
+        layout_ranges: [core::ops::Range<usize>; 8],
+        semantics: [u64; 13],
+    ) -> CanonicalRelationMaterialV1<'a> {
+        CanonicalRelationMaterialV1 {
+            dimensions,
+            matrices: [&shape.a, &shape.b, &shape.c],
+            issuer_template,
+            issuer_fixed,
+            birth_template,
+            birth_fixed,
+            layout_ranges,
+            layout_schema: b"test-layout-schema-v1",
+            semantic_schema: b"test-semantic-schema-v1",
+            semantics,
         }
     }
 
@@ -1016,6 +1308,75 @@ mod tests {
     }
 
     #[test]
+    fn proof_decoder_preflights_oversized_and_forged_vector_counts() {
+        let dimensions = VegaMdlProofDimensionsV1 {
+            variable_count: 524_288,
+            constraint_count: 1_048_576,
+            commitment_columns: 1_024,
+            witness_commitment_points: 512,
+            error_commitment_points: 1_024,
+            outer_sumcheck_rounds: 20,
+            inner_sumcheck_rounds: 20,
+        };
+        let point = VegaPointWireV1::from_raw_bytes_for_test([1; 33]);
+        let scalar = VegaScalarWireV1::from_raw_bytes_for_test([0; 32]);
+        let oversized = VegaMdlProofWireV1 {
+            version: PROOF_VERSION,
+            mask_witness_commitment: CommitmentWireV1 {
+                points: vec![point; dimensions.commitment_columns + 1],
+            },
+            mask_error_commitment: CommitmentWireV1 { points: Vec::new() },
+            mask_relaxation: scalar,
+            mask_public_inputs: [scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
+            regular_witness_commitment: CommitmentWireV1 { points: Vec::new() },
+            cross_term_commitment: CommitmentWireV1 { points: Vec::new() },
+            outer_sumcheck_rounds: Vec::new(),
+            outer_claims: [scalar; 3],
+            inner_sumcheck_rounds: Vec::new(),
+            witness_opening: Vec::new(),
+            witness_opening_blinding: scalar,
+            error_opening: Vec::new(),
+            error_opening_blinding: scalar,
+        };
+        let encoded = encode_proof(&oversized);
+        let limits = dimensions
+            .proof_decode_limits(encoded.len())
+            .expect("released decoder limits");
+        assert!(matches!(
+            norito::codec::decode_exact_from_slice_with_limits::<VegaMdlProofWireV1>(
+                &encoded, limits
+            ),
+            Err(norito::Error::SequenceLengthExceeded {
+                length: 1_025,
+                limit: 1_024
+            })
+        ));
+
+        let encoded_count = 1_025_u32.to_le_bytes();
+        let count_offset = encoded
+            .windows(encoded_count.len())
+            .rposition(|window| window == encoded_count)
+            .expect("oversized vector count is present in canonical wire");
+        let mut forged = encoded;
+        forged[count_offset..count_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let limits = dimensions
+            .proof_decode_limits(forged.len())
+            .expect("released decoder limits");
+        let forged_error =
+            norito::codec::decode_exact_from_slice_with_limits::<VegaMdlProofWireV1>(
+                &forged, limits,
+            )
+            .expect_err("forged vector count must fail before allocation");
+        assert!(
+            matches!(forged_error, norito::Error::SequenceLengthExceeded { length, limit }
+                if length == u64::from(u32::MAX)
+                    && limit <= MAX_VEGA_PROOF_BYTES_V1 as u64
+                    && limit < length),
+            "unexpected forged-count rejection: {forged_error:?}"
+        );
+    }
+
+    #[test]
     fn context_frame_binds_every_field_profile_round_index_and_vector_length() {
         let shape = canonical_shape().expect("shape");
         let dimensions = VegaMdlProofDimensionsV1::from_shape(&shape).expect("dimensions");
@@ -1073,7 +1434,7 @@ mod tests {
     }
 
     #[test]
-    fn random_source_failure_and_all_zero_tape_fail_closed() {
+    fn random_source_failure_zero_and_constant_tapes_fail_closed() {
         assert_eq!(
             sample_scalar(&mut FailureRandom),
             Err(VegaMdlProofErrorV1::RandomSource(
@@ -1083,6 +1444,216 @@ mod tests {
         assert_eq!(
             sample_nonzero_scalar(&mut ZeroRandom),
             Err(VegaMdlProofErrorV1::DegenerateRandomness)
+        );
+        assert_eq!(
+            validate_random_health(&mut ConstantRandom(1)),
+            Err(VegaMdlProofErrorV1::DegenerateRandomness)
+        );
+        let mut healthy = TapeRandom(0x9e37_79b9_7f4a_7c15);
+        validate_random_health(&mut healthy).expect("distinct deterministic conformance draws");
+    }
+
+    #[test]
+    fn canonical_relation_digest_binds_full_sparse_entries_and_fixed_layout() {
+        let shape = canonical_shape().expect("canonical shape");
+        let digest = canonical_relation_digest(&shape).expect("canonical relation digest");
+        assert_eq!(digest, VEGA_MDL_CANONICAL_RELATION_DIGEST_V1);
+        assert_eq!(
+            hex::encode(VEGA_MDL_CANONICAL_RELATION_DIGEST_V1),
+            "f327bb5b0aa3a09418a7c062cac81196cdfb65c56259e90195f80983da5307e3"
+        );
+
+        let base_shape =
+            relation_digest_test_shape(&[(0, 0, Scalar::one())]).expect("base test shape");
+        let dimensions = [2, 1, 1, 3];
+        let issuer_template = vec![0x10, 0x11, 0x12];
+        let issuer_fixed = vec![true, false, true];
+        let birth_template = vec![0x20, 0x21, 0x22];
+        let birth_fixed = vec![true, true, false];
+        let layout_ranges = [0..1, 1..2, 2..3, 0..1, 1..2, 2..3, 0..2, 2..3];
+        let semantics = core::array::from_fn(|index| (index + 1) as u64);
+        let base_digest = canonical_relation_digest_from_material(&relation_digest_test_material(
+            &base_shape,
+            dimensions,
+            &issuer_template,
+            &issuer_fixed,
+            &birth_template,
+            &birth_fixed,
+            layout_ranges.clone(),
+            semantics,
+        ))
+        .expect("base test material");
+
+        for (mutation, changed_shape) in [
+            (
+                "coefficient",
+                relation_digest_test_shape(&[(0, 0, Scalar::from_u64(2))])
+                    .expect("coefficient mutation"),
+            ),
+            (
+                "row",
+                relation_digest_test_shape(&[(1, 0, Scalar::one())]).expect("row mutation"),
+            ),
+            (
+                "column",
+                relation_digest_test_shape(&[(0, 1, Scalar::one())]).expect("column mutation"),
+            ),
+        ] {
+            assert_ne!(
+                canonical_relation_digest_from_material(&relation_digest_test_material(
+                    &changed_shape,
+                    dimensions,
+                    &issuer_template,
+                    &issuer_fixed,
+                    &birth_template,
+                    &birth_fixed,
+                    layout_ranges.clone(),
+                    semantics,
+                ))
+                .expect("mutated sparse material"),
+                base_digest,
+                "{mutation} mutation must change the canonical relation digest"
+            );
+        }
+
+        let mut changed_issuer_template = issuer_template.clone();
+        changed_issuer_template[1] ^= 1;
+        assert_ne!(
+            canonical_relation_digest_from_material(&relation_digest_test_material(
+                &base_shape,
+                dimensions,
+                &changed_issuer_template,
+                &issuer_fixed,
+                &birth_template,
+                &birth_fixed,
+                layout_ranges.clone(),
+                semantics,
+            ))
+            .expect("issuer template mutation"),
+            base_digest
+        );
+        let mut changed_issuer_mask = issuer_fixed.clone();
+        changed_issuer_mask[1] = !changed_issuer_mask[1];
+        assert_ne!(
+            canonical_relation_digest_from_material(&relation_digest_test_material(
+                &base_shape,
+                dimensions,
+                &issuer_template,
+                &changed_issuer_mask,
+                &birth_template,
+                &birth_fixed,
+                layout_ranges.clone(),
+                semantics,
+            ))
+            .expect("issuer mask mutation"),
+            base_digest
+        );
+        let mut changed_birth_template = birth_template.clone();
+        changed_birth_template[2] ^= 1;
+        assert_ne!(
+            canonical_relation_digest_from_material(&relation_digest_test_material(
+                &base_shape,
+                dimensions,
+                &issuer_template,
+                &issuer_fixed,
+                &changed_birth_template,
+                &birth_fixed,
+                layout_ranges.clone(),
+                semantics,
+            ))
+            .expect("birth template mutation"),
+            base_digest
+        );
+        let mut changed_birth_mask = birth_fixed.clone();
+        changed_birth_mask[2] = !changed_birth_mask[2];
+        assert_ne!(
+            canonical_relation_digest_from_material(&relation_digest_test_material(
+                &base_shape,
+                dimensions,
+                &issuer_template,
+                &issuer_fixed,
+                &birth_template,
+                &changed_birth_mask,
+                layout_ranges.clone(),
+                semantics,
+            ))
+            .expect("birth mask mutation"),
+            base_digest
+        );
+        let mut changed_ranges = layout_ranges.clone();
+        changed_ranges[5].end += 1;
+        assert_ne!(
+            canonical_relation_digest_from_material(&relation_digest_test_material(
+                &base_shape,
+                dimensions,
+                &issuer_template,
+                &issuer_fixed,
+                &birth_template,
+                &birth_fixed,
+                changed_ranges,
+                semantics,
+            ))
+            .expect("layout endpoint mutation"),
+            base_digest
+        );
+        let mut changed_semantics = semantics;
+        changed_semantics[11] += 1;
+        assert_ne!(
+            canonical_relation_digest_from_material(&relation_digest_test_material(
+                &base_shape,
+                dimensions,
+                &issuer_template,
+                &issuer_fixed,
+                &birth_template,
+                &birth_fixed,
+                layout_ranges.clone(),
+                changed_semantics,
+            ))
+            .expect("semantic mutation"),
+            base_digest
+        );
+        let mut changed_dimensions = dimensions;
+        changed_dimensions[2] += 1;
+        assert_ne!(
+            canonical_relation_digest_from_material(&relation_digest_test_material(
+                &base_shape,
+                changed_dimensions,
+                &issuer_template,
+                &issuer_fixed,
+                &birth_template,
+                &birth_fixed,
+                layout_ranges,
+                semantics,
+            ))
+            .expect("dimension mutation"),
+            base_digest
+        );
+
+        assert_eq!(
+            SparseMatrix::new(2, 3, &[(0, 0, Scalar::one()), (0, 0, Scalar::from_u64(2)),],),
+            Err(R1csError::NonCanonicalMatrix)
+        );
+        assert_eq!(
+            SparseMatrix::new(2, 3, &[(1, 0, Scalar::one()), (0, 1, Scalar::one())],),
+            Err(R1csError::NonCanonicalMatrix)
+        );
+    }
+
+    #[test]
+    #[ignore = "operator-only KAT regeneration after an intentional relation change"]
+    fn print_canonical_relation_and_compiled_profile_digests() {
+        let shape = canonical_shape().expect("canonical shape");
+        let dimensions = VegaMdlProofDimensionsV1::from_shape(&shape).expect("dimensions");
+        let relation = canonical_relation_digest(&shape).expect("relation");
+        let profile =
+            profile_frame_with_relation_digest(&shape, dimensions, relation).expect("profile");
+        eprintln!(
+            "VEGA_MDL_CANONICAL_RELATION_DIGEST_V1={}",
+            hex::encode(relation)
+        );
+        eprintln!(
+            "VEGA_MDL_COMPILED_PROFILE_DIGEST_V1={}",
+            hex::encode(keccak256(&profile))
         );
     }
 
@@ -1094,7 +1665,7 @@ mod tests {
         assert_eq!(recomputed, VEGA_MDL_COMPILED_PROFILE_DIGEST_V1);
         assert_eq!(
             hex::encode(VEGA_MDL_COMPILED_PROFILE_DIGEST_V1),
-            "e2bcbb620c664720e48a913a13d721615674e2127121281a30397d3c0f2d8833"
+            "fd97bb0f9d673677182f0b8734609c7c0347806324ee64c374ccc6a7a15ee473"
         );
         assert_eq!(
             vega_mdl_compiled_profile_digest_v1(),

@@ -246,7 +246,7 @@ impl OrderbookAdmissionPolicyV1 {
     ///
     /// Returns a Norito encoding error if canonical serialization fails.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(ORDERBOOK_ADMISSION_POLICY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -842,6 +842,13 @@ mod tests {
     use super::*;
     use crate::events::data::sorafs::SorafsOrderbookLedgerEventKind;
 
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout orderbook value")
+    }
+
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("nonzero deterministic Ed25519 seed");
@@ -853,14 +860,24 @@ mod tests {
         T: core::fmt::Debug + PartialEq + norito::core::NoritoSerialize,
         for<'de> T: norito::core::NoritoDeserialize<'de>,
     {
-        let encoded = norito::to_bytes(value).expect("encode canonical orderbook value");
+        let encoded = norito::encode_canonical(value).expect("encode canonical orderbook value");
         let decoded: T =
-            norito::decode_from_bytes(&encoded).expect("decode canonical orderbook value");
+            norito::decode_canonical(&encoded).expect("decode canonical orderbook value");
         assert_eq!(&decoded, value);
         assert_eq!(
-            norito::to_bytes(&decoded).expect("re-encode canonical orderbook value"),
+            norito::encode_canonical(&decoded).expect("re-encode canonical orderbook value"),
             encoded
         );
+
+        let alternate = encode_with_alternate_norito_layout(value);
+        assert_ne!(alternate, encoded);
+        let alternate_decoded: T = norito::decode_from_bytes(&alternate)
+            .expect("alternate-layout orderbook value remains structurally decodable");
+        assert_eq!(&alternate_decoded, value);
+        assert!(matches!(
+            norito::decode_canonical::<T>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
     }
 
     fn policy() -> OrderbookAdmissionPolicyV1 {
@@ -891,6 +908,19 @@ mod tests {
         policy.validate().expect("valid policy");
         let first = policy.digest().expect("digest policy");
         assert_eq!(first, policy.digest().expect("repeat digest"));
+        assert_canonical_norito_round_trip(&policy);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_digest = policy
+            .digest()
+            .expect("digest policy under alternate ambient layout");
+        drop(ambient);
+        assert_eq!(
+            ambient_digest, first,
+            "policy identity must ignore ambient Norito layout"
+        );
 
         let mut changed = policy.clone();
         changed.price_tick_micro_xor += 1;

@@ -811,9 +811,25 @@ void connect_norito_free(uint8_t* ptr);
 // Output buffers are Norito V1 archives allocated by the bridge and must be
 // released with `iroha_privacy_free_buffer`, which zeroizes privacy output
 // memory before release.
+typedef enum iroha_privacy_capability_validation_status_v1 {
+    IROHA_PRIVACY_CAPABILITY_VALID_V1 = 0,
+    IROHA_PRIVACY_CAPABILITY_NULL_POINTER_V1 = 1,
+    IROHA_PRIVACY_CAPABILITY_EMPTY_V1 = 2,
+    IROHA_PRIVACY_CAPABILITY_ARCHIVE_TOO_LARGE_V1 = 3,
+    IROHA_PRIVACY_CAPABILITY_DECODE_RESOURCE_LIMIT_V1 = 4,
+    IROHA_PRIVACY_CAPABILITY_SCHEMA_MISMATCH_V1 = 5,
+    IROHA_PRIVACY_CAPABILITY_NON_CANONICAL_V1 = 6,
+    IROHA_PRIVACY_CAPABILITY_MALFORMED_ARCHIVE_V1 = 7,
+    IROHA_PRIVACY_CAPABILITY_INVALID_SNAPSHOT_V1 = 8
+} iroha_privacy_capability_validation_status_v1;
+
 int32_t iroha_privacy_capabilities_v1(
     uint8_t** out_ptr,
     unsigned long* out_len);
+
+int32_t iroha_privacy_validate_capabilities_v1(
+    const uint8_t* archive_ptr,
+    unsigned long archive_len);
 
 void iroha_privacy_free_buffer(uint8_t* ptr);
 

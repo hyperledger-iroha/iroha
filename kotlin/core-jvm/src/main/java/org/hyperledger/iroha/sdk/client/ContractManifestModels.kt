@@ -324,6 +324,12 @@ object ContractManifestJsonParser {
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",
         "__kotodama_decimal_to_int_round",
+        "is_some",
+        "is_none",
+        "is_ok",
+        "is_err",
+        "unwrap_or",
+        "unwrap_err_or",
     )
     private val retiredNumericTypeNames = setOf(
         "i8",
@@ -353,7 +359,33 @@ object ContractManifestJsonParser {
         "Quantity",
         "number",
     )
+    private val stateMapKeyTypeNames = setOf(
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "DataSpaceId",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "NftId",
+        "DomainId",
+        "Name",
+    )
+    private val dynamicAccessBoundKinds = setOf(
+        "range",
+        "take",
+    )
+    private val maxDynamicAccessKeys = BigInteger.valueOf(64)
     // END GENERATED: kotodama-v1-validator-policy
+    private val stateScalarTypeNames = setOf(
+        "int", "decimal", "quantity", "bool", "string", "bytes", "DataSpaceId",
+        "AccountId", "AssetDefinitionId", "AssetId", "NftId", "DomainId", "Name", "Json",
+    )
+    private const val maxStateTypeDepth = 256
+    private const val maxStateTypeNodes = 256
     private val valueKindByWire = mapOf(
         "Int" to EntrypointValueKindV1.INT,
         "Decimal" to EntrypointValueKindV1.DECIMAL,
@@ -453,6 +485,7 @@ object ContractManifestJsonParser {
             }
         }
         states?.let { requireUnique(it.map { descriptor -> descriptor.name }, "manifest.states") }
+        validateDynamicAccessHintStateMaps(accessSetHints, states.orEmpty())
         errorCodes?.let {
             requireUnique(it.map { descriptor -> "${descriptor.namespace}::${descriptor.name}" }, "manifest.error_codes")
             requireUnique(it.map { descriptor -> descriptor.code.toString() }, "manifest.error_codes.code")
@@ -487,21 +520,76 @@ object ContractManifestJsonParser {
     private fun parseDynamicHint(root: Map<String, Any?>): ContractDynamicAccessHint {
         exactKeys(root, setOf("base_key", "key_type", "bound_kind", "max_keys"), "dynamic access hint")
         val baseKey = exactString(required(root, "base_key", "dynamic access hint"), "dynamic access hint.base_key")
-        check(baseKey.startsWith("state:") && baseKey != "state:*") {
-            "dynamic access hint.base_key must be a concrete state: key"
+        val stateName = baseKey.removePrefix("state:")
+        check(baseKey.startsWith("state:") && canonicalDeclarationIdentifier(stateName)) {
+            "dynamic access hint.base_key must be state: followed by one canonical state declaration identifier"
+        }
+        val keyType = exactString(
+            required(root, "key_type", "dynamic access hint"),
+            "dynamic access hint.key_type",
+        )
+        check(keyType in stateMapKeyTypeNames) {
+            "dynamic access hint.key_type must be an exact canonical StateMap key type"
+        }
+        val boundKind = exactString(
+            required(root, "bound_kind", "dynamic access hint"),
+            "dynamic access hint.bound_kind",
+        )
+        check(boundKind in dynamicAccessBoundKinds) {
+            "dynamic access hint.bound_kind must be `take` or `range`"
         }
         val maxKeys = unsignedInteger(
             required(root, "max_keys", "dynamic access hint"),
-            BigInteger.valueOf(0xffff_ffffL),
+            maxDynamicAccessKeys,
             "dynamic access hint.max_keys",
         ).longValueExact()
-        check(maxKeys > 0) { "dynamic access hint.max_keys must be positive" }
+        check(maxKeys > 0) { "dynamic access hint.max_keys must be in 1..64" }
         return ContractDynamicAccessHint(
             baseKey,
-            exactString(required(root, "key_type", "dynamic access hint"), "dynamic access hint.key_type"),
-            exactString(required(root, "bound_kind", "dynamic access hint"), "dynamic access hint.bound_kind"),
+            keyType,
+            boundKind,
             maxKeys,
         )
+    }
+
+    private fun validateDynamicAccessHintStateMaps(
+        accessSetHints: ContractAccessSetHints?,
+        states: List<ContractStateDescriptor>,
+    ) {
+        if (accessSetHints == null) return
+
+        val stateMapKeyTypes = states.mapNotNull { state ->
+            topLevelStateMapKeyType(state.typeName)?.let { keyType -> state.name to keyType }
+        }.toMap()
+        listOf(
+            "manifest.access_set_hints.dynamic_reads" to accessSetHints.dynamicReads,
+            "manifest.access_set_hints.dynamic_writes" to accessSetHints.dynamicWrites,
+        ).forEach { (field, hints) ->
+            val unique = HashSet<List<Any>>()
+            hints.forEach { hint ->
+                check(unique.add(listOf(hint.baseKey, hint.keyType, hint.boundKind, hint.maxKeys))) {
+                    "$field must not contain duplicate hints for `${hint.baseKey}`"
+                }
+                val stateName = hint.baseKey.removePrefix("state:")
+                val expectedKeyType = stateMapKeyTypes[stateName]
+                check(expectedKeyType != null) {
+                    "$field hint `${hint.baseKey}` must reference a declared top-level StateMap"
+                }
+                check(hint.keyType == expectedKeyType) {
+                    "$field hint `${hint.baseKey}` declares key_type `${hint.keyType}` " +
+                        "but its StateMap key type is `$expectedKeyType`"
+                }
+            }
+        }
+    }
+
+    private fun topLevelStateMapKeyType(typeName: String): String? {
+        val prefix = "StateMap<"
+        if (!typeName.startsWith(prefix)) return null
+        val separator = typeName.indexOf(", ", prefix.length)
+        if (separator < 0) return null
+        return typeName.substring(prefix.length, separator)
+            .takeIf { it in stateMapKeyTypeNames }
     }
 
     private fun parseEntrypoint(root: Map<String, Any?>): ContractEntrypointDescriptor {
@@ -542,6 +630,7 @@ object ContractManifestJsonParser {
                     })
         ) { "entrypoint descriptor argument schema does not exactly match params" }
         val returnType = optionalExactString(root, "return_type", "entrypoint descriptor.return_type")
+            ?.let { currentTypeName(it, "entrypoint descriptor.return_type") }
         val returnSchema = optionalObject(root, "return_schema", "entrypoint descriptor.return_schema")
             ?.let(::parseValueType)
         check((returnType == null) == (returnSchema == null)) {
@@ -604,7 +693,10 @@ object ContractManifestJsonParser {
         check(canonicalSourceIdentifier(name)) { "entrypoint parameter.name must be a canonical Kotodama identifier" }
         return ContractEntrypointParameter(
             name,
-            exactString(required(root, "type_name", "entrypoint parameter"), "entrypoint parameter.type_name"),
+            currentTypeName(
+                exactString(required(root, "type_name", "entrypoint parameter"), "entrypoint parameter.type_name"),
+                "entrypoint parameter.type_name",
+            ),
         )
     }
 
@@ -1010,10 +1102,11 @@ object ContractManifestJsonParser {
         exactKeys(root, setOf("name", "type_name"), "state descriptor")
         val name = exactString(required(root, "name", "state descriptor"), "state descriptor.name")
         check(canonicalDeclarationIdentifier(name)) { "state descriptor.name must be a canonical Kotodama identifier" }
-        return ContractStateDescriptor(
-            name,
-            exactString(required(root, "type_name", "state descriptor"), "state descriptor.type_name"),
-        )
+        val typeName = exactString(required(root, "type_name", "state descriptor"), "state descriptor.type_name")
+        check(StateTypeNameParser(typeName).parse()) {
+            "state descriptor.type_name must be a canonical Kotodama V1 state type"
+        }
+        return ContractStateDescriptor(name, typeName)
     }
 
     private fun parseErrorCode(root: Map<String, Any?>): ContractErrorCodeDescriptor {
@@ -1215,6 +1308,192 @@ object ContractManifestJsonParser {
 
     private fun canonicalTypeDeclarationIdentifier(value: String): Boolean =
         canonicalDeclarationIdentifier(value) && value !in retiredNumericTypeNames
+
+    private class StateTypeNameParser(private val value: String) {
+        private var cursor = 0
+        private var nodes = 0
+
+        fun parse(): Boolean =
+            value.isNotEmpty() &&
+                parseType(allowStateMap = true, depth = 1) != null &&
+                cursor == value.length
+
+        private fun parseType(allowStateMap: Boolean, depth: Int): String? {
+            nodes += 1
+            if (depth > maxStateTypeDepth || nodes > maxStateTypeNodes) return null
+
+            if (consume("(")) {
+                if (parseType(allowStateMap = false, depth = depth + 1) == null || !consume(", ")) return null
+                if (parseType(allowStateMap = false, depth = depth + 1) == null) return null
+                while (consume(", ")) {
+                    if (parseType(allowStateMap = false, depth = depth + 1) == null) return null
+                }
+                return if (consume(")")) aggregateType else null
+            }
+
+            val name = identifier() ?: return null
+            if (name in stateScalarTypeNames) return name
+            when (name) {
+                "Option" -> {
+                    if (!consume("<") || parseType(false, depth + 1) == null || !consume(">")) return null
+                    return aggregateType
+                }
+                "Result" -> {
+                    if (
+                        !consume("<") ||
+                        parseType(false, depth + 1) == null ||
+                        !consume(", ") ||
+                        parseType(false, depth + 1) == null ||
+                        !consume(">")
+                    ) return null
+                    return aggregateType
+                }
+                "List" -> {
+                    if (
+                        !consume("<") ||
+                        parseType(false, depth + 1) == null ||
+                        !consume(", ") ||
+                        !listCapacity() ||
+                        !consume(">")
+                    ) return null
+                    return aggregateType
+                }
+                "StateMap" -> {
+                    if (!allowStateMap || !consume("<")) return null
+                    // The map wrapper and scalar key are outside the stored
+                    // value schema node budget, but the wrapper counts in CNTR depth.
+                    nodes -= 1
+                    val keyType = identifier()
+                    if (
+                        keyType == null ||
+                        keyType !in stateMapKeyTypeNames ||
+                        !consume(", ") ||
+                        parseType(false, depth + 1) == null ||
+                        !consume(">")
+                    ) return null
+                    return aggregateType
+                }
+            }
+
+            if (!canonicalTypeDeclarationIdentifier(name) || !consume("{")) return null
+            val fields = HashSet<String>()
+            while (true) {
+                val field = identifier()
+                if (
+                    field == null ||
+                    !canonicalSourceIdentifier(field) ||
+                    field.startsWith("__kotodama_link_") ||
+                    !fields.add(field) ||
+                    !consume(": ")
+                ) return null
+                if (parseType(false, depth + 1) == null) return null
+                if (consume("}")) return aggregateType
+                if (!consume(", ")) return null
+            }
+        }
+
+        private fun consume(literal: String): Boolean {
+            if (!value.startsWith(literal, cursor)) return false
+            cursor += literal.length
+            return true
+        }
+
+        private fun identifier(): String? {
+            if (cursor >= value.length || !isAsciiIdentifierStart(value[cursor])) return null
+            val start = cursor
+            cursor += 1
+            while (cursor < value.length && isAsciiIdentifierPart(value[cursor])) {
+                cursor += 1
+            }
+            return value.substring(start, cursor)
+        }
+
+        private fun listCapacity(): Boolean {
+            val start = cursor
+            var capacity = 0
+            while (cursor < value.length && value[cursor] in '0'..'9') {
+                capacity = minOf(65, capacity * 10 + (value[cursor] - '0'))
+                cursor += 1
+            }
+            if (cursor == start || (cursor - start > 1 && value[start] == '0')) return false
+            return capacity in 1..64
+        }
+
+        private companion object {
+            const val aggregateType = "aggregate"
+        }
+    }
+
+    private fun currentTypeName(value: String, path: String): String {
+        val braceGenericDepths = ArrayList<Int>()
+        var genericDepth = 0
+        var index = 0
+        while (index < value.length) {
+            when {
+                value[index] == '{' -> {
+                    braceGenericDepths.add(genericDepth)
+                    index += 1
+                }
+                value[index] == '}' -> {
+                    if (braceGenericDepths.isNotEmpty()) {
+                        braceGenericDepths.removeAt(braceGenericDepths.lastIndex)
+                    }
+                    index += 1
+                }
+                value[index] == '<' -> {
+                    genericDepth += 1
+                    index += 1
+                }
+                value[index] == '>' -> {
+                    genericDepth = maxOf(0, genericDepth - 1)
+                    index += 1
+                }
+                isAsciiIdentifierStart(value[index]) -> {
+                    val start = index
+                    index += 1
+                    while (index < value.length && isAsciiIdentifierPart(value[index])) {
+                        index += 1
+                    }
+                    val identifier = value.substring(start, index)
+                    var next = index
+                    while (next < value.length && value[next].isWhitespace()) {
+                        next += 1
+                    }
+                    var afterColon = next + 1
+                    while (afterColon < value.length && value[afterColon].isWhitespace()) {
+                        afterColon += 1
+                    }
+                    var previous = start - 1
+                    while (previous >= 0 && value[previous].isWhitespace()) {
+                        previous -= 1
+                    }
+                    val isStructField =
+                        braceGenericDepths.lastOrNull() == genericDepth &&
+                            previous >= 0 &&
+                            (value[previous] == '{' || value[previous] == ',') &&
+                            next < value.length &&
+                            value[next] == ':' &&
+                            (afterColon >= value.length || value[afterColon] != ':')
+                    check(isStructField || identifier !in retiredNumericTypeNames) {
+                        "$path must not use retired Kotodama numeric type name `$identifier`"
+                    }
+                }
+                else -> {
+                    check(value[index].code <= 0x7f) {
+                        "$path must use ASCII Kotodama type identifiers"
+                    }
+                    index += 1
+                }
+            }
+        }
+        return value
+    }
+
+    private fun isAsciiIdentifierStart(value: Char): Boolean =
+        value == '_' || value in 'A'..'Z' || value in 'a'..'z'
+
+    private fun isAsciiIdentifierPart(value: Char): Boolean =
+        isAsciiIdentifierStart(value) || value in '0'..'9'
 
     private fun canonicalEntrypointName(value: String): Boolean =
         value == "hajimari" || value == "始まり" || value == "kaizen" || value == "改善" || canonicalDeclarationIdentifier(value)

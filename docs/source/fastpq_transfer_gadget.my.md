@@ -2,7 +2,7 @@
 lang: my
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -19,7 +19,7 @@ translator: machine-google-reviewed
 - **Scope**- လက်ရှိ Kotodama/IVM `TransferAsset` syscall မျက်နှာပြင်မှတဆင့် ထုတ်လွှတ်သော တစ်ခုတည်းသော လွှဲပြောင်းမှုများနှင့် အသေးစားအတွဲများ။
 - **ပန်းတိုင်**- ရှာဖွေမှုဇယားများကို မျှဝေပြီး တစ်ခုချင်းလွှဲပြောင်းသည့်ဂဏန်းသင်္ချာကို ကျစ်လစ်သိပ်သည်းစွာ ကန့်သတ်ပိတ်ဆို့ထားသော ဘလောက်တစ်ခုအဖြစ် ပြိုကျစေခြင်းဖြင့် ပမာဏမြင့်မားသောလွှဲပြောင်းမှုများအတွက် FFT/LDE ကော်လံခြေရာကို ဖြတ်လိုက်ပါ။
 
-#ဗိသုကာ
+# ဗိသုကာ
 
 ```
 Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ decoding မတိုင်ခင်။ `TransitionBatch` မက်တာဒေ�
      - `from_balance_before >= amount` (မျှဝေထားသော RNS ပြိုကွဲခြင်းနှင့်အတူ အပိုင်းအခြား gadget)။
      - `from_balance_after = from_balance_before - amount`။
      - `to_balance_after = to_balance_before + amount`။
-   - စိတ်ကြိုက်တံခါးတစ်ခုတွင် ထည့်သွင်းထားသောကြောင့် ညီမျှခြင်းသုံးခုစလုံးသည် အတန်းအုပ်စုတစ်စုကို စားသုံးသည်။2. **Poseidon ကတိကဝတ် Block**
+   - စိတ်ကြိုက်တံခါးတစ်ခုတွင် ထည့်သွင်းထားသောကြောင့် ညီမျှခြင်းသုံးခုစလုံးသည် အတန်းအုပ်စုတစ်စုကို စားသုံးသည်။
+
+2. **Poseidon ကတိကဝတ် Block**
    - အခြား gadget များတွင် အသုံးပြုထားပြီးဖြစ်သော Poseidon ရှာဖွေမှုဇယားကို အသုံးပြု၍ `poseidon_preimage_digest` ကို ပြန်လည်တွက်ချက်သည်။ သဲလွန်စတွင် တစ်ကြိမ် လွှဲပြောင်းခြင်း Poseidon လှည့်ခြင်း မရှိပါ။
 
 3. ** Merkle Path Block**
@@ -96,7 +98,9 @@ decoding မတိုင်ခင်။ `TransitionBatch` မက်တာဒေ�
 5. **Batch Loop**
    - ပရိုဂရမ်များသည် `transfer_asset` တည်ဆောက်သူများနှင့် နောက်မှ `transfer_v1_batch_end()` တို့ကို ကွင်းဆက်မတိုင်မီ `transfer_v1_batch_begin()` သို့ခေါ်ဆိုပါ။ နယ်ပယ်သည် တက်ကြွနေချိန်တွင် လက်ခံဆောင်ရွက်ပေးသူသည် လွှဲပြောင်းမှုတစ်ခုစီကို ကြားခံလုပ်ဆောင်ပြီး ၎င်းတို့ကို `TransferAssetBatch` တစ်ခုတည်းအဖြစ် Poseidon/SMT ဆက်စပ်မှုကို တစ်သုတ်လျှင် တစ်ကြိမ် ပြန်လည်အသုံးပြုသည်။ နောက်ထပ်မြစ်ဝကျွန်းပေါ်ဒေသတစ်ခုစီသည် ဂဏန်းသင်္ချာနှင့် အရွက်စစ်ဆေးမှုနှစ်ခုကိုသာ ပေါင်းထည့်သည်။ စာသားမှတ်တမ်း ဒီကုဒ်ဒါသည် ယခုအခါ မြစ်ဝကျွန်းပေါ်ဒေသအစုံအလင်ကို လက်ခံပြီး ၎င်းတို့ကို `TransferGadgetInput::deltas` အဖြစ် ပေါ်လွင်စေသောကြောင့် စီစဉ်သူသည် Norito ကို ပြန်လည်မဖတ်ဘဲ သက်သေများကို ခေါက်နိုင်သည်။ Norito ပေးဆောင်ရန် အဆင်ပြေသော စာချုပ်များ (ဥပမာ၊ CLI/SDKs) များသည် `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` ကိုခေါ်ဆိုခြင်းဖြင့်၊ syscall တစ်ခုတွင် အပြည့်အဝ encoded batch ကို လက်ခံဆောင်ရွက်ပေးသူအား ပေးအပ်သည့် `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` ကိုခေါ်ဆိုခြင်းဖြင့် နယ်ပယ်တစ်ခုလုံးကို ကျော်သွားနိုင်ပါသည်။
 
-# လက်ခံသူနှင့် သက်သေ အပြောင်းအလဲများ| အလွှာ | အပြောင်းအလဲများ |
+# လက်ခံသူနှင့် သက်သေ အပြောင်းအလဲများ
+
+| အလွှာ | အပြောင်းအလဲများ |
 |---------|---------|
 | `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) သို့ထည့်ပါ ထို့ကြောင့် ပရိုဂရမ်များသည် `transfer_v1` အလယ်အလတ် ISIs၊ 604X နှင့် ISI6040 တို့ကို အလယ်အလတ် ISIs များ ထုတ်လွှတ်ခြင်းမရှိဘဲ ကွင်းပိတ်ပြုလုပ်နိုင်သည်။ ကြိုတင်ကုဒ်လုပ်ထားသော အတွဲများအတွက် (`0x2B`)။ |
 | `ivm::host` & စမ်းသပ်မှုများ | Core/Default host များသည် `transfer_v1` ကို scope တက်ကြွနေချိန်တွင်၊ မျက်နှာပြင် `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` နှင့် mock WSV host buffers များသည် buffers entry များကို မလုပ်ဆောင်မီ regression tests သည် အဆုံးအဖြတ်လက်ကျန်ကို အာမခံနိုင်သည် အပ်ဒိတ်များ။【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```ထုတ်လွှတ်သော JSON သည် `iroha_cli audit witness` မှ ယခုထုတ်လွှတ်သော FASTPQ အတွဲအစည်းကို ပုံသေဖြင့်ထင်ဟပ်စေသည် (၎င်းတို့ကို ဖိနှိပ်ရန် `--no-fastpq-batches` ကို ကျော်ဖြတ်သည်) ထို့ကြောင့် `scripts/fastpq/check_row_usage.py` နှင့် CI ဂိတ်သည် ကြိုတင်လုပ်ဆောင်ထားသောလျှပ်တစ်ပြက်ရိုက်ချက်များနှင့် ကိုက်ညီသောပြောင်းလဲမှုများကို ကွဲပြားစေနိုင်သည်။
+```
+
+ထုတ်လွှတ်သော JSON သည် `iroha_cli audit witness` မှ ယခုထုတ်လွှတ်သော FASTPQ အတွဲအစည်းကို ပုံသေဖြင့်ထင်ဟပ်စေသည် (၎င်းတို့ကို ဖိနှိပ်ရန် `--no-fastpq-batches` ကို ကျော်ဖြတ်သည်) ထို့ကြောင့် `scripts/fastpq/check_row_usage.py` နှင့် CI ဂိတ်သည် ကြိုတင်လုပ်ဆောင်ထားသောလျှပ်တစ်ပြက်ရိုက်ချက်များနှင့် ကိုက်ညီသောပြောင်းလဲမှုများကို ကွဲပြားစေနိုင်သည်။
 
 # ဖြန့်ချိမှုအစီအစဉ်
 

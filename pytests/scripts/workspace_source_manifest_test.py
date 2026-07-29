@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import socket
+import stat
+import struct
 import subprocess
+import tempfile
 
 import pytest
 
@@ -43,6 +48,52 @@ def init_release_repo(path: Path) -> None:
     (path / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _seal_bytes(module, records: list[tuple[bytes, bytes, int, bytes]]) -> bytes:
+    payload = bytearray(module._SOURCE_SEAL_DOMAIN)
+    payload.extend(struct.pack(">Q", len(records)))
+    for member, kind, mode, contents in records:
+        payload.extend(struct.pack(">Q", len(member)))
+        payload.extend(member)
+        payload.extend(kind)
+        payload.extend(struct.pack(">I", mode))
+        payload.extend(struct.pack(">Q", len(contents)))
+        payload.extend(contents)
+    return bytes(payload)
+
+
+def _source_seal_fixture(tmp_path: Path):
+    module = load_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "bin").mkdir()
+    executable = source / "bin" / "runner"
+    executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+    executable.chmod(0o751)
+    (source / "payload").write_bytes(b"privacy-release-input\n")
+    (source / "link").symlink_to("payload")
+    (source / "empty").mkdir()
+    paths = [
+        "bin/runner",
+        "deleted",
+        "empty",
+        "link",
+        "payload",
+    ]
+    path_list = tmp_path / "source-paths.bin"
+    module.write_source_path_list(path_list, paths)
+    manifest = module.workspace_source_manifest_from_path_list(source, path_list)
+    archive = tmp_path / "source.seal"
+    archive_sha = module.create_source_seal(
+        source, path_list, archive, manifest
+    )
+    assert archive_sha == _sha256(archive)
+    return module, source, path_list, manifest, archive, archive_sha
+
+
 def test_manifest_is_order_independent_and_content_sensitive(tmp_path: Path) -> None:
     module = load_module()
     (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8")
@@ -50,9 +101,32 @@ def test_manifest_is_order_independent_and_content_sensitive(tmp_path: Path) -> 
 
     first = module._manifest_for_paths(tmp_path, ["b.txt", "a.txt"])
     assert first == module._manifest_for_paths(tmp_path, ["a.txt", "b.txt"])
+    path_list = tmp_path / "source-paths.bin"
+    module.write_source_path_list(path_list, ["b.txt", "a.txt"])
+    assert module.read_source_path_list(path_list) == ["a.txt", "b.txt"]
+    assert (
+        module.workspace_source_manifest_from_path_list(tmp_path, path_list)
+        == first
+    )
 
     (tmp_path / "a.txt").write_text("changed\n", encoding="utf-8")
     assert first != module._manifest_for_paths(tmp_path, ["a.txt", "b.txt"])
+    assert first != module.workspace_source_manifest_from_path_list(
+        tmp_path, path_list
+    )
+
+    malformed = tmp_path / "malformed-source-paths.bin"
+    malformed.write_bytes(path_list.read_bytes() + b"trailing")
+    with pytest.raises(module.SourcePathListError, match="trailing bytes"):
+        module.read_source_path_list(malformed)
+    symlinked = tmp_path / "symlinked-source-paths.bin"
+    symlinked.symlink_to(path_list.name)
+    with pytest.raises(module.SourcePathListError, match="regular file"):
+        module.read_source_path_list(symlinked)
+    with pytest.raises(FileNotFoundError):
+        module.read_source_path_list(tmp_path / "missing-source-paths.bin")
+    with pytest.raises(FileExistsError):
+        module.write_source_path_list(path_list, ["a.txt"])
 
 
 def test_manifest_distinguishes_deleted_and_symlink_entries(tmp_path: Path) -> None:
@@ -81,6 +155,659 @@ def test_manifest_tracks_executable_mode(tmp_path: Path) -> None:
     executable = module._manifest_for_paths(tmp_path, ["gate.sh"])
     assert regular != executable
     assert os.access(script, os.X_OK)
+
+
+def test_source_seal_is_deterministic_and_round_trips_exact_closure(
+    tmp_path: Path,
+) -> None:
+    (
+        module,
+        source,
+        path_list,
+        manifest,
+        archive,
+        archive_sha,
+    ) = _source_seal_fixture(tmp_path)
+    second_archive = tmp_path / "source-second.seal"
+    assert (
+        module.create_source_seal(
+            source, path_list, second_archive, manifest
+        )
+        == archive_sha
+    )
+    assert second_archive.read_bytes() == archive.read_bytes()
+
+    destination = tmp_path / "detached"
+    destination.mkdir()
+    assert (
+        module.extract_source_seal(
+            archive,
+            path_list,
+            destination,
+            manifest,
+            archive_sha,
+            _sha256(path_list),
+        )
+        == manifest
+    )
+    assert (destination / "bin" / "runner").read_bytes() == (
+        source / "bin" / "runner"
+    ).read_bytes()
+    assert stat.S_IMODE((destination / "bin" / "runner").stat().st_mode) == 0o751
+    assert stat.S_IMODE((destination / "empty").stat().st_mode) == stat.S_IMODE(
+        (source / "empty").stat().st_mode
+    )
+    assert (destination / "link").is_symlink()
+    assert os.readlink(destination / "link") == "payload"
+    assert not (destination / "deleted").exists()
+    assert (
+        module.workspace_source_manifest_from_path_list(destination, path_list)
+        == manifest
+    )
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    (
+        "/absolute",
+        "../escape",
+        "nested/../../escape",
+        ".git",
+        ".git/config",
+        "double//separator",
+        "./dot",
+    ),
+)
+def test_source_path_list_rejects_unsafe_archive_names(
+    tmp_path: Path, unsafe_path: str
+) -> None:
+    module = load_module()
+    with pytest.raises(module.SourcePathListError, match="unsafe path"):
+        module.write_source_path_list(
+            tmp_path / "unsafe-source-paths.bin", [unsafe_path]
+        )
+
+
+def test_source_seal_rejects_out_of_root_symlinks_on_create_and_extract(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "link").symlink_to("../escape")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["link"])
+    manifest = module.workspace_source_manifest_from_path_list(source, path_list)
+    with pytest.raises(module.SourceSealError, match="out-of-root symlink"):
+        module.create_source_seal(
+            source, path_list, tmp_path / "unsafe.seal", manifest
+        )
+
+    (source / "link").unlink()
+    (source / "link").symlink_to("safe")
+    safe_manifest = module.workspace_source_manifest_from_path_list(
+        source, path_list
+    )
+    malicious = tmp_path / "malicious.seal"
+    malicious.write_bytes(
+        _seal_bytes(module, [(b"link", b"L", 0o777, b"../../escape")])
+    )
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    with pytest.raises(module.SourceSealError, match="out-of-root symlink"):
+        module.extract_source_seal(
+            malicious,
+            path_list,
+            destination,
+            safe_manifest,
+            _sha256(malicious),
+            _sha256(path_list),
+        )
+    assert list(destination.iterdir()) == []
+
+
+def test_in_root_dangling_symlink_cannot_smuggle_unsealed_target(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "link").symlink_to("generated-but-unsealed")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["link"])
+    manifest = module.workspace_source_manifest_from_path_list(source, path_list)
+    archive = tmp_path / "source.seal"
+    archive_sha = module.create_source_seal(
+        source, path_list, archive, manifest
+    )
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    module.extract_source_seal(
+        archive,
+        path_list,
+        destination,
+        manifest,
+        archive_sha,
+        _sha256(path_list),
+    )
+    assert (destination / "link").is_symlink()
+    assert not (destination / "link").exists()
+
+    (destination / "generated-but-unsealed").write_bytes(b"smuggled input")
+    with pytest.raises(module.SourceSealError, match="extra or hard-linked"):
+        module.workspace_source_manifest_from_exact_path_list(
+            destination, path_list
+        )
+
+
+@pytest.mark.parametrize(
+    ("records", "message"),
+    (
+        (
+            [(b"a", b"F", 0o644, b"a"), (b"a", b"F", 0o644, b"a")],
+            "outside or out of order",
+        ),
+        (
+            [(b"a", b"F", 0o644, b"a"), (b"outside", b"F", 0o644, b"b")],
+            "outside or out of order",
+        ),
+        (
+            [(b"/absolute", b"F", 0o644, b"a"), (b"b", b"F", 0o644, b"b")],
+            "unsafe path",
+        ),
+        (
+            [(b"../escape", b"F", 0o644, b"a"), (b"b", b"F", 0o644, b"b")],
+            "unsafe path",
+        ),
+        (
+            [(b".git", b"F", 0o644, b"a"), (b"b", b"F", 0o644, b"b")],
+            "unsafe path",
+        ),
+    ),
+    ids=("duplicate", "outside-closure", "absolute", "dotdot", "dot-git"),
+)
+def test_source_seal_rejects_duplicate_outside_and_unsafe_members_before_extract(
+    tmp_path: Path,
+    records: list[tuple[bytes, bytes, int, bytes]],
+    message: str,
+) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a").write_bytes(b"a")
+    (source / "b").write_bytes(b"b")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["a", "b"])
+    manifest = module.workspace_source_manifest_from_path_list(source, path_list)
+    archive = tmp_path / "malicious.seal"
+    archive.write_bytes(_seal_bytes(module, records))
+    destination = tmp_path / "destination"
+    destination.mkdir()
+
+    with pytest.raises(module.SourceSealError, match=message):
+        module.extract_source_seal(
+            archive,
+            path_list,
+            destination,
+            manifest,
+            _sha256(archive),
+            _sha256(path_list),
+        )
+    assert list(destination.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", (b"H", b"C", b"B", b"P", b"S"))
+def test_source_seal_rejects_hard_link_device_fifo_and_socket_member_kinds(
+    tmp_path: Path, kind: bytes
+) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "member").write_bytes(b"x")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["member"])
+    manifest = module.workspace_source_manifest_from_path_list(source, path_list)
+    archive = tmp_path / "malicious.seal"
+    archive.write_bytes(_seal_bytes(module, [(b"member", kind, 0o644, b"")]))
+    destination = tmp_path / "destination"
+    destination.mkdir()
+
+    with pytest.raises(module.SourceSealError, match="hard link, device, FIFO, socket"):
+        module.extract_source_seal(
+            archive,
+            path_list,
+            destination,
+            manifest,
+            _sha256(archive),
+            _sha256(path_list),
+        )
+    assert list(destination.iterdir()) == []
+
+
+def test_source_seal_rejects_hard_link_fifo_and_socket_sources(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+
+    hard_link_root = tmp_path / "hard-link-source"
+    hard_link_root.mkdir()
+    (hard_link_root / "first").write_bytes(b"same inode")
+    os.link(hard_link_root / "first", hard_link_root / "second")
+    hard_link_paths = tmp_path / "hard-link-paths.bin"
+    module.write_source_path_list(hard_link_paths, ["first", "second"])
+    hard_link_manifest = module.workspace_source_manifest_from_path_list(
+        hard_link_root, hard_link_paths
+    )
+    with pytest.raises(module.SourceSealError, match="hard-linked regular"):
+        module.create_source_seal(
+            hard_link_root,
+            hard_link_paths,
+            tmp_path / "hard-link.seal",
+            hard_link_manifest,
+        )
+
+    fifo_root = tmp_path / "fifo-source"
+    fifo_root.mkdir()
+    os.mkfifo(fifo_root / "member")
+    fifo_paths = tmp_path / "fifo-paths.bin"
+    module.write_source_path_list(fifo_paths, ["member"])
+    fifo_manifest = module.workspace_source_manifest_from_path_list(
+        fifo_root, fifo_paths
+    )
+    with pytest.raises(module.SourceSealError, match="device, FIFO, socket"):
+        module.create_source_seal(
+            fifo_root, fifo_paths, tmp_path / "fifo.seal", fifo_manifest
+        )
+
+    with tempfile.TemporaryDirectory(prefix="iroha-seal-", dir="/tmp") as short:
+        socket_root = Path(short)
+        socket_path = socket_root / "member"
+        with socket.socket(socket.AF_UNIX) as unix_socket:
+            unix_socket.bind(str(socket_path))
+            socket_paths = tmp_path / "socket-paths.bin"
+            module.write_source_path_list(socket_paths, ["member"])
+            socket_manifest = module.workspace_source_manifest_from_path_list(
+                socket_root, socket_paths
+            )
+            with pytest.raises(
+                module.SourceSealError, match="device, FIFO, socket"
+            ):
+                module.create_source_seal(
+                    socket_root,
+                    socket_paths,
+                    tmp_path / "socket.seal",
+                    socket_manifest,
+                )
+
+
+def test_source_seal_rejects_mutated_archive_and_path_list(
+    tmp_path: Path,
+) -> None:
+    (
+        module,
+        _,
+        path_list,
+        manifest,
+        archive,
+        archive_sha,
+    ) = _source_seal_fixture(tmp_path)
+    original_path_list_sha = _sha256(path_list)
+
+    mutated_archive = tmp_path / "mutated.seal"
+    payload = bytearray(archive.read_bytes())
+    payload[-1] ^= 1
+    mutated_archive.write_bytes(payload)
+    destination = tmp_path / "archive-destination"
+    destination.mkdir()
+    with pytest.raises(module.SourceSealError, match="archive SHA-256 mismatch"):
+        module.extract_source_seal(
+            mutated_archive,
+            path_list,
+            destination,
+            manifest,
+            archive_sha,
+            original_path_list_sha,
+        )
+    assert list(destination.iterdir()) == []
+
+    mutated_path_list = tmp_path / "mutated-paths.bin"
+    mutated_path_list.write_bytes(path_list.read_bytes() + b"mutation")
+    destination = tmp_path / "path-list-destination"
+    destination.mkdir()
+    with pytest.raises(module.SourceSealError, match="path-list SHA-256 mismatch"):
+        module.extract_source_seal(
+            archive,
+            mutated_path_list,
+            destination,
+            manifest,
+            archive_sha,
+            original_path_list_sha,
+        )
+    assert list(destination.iterdir()) == []
+
+
+def test_source_seal_rejects_missing_member_trailing_bytes_and_size_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "member").write_bytes(b"required")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["member"])
+    manifest = module.workspace_source_manifest_from_path_list(source, path_list)
+
+    missing = tmp_path / "missing.seal"
+    missing.write_bytes(_seal_bytes(module, [(b"member", b"D", 0, b"")]))
+    destination = tmp_path / "missing-destination"
+    destination.mkdir()
+    with pytest.raises(module.SourceSealError, match="workspace manifest mismatch"):
+        module.extract_source_seal(
+            missing,
+            path_list,
+            destination,
+            manifest,
+            _sha256(missing),
+            _sha256(path_list),
+        )
+    assert list(destination.iterdir()) == []
+
+    trailing = tmp_path / "trailing.seal"
+    trailing.write_bytes(
+        _seal_bytes(module, [(b"member", b"F", 0o644, b"required")])
+        + b"trailing"
+    )
+    with pytest.raises(module.SourceSealError, match="trailing bytes"):
+        module.extract_source_seal(
+            trailing,
+            path_list,
+            tmp_path / "missing-destination",
+            manifest,
+            _sha256(trailing),
+            _sha256(path_list),
+        )
+
+    oversized = tmp_path / "oversized.seal"
+    oversized.write_bytes(
+        _seal_bytes(module, [(b"member", b"F", 0o644, b"required")])
+    )
+    monkeypatch.setattr(module, "_MAX_SOURCE_FILE_BYTES", 1)
+    with pytest.raises(module.SourceSealError, match="file exceeds its size bound"):
+        module.extract_source_seal(
+            oversized,
+            path_list,
+            tmp_path / "missing-destination",
+            manifest,
+            _sha256(oversized),
+            _sha256(path_list),
+        )
+
+
+def test_source_seal_rejects_archive_and_member_count_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (
+        module,
+        _,
+        path_list,
+        manifest,
+        archive,
+        archive_sha,
+    ) = _source_seal_fixture(tmp_path)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    monkeypatch.setattr(
+        module, "_MAX_SOURCE_SEAL_BYTES", archive.stat().st_size - 1
+    )
+    with pytest.raises(module.SourceSealError, match="bounded"):
+        module.extract_source_seal(
+            archive,
+            path_list,
+            destination,
+            manifest,
+            archive_sha,
+            _sha256(path_list),
+        )
+
+    module = load_module()
+    count_overflow = tmp_path / "count-overflow.seal"
+    count_overflow.write_bytes(
+        module._SOURCE_SEAL_DOMAIN
+        + struct.pack(">Q", module._MAX_PATH_COUNT + 1)
+    )
+    empty = tmp_path / "count-destination"
+    empty.mkdir()
+    with pytest.raises(module.SourceSealError, match="member count"):
+        module.extract_source_seal(
+            count_overflow,
+            path_list,
+            empty,
+            manifest,
+            _sha256(count_overflow),
+            _sha256(path_list),
+        )
+
+    path_count_overflow = tmp_path / "path-count-overflow.bin"
+    path_count_overflow.write_bytes(
+        module._PATH_LIST_DOMAIN
+        + struct.pack(">Q", module._MAX_PATH_COUNT + 1)
+    )
+    with pytest.raises(module.SourcePathListError, match="count"):
+        module.read_source_path_list(path_count_overflow)
+
+
+def test_source_seal_validates_every_member_before_writing_destination(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a").write_bytes(b"a")
+    (source / "b").write_bytes(b"b")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["a", "b"])
+    manifest = module.workspace_source_manifest_from_path_list(source, path_list)
+    archive = tmp_path / "late-malicious.seal"
+    archive.write_bytes(
+        _seal_bytes(
+            module,
+            [
+                (b"a", b"F", 0o644, b"a"),
+                (b"b", b"H", 0o644, b""),
+            ],
+        )
+    )
+    destination = tmp_path / "destination"
+    destination.mkdir()
+
+    with pytest.raises(module.SourceSealError, match="hard link, device, FIFO, socket"):
+        module.extract_source_seal(
+            archive,
+            path_list,
+            destination,
+            manifest,
+            _sha256(archive),
+            _sha256(path_list),
+        )
+    assert list(destination.iterdir()) == []
+
+
+def test_source_seal_rejects_nonempty_symlink_and_hardlinked_inputs(
+    tmp_path: Path,
+) -> None:
+    (
+        module,
+        _,
+        path_list,
+        manifest,
+        archive,
+        archive_sha,
+    ) = _source_seal_fixture(tmp_path)
+    path_list_sha = _sha256(path_list)
+
+    nonempty = tmp_path / "nonempty"
+    nonempty.mkdir()
+    (nonempty / "injected").write_bytes(b"extra")
+    with pytest.raises(module.SourceSealError, match="destination must be empty"):
+        module.extract_source_seal(
+            archive,
+            path_list,
+            nonempty,
+            manifest,
+            archive_sha,
+            path_list_sha,
+        )
+
+    real_destination = tmp_path / "real-destination"
+    real_destination.mkdir()
+    symlink_destination = tmp_path / "symlink-destination"
+    symlink_destination.symlink_to(real_destination, target_is_directory=True)
+    with pytest.raises(module.SourceSealError, match="must be a real directory"):
+        module.extract_source_seal(
+            archive,
+            path_list,
+            symlink_destination,
+            manifest,
+            archive_sha,
+            path_list_sha,
+        )
+
+    hardlinked_archive = tmp_path / "hardlinked.seal"
+    os.link(archive, hardlinked_archive)
+    empty = tmp_path / "hardlink-destination"
+    empty.mkdir()
+    with pytest.raises(module.SourceSealError, match="singly linked regular"):
+        module.extract_source_seal(
+            hardlinked_archive,
+            path_list,
+            empty,
+            manifest,
+            archive_sha,
+            path_list_sha,
+        )
+
+
+def test_extracted_closure_audit_rejects_extra_members(tmp_path: Path) -> None:
+    (
+        module,
+        _,
+        path_list,
+        manifest,
+        archive,
+        archive_sha,
+    ) = _source_seal_fixture(tmp_path)
+    destination = tmp_path / "detached"
+    destination.mkdir()
+    module.extract_source_seal(
+        archive,
+        path_list,
+        destination,
+        manifest,
+        archive_sha,
+        _sha256(path_list),
+    )
+    (destination / "injected").write_bytes(b"outside closure")
+    extractor = module._DestinationExtractor.__new__(module._DestinationExtractor)
+    extractor.destination = destination
+    extractor.root_descriptor, extractor.root_before = module._open_root_directory(
+        destination, "source seal destination"
+    )
+    try:
+        with pytest.raises(module.SourceSealError, match="extra or hard-linked"):
+            module._audit_extracted_closure(
+                extractor,
+                {
+                    os.fsencode(path): (
+                        b"D"
+                        if path == "deleted"
+                        else b"G"
+                        if path == "empty"
+                        else b"L"
+                        if path == "link"
+                        else b"F"
+                    )
+                    for path in module.read_source_path_list(path_list)
+                },
+            )
+    finally:
+        extractor.close()
+
+
+def test_exact_detached_manifest_and_minimal_context_reject_extras(
+    tmp_path: Path,
+) -> None:
+    (
+        module,
+        _,
+        path_list,
+        manifest,
+        archive,
+        archive_sha,
+    ) = _source_seal_fixture(tmp_path)
+    destination = tmp_path / "detached"
+    destination.mkdir()
+    module.extract_source_seal(
+        archive,
+        path_list,
+        destination,
+        manifest,
+        archive_sha,
+        _sha256(path_list),
+    )
+    assert (
+        module.workspace_source_manifest_from_exact_path_list(
+            destination, path_list
+        )
+        == manifest
+    )
+    (destination / "target").mkdir()
+    (destination / "target" / "injected").write_bytes(b"build output")
+    with pytest.raises(module.SourceSealError, match="outside the frozen closure"):
+        module.workspace_source_manifest_from_exact_path_list(
+            destination, path_list
+        )
+
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "scripts").mkdir()
+    for relative in module._SEALED_CONTEXT_FILES:
+        path = context / os.fsdecode(relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"control\n")
+    module.validate_sealed_context(context)
+    (context / "injected").write_bytes(b"extra")
+    with pytest.raises(module.SourceSealError, match="exact minimal inventory"):
+        module.validate_sealed_context(context)
+
+
+def test_minimal_context_rejects_symlink_and_hardlink_controls(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+
+    def make_context(name: str) -> Path:
+        context = tmp_path / name
+        context.mkdir()
+        (context / "scripts").mkdir()
+        for relative in module._SEALED_CONTEXT_FILES:
+            path = context / os.fsdecode(relative)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"control\n")
+        return context
+
+    symlink_context = make_context("symlink-context")
+    helper = symlink_context / "scripts" / "compute_workspace_source_manifest.py"
+    helper.unlink()
+    helper.symlink_to("../Dockerfile")
+    with pytest.raises(module.SourceSealError, match="symlink, hard link"):
+        module.validate_sealed_context(symlink_context)
+
+    hardlink_context = make_context("hardlink-context")
+    control = hardlink_context / "context-control.sha256"
+    hardlink = tmp_path / "context-control-hardlink"
+    os.link(control, hardlink)
+    with pytest.raises(module.SourceSealError, match="symlink, hard link"):
+        module.validate_sealed_context(hardlink_context)
 
 
 def test_workspace_manifest_binds_ignored_cargo_lock(tmp_path: Path) -> None:

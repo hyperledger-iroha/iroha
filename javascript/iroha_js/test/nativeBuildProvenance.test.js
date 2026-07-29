@@ -24,6 +24,7 @@ import {
   cleanupNativeBuildSourceSnapshot,
   createNativeBuildSourceSnapshot,
   invalidateNativeBuildProvenance,
+  NATIVE_BUILD_CARGO_LOCK_ENV,
   nativeBuildProvenancePath,
   readNativeBuildProvenance,
   readNativeBuildSourceState,
@@ -35,6 +36,17 @@ import {
 
 const REVISION = "a".repeat(40);
 const SOURCE_DIGEST = "b".repeat(64);
+const INHERITED_CARGO_LOCK_PATH = process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
+
+delete process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
+
+test.after(() => {
+  if (INHERITED_CARGO_LOCK_PATH === undefined) {
+    delete process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
+  } else {
+    process.env[NATIVE_BUILD_CARGO_LOCK_ENV] = INHERITED_CARGO_LOCK_PATH;
+  }
+});
 
 function sourceState({
   revision = REVISION,
@@ -229,6 +241,89 @@ test("source seal covers tracked, untracked, lock, mode, symlink, and deletion s
     assert.notEqual(deleted.sourceTreeSha256, base.sourceTreeSha256);
   });
 });
+
+test("selected Cargo lock is snapshotted, fingerprinted, and monitored", () => {
+  withSourceRepository((repoRoot) => {
+    const privateDirectory = path.join(repoRoot, "target", "private-lock");
+    const privateLock = path.join(privateDirectory, "Cargo.lock");
+    const rootLock = path.join(repoRoot, "Cargo.lock");
+    mkdirSync(privateDirectory, { recursive: true });
+    writeFileSync(privateLock, "version = 4\n# selected private lock\n");
+    const env = {
+      ...process.env,
+      [NATIVE_BUILD_CARGO_LOCK_ENV]: privateLock,
+    };
+
+    const selected = readNativeBuildSourceState(repoRoot, { env });
+    writeFileSync(rootLock, "version = 4\n# unrelated root lock change\n");
+    assert.deepEqual(
+      readNativeBuildSourceState(repoRoot, { env }),
+      selected,
+    );
+    writeFileSync(privateLock, "version = 4\n# changed selected lock\n");
+    assert.notEqual(
+      readNativeBuildSourceState(repoRoot, { env }).sourceTreeSha256,
+      selected.sourceTreeSha256,
+    );
+
+    writeFileSync(rootLock, "version = 4\n");
+    writeFileSync(privateLock, "version = 4\n# selected private lock\n");
+    const snapshot = createNativeBuildSourceSnapshot(
+      repoRoot,
+      path.join(repoRoot, "target", "selected-lock-snapshot"),
+      { env },
+    );
+    try {
+      assert.equal(
+        readFileSync(path.join(snapshot.snapshotRoot, "Cargo.lock"), "utf8"),
+        "version = 4\n# selected private lock\n",
+      );
+      assert.deepEqual(
+        verifyNativeBuildSourceSnapshot(snapshot),
+        snapshot.sourceState,
+      );
+      writeFileSync(privateLock, "version = 4\n# drifted selected lock\n");
+      assert.throws(
+        () => verifyNativeBuildSourceSnapshot(snapshot),
+        /Cargo\.lock changed while it was in use/u,
+      );
+    } finally {
+      cleanupNativeBuildSourceSnapshot(snapshot);
+    }
+  });
+});
+
+test(
+  "selected Cargo lock rejects relative and symbolic-link paths",
+  { skip: process.platform === "win32" },
+  () => {
+    withSourceRepository((repoRoot) => {
+      assert.throws(
+        () =>
+          readNativeBuildSourceState(repoRoot, {
+            env: {
+              ...process.env,
+              [NATIVE_BUILD_CARGO_LOCK_ENV]: "Cargo.lock",
+            },
+          }),
+        /must name an absolute Cargo\.lock path/u,
+      );
+      const linkPath = path.join(repoRoot, "target", "linked-Cargo.lock");
+      mkdirSync(path.dirname(linkPath), { recursive: true });
+      symlinkSync(path.join(repoRoot, "Cargo.lock"), linkPath);
+      assert.throws(
+        () =>
+          readNativeBuildSourceState(repoRoot, {
+            env: {
+              ...process.env,
+              [NATIVE_BUILD_CARGO_LOCK_ENV]: linkPath,
+            },
+          }),
+        /canonical and contain no symbolic-link components/u,
+      );
+    });
+  },
+);
 
 test("source seal binds exact stage-0 index bytes even when the dirty worktree is unchanged", () => {
   withSourceRepository((repoRoot) => {

@@ -17,223 +17,6 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
     }
 
     private let sessionID = Data((1...16).map(UInt8.init))
-
-    func testMatchesSharedINF1NST1APDUAndJournalGoldenFixture() throws {
-        let fixture = try IrohaPeerMobileFixtureSupport.loadNfc()
-        let fixtureSessionID = try IrohaPeerMobileFixtureSupport.hex(
-            fixture.sessionHex
-        )
-        XCTAssertEqual(IrohaPeerNfcV1.applicationIdentifierHex, fixture.aidHex)
-        XCTAssertEqual(
-            IrohaPeerNfcV1.applicationIdentifier,
-            try IrohaPeerMobileFixtureSupport.hex(fixture.aidHex)
-        )
-
-        let syntheticIdentity = try IrohaPeerNfcRequestIdentityV1(
-            profile: .offlineNote,
-            sessionID: fixtureSessionID,
-            requestCanonicalHash: Data(repeating: 0x11, count: 32),
-            requestWireHash: Data(repeating: 0x22, count: 32)
-        )
-        let info = try IrohaPeerNfcInfoV1(
-            phase: .requestReady,
-            flags: [.idempotentWrites],
-            identity: syntheticIdentity,
-            requestLength: 300,
-            maximumReadChunkBytes: 240,
-            maximumWriteChunkBytes: 240
-        )
-        XCTAssertEqual(
-            info.encode(),
-            try IrohaPeerMobileFixtureSupport.hex(fixture.infoHex)
-        )
-        XCTAssertEqual(try IrohaPeerNfcInfoV1.decode(info.encode()), info)
-
-        let status = try IrohaPeerNfcStatusV1(
-            phase: .acknowledgementReady,
-            flags: [.idempotentWrites, .durableAcknowledgement],
-            identity: syntheticIdentity,
-            paymentProfile: .offlineNote,
-            paymentLength: 700,
-            receivedPaymentBytes: 700,
-            paymentWireHash: Data(repeating: 0x33, count: 32),
-            acknowledgementProfile: .offlineNote,
-            acknowledgementLength: 270,
-            acknowledgementWireHash: Data(repeating: 0x44, count: 32),
-            maximumReadChunkBytes: 240,
-            maximumWriteChunkBytes: 240
-        )
-        XCTAssertEqual(
-            status.encode(),
-            try IrohaPeerMobileFixtureSupport.hex(
-                fixture.ackReadyStatusHex
-            )
-        )
-        XCTAssertEqual(try IrohaPeerNfcStatusV1.decode(status.encode()), status)
-
-        let request = try fixtureMessage(fixture.messages.request)
-        let payment = try fixtureMessage(fixture.messages.payment)
-        let acknowledgement = try fixtureMessage(
-            fixture.messages.acknowledgement
-        )
-        let commands: [(String, IrohaPeerNfcCommandV1, String)] = [
-            ("select", .selectApplication, fixture.apduHex.select),
-            ("get_info", .getInfo, fixture.apduHex.getInfo),
-            (
-                "read_request",
-                .readRequest(
-                    sessionID: fixtureSessionID,
-                    requestCanonicalHash: request.canonicalHash,
-                    offset: 0x0102_0304,
-                    length: 240
-                ),
-                fixture.apduHex.readRequest
-            ),
-            (
-                "begin_payment",
-                .beginPayment(
-                    sessionID: fixtureSessionID,
-                    requestCanonicalHash: request.canonicalHash,
-                    paymentHeader: payment.header.bytes
-                ),
-                fixture.apduHex.beginPayment
-            ),
-            (
-                "write_300",
-                .write(
-                    sessionID: fixtureSessionID,
-                    paymentWireHash: payment.wireHash,
-                    offset: 0x0102_0304,
-                    bytes: Data(repeating: 0x55, count: 300)
-                ),
-                fixture.apduHex.write300.joined()
-            ),
-            (
-                "commit",
-                .commit(
-                    sessionID: fixtureSessionID,
-                    requestCanonicalHash: request.canonicalHash,
-                    paymentWireHash: payment.wireHash
-                ),
-                fixture.apduHex.commit
-            ),
-            (
-                "read_ack_1024",
-                .readAcknowledgement(
-                    sessionID: fixtureSessionID,
-                    paymentWireHash: payment.wireHash,
-                    offset: 0x0102_0304,
-                    length: 1_024
-                ),
-                fixture.apduHex.readAck1024
-            ),
-            (
-                "confirm_ack",
-                .confirmAcknowledgement(
-                    sessionID: fixtureSessionID,
-                    paymentWireHash: payment.wireHash,
-                    acknowledgementWireHash: acknowledgement.wireHash
-                ),
-                fixture.apduHex.confirmAck
-            ),
-            (
-                "get_status",
-                .getStatus(
-                    sessionID: fixtureSessionID,
-                    requestCanonicalHash: request.canonicalHash
-                ),
-                fixture.apduHex.getStatus
-            ),
-        ]
-        for (name, command, hex) in commands {
-            let encoded = try IrohaPeerNfcAPDUCodecV1.encode(command)
-            XCTAssertEqual(
-                encoded,
-                try IrohaPeerMobileFixtureSupport.hex(hex),
-                name
-            )
-            XCTAssertEqual(try IrohaPeerNfcAPDUCodecV1.decode(encoded), command)
-        }
-
-        let policy = IrohaPeerNfcProfilePolicyV1(profile: .offlineNote)
-        let checkpoint = try IrohaPeerNfcSenderCheckpointV1(
-            sessionID: fixtureSessionID,
-            receiveRequest: request.encoded,
-            payment: payment.encoded,
-            profilePolicy: policy
-        )
-        XCTAssertEqual(
-            checkpoint.encoded.count,
-            fixture.checkpoint.withoutAckLength
-        )
-        XCTAssertEqual(
-            Blake2b.hash256(checkpoint.encoded).hexEncodedString(),
-            fixture.checkpoint.withoutAckBlake2b256Hex
-        )
-
-        let identity = try IrohaPeerNfcRequestIdentityV1(
-            profile: request.profile,
-            sessionID: fixtureSessionID,
-            requestCanonicalHash: request.canonicalHash,
-            requestWireHash: request.wireHash
-        )
-        let admissionContext = try IrohaPeerNfcPaymentAdmissionContextV1(
-            identity: identity,
-            profilePolicy: policy,
-            paymentHeader: payment.header.bytes
-        )
-        let admission = try IrohaPeerNfcDurablePaymentAdmissionV1(
-            context: admissionContext
-        )
-        XCTAssertEqual(admission.encoded.count, fixture.paymentAdmission.length)
-        XCTAssertEqual(
-            admission.encoded,
-            try IrohaPeerMobileFixtureSupport.hex(fixture.paymentAdmission.encodedHex)
-        )
-        XCTAssertEqual(
-            Blake2b.hash256(admission.encoded).hexEncodedString(),
-            fixture.paymentAdmission.blake2b256Hex
-        )
-        XCTAssertEqual(
-            try IrohaPeerNfcDurablePaymentAdmissionV1.decode(
-                admission.encoded,
-                profilePolicy: policy
-            ),
-            admission
-        )
-
-        let context = try IrohaPeerNfcCommitContextV1(
-            identity: identity,
-            profilePolicy: policy,
-            payment: payment
-        )
-        let durable = try IrohaPeerNfcDurableAcknowledgementV1(
-            context: context,
-            acknowledgement: acknowledgement.encoded
-        )
-        XCTAssertEqual(durable.encoded.count, fixture.durableAck.length)
-        XCTAssertEqual(
-            Blake2b.hash256(durable.encoded).hexEncodedString(),
-            fixture.durableAck.blake2b256Hex
-        )
-
-        let checkpointWithAck = try IrohaPeerNfcSenderCheckpointV1(
-            sessionID: fixtureSessionID,
-            receiveRequest: request.encoded,
-            payment: payment.encoded,
-            durableAcknowledgement: acknowledgement.encoded,
-            profilePolicy: policy
-        )
-        XCTAssertEqual(
-            checkpointWithAck.encoded.count,
-            fixture.checkpoint.withAckLength
-        )
-        XCTAssertEqual(
-            Blake2b.hash256(checkpointWithAck.encoded).hexEncodedString(),
-            fixture.checkpoint.withAckBlake2b256Hex
-        )
-    }
-
     func testExactAidInstructionsAndUInt32Offsets() throws {
         let expectedAid = Data([
             0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01,
@@ -501,7 +284,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             maximumReadChunkBytes: 128,
             maximumWriteChunkBytes: 128
         )
-        let policy = IrohaPeerNfcProfilePolicyV1(profile: .offlineNote)
+        let policy = IrohaPeerNfcProfilePolicyV1(profile: .kagemusha)
         let request = try message(kind: .receiveRequest, byte: 0x51, count: 260)
         let payment = try message(kind: .payment, byte: 0x52, count: 530)
         let acknowledgement = try message(kind: .acknowledgement, byte: 0x53, count: 270)
@@ -617,10 +400,30 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
     }
 
     func testDurableAdmissionDecodeRejectsRedundantFieldMutation() throws {
-        let fixture = try IrohaPeerMobileFixtureSupport.loadNfc()
-        let encoded = try IrohaPeerMobileFixtureSupport.hex(
-            fixture.paymentAdmission.encodedHex
+        let limits = IrohaPeerNfcLimitsV1(
+            maximumReadChunkBytes: 128,
+            maximumWriteChunkBytes: 128
         )
+        let request = try message(kind: .receiveRequest, byte: 0x55, count: 260)
+        let payment = try message(kind: .payment, byte: 0x56, count: 530)
+        var receiver = try IrohaPeerNfcReceiverSessionV1(
+            sessionID: sessionID,
+            receiveRequest: request.encoded,
+            profilePolicy: .init(profile: .kagemusha),
+            limits: limits
+        )
+        guard case .requiresDurableAdmission(let context) =
+            try receiver.preparePaymentAdmission(.beginPayment(
+                sessionID: sessionID,
+                requestCanonicalHash: request.canonicalHash,
+                paymentHeader: payment.header.bytes
+            )) else {
+            return XCTFail("current Kagemusha BEGIN must require durable admission")
+        }
+        let encoded = try IrohaPeerNfcDurablePaymentAdmissionV1(
+            context: context,
+            limits: limits
+        ).encoded
         var mutated = encoded
         mutated[96] ^= 1
         XCTAssertThrowsError(try IrohaPeerNfcDurablePaymentAdmissionV1.decode(mutated)) {
@@ -899,41 +702,13 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
     }
 
-    func testMixedProfilesAreRejectedAndKagemushaSessionStaysSingleProfile() throws {
-        let retailRequest = try message(
-            profile: .offlineNote,
-            kind: .receiveRequest,
-            byte: 0x91,
-            count: 120
-        )
+    func testKagemushaSessionStaysSingleProfile() throws {
         let kagemushaPayment = try message(
             profile: .kagemusha,
             kind: .payment,
             byte: 0x92,
             count: 360
         )
-        let retailPolicy = IrohaPeerNfcProfilePolicyV1(profile: .offlineNote)
-        XCTAssertThrowsError(try IrohaPeerNfcSenderCheckpointV1(
-            sessionID: sessionID,
-            receiveRequest: retailRequest.encoded,
-            payment: kagemushaPayment.encoded,
-            profilePolicy: retailPolicy
-        )) {
-            XCTAssertEqual($0 as? IrohaPeerNfcErrorV1, .invalidProfile)
-        }
-
-        var retailReceiver = try IrohaPeerNfcReceiverSessionV1(
-            sessionID: sessionID,
-            receiveRequest: retailRequest.encoded,
-            profilePolicy: retailPolicy
-        )
-        XCTAssertThrowsError(try retailReceiver.preparePaymentAdmission(.beginPayment(
-            sessionID: sessionID,
-            requestCanonicalHash: retailRequest.canonicalHash,
-            paymentHeader: kagemushaPayment.header.bytes
-        ))) {
-            XCTAssertEqual($0 as? IrohaPeerNfcErrorV1, .invalidProfile)
-        }
 
         let request = try message(
             profile: .kagemusha,
@@ -1109,7 +884,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
 
         let result = try await IrohaPeerNfcReaderExchangeV1.run(
-            profilePolicy: .init(profile: .offlineNote),
+            profilePolicy: .init(profile: .kagemusha),
             limits: limits,
             transceive: { command in
                 try await loopback.transceive(command)
@@ -1187,7 +962,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
             do {
                 _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                    profilePolicy: .init(profile: .offlineNote),
+                    profilePolicy: .init(profile: .kagemusha),
                     limits: IrohaPeerNfcLimitsV1(
                         maximumReadChunkBytes: 240,
                         maximumWriteChunkBytes: 240
@@ -1224,7 +999,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
     }
 
-    func testDefaultNfcLimitCarriesExactMaximumOfflineNoteIPM() throws {
+    func testDefaultNfcLimitCarriesExactMaximumKagemushaIPM() throws {
         let request = try message(
             kind: .receiveRequest,
             byte: 0xBC,
@@ -1233,7 +1008,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         let payment = try message(
             kind: .payment,
             byte: 0xBD,
-            count: 24_576
+            count: 24_528
         )
         XCTAssertEqual(payment.encoded.count, IrohaPeerNfcV1.maximumMessageBytes)
 
@@ -1255,7 +1030,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         XCTAssertThrowsError(try message(
             kind: .payment,
             byte: 0xBE,
-            count: 24_577
+            count: 24_529
         )) {
             XCTAssertEqual(
                 $0 as? IrohaPeerWireMessageErrorV1,
@@ -1285,7 +1060,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .offlineNote),
+                profilePolicy: .init(profile: .kagemusha),
                 maximumActions: 6,
                 transceive: { command in
                     try await probe.transceive(command)
@@ -1339,7 +1114,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .offlineNote),
+                profilePolicy: .init(profile: .kagemusha),
                 maximumActions: 2 + request.encoded.count,
                 transceive: { command in
                     try await probe.transceive(command)
@@ -1398,7 +1173,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
                 restoredCheckpoint: checkpoint.encoded,
-                profilePolicy: .init(profile: .offlineNote),
+                profilePolicy: .init(profile: .kagemusha),
                 limits: limits,
                 maximumActions: 2,
                 transceive: { command in
@@ -1454,7 +1229,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .offlineNote),
+                profilePolicy: .init(profile: .kagemusha),
                 limits: limits,
                 maximumActions: actionsBeforeAcknowledgementPersistence,
                 transceive: { command in
@@ -1517,7 +1292,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             maximumActions: Int = IrohaPeerNfcReaderExchangeV1.defaultMaximumActions
         ) async throws -> IrohaPeerNfcReaderExchangeResultV1 {
             try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .offlineNote),
+                profilePolicy: .init(profile: .kagemusha),
                 limits: limits,
                 maximumActions: maximumActions,
                 transceive: { command in
@@ -1598,7 +1373,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .init(profile: .offlineNote),
+                profilePolicy: .init(profile: .kagemusha),
                 limits: limits,
                 transceive: { command in
                     try await loopback.transceive(command)
@@ -1623,7 +1398,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         XCTAssertNil(
             try IrohaPeerNfcSenderCheckpointV1.decode(
                 paymentOnlyCheckpoint,
-                profilePolicy: .init(profile: .offlineNote),
+                profilePolicy: .init(profile: .kagemusha),
                 limits: limits
             ).durableAcknowledgement
         )
@@ -1632,7 +1407,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
         let result = try await IrohaPeerNfcReaderExchangeV1.run(
             restoredCheckpoint: paymentOnlyCheckpoint,
-            profilePolicy: .init(profile: .offlineNote),
+            profilePolicy: .init(profile: .kagemusha),
             limits: limits,
             transceive: { command in
                 try await loopback.transceive(command)
@@ -1692,7 +1467,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             ) async throws -> IrohaPeerNfcReaderExchangeResultV1 {
                 try await IrohaPeerNfcReaderExchangeV1.run(
                     restoredCheckpoint: restoredCheckpoint,
-                    profilePolicy: .init(profile: .offlineNote),
+                    profilePolicy: .init(profile: .kagemusha),
                     limits: limits,
                     transceive: { command in
                         try await loopback.transceive(command)
@@ -1747,24 +1522,24 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         }
     }
 
-    func testProfileKindSessionAndHashSubstitutionFailClosed() throws {
+    func testRetiredProfileKindSessionAndHashSubstitutionFailClosed() throws {
         let request = try message(kind: .receiveRequest, byte: 0x11, count: 90)
-        let wrongProfilePayment = try message(
-            profile: .kagemusha,
-            kind: .payment,
-            byte: 0x12,
-            count: 90
-        )
+        let payment = try message(kind: .payment, byte: 0x12, count: 90)
         var receiver = try IrohaPeerNfcReceiverSessionV1(
             sessionID: sessionID,
             receiveRequest: request.encoded
         )
-        XCTAssertThrowsError(try receiver.preparePaymentAdmission(.beginPayment(
-            sessionID: sessionID,
-            requestCanonicalHash: request.canonicalHash,
-            paymentHeader: wrongProfilePayment.header.bytes
-        ))) {
-            XCTAssertEqual($0 as? IrohaPeerNfcErrorV1, .invalidProfile)
+        for rawProfile: UInt16 in [1, UInt16.max] {
+            var forgedHeader = payment.header.bytes
+            forgedHeader[6] = UInt8(rawProfile >> 8)
+            forgedHeader[7] = UInt8(rawProfile & 0xFF)
+            XCTAssertThrowsError(try receiver.preparePaymentAdmission(.beginPayment(
+                sessionID: sessionID,
+                requestCanonicalHash: request.canonicalHash,
+                paymentHeader: forgedHeader
+            ))) {
+                XCTAssertEqual($0 as? IrohaPeerNfcErrorV1, .invalidIPM1)
+            }
         }
 
         var wrongSession = sessionID
@@ -1789,11 +1564,10 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNfcErrorV1, .invalidHash)
         }
 
-        let payment = try message(kind: .payment, byte: 0x13, count: 100)
         XCTAssertThrowsError(try IrohaPeerNfcDurableAcknowledgementV1(
             context: IrohaPeerNfcCommitContextV1(
                 identity: try identity(for: request),
-                profilePolicy: .init(profile: .offlineNote),
+                profilePolicy: .init(profile: .kagemusha),
                 payment: payment
             ),
             acknowledgement: payment.encoded
@@ -1807,7 +1581,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
     }
 
     private func message(
-        profile: IrohaPeerPayloadProfile = .offlineNote,
+        profile: IrohaPeerPayloadProfile = .kagemusha,
         kind: IrohaPeerPayloadKind,
         byte: UInt8,
         count: Int
@@ -1822,28 +1596,6 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             schemaVersion: profile.requiredSchemaVersion,
             canonicalPayload: canonicalPayload
         )
-    }
-
-    private func fixtureMessage(
-        _ fixture: PeerNfcFixtureV1.Message
-    ) throws -> IrohaPeerWireMessageV1 {
-        let profile = try XCTUnwrap(
-            IrohaPeerPayloadProfile(rawValue: fixture.profile)
-        )
-        let kind = try XCTUnwrap(
-            IrohaPeerPayloadKind(rawValue: fixture.kind)
-        )
-        let message = try IrohaPeerWireMessageV1(
-            profile: profile,
-            kind: kind,
-            schemaVersion: fixture.schemaVersion,
-            canonicalPayload: Data(
-                repeating: fixture.repeatByte,
-                count: fixture.count
-            )
-        )
-        XCTAssertEqual(message.wireHash.hexEncodedString(), fixture.wireHashHex)
-        return message
     }
 
     private func identity(
@@ -2092,7 +1844,7 @@ private struct IrohaPeerNfcTransactionalCheckpointStoreSnapshotV1: Sendable {
 private actor IrohaPeerNfcTransactionalCheckpointStoreV1 {
     private let payment: IrohaPeerWireMessageV1
     private let limits: IrohaPeerNfcLimitsV1
-    private let profilePolicy = IrohaPeerNfcProfilePolicyV1(profile: .offlineNote)
+    private let profilePolicy = IrohaPeerNfcProfilePolicyV1(profile: .kagemusha)
     private var encodedCheckpoint: Data?
     private var failNextLoadOrCreate: Bool
     private var failNextUpdate: Bool

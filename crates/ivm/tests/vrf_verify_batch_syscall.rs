@@ -7,6 +7,14 @@ use common::assemble_syscalls;
 use group::{Curve, Group, prime::PrimeCurveAffine};
 use ivm::vrf::{VrfVerifyBatchRequest, VrfVerifyRequest};
 
+fn vrf_batch_vm_gas(payload_len: usize) -> u64 {
+    ivm::gas::vrf_verify_gas(
+        u64::try_from(ivm::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1).expect("VRF batch cap fits u64"),
+        u64::try_from(payload_len).unwrap_or(u64::MAX),
+    )
+    .saturating_add(1_024)
+}
+
 fn hash_to_g1(msg: &[u8]) -> G1Affine {
     const DST: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
     G1Projective::hash_to_curve(msg, DST, &[]).to_affine()
@@ -32,7 +40,7 @@ fn run_vrf_verify_batch(req: VrfVerifyBatchRequest) -> (u64, u64, u64) {
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -118,7 +126,7 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -185,7 +193,7 @@ fn syscall_vrf_verify_batch_fail_index_is_reported() {
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -270,7 +278,7 @@ fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
     // Configure host to enforce chain id = host_chain
     vm.set_host(DefaultHost::new().with_chain_id(host_chain.to_vec()));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");

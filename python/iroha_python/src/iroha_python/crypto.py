@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional, TypeAlias, Union
 
 from ._native import load_crypto_extension
@@ -22,18 +23,22 @@ GOST_3410_2012_512_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-512-paramse
 BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
 BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
-PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 7
-PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Final[int] = 64 * 1024 * 1024
+PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21
+PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Final[int] = 256 * 1024
+PRIVACY_CAPABILITY_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = MappingProxyType(
+    {
+        "VALID": 0,
+        "NULL_POINTER": 1,
+        "EMPTY": 2,
+        "ARCHIVE_TOO_LARGE": 3,
+        "DECODE_RESOURCE_LIMIT": 4,
+        "SCHEMA_MISMATCH": 5,
+        "NON_CANONICAL": 6,
+        "MALFORMED_ARCHIVE": 7,
+        "INVALID_SNAPSHOT": 8,
+    }
+)
 _PRIVACY_MAX_BRIDGE_ABI_VERSION: Final[int] = 0xFFFF_FFFF
-_PRIVACY_NORITO_HEADER_BYTES: Final[int] = 40
-_PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES: Final[int] = 64
-_PRIVACY_NORITO_SUPPORTED_FLAGS_MASK: Final[int] = 0x27
-_PRIVACY_NORITO_FIELD_BITSET_FLAG: Final[int] = 0x20
-_PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS: Final[int] = 0x06
-_PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE: Final[int] = 0x50
-_PRIVACY_CRC64_MASK: Final[int] = 0xFFFF_FFFF_FFFF_FFFF
-_PRIVACY_CRC64_REFLECTED_POLY: Final[int] = 0xC96C_5795_D787_0F42
-_PRIVACY_NORITO_MAGIC: Final[bytes] = b"NRT0"
 try:
     SUPPORTED_CRYPTO_ALGORITHMS: Final[tuple[str, ...]] = tuple(
         _crypto.supported_crypto_algorithms()
@@ -88,6 +93,7 @@ __all__ = [
     "BLS_SMALL_ALGORITHM",
     "SM2_ALGORITHM",
     "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION",
+    "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1",
     "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES",
     "SUPPORTED_CRYPTO_ALGORITHMS",
     "ED25519_PRIVATE_KEY_LENGTH",
@@ -104,6 +110,14 @@ __all__ = [
     "Instruction",
     "ContractCall",
     "TransactionExecutableEntry",
+    "PrivacyBootleLanternPresentationActionBuildResultV1",
+    "PrivacyJindoActionBuildResultV1",
+    "PrivacyVeRangeActionBuildResultV1",
+    "PrivacyVegaActionPreparationV1",
+    "PrivacyVegaActionBuildResultV1",
+    "PrivacyZkAceTransferActionBuildResultV1",
+    "PrivacyZkAmsBatchAdmissionActionBuildResultV1",
+    "PrivacyZkAmsProvisionAccountActionBuildResultV1",
     "SignedTransactionEnvelope",
     "TransactionBuilder",
     "ConfidentialKeyset",
@@ -168,14 +182,19 @@ __all__ = [
     "buildConfidentialAssetHiddenTransferProofV1",
     "confidential_transfer_v2_verifying_key_registration_payload_v1",
     "confidential_unshield_v3_verifying_key_registration_payload_v1",
-    "zk_ace_verifying_key_registration_payload_v1",
-    "build_zk_ace_authorization_proof_v1",
-    "zk_ace_authorized_transfer_digest_check",
-    "zk_ace_build_transfer_authorization_v1",
-    "zk_ace_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
     "is_privacy_native_available",
     "privacy_capabilities_v1",
+    "canonical_genesis_header_hash_v1",
+    "canonical_signed_transaction_hash_v1",
+    "privacy_vega_device_authentication_digest_v1",
+    "inspect_signed_privacy_zk_ace_transfer_action_v1",
+    "inspect_signed_privacy_bootle_lantern_presentation_action_v1",
+    "inspect_signed_privacy_jindo_action_v1",
+    "inspect_signed_privacy_verange_action_v1",
+    "inspect_signed_privacy_vega_action_v1",
+    "inspect_signed_privacy_zk_ams_batch_admission_action_v1",
+    "inspect_signed_privacy_zk_ams_provision_account_action_v1",
     "sm2_fixture_from_seed",
 ]
 
@@ -229,32 +248,18 @@ TransactionExecutableEntry: TypeAlias = Union["Instruction", ContractCall]
 
 if TYPE_CHECKING:
     Instruction: TypeAlias = Any
+    PrivacyBootleLanternPresentationActionBuildResultV1: TypeAlias = Any
+    PrivacyJindoActionBuildResultV1: TypeAlias = Any
+    PrivacyVeRangeActionBuildResultV1: TypeAlias = Any
+    PrivacyVegaActionPreparationV1: TypeAlias = Any
+    PrivacyVegaActionBuildResultV1: TypeAlias = Any
+    PrivacyZkAceTransferActionBuildResultV1: TypeAlias = Any
+    PrivacyZkAmsBatchAdmissionActionBuildResultV1: TypeAlias = Any
+    PrivacyZkAmsProvisionAccountActionBuildResultV1: TypeAlias = Any
     SignedTransactionEnvelope: TypeAlias = Any
     TransactionBuilder: TypeAlias = Any
 else:
     _NativeInstruction = _crypto.Instruction
-
-    def _normalize_zk_ace_allowed_accounts(allowed_accounts: Any) -> list[str]:
-        if allowed_accounts is None:
-            raise TypeError("allowed_accounts must be a non-empty sequence of account ids")
-        if isinstance(allowed_accounts, (str, bytes, bytearray, memoryview)):
-            raise TypeError("allowed_accounts must be a non-empty sequence of account ids")
-        try:
-            accounts = list(allowed_accounts)
-        except TypeError as exc:
-            raise TypeError("allowed_accounts must be a non-empty sequence of account ids") from exc
-        if not accounts:
-            raise ValueError("allowed_accounts must be non-empty")
-        if len(accounts) > 16:
-            raise ValueError("allowed_accounts must contain at most 16 accounts")
-        seen: set[str] = set()
-        for index, account in enumerate(accounts):
-            if not isinstance(account, str) or not account.strip():
-                raise ValueError(f"allowed_accounts[{index}] must be a non-empty account id")
-            if account in seen:
-                raise ValueError(f"allowed_accounts[{index}] duplicates an earlier account")
-            seen.add(account)
-        return accounts
 
     def _require_cancel_asset_lock_id(value: Any) -> str:
         if not isinstance(value, str):
@@ -300,52 +305,6 @@ else:
             return _NativeInstruction.cancel_asset_lock(
                 _require_cancel_asset_lock_id(escrow_id),
                 expected_remaining_amount,
-            )
-
-        @staticmethod
-        def register_zk_ace_identity_commitment(
-            asset_definition_id: str,
-            identity_commitment: Any,
-            policy_hash: Any,
-            allowed_accounts: Any = None,
-            verifier_key: Any = None,
-            *,
-            action_class: Optional[str] = None,
-            domain_tag: Optional[str] = None,
-        ) -> Any:
-            accounts = _normalize_zk_ace_allowed_accounts(allowed_accounts)
-            return _NativeInstruction.register_zk_ace_identity_commitment(
-                asset_definition_id,
-                identity_commitment,
-                policy_hash,
-                accounts,
-                verifier_key,
-                action_class=action_class,
-                domain_tag=domain_tag,
-            )
-
-        @staticmethod
-        def rotate_zk_ace_identity_commitment(
-            asset_definition_id: str,
-            old_identity_commitment: Any,
-            new_identity_commitment: Any,
-            policy_hash: Any,
-            allowed_accounts: Any = None,
-            verifier_key: Any = None,
-            *,
-            action_class: Optional[str] = None,
-            domain_tag: Optional[str] = None,
-        ) -> Any:
-            accounts = _normalize_zk_ace_allowed_accounts(allowed_accounts)
-            return _NativeInstruction.rotate_zk_ace_identity_commitment(
-                asset_definition_id,
-                old_identity_commitment,
-                new_identity_commitment,
-                policy_hash,
-                accounts,
-                verifier_key,
-                action_class=action_class,
-                domain_tag=domain_tag,
             )
 
         @staticmethod
@@ -396,6 +355,22 @@ else:
                 expiration_epoch,
             )
 
+    PrivacyBootleLanternPresentationActionBuildResultV1 = (
+        _crypto.PrivacyBootleLanternPresentationActionBuildResultV1
+    )
+    PrivacyJindoActionBuildResultV1 = _crypto.PrivacyJindoActionBuildResultV1
+    PrivacyVeRangeActionBuildResultV1 = _crypto.PrivacyVeRangeActionBuildResultV1
+    PrivacyVegaActionPreparationV1 = _crypto.PrivacyVegaActionPreparationV1
+    PrivacyVegaActionBuildResultV1 = _crypto.PrivacyVegaActionBuildResultV1
+    PrivacyZkAceTransferActionBuildResultV1 = (
+        _crypto.PrivacyZkAceTransferActionBuildResultV1
+    )
+    PrivacyZkAmsBatchAdmissionActionBuildResultV1 = (
+        _crypto.PrivacyZkAmsBatchAdmissionActionBuildResultV1
+    )
+    PrivacyZkAmsProvisionAccountActionBuildResultV1 = (
+        _crypto.PrivacyZkAmsProvisionAccountActionBuildResultV1
+    )
     SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
     TransactionBuilder = _crypto.TransactionBuilder
 verify_signed_transaction_versioned = _crypto.verify_signed_transaction_versioned
@@ -1161,45 +1136,7 @@ def hash_blake2b_32(data: bytes) -> bytes:
     return _crypto.hash_blake2b_32(data)
 
 
-_ZK_ACE_ALGORITHM_ID: Final[str] = "zk-ace-pq-authorization-v0"
-_ZK_ACE_PRODUCTION_ENTRYPOINT: Final[str] = "buildZkAceAuthorizationProofV1"
-_ZK_ACE_PRODUCTION_VK_REF: Final[str] = "stark-fri:zk_ace_pq_authorization_v0"
-_ZK_ACE_PRODUCTION_DISABLED_MESSAGE: Final[str] = (
-    "native ZK-ACE prover returned PRIVACY_FFI_ERROR_PRODUCTION_DISABLED for "
-    f"{_ZK_ACE_ALGORITHM_ID} {_ZK_ACE_PRODUCTION_ENTRYPOINT} "
-    f"{_ZK_ACE_PRODUCTION_VK_REF}: "
-    "Iroha production allowlist is not enabled for this audited row"
-)
 _U128_MAX: Final[int] = (1 << 128) - 1
-
-
-def _zk_ace_sanitized_native_prover_error(error: Exception) -> RuntimeError:
-    message = str(error)
-    if (
-        "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED" in message
-        or "production disabled" in message.lower()
-        or "production-disabled" in message.lower()
-        or "Iroha production allowlist" in message
-    ):
-        return RuntimeError(_ZK_ACE_PRODUCTION_DISABLED_MESSAGE)
-    return RuntimeError("native ZK-ACE prover failed")
-
-
-def _normalize_positive_u128_literal(value: int | str, name: str) -> str:
-    if isinstance(value, bool):
-        raise ValueError(f"{name} must be a positive decimal u128 string")
-    if isinstance(value, int):
-        amount = value
-    elif isinstance(value, str):
-        normalized = value.strip()
-        if not normalized.isdecimal():
-            raise ValueError(f"{name} must be a positive decimal u128 string")
-        amount = int(normalized, 10)
-    else:
-        raise TypeError(f"{name} must be a positive decimal u128 string")
-    if amount <= 0 or amount > _U128_MAX:
-        raise ValueError(f"{name} must be a positive decimal u128 string")
-    return str(amount)
 
 
 def _normalize_u128_literal(value: int | str, name: str) -> str:
@@ -1599,19 +1536,6 @@ buildConfidentialAssetHiddenTransferProofV1 = (
 )
 
 
-def zk_ace_verifying_key_registration_payload_v1() -> Dict[str, Any]:
-    """Build the canonical active ZK-ACE verifier-key registration payload."""
-
-    if not hasattr(_crypto, "zk_ace_verifying_key_registration_payload_v1"):
-        raise RuntimeError(
-            "iroha_python._crypto is missing ZK-ACE verifier-key support; rebuild the extension"
-        )
-    payload = _crypto.zk_ace_verifying_key_registration_payload_v1()
-    if not isinstance(payload, Mapping):
-        raise RuntimeError("ZK-ACE verifier-key builder returned a non-object payload")
-    return dict(payload)
-
-
 def confidential_transfer_v2_verifying_key_registration_payload_v1() -> Dict[str, Any]:
     """Build the canonical active confidential transfer v2 verifier-key payload."""
 
@@ -1646,71 +1570,6 @@ def confidential_unshield_v3_verifying_key_registration_payload_v1() -> Dict[str
     return dict(payload)
 
 
-def zk_ace_build_transfer_authorization_v1(
-    *,
-    from_account_id: str,
-    to_account_id: str,
-    asset_definition_id: str,
-    amount: int | str,
-    chain_id: str,
-    identity_root: bytes | bytearray | memoryview | str,
-    identity_blinding: bytes | bytearray | memoryview | str,
-    replay_secret: bytes | bytearray | memoryview | str,
-    policy_hash: bytes | bytearray | memoryview | str,
-    verifier_key_id: str | Mapping[str, Any] | None = None,
-    vk_commitment: bytes | bytearray | memoryview | str | None = None,
-) -> Dict[str, Any]:
-    """Build a STARK/FRI-backed ZK-ACE transparent-transfer authorization."""
-
-    if not hasattr(_crypto, "zk_ace_build_transfer_authorization_v1"):
-        raise RuntimeError(
-            "iroha_python._crypto is missing ZK-ACE prover support; rebuild the extension"
-        )
-    native_args = (
-        str(from_account_id),
-        str(to_account_id),
-        str(asset_definition_id),
-        _normalize_positive_u128_literal(amount, "amount"),
-        str(chain_id),
-        identity_root,
-        identity_blinding,
-        replay_secret,
-        policy_hash,
-        verifier_key_id,
-        vk_commitment,
-    )
-    native_error: Exception | None = None
-    try:
-        result = _crypto.zk_ace_build_transfer_authorization_v1(*native_args)
-    except Exception as error:
-        native_error = error
-        result = ""
-    if native_error is not None:
-        raise _zk_ace_sanitized_native_prover_error(native_error)
-    parsed = json.loads(result)
-    if not isinstance(parsed, dict):
-        raise RuntimeError("ZK-ACE prover returned a non-object payload")
-    return parsed
-
-
-def zk_ace_authorized_transfer_digest_check(
-    instruction_archive_hex: str,
-) -> Dict[str, Any]:
-    """Decode a ZK-ACE transfer archive and compare its digest bindings."""
-
-    if not hasattr(_crypto, "zk_ace_authorized_transfer_digest_check"):
-        raise RuntimeError(
-            "iroha_python._crypto is missing ZK-ACE digest inspection support; rebuild the extension"
-        )
-    return dict(_crypto.zk_ace_authorized_transfer_digest_check(str(instruction_archive_hex)))
-
-
-def build_zk_ace_authorization_proof_v1(**kwargs: Any) -> Dict[str, Any]:
-    """Build the executable Python SDK ZK-ACE authorization proof v1 payload."""
-
-    return zk_ace_build_transfer_authorization_v1(**kwargs)
-
-
 def _privacy_unsigned_byte_view(
     value: object,
     *,
@@ -1726,7 +1585,7 @@ def _privacy_unsigned_byte_view(
     return view
 
 
-def _privacy_output_archive(operation: str, result: object) -> bytes:
+def _privacy_output_archive(module: object, operation: str, result: object) -> bytes:
     if result is None:
         raise RuntimeError(f"native {operation} returned no output")
     if isinstance(result, str):
@@ -1745,11 +1604,11 @@ def _privacy_output_archive(operation: str, result: object) -> bytes:
     archive = view.tobytes()
     if not archive:
         raise RuntimeError(f"native {operation} returned empty output")
-    _assert_privacy_norito_archive(
-        operation,
-        archive,
-        expected_schema_byte=_privacy_expected_result_schema_byte(operation),
-    )
+    validation_status = _invoke_privacy_capability_validator(module, archive)
+    if validation_status != PRIVACY_CAPABILITY_VALIDATION_STATUS_V1["VALID"]:
+        raise RuntimeError(
+            f"native {operation} returned an invalid typed privacy capability archive"
+        )
     return archive
 
 
@@ -1772,113 +1631,11 @@ def _clear_privacy_native_output(result: object) -> None:
         return
 
 
-def _privacy_crc64_table() -> tuple[int, ...]:
-    table: list[int] = []
-    for index in range(256):
-        crc = index
-        for _ in range(8):
-            if crc & 1:
-                crc = (crc >> 1) ^ _PRIVACY_CRC64_REFLECTED_POLY
-            else:
-                crc >>= 1
-        table.append(crc & _PRIVACY_CRC64_MASK)
-    return tuple(table)
-
-
-_PRIVACY_CRC64_TABLE: Final[tuple[int, ...]] = _privacy_crc64_table()
-
-
-def _privacy_crc64(payload: bytes) -> int:
-    crc = _PRIVACY_CRC64_MASK
-    for byte in payload:
-        crc = _PRIVACY_CRC64_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
-    return (crc ^ _PRIVACY_CRC64_MASK) & _PRIVACY_CRC64_MASK
-
-
-def _assert_privacy_norito_archive(
-    operation: str,
-    archive: bytes | memoryview,
-    *,
-    native_output: bool = True,
-    expected_schema_byte: int,
-) -> None:
-    archive_view = memoryview(archive)
-
-    def fail() -> None:
-        if not native_output:
-            raise ValueError(f"{operation} must be a valid Norito V1 archive")
-        raise RuntimeError(f"native {operation} returned invalid Norito V1 archive")
-
-    if (
-        isinstance(expected_schema_byte, bool)
-        or not isinstance(expected_schema_byte, int)
-        or expected_schema_byte < 0
-        or expected_schema_byte > 0xFF
-    ):
-        if not native_output:
-            raise ValueError(f"{operation} must use the privacy request schema")
-        raise RuntimeError(
-            f"native {operation} returned unexpected privacy result schema"
-        )
-
-    if archive_view.nbytes < _PRIVACY_NORITO_HEADER_BYTES:
-        fail()
-    if archive_view[0:4].tobytes() != _PRIVACY_NORITO_MAGIC:
-        fail()
-    if archive_view[4] != 0 or archive_view[5] != 0:
-        fail()
-    if archive_view[22] != 0:
-        fail()
-    flags = archive_view[39]
-    if flags & ~_PRIVACY_NORITO_SUPPORTED_FLAGS_MASK:
-        fail()
-    if (
-        flags & _PRIVACY_NORITO_FIELD_BITSET_FLAG
-        and flags & _PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS
-        != _PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS
-    ):
-        fail()
-    payload_length = int.from_bytes(archive_view[23:31], "little")
-    if payload_length == 0:
-        if not native_output:
-            raise ValueError(
-                f"{operation} must contain a non-empty privacy request payload"
-            )
-        raise RuntimeError(
-            f"native {operation} returned empty privacy result payload"
-        )
-    minimum_length = _PRIVACY_NORITO_HEADER_BYTES + payload_length
-    if archive_view.nbytes < minimum_length:
-        fail()
-    padding_length = archive_view.nbytes - minimum_length
-    if padding_length > _PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES:
-        fail()
-    padding_start = _PRIVACY_NORITO_HEADER_BYTES
-    padding_end = padding_start + padding_length
-    if any(archive_view[padding_start:padding_end]):
-        fail()
-    payload = archive_view[padding_end:]
-    expected_crc = int.from_bytes(archive_view[31:39], "little")
-    if _privacy_crc64(payload) != expected_crc:
-        fail()
-    if any(byte != expected_schema_byte for byte in archive_view[6:22]):
-        if not native_output:
-            raise ValueError(f"{operation} must use the privacy request schema")
-        raise RuntimeError(
-            f"native {operation} returned unexpected privacy result schema"
-        )
-
-
-def _privacy_expected_result_schema_byte(operation: str) -> int:
-    if operation != "privacy_capabilities_v1":
-        raise RuntimeError(
-            f"native {operation} is not a supported privacy capability operation"
-        )
-    return _PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE
-
-
 _PRIVACY_BRIDGE_ABI_VERSION_METHOD: Final[str] = "privacy_bridge_abi_version"
 _PRIVACY_CAPABILITY_METHOD: Final[str] = "privacy_capabilities_v1"
+_PRIVACY_CAPABILITY_VALIDATOR_METHOD: Final[str] = (
+    "privacy_validate_capabilities_v1"
+)
 
 
 def _privacy_bridge_abi_version(module: object) -> int | None:
@@ -1901,7 +1658,36 @@ def _privacy_bridge_abi_version(module: object) -> int | None:
 
 def _has_privacy_bridge_abi(module: object) -> bool:
     version = _privacy_bridge_abi_version(module)
-    return version is not None and version >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
+    return version == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
+
+
+def _privacy_capability_validator(module: object):
+    if not _has_privacy_bridge_abi(module):
+        raise RuntimeError(
+            "privacy capabilities require native bridge ABI "
+            f"{PRIVACY_REQUIRED_BRIDGE_ABI_VERSION}"
+        )
+    method = getattr(module, _PRIVACY_CAPABILITY_VALIDATOR_METHOD, None)
+    if not callable(method):
+        raise RuntimeError(
+            "iroha_python._crypto is missing privacy_validate_capabilities_v1; "
+            "rebuild the extension"
+        )
+    return method
+
+
+def _invoke_privacy_capability_validator(module: object, archive: bytes) -> int:
+    try:
+        status = _privacy_capability_validator(module)(archive)
+    except Exception:
+        raise RuntimeError("native privacy capability validation failed") from None
+    if (
+        isinstance(status, bool)
+        or not isinstance(status, int)
+        or status not in PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.values()
+    ):
+        raise RuntimeError("native privacy capability validation returned invalid status")
+    return status
 
 
 def _privacy_capability_method(module: object):
@@ -1922,7 +1708,7 @@ def _privacy_native_probe_returns_bytes(module: object) -> bool:
     result: object | None = None
     try:
         result = _privacy_capability_method(module)()
-        _privacy_output_archive(_PRIVACY_CAPABILITY_METHOD, result)
+        _privacy_output_archive(module, _PRIVACY_CAPABILITY_METHOD, result)
         return True
     except Exception:
         return False
@@ -1959,6 +1745,326 @@ def privacy_capabilities_v1() -> bytes:
     """Return the canonical Norito V1 privacy capability snapshot archive."""
 
     return _privacy_output_archive(
+        _crypto,
         _PRIVACY_CAPABILITY_METHOD,
         _invoke_privacy_capability_native(),
     )
+
+
+def canonical_genesis_header_hash_v1(
+    framed_signed_genesis: bytes | bytearray | memoryview,
+) -> bytes:
+    """Return the header hash of one exact canonical framed signed genesis.
+
+    Authentication and root selection remain the caller's responsibility. The
+    native boundary rejects malformed, non-canonical, non-genesis, and
+    oversized block wires before returning a hash.
+    """
+
+    if not isinstance(framed_signed_genesis, (bytes, bytearray, memoryview)):
+        raise TypeError("framed_signed_genesis must be bytes-like")
+    try:
+        result = _crypto.canonical_genesis_header_hash_v1(
+            bytes(framed_signed_genesis)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing canonical_genesis_header_hash_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid canonical framed signed genesis") from None
+    if not isinstance(result, bytes) or len(result) != 32 or result == bytes(32):
+        raise RuntimeError("native canonical genesis hash returned invalid bytes")
+    return result
+
+
+def canonical_signed_transaction_hash_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> bytes:
+    """Authenticate one exact current signed wire and recompute its chain hash."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.canonical_signed_transaction_hash_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing canonical_signed_transaction_hash_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid canonical signed transaction") from None
+    if not isinstance(result, bytes) or len(result) != 32:
+        raise RuntimeError("native canonical signed transaction hash returned invalid bytes")
+    return result
+
+
+def privacy_vega_device_authentication_digest_v1(
+    chain_id: str,
+    canonical_genesis_hash: bytes | bytearray | memoryview,
+    transaction_intent_digest: bytes | bytearray | memoryview,
+    issuer_id: bytes | bytearray | memoryview,
+    issuer_record_epoch: int,
+    issuer_record_digest: bytes | bytearray | memoryview,
+    issuer_public_key: bytes | bytearray | memoryview,
+    presentation_year: int,
+    presentation_month: int,
+    presentation_day: int,
+    minimum_age_years: int,
+    reader_challenge: bytes | bytearray | memoryview,
+    session_transcript_digest: bytes | bytearray | memoryview,
+) -> bytes:
+    """Derive Vega ``H_dev`` for an explicit prepared transaction intent.
+
+    The native derivation fixes the ISO 18013-5 document profile, action index,
+    governed Vega artifacts, chain, genesis, date, threshold, reader challenge,
+    session transcript, and canonical nonzero transaction intent. Prefer
+    :meth:`TransactionDraft.prepare_privacy_vega_action_v1`; this low-level
+    helper exists for independently transporting an already prepared intent.
+    """
+
+    if not isinstance(chain_id, str):
+        raise TypeError("chain_id must be a string")
+    byte_inputs = (
+        (canonical_genesis_hash, "canonical_genesis_hash"),
+        (transaction_intent_digest, "transaction_intent_digest"),
+        (issuer_id, "issuer_id"),
+        (issuer_record_digest, "issuer_record_digest"),
+        (issuer_public_key, "issuer_public_key"),
+        (reader_challenge, "reader_challenge"),
+        (session_transcript_digest, "session_transcript_digest"),
+    )
+    for value, field in byte_inputs:
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            raise TypeError(f"{field} must be bytes-like")
+    try:
+        result = _crypto.privacy_vega_device_authentication_digest_v1(
+            chain_id,
+            bytes(canonical_genesis_hash),
+            bytes(transaction_intent_digest),
+            bytes(issuer_id),
+            issuer_record_epoch,
+            bytes(issuer_record_digest),
+            bytes(issuer_public_key),
+            presentation_year,
+            presentation_month,
+            presentation_day,
+            minimum_age_years,
+            bytes(reader_challenge),
+            bytes(session_transcript_digest),
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "privacy_vega_device_authentication_digest_v1; rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid Vega device-authentication statement") from None
+    if not isinstance(result, bytes) or len(result) != 32 or result == bytes(32):
+        raise RuntimeError(
+            "native Vega device-authentication derivation returned invalid bytes"
+        )
+    return result
+
+
+def inspect_signed_privacy_zk_ace_transfer_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact native ZK-ACE transfer action."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.inspect_signed_privacy_zk_ace_transfer_action_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "inspect_signed_privacy_zk_ace_transfer_action_v1; rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid canonical signed ZK-ACE transfer action") from None
+    if type(result) is not dict:
+        raise RuntimeError(
+            "native ZK-ACE transfer action inspection returned an invalid result"
+        )
+    return result
+
+
+def inspect_signed_privacy_jindo_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect public metadata from one exact Jindo action."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.inspect_signed_privacy_jindo_action_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "inspect_signed_privacy_jindo_action_v1; rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid canonical signed Jindo action") from None
+    if type(result) is not dict:
+        raise RuntimeError("native Jindo action inspection returned an invalid result")
+    return result
+
+
+def inspect_signed_privacy_verange_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect public metadata from one exact VeRange action."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.inspect_signed_privacy_verange_action_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "inspect_signed_privacy_verange_action_v1; rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid canonical signed VeRange action") from None
+    if type(result) is not dict:
+        raise RuntimeError("native VeRange action inspection returned an invalid result")
+    return result
+
+
+def inspect_signed_privacy_vega_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect public metadata from one exact Vega action."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.inspect_signed_privacy_vega_action_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "inspect_signed_privacy_vega_action_v1; rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid canonical signed Vega action") from None
+    if type(result) is not dict:
+        raise RuntimeError("native Vega action inspection returned an invalid result")
+    return result
+
+
+def inspect_signed_privacy_zk_ams_batch_admission_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact ZK-AMS batch-admission action."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.inspect_signed_privacy_zk_ams_batch_admission_action_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "inspect_signed_privacy_zk_ams_batch_admission_action_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid canonical signed ZK-AMS batch-admission action") from None
+    if type(result) is not dict:
+        raise RuntimeError(
+            "native ZK-AMS batch-admission inspection returned an invalid result"
+        )
+    return result
+
+
+def inspect_signed_privacy_zk_ams_provision_account_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact ZK-AMS account-provisioning action."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.inspect_signed_privacy_zk_ams_provision_account_action_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "inspect_signed_privacy_zk_ams_provision_account_action_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError(
+            "invalid canonical signed ZK-AMS account-provisioning action"
+        ) from None
+    if type(result) is not dict:
+        raise RuntimeError(
+            "native ZK-AMS account-provisioning inspection returned an invalid result"
+        )
+    return result
+
+
+def inspect_signed_privacy_bootle_lantern_presentation_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+) -> dict[str, Any]:
+    """Authenticate and inspect one exact Bootle/Lantern presentation action."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    try:
+        result = _crypto.inspect_signed_privacy_bootle_lantern_presentation_action_v1(
+            bytes(signed_transaction_versioned)
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "inspect_signed_privacy_bootle_lantern_presentation_action_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError(
+            "invalid canonical signed Bootle/Lantern presentation action"
+        ) from None
+    if type(result) is not dict:
+        raise RuntimeError(
+            "native Bootle/Lantern presentation inspection returned an invalid result"
+        )
+    return result

@@ -107,30 +107,10 @@ public final class IrohaPeerQRScanSessionV1Tests {
   }
 
   @Test
-  public void expectedProfileAndKindMismatchesQuarantineTheirStreamIds() {
-    final IrohaPeerWireMessageV1 kagemusha = kagemushaMessage(new byte[] {1});
-    final String profileText = IrohaPeerQRCodecV1.encode(kagemusha).get(0);
-    final IrohaPeerQRScanSessionV1 profileSession =
-        new IrohaPeerQRScanSessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE, null, null);
-    final IllegalArgumentException profileMismatch =
-        assertThrows(
-            IllegalArgumentException.class,
-            () -> profileSession.ingestAt(profileText, 100));
-    assertTrue(profileMismatch.getMessage().contains("profile mismatch"));
-    final IllegalArgumentException repeatedProfile =
-        assertThrows(
-            IllegalArgumentException.class,
-            () -> profileSession.ingestAt(profileText, 101));
-    assertTrue(repeatedProfile.getMessage().contains("quarantined"));
-
+  public void expectedKindMismatchQuarantinesItsStreamId() {
     final IrohaPeerWireMessageV1 acknowledgement =
-        new IrohaPeerWireMessageV1(
-            new IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                IrohaPeerPayloadKind.ACKNOWLEDGEMENT,
-                1,
-                new byte[] {2}));
+        IrohaPeerKagemushaStructuralTestV1.message(
+            IrohaPeerPayloadKind.ACKNOWLEDGEMENT, new byte[] {2});
     final String kindText = IrohaPeerQRCodecV1.encode(acknowledgement).get(0);
     final IrohaPeerQRScanSessionV1 kindSession =
         new IrohaPeerQRScanSessionV1(null, IrohaPeerPayloadKind.PAYMENT, null);
@@ -239,7 +219,7 @@ public final class IrohaPeerQRScanSessionV1Tests {
     final IrohaPeerQRFrameV1 hostileComplete =
         new IrohaPeerQRFrameV1(
             IrohaPeerQRFrameV1.FrameKind.COMPLETE,
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerPayloadKind.PAYMENT,
             small.streamId(),
             0,
@@ -292,16 +272,16 @@ public final class IrohaPeerQRScanSessionV1Tests {
     final String staticText = IrohaPeerQRCodecV1.encode(small).get(0);
     final IrohaPeerQRScanSessionV1 staticSession =
         new IrohaPeerQRScanSessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerPayloadKind.PAYMENT,
-            0x0102,
+            1,
             limits,
             () -> 0L);
     final IllegalArgumentException staticMismatch =
         assertThrows(
             IllegalArgumentException.class,
             () -> staticSession.ingestAt(staticText, 1_000));
-    assertTrue(staticMismatch.getMessage().contains("expected 258, received 1"));
+    assertTrue(staticMismatch.getMessage().contains("expected 1, received 258"));
     final IllegalArgumentException staticQuarantine =
         assertThrows(
             IllegalArgumentException.class,
@@ -311,7 +291,7 @@ public final class IrohaPeerQRScanSessionV1Tests {
         assertThrows(
             IllegalArgumentException.class,
             () -> staticSession.ingestAt(staticText, 1_030));
-    assertTrue(expiredStatic.getMessage().contains("expected 258, received 1"));
+    assertTrue(expiredStatic.getMessage().contains("expected 1, received 258"));
 
     final List<String> animated = IrohaPeerQRCodecV1.animatedFrameTexts(animatedMessage(72));
     final List<String> headers = new ArrayList<>();
@@ -325,9 +305,9 @@ public final class IrohaPeerQRScanSessionV1Tests {
     final String trailingParityText = parity;
     final IrohaPeerQRScanSessionV1 animatedSession =
         new IrohaPeerQRScanSessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerPayloadKind.PAYMENT,
-            0x0102,
+            1,
             limits,
             () -> 0L);
     assertThrows(
@@ -347,7 +327,7 @@ public final class IrohaPeerQRScanSessionV1Tests {
         assertThrows(
             IllegalArgumentException.class,
             () -> animatedSession.ingestAt(headers.get(headers.size() - 1), 2_030));
-    assertTrue(expiredHeader.getMessage().contains("expected 258, received 1"));
+    assertTrue(expiredHeader.getMessage().contains("expected 1, received 258"));
 
     final IrohaPeerWireMessageV1 kagemusha = kagemushaMessage(new byte[] {1, 2, 3});
     assertEquals(
@@ -371,12 +351,7 @@ public final class IrohaPeerQRScanSessionV1Tests {
   }
 
   private static IrohaPeerWireMessageV1 messageWithBytes(final byte[] bytes) {
-    return new IrohaPeerWireMessageV1(
-        new IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerPayloadKind.PAYMENT,
-            1,
-            bytes));
+    return IrohaPeerKagemushaStructuralTestV1.message(IrohaPeerPayloadKind.PAYMENT, bytes);
   }
 
   private static IrohaPeerWireMessageV1 kagemushaMessage(final byte[] body) {

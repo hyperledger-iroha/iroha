@@ -44,9 +44,8 @@ const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v2";
 const ACCOUNT_ONBOARDING_TOKEN_HEADER: &str = "x-iroha-onboarding-token";
 
 const REQUIRED_MCP_TOOLS: &[&str] = &[
-    "iroha.status",
+    "iroha.health",
     "iroha.sumeragi.status",
-    "iroha.time.now",
     "iroha.musubi.search",
     "iroha.musubi.release.get",
     "iroha.musubi.instructions.yank_release",
@@ -56,6 +55,7 @@ const REQUIRED_MCP_TOOLS: &[&str] = &[
 
 const ROUTE_CHECKS: &[(&str, &str, &[u16])] = &[
     ("status", "/status", &[200]),
+    ("time_now", "/v1/time/now", &[200]),
     ("sumeragi_status", "/v1/sumeragi/status", &[200]),
     (
         "pipeline_transaction_status",
@@ -185,15 +185,23 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     for (name, path, expected_statuses) in ROUTE_CHECKS {
         let url = join_url(&public_root, path)?;
         let result = http_json(&http, reqwest::Method::GET, url.as_str(), None)?;
-        let ok = expected_statuses.contains(&result.status);
+        let status_ok = expected_statuses.contains(&result.status);
+        let semantic_error = if *name == "time_now" && status_ok {
+            validate_time_snapshot(result.body.as_ref()).err()
+        } else {
+            None
+        };
+        let ok = status_ok && semantic_error.is_none();
         push_check(
             &mut checks,
             name,
             result.status,
             ok,
-            route_check_detail(expected_statuses),
+            semantic_error
+                .clone()
+                .or_else(|| route_check_detail(expected_statuses)),
         );
-        if !ok {
+        if !status_ok {
             failures.push(format!(
                 "{name} returned HTTP {}; expected {}",
                 result.status,
@@ -203,6 +211,8 @@ fn run_doctor(public_root: &str) -> Result<Value> {
                     .collect::<Vec<_>>()
                     .join(" or ")
             ));
+        } else if let Some(error) = semantic_error {
+            failures.push(error);
         }
         if *name == "status" && ok {
             collect_status_warnings(result.body.as_ref(), &mut warnings);
@@ -1056,6 +1066,50 @@ fn value_path_u64(value: &Value, path: &[&str]) -> Option<u64> {
 
 fn value_path_bool(value: &Value, path: &[&str]) -> Option<bool> {
     value_path(value, path).and_then(Value::as_bool)
+}
+
+fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
+    let snapshot = snapshot
+        .and_then(Value::as_object)
+        .ok_or_else(|| "/v1/time/now returned a non-object JSON body".to_owned())?;
+    let positive_u64 = |field: &str| {
+        snapshot
+            .get(field)
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| format!("/v1/time/now field `{field}` must be a positive integer"))
+    };
+    positive_u64("now")?;
+    positive_u64("sample_count")?;
+    positive_u64("peer_count")?;
+    snapshot
+        .get("confidence_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            "/v1/time/now field `confidence_ms` must be a nonnegative integer".to_owned()
+        })?;
+    snapshot
+        .get("offset_ms")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| "/v1/time/now field `offset_ms` must be an integer".to_owned())?;
+    if snapshot.get("enforcement_mode").and_then(Value::as_str) != Some("reject") {
+        return Err("/v1/time/now is not using fail-closed time enforcement".to_owned());
+    }
+    if snapshot.get("fallback").and_then(Value::as_bool) != Some(false) {
+        return Err("/v1/time/now is using the local-clock fallback".to_owned());
+    }
+    for field in ["healthy", "min_samples_ok", "offset_ok", "confidence_ok"] {
+        if snapshot
+            .get("health")
+            .and_then(Value::as_object)
+            .and_then(|health| health.get(field))
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Err(format!("/v1/time/now health field `{field}` is not true"));
+        }
+    }
+    Ok(())
 }
 
 fn mcp_tool_names(payload: Option<&Value>) -> Vec<String> {
@@ -1971,6 +2025,24 @@ mod tests {
                     "queue_size": 0
                 }),
             ),
+            ("GET", "/v1/time/now") => MockResponse::json(
+                200,
+                norito::json!({
+                    "now": 1_785_168_000_000_u64,
+                    "offset_ms": 0,
+                    "confidence_ms": 1,
+                    "sample_count": 3,
+                    "peer_count": 3,
+                    "enforcement_mode": "reject",
+                    "fallback": false,
+                    "health": {
+                        "healthy": true,
+                        "min_samples_ok": true,
+                        "offset_ok": true,
+                        "confidence_ok": true
+                    }
+                }),
+            ),
             ("GET", "/v1/contracts/state") => {
                 MockResponse::json(400, norito::json!({"error": "missing selector"}))
             }
@@ -2174,7 +2246,7 @@ mod tests {
 
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
-        let server = spawn_mock_http(13, |request| doctor_mock_response(request, None));
+        let server = spawn_mock_http(14, |request| doctor_mock_response(request, None));
         let report = run_doctor(&server.base_url).expect("doctor report");
         let requests = finish_mock(server);
 
@@ -2195,6 +2267,9 @@ mod tests {
         }));
         assert!(requests.iter().any(|request| {
             request.method == "GET" && path_only(&request.path) == "/v1/transactions/status"
+        }));
+        assert!(requests.iter().any(|request| {
+            request.method == "GET" && path_only(&request.path) == "/v1/time/now"
         }));
     }
 
@@ -2227,6 +2302,66 @@ mod tests {
             output
                 .contains("contracts_state HTTP 400 (mounted route is expected to return HTTP 400")
         );
+    }
+
+    #[test]
+    fn time_snapshot_requires_network_time_and_every_health_axis() {
+        let healthy = norito::json!({
+            "now": 1_u64,
+            "offset_ms": 0,
+            "confidence_ms": 0_u64,
+            "sample_count": 3_u64,
+            "peer_count": 3_u64,
+            "enforcement_mode": "reject",
+            "fallback": false,
+            "health": {
+                "healthy": true,
+                "min_samples_ok": true,
+                "offset_ok": true,
+                "confidence_ok": true
+            }
+        });
+        validate_time_snapshot(Some(&healthy)).expect("healthy network time");
+
+        for (label, mutation) in [
+            ("fallback", "/v1/time/now is using the local-clock fallback"),
+            (
+                "samples",
+                "/v1/time/now field `sample_count` must be a positive integer",
+            ),
+            ("health", "/v1/time/now health field `healthy` is not true"),
+            (
+                "enforcement",
+                "/v1/time/now is not using fail-closed time enforcement",
+            ),
+        ] {
+            let mut hostile = healthy.clone();
+            let object = hostile.as_object_mut().expect("object");
+            match label {
+                "fallback" => {
+                    object.insert("fallback".into(), Value::Bool(true));
+                }
+                "samples" => {
+                    object.insert("sample_count".into(), Value::from(0_u64));
+                }
+                "health" => {
+                    object
+                        .get_mut("health")
+                        .and_then(Value::as_object_mut)
+                        .expect("health")
+                        .insert("healthy".into(), Value::Bool(false));
+                }
+                "enforcement" => {
+                    object.insert("enforcement_mode".into(), Value::from("warn"));
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                validate_time_snapshot(Some(&hostile)),
+                Err(mutation.to_owned())
+            );
+        }
+        assert!(validate_time_snapshot(None).is_err());
     }
 
     #[test]
@@ -2389,7 +2524,7 @@ mod tests {
     #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
-        let server = spawn_mock_http(13, move |request| {
+        let server = spawn_mock_http(14, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
         let report = run_doctor(&server.base_url).expect("doctor report");

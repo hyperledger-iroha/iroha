@@ -107,9 +107,9 @@ use iroha_data_model::{
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey,
-        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtReplayRecord, DataSpaceCatalog,
-        DataSpaceId, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
-        DomainEndorsementRecord, FeeDebitSource, FeeSponsorBudgetCounter,
+        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
+        AxtReplayRecord, DataSpaceCatalog, DataSpaceId, DomainCommittee, DomainEndorsement,
+        DomainEndorsementPolicy, DomainEndorsementRecord, FeeDebitSource, FeeSponsorBudgetCounter,
         FeeSponsorBudgetCounterKey, FeeSponsorEnrollment, FeeSponsorEnrollmentKey,
         FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
         FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey, FeeSponsorVault,
@@ -318,7 +318,7 @@ fn checked_keypair() -> KeyPair {
 }
 
 #[cfg(any(test, feature = "bench"))]
-fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+pub(crate) fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("state fixture key generation for requested algorithm should succeed")
 }
@@ -1807,7 +1807,8 @@ impl NativeAmxParticipantApplicationDiagnosticIdentity {
     }
 
     fn canonical_bytes(self) -> Vec<u8> {
-        norito::to_bytes(&self).expect("bounded Native AMX diagnostics identity must encode")
+        norito::encode_canonical(&self)
+            .expect("bounded Native AMX diagnostics identity must encode")
     }
 }
 
@@ -1934,10 +1935,10 @@ fn decode_canonical_merge_reservation_key(
         MAX_MERGE_EXECUTION_RESERVATION_KEY_BYTES,
         "lane reservation key",
     )?;
-    let decoded = norito::decode_from_bytes::<crate::queue::LaneQueueReservationKeyV2>(encoded)
+    let decoded = norito::decode_canonical::<crate::queue::LaneQueueReservationKeyV2>(encoded)
         .map_err(|error| {
             MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "encoded lane reservation key is not valid exact framed Norito: {error}"
+                "encoded lane reservation key is not canonical exact framed Norito: {error}"
             ))
         })?;
     decoded.validate().map_err(|reason| {
@@ -1945,16 +1946,6 @@ fn decode_canonical_merge_reservation_key(
             "encoded lane reservation key failed validation: {reason}"
         ))
     })?;
-    let canonical = norito::to_bytes(&decoded).map_err(|error| {
-        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-            "canonical lane reservation key encoding failed: {error}"
-        ))
-    })?;
-    if canonical != encoded {
-        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded lane reservation key is not canonical framed Norito".to_owned(),
-        ));
-    }
     Ok(decoded)
 }
 
@@ -1966,23 +1957,11 @@ fn decode_canonical_merge_routing_plan(
         MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES,
         "routing plan",
     )?;
-    let decoded =
-        norito::decode_from_bytes::<crate::queue::RoutingPlan>(encoded).map_err(|error| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "encoded routing plan is not valid exact framed Norito: {error}"
-            ))
-        })?;
-    let canonical = norito::to_bytes(&decoded).map_err(|error| {
+    norito::decode_canonical::<crate::queue::RoutingPlan>(encoded).map_err(|error| {
         MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-            "canonical routing plan encoding failed: {error}"
+            "encoded routing plan is not canonical exact framed Norito: {error}"
         ))
-    })?;
-    if canonical != encoded {
-        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded routing plan is not canonical framed Norito".to_owned(),
-        ));
-    }
-    Ok(decoded)
+    })
 }
 
 /// Return the transaction-membership hashes committed by an execution batch.
@@ -11371,7 +11350,16 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Replace the cached AXT policies for this block scope with `snapshot`.
-    pub fn install_axt_policy_snapshot(&mut self, snapshot: &AxtPolicySnapshot) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when `snapshot` is not
+    /// canonically ordered or its version does not bind its exact entries.
+    pub fn install_axt_policy_snapshot(
+        &mut self,
+        snapshot: &AxtPolicySnapshot,
+    ) -> Result<(), AxtPolicySnapshotValidationError> {
+        snapshot.validate()?;
         let stale: Vec<_> = self
             .world
             .axt_policies
@@ -11386,6 +11374,7 @@ impl<'state> StateBlock<'state> {
         }
         #[cfg(feature = "telemetry")]
         self.telemetry.set_axt_policy_snapshot_version(snapshot);
+        Ok(())
     }
 
     fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
@@ -11452,7 +11441,9 @@ impl<'state> StateBlock<'state> {
             }
         }
 
-        self.install_axt_policy_snapshot(snap);
+        snap.version = AxtPolicySnapshot::compute_version(&snap.entries);
+        self.install_axt_policy_snapshot(snap)
+            .expect("directory-derived AXT policy snapshot must be canonical");
         snapshot
     }
 
@@ -26837,6 +26828,7 @@ impl State {
                 }
             }
         }
+        snap.version = AxtPolicySnapshot::compute_version(&snap.entries);
 
         let existing_keys: Vec<_> = tx.view().iter().map(|(dsid, _)| *dsid).collect();
         for dsid in existing_keys {
@@ -32615,7 +32607,7 @@ impl State {
         let encoded_reservations = executable_payload
             .reservation_keys
             .iter()
-            .map(norito::to_bytes)
+            .map(norito::encode_canonical)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -32625,7 +32617,7 @@ impl State {
         let encoded_plans = executable_payload
             .routing_plans
             .iter()
-            .map(norito::to_bytes)
+            .map(norito::encode_canonical)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -32961,7 +32953,7 @@ impl State {
                     .input
                     .reservation_keys
                     .iter()
-                    .map(norito::to_bytes)
+                    .map(norito::encode_canonical)
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|error| {
                         MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -32972,7 +32964,7 @@ impl State {
                     .input
                     .routing_plans
                     .iter()
-                    .map(norito::to_bytes)
+                    .map(norito::encode_canonical)
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|error| {
                         MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -36152,12 +36144,12 @@ impl State {
                             let reservation_bytes = payload
                                 .reservation_keys
                                 .iter()
-                                .map(norito::to_bytes)
+                                .map(norito::encode_canonical)
                                 .collect::<std::result::Result<Vec<_>, _>>();
                             let routing_bytes = payload
                                 .routing_plans
                                 .iter()
-                                .map(norito::to_bytes)
+                                .map(norito::encode_canonical)
                                 .collect::<std::result::Result<Vec<_>, _>>();
                             let exact = bundle.bundle_hash().ok()
                                 == Some(execution.source_bundle_hash)
@@ -49728,7 +49720,8 @@ impl<'state> StateBlock<'state> {
         }
 
         if let Some(snapshot) = block.as_ref().axt_policy_snapshot() {
-            self.install_axt_policy_snapshot(snapshot);
+            self.install_axt_policy_snapshot(snapshot)
+                .expect("committed block must contain a canonical AXT policy snapshot");
         }
         let current_slot =
             current_axt_slot_from_block(&block.as_ref().header(), self.nexus.axt.slot_length_ms);
@@ -61813,7 +61806,7 @@ impl StateTransaction<'_, '_> {
     /// committed-fragment position, not merely block height. Applying a transaction advances the
     /// fragment before another transaction can commit in the same block.
     pub(crate) fn direct_execution_identity(&self) -> Result<iroha_crypto::Hash, &'static str> {
-        let block_header = norito::to_bytes(&self._curr_block)
+        let block_header = ivm::codec::encode_canonical_norito(&self._curr_block)
             .map_err(|_| "failed to encode direct execution block identity")?;
         let fragment = u64::try_from(*self.committed_fragments).unwrap_or(u64::MAX);
         let mut preimage = Vec::from(&b"iroha:direct-execution:v1\0"[..]);
@@ -62541,7 +62534,6 @@ impl StateTransaction<'_, '_> {
             crate::pipeline::overlay::resolve_streaming_metadata(self, authority);
         let bound_contract_records =
             crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self);
-        let axt_policy_snapshot = self.axt_policy_snapshot();
         let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
             authority.clone(),
             accounts,
@@ -62553,8 +62545,9 @@ impl StateTransaction<'_, '_> {
         host.set_amx_limits(
             crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(&self.pipeline),
         );
-        host.set_axt_timing(self.nexus.axt);
-        host.hydrate_axt_replay_ledger(self);
+        host.hydrate_axt_state(self).map_err(|error| {
+            ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+        })?;
         let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
             .expect("block creation timestamp must fit into u64");
         host.set_trigger_id(id.clone());
@@ -62570,7 +62563,6 @@ impl StateTransaction<'_, '_> {
         host.set_vrf_epoch_seeds_from_world(&self.world);
         host.set_query_state(self);
         host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
-        host = host.with_axt_policy_snapshot(&axt_policy_snapshot);
         crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
         host.set_zk_snapshots_from_world(&self.world, &self.zk)
             .map_err(|error| {
@@ -62981,6 +62973,9 @@ impl StateTransaction<'_, '_> {
                         contract_call_context.prepared_argument_record().cloned(),
                     );
                 host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                host.hydrate_axt_state(self).map_err(|error| {
+                    ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+                })?;
                 let current_block_time_ms =
                     u64::try_from(self._curr_block.creation_time().as_millis())
                         .expect("block creation timestamp must fit into u64");
@@ -63221,6 +63216,11 @@ impl StateTransaction<'_, '_> {
                                 host.set_entrypoint_argument_record(Some(record.clone()));
                             }
                             host.set_prepared_contract_cache(prepared_cache);
+                            host.hydrate_axt_state(self).map_err(|error| {
+                                ValidationFail::InternalError(format!(
+                                    "invalid AXT policy snapshot: {error}"
+                                ))
+                            })?;
                             let current_block_time_ms =
                                 u64::try_from(self._curr_block.creation_time().as_millis())
                                     .expect("block creation timestamp must fit into u64");
@@ -64135,7 +64135,7 @@ pub(crate) mod deserialize {
                     field: "state.world.privacy_consensus_policy".to_owned(),
                     message: error.to_string(),
                 })?;
-            crate::privacy_state::validate_privacy_activation_schedules_at_committed_height_v1(
+            crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
                 &world.privacy_activations.view(),
                 committed_height,
             )
@@ -73560,12 +73560,38 @@ seiyaku SequentialNfts {
             LaneId::new(7),
             DataSpaceId::new(9),
         ));
-        let framed = norito::to_bytes(&plan).expect("canonical framed routing plan");
+        let framed = norito::encode_canonical(&plan).expect("canonical framed routing plan");
         assert_eq!(
             decode_canonical_merge_routing_plan(&framed)
                 .expect("canonical framed routing plan must decode"),
             plan
         );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&plan).expect("alternate-layout routing plan")
+        };
+        assert_ne!(
+            alternate, framed,
+            "fixture must exercise a non-canonical routing-plan layout"
+        );
+        assert!(
+            matches!(
+                decode_canonical_merge_routing_plan(&alternate),
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                    if message.contains("canonical exact framed Norito")
+            ),
+            "alternate-layout routing plan must reject"
+        );
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                decode_canonical_merge_routing_plan(&framed)
+                    .expect("canonical routing plan must ignore ambient layout"),
+                plan
+            );
+        }
 
         let assert_framed_rejected = |candidate: &[u8], context: &str| {
             assert!(
@@ -73656,17 +73682,43 @@ seiyaku SequentialNfts {
             reservation_owner_hash: Hash::new(b"merge-reservation-owner"),
             proposal_identity_hash: Hash::new(b"merge-reservation-proposal"),
         };
-        let framed = norito::to_bytes(&key).expect("encode current merge reservation key");
+        let framed = norito::encode_canonical(&key).expect("encode current merge reservation key");
         assert_eq!(
             decode_canonical_merge_reservation_key(&framed)
                 .expect("current merge reservation key must decode"),
             key
         );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&key).expect("encode alternate-layout merge reservation key")
+        };
+        assert_ne!(
+            alternate, framed,
+            "fixture must exercise a non-canonical reservation-key layout"
+        );
+        assert!(
+            matches!(
+                decode_canonical_merge_reservation_key(&alternate),
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                    if message.contains("canonical exact framed Norito")
+            ),
+            "alternate-layout merge reservation key must reject"
+        );
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                decode_canonical_merge_reservation_key(&framed)
+                    .expect("canonical reservation key must ignore ambient layout"),
+                key
+            );
+        }
 
         for malformed_version in [0, crate::queue::LaneQueueReservationKeyV2::VERSION + 1] {
             let mut malformed = key;
             malformed.version = malformed_version;
-            let framed = norito::to_bytes(&malformed)
+            let framed = norito::encode_canonical(&malformed)
                 .expect("encode canonical malformed-version reservation key");
             assert!(
                 matches!(
@@ -73681,7 +73733,7 @@ seiyaku SequentialNfts {
         let mut mismatched_hashes = key;
         mismatched_hashes.signed_transaction_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"mismatched-merge-signed-transaction"));
-        let framed = norito::to_bytes(&mismatched_hashes)
+        let framed = norito::encode_canonical(&mismatched_hashes)
             .expect("encode canonical hash-mismatched reservation key");
         assert!(
             matches!(
@@ -75739,7 +75791,7 @@ seiyaku SequentialNfts {
                 results,
                 BTreeMap::new(),
                 Vec::new(),
-                None,
+                AxtPolicySnapshot::default(),
             )
             .expect("empty autoscale test block should accept an empty result");
         block.set_committed_fragment_count(committed_fragments);
@@ -87348,7 +87400,7 @@ seiyaku SequentialNfts {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(2),
+            commit_height: 2,
         };
 
         let mut state_block = state.block(second.header());
@@ -113699,7 +113751,7 @@ seiyaku SequentialNfts {
                 }],
                 proofs: vec![proof_fragment.clone()],
                 handles: vec![handle_fragment.clone()],
-                commit_height: Some(1),
+                commit_height: 1,
             });
             stx.apply();
             block.commit().expect("commit recorded envelope");
@@ -113719,7 +113771,8 @@ seiyaku SequentialNfts {
         let restarted =
             State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
 
-        let mut host = CoreHost::from_state(authority.clone(), &restarted);
+        let mut host =
+            CoreHost::from_state(authority.clone(), &restarted).expect("canonical state snapshots");
         let mut vm = IVM::new(100_000);
         let desc_ptr = store_tlv_norito(&mut vm, PointerType::AxtDescriptor, &ivm_descriptor);
         vm.set_register(10, desc_ptr);
@@ -113934,7 +113987,7 @@ seiyaku SequentialNfts {
                 }],
                 proofs: vec![proof_fragment.clone()],
                 handles: vec![handle_fragment.clone()],
-                commit_height: Some(1),
+                commit_height: 1,
             });
             stx.apply();
         }
@@ -113971,7 +114024,8 @@ seiyaku SequentialNfts {
             "ledger entries should be pruned after retention window"
         );
 
-        let mut host = CoreHost::from_state(authority.clone(), &state);
+        let mut host =
+            CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
         let mut vm = IVM::new(100_000);
         let desc_ptr = store_tlv_norito(&mut vm, PointerType::AxtDescriptor, &ivm_descriptor);
         vm.set_register(10, desc_ptr);
@@ -114048,7 +114102,9 @@ seiyaku SequentialNfts {
             entries,
         };
 
-        block.install_axt_policy_snapshot(&snapshot);
+        block
+            .install_axt_policy_snapshot(&snapshot)
+            .expect("test policy snapshot must be canonical");
 
         let stored = block.world.axt_policies.get(&dsid).expect("policy written");
         assert_eq!(stored.manifest_root, entry.manifest_root);
@@ -114056,6 +114112,39 @@ seiyaku SequentialNfts {
         assert_eq!(stored.min_handle_era, entry.min_handle_era);
         assert_eq!(stored.min_sub_nonce, entry.min_sub_nonce);
         assert_eq!(stored.current_slot, entry.current_slot);
+
+        let duplicate_entries = vec![
+            AxtPolicyBinding {
+                dsid,
+                policy: entry,
+            },
+            AxtPolicyBinding {
+                dsid,
+                policy: AxtPolicyEntry {
+                    manifest_root: [0x99; 32],
+                    ..entry
+                },
+            },
+        ];
+        let invalid = AxtPolicySnapshot {
+            version: AxtPolicySnapshot::compute_version(&duplicate_entries),
+            entries: duplicate_entries,
+        };
+        assert!(matches!(
+            block.install_axt_policy_snapshot(&invalid),
+            Err(AxtPolicySnapshotValidationError::DuplicateDataspaceId(
+                duplicate
+            )) if duplicate == dsid
+        ));
+        let stored_after = block
+            .world
+            .axt_policies
+            .get(&dsid)
+            .expect("original policy remains installed");
+        assert_eq!(
+            *stored_after, entry,
+            "failed snapshot installation must not mutate cached policy state"
+        );
     }
 
     #[cfg(feature = "telemetry")]
@@ -114083,7 +114172,9 @@ seiyaku SequentialNfts {
             entries,
         };
 
-        block.install_axt_policy_snapshot(&snapshot);
+        block
+            .install_axt_policy_snapshot(&snapshot)
+            .expect("test policy snapshot must be canonical");
 
         assert_eq!(metrics.axt_policy_snapshot_version.get(), snapshot.version);
     }
@@ -114143,11 +114234,7 @@ seiyaku SequentialNfts {
         state.configure_test_runtime_defaults();
         let snapshot = state.view().axt_policy_snapshot();
 
-        let expected = if snapshot.version != 0 {
-            snapshot.version
-        } else {
-            AxtPolicySnapshot::compute_version(&snapshot.entries)
-        };
+        let expected = snapshot.version;
 
         assert_eq!(
             metrics
@@ -114489,7 +114576,7 @@ seiyaku SequentialNfts {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(1),
+            commit_height: 1,
         };
 
         stx.record_axt_envelope(envelope);
@@ -114582,7 +114669,7 @@ seiyaku SequentialNfts {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(1),
+            commit_height: 1,
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
@@ -114636,7 +114723,7 @@ seiyaku SequentialNfts {
             },
             touches: Vec::new(),
             proofs: Vec::new(),
-            commit_height: Some(2),
+            commit_height: 2,
         });
         stx.apply();
 
@@ -114682,7 +114769,7 @@ seiyaku SequentialNfts {
                     results,
                     BTreeMap::new(),
                     vec![envelope],
-                    Some(snapshot),
+                    snapshot,
                 )
                 .expect("empty test block should attach AXT envelope results");
             block
@@ -114707,7 +114794,7 @@ seiyaku SequentialNfts {
                     results,
                     BTreeMap::new(),
                     vec![envelope],
-                    Some(snapshot),
+                    snapshot,
                 )
                 .expect("empty committed test block should attach AXT envelope results");
             let env_len = committed
@@ -114850,7 +114937,7 @@ seiyaku SequentialNfts {
             touches: vec![touch_fragment],
             proofs: vec![proof_fragment],
             handles: vec![handle_fragment.clone()],
-            commit_height: Some(1),
+            commit_height: 1,
         };
         let snapshot = state.axt_policy_snapshot();
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
@@ -120239,8 +120326,7 @@ seiyaku IdentitylessRawCallback {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new(world, kura, query_handle);
-        state.chain_id = ChainId::from("chain");
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
 
         let trigger_id: TriggerId = "rollback_trigger_block".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =

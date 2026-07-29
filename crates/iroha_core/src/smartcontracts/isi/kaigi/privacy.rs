@@ -306,8 +306,7 @@ fn validate_roster_artifacts<'a>(
         return Err(privacy_error("roster root mismatch"));
     }
 
-    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes)
-        .map_err(|_| privacy_error("failed to decode privacy proof envelope"))?;
+    let envelope = decode_privacy_proof_envelope(proof_bytes)?;
     if envelope.circuit_id == KAIGI_ROSTER_BACKEND {
         let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
             .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
@@ -359,8 +358,7 @@ fn validate_host_artifacts<'a>(
         return Err(privacy_error("roster root mismatch"));
     }
 
-    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes)
-        .map_err(|_| privacy_error("failed to decode privacy proof envelope"))?;
+    let envelope = decode_privacy_proof_envelope(proof_bytes)?;
     if envelope.circuit_id == KAIGI_ROSTER_BACKEND {
         let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
             .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
@@ -404,8 +402,7 @@ fn verify_with_config(
     let record_commitment = record.commitment;
     let record_key = record.key.clone();
 
-    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes)
-        .map_err(|_| privacy_error("failed to decode privacy proof envelope"))?;
+    let envelope = decode_privacy_proof_envelope(proof_bytes)?;
 
     validate_privacy_proof_envelope_metadata(
         &envelope,
@@ -448,6 +445,15 @@ fn verify_with_config(
     }
 
     Ok(())
+}
+
+#[cfg(not(feature = "kaigi_privacy_mocks"))]
+fn decode_privacy_proof_envelope(proof_bytes: &[u8]) -> Result<OpenVerifyEnvelope, Error> {
+    norito::decode_canonical(proof_bytes).map_err(|err| {
+        privacy_error(format!(
+            "failed to decode canonical privacy proof envelope: {err}"
+        ))
+    })
 }
 
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
@@ -629,5 +635,44 @@ mod tests {
             panic!("unexpected zero-hash rejection: {err:?}");
         };
         assert!(message.contains("non-zero"), "unexpected error: {message}");
+    }
+
+    #[test]
+    fn privacy_proof_admission_rejects_alternate_norito_layout() {
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "kaigi/roster".to_owned(),
+            vk_hash: [0xA5; Hash::LENGTH],
+            public_inputs: vec![0x11; 32],
+            proof_bytes: vec![0x22; 64],
+            aux: Vec::new(),
+        };
+        let canonical =
+            norito::encode_canonical(&envelope).expect("encode canonical privacy envelope");
+        assert_eq!(
+            decode_privacy_proof_envelope(&canonical)
+                .expect("canonical privacy envelope must decode"),
+            envelope
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope).expect("encode alternate-layout privacy envelope")
+        };
+        assert_ne!(alternate, canonical);
+        let err = decode_privacy_proof_envelope(&alternate)
+            .expect_err("alternate-layout privacy envelope must reject");
+        let Error::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(message),
+        ) = err
+        else {
+            panic!("unexpected alternate-layout rejection: {err:?}");
+        };
+        assert!(
+            message.contains("canonical privacy proof envelope"),
+            "unexpected error: {message}"
+        );
     }
 }

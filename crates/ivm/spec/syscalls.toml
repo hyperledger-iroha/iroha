@@ -434,15 +434,15 @@ gas = "G_vote_get + bytes"
 # VRF verification syscalls
 [[syscall]]
 number = "0x66"
-args = "r10=&NoritoBytes(VrfVerifyRequest)"
+args = "r10=&NoritoBytes(VrfVerifyRequest), canonical frame <=65536 bytes"
 ret = "r10=ptr (&Blob(32-byte output)), r11=status:u64"
-gas = "G_verify + bytes"
+gas = "64 + 250,000 per examined item + 5 per canonical request byte"
 
 [[syscall]]
 number = "0x67"
-args = "r10=&NoritoBytes(VrfVerifyBatchRequest)"
+args = "r10=&NoritoBytes(VrfVerifyBatchRequest), 1..=16 items, canonical frame <=65536 bytes"
 ret = "r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64"
-gas = "G_verify + bytes"
+gas = "64 + 250,000 per examined item + 5 per canonical request byte"
 
 [[syscall]]
 number = "0x68"
@@ -981,7 +981,7 @@ gas = "G_scq + query items + encoded bytes"
 [[syscall]]
 number = "0x010002"
 args = "r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64"
-ret = "r10=List<View,64> handle, r11=Option<i64> sum handle"
+ret = "r10=List<View,64> handle, r11=Option<int> sum handle"
 gas = "G_scq + offset + query items + encoded bytes"
 
 [[syscall]]

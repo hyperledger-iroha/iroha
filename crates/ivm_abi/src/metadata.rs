@@ -170,7 +170,13 @@ pub struct EmbeddedStateFieldDescriptor {
 }
 
 /// Compact durable-state type schema embedded in contract artifacts.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Equality and destruction walk the recursive type tree iteratively so the
+/// complete V1 nesting budget remains safe on constrained runtime stacks.
+/// `Clone` and `Debug` remain recursively derived for tooling; production
+/// boundary code must borrow rather than clone or format an untrusted
+/// maximum-depth tree.
+#[derive(Clone, Debug)]
 pub enum EmbeddedStateType {
     Int,
     Decimal,
@@ -205,6 +211,157 @@ pub enum EmbeddedStateType {
         element: Box<EmbeddedStateType>,
         capacity: u8,
     },
+}
+
+impl PartialEq for EmbeddedStateType {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pending = vec![(self, other)];
+        while let Some((left, right)) = pending.pop() {
+            match (left, right) {
+                (Self::Int, Self::Int)
+                | (Self::Decimal, Self::Decimal)
+                | (Self::Quantity, Self::Quantity)
+                | (Self::Bool, Self::Bool)
+                | (Self::String, Self::String)
+                | (Self::Bytes, Self::Bytes)
+                | (Self::DataSpaceId, Self::DataSpaceId)
+                | (Self::AccountId, Self::AccountId)
+                | (Self::AssetDefinitionId, Self::AssetDefinitionId)
+                | (Self::AssetId, Self::AssetId)
+                | (Self::NftId, Self::NftId)
+                | (Self::DomainId, Self::DomainId)
+                | (Self::Name, Self::Name)
+                | (Self::Json, Self::Json) => {}
+                (Self::Tuple(left), Self::Tuple(right)) => {
+                    if left.len() != right.len() {
+                        return false;
+                    }
+                    pending.extend(left.iter().zip(right).rev());
+                }
+                (
+                    Self::Struct {
+                        name: left_name,
+                        fields: left_fields,
+                    },
+                    Self::Struct {
+                        name: right_name,
+                        fields: right_fields,
+                    },
+                ) => {
+                    if left_name != right_name || left_fields.len() != right_fields.len() {
+                        return false;
+                    }
+                    for (left, right) in left_fields.iter().zip(right_fields).rev() {
+                        if left.name != right.name {
+                            return false;
+                        }
+                        pending.push((&left.ty, &right.ty));
+                    }
+                }
+                (
+                    Self::StateMap {
+                        key: left_key,
+                        value: left_value,
+                    },
+                    Self::StateMap {
+                        key: right_key,
+                        value: right_value,
+                    },
+                ) => {
+                    pending.push((left_value, right_value));
+                    pending.push((left_key, right_key));
+                }
+                (Self::Option(left), Self::Option(right)) => {
+                    pending.push((left, right));
+                }
+                (
+                    Self::Result {
+                        ok: left_ok,
+                        err: left_err,
+                    },
+                    Self::Result {
+                        ok: right_ok,
+                        err: right_err,
+                    },
+                ) => {
+                    pending.push((left_err, right_err));
+                    pending.push((left_ok, right_ok));
+                }
+                (
+                    Self::List {
+                        element: left_element,
+                        capacity: left_capacity,
+                    },
+                    Self::List {
+                        element: right_element,
+                        capacity: right_capacity,
+                    },
+                ) => {
+                    if left_capacity != right_capacity {
+                        return false;
+                    }
+                    pending.push((left_element, right_element));
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
+impl Eq for EmbeddedStateType {}
+
+fn move_embedded_state_type_children(
+    value: &mut EmbeddedStateType,
+    pending: &mut Vec<EmbeddedStateType>,
+) {
+    match value {
+        EmbeddedStateType::Tuple(items) => pending.append(items),
+        EmbeddedStateType::Struct { fields, .. } => {
+            pending.extend(fields.drain(..).map(|field| field.ty));
+        }
+        EmbeddedStateType::StateMap { key, value } => {
+            pending.push(core::mem::replace(key.as_mut(), EmbeddedStateType::Bool));
+            pending.push(core::mem::replace(value.as_mut(), EmbeddedStateType::Bool));
+        }
+        EmbeddedStateType::Option(inner) => {
+            pending.push(core::mem::replace(inner.as_mut(), EmbeddedStateType::Bool));
+        }
+        EmbeddedStateType::Result { ok, err } => {
+            pending.push(core::mem::replace(ok.as_mut(), EmbeddedStateType::Bool));
+            pending.push(core::mem::replace(err.as_mut(), EmbeddedStateType::Bool));
+        }
+        EmbeddedStateType::List { element, .. } => {
+            pending.push(core::mem::replace(
+                element.as_mut(),
+                EmbeddedStateType::Bool,
+            ));
+        }
+        EmbeddedStateType::Int
+        | EmbeddedStateType::Decimal
+        | EmbeddedStateType::Quantity
+        | EmbeddedStateType::Bool
+        | EmbeddedStateType::String
+        | EmbeddedStateType::Bytes
+        | EmbeddedStateType::DataSpaceId
+        | EmbeddedStateType::AccountId
+        | EmbeddedStateType::AssetDefinitionId
+        | EmbeddedStateType::AssetId
+        | EmbeddedStateType::NftId
+        | EmbeddedStateType::DomainId
+        | EmbeddedStateType::Name
+        | EmbeddedStateType::Json => {}
+    }
+}
+
+impl Drop for EmbeddedStateType {
+    fn drop(&mut self) {
+        let mut pending = Vec::new();
+        move_embedded_state_type_children(self, &mut pending);
+        while let Some(mut child) = pending.pop() {
+            move_embedded_state_type_children(&mut child, &mut pending);
+        }
+    }
 }
 
 impl EmbeddedStateType {
@@ -366,17 +523,113 @@ fn encode_embedded_state_owned_child(
     Ok(())
 }
 
-fn decode_embedded_state_owned_child(encoded: &[u8]) -> Result<(Vec<u8>, usize), NoritoError> {
-    let (owned_payload_len, header_len) = norito::core::read_len_from_slice(encoded)?;
+fn decode_embedded_state_owned_child(encoded: &[u8]) -> Result<(&[u8], usize), NoritoError> {
+    let (owned_payload_len, header_len) = norito::core::inspect_len_from_slice(encoded)?;
     let end = header_len
         .checked_add(owned_payload_len)
         .ok_or(NoritoError::LengthMismatch)?;
     let owned_payload = encoded
         .get(header_len..end)
         .ok_or(NoritoError::LengthMismatch)?;
-    let (child, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(owned_payload)?;
-    expect_payload_consumed(used, owned_payload.len(), "EmbeddedStateType owned child")?;
+    let (child, child_used) = decode_embedded_state_byte_vec(owned_payload)?;
+    expect_payload_consumed(
+        child_used,
+        owned_payload.len(),
+        "EmbeddedStateType owned child",
+    )?;
     Ok((child, end))
+}
+
+fn decode_embedded_state_byte_vec(encoded: &[u8]) -> Result<(&[u8], usize), NoritoError> {
+    let (value_len, header_len) = norito::core::inspect_seq_len_slice(encoded)?;
+    let end = header_len
+        .checked_add(value_len)
+        .ok_or(NoritoError::LengthMismatch)?;
+    let value = encoded
+        .get(header_len..end)
+        .ok_or(NoritoError::LengthMismatch)?;
+    Ok((value, end))
+}
+
+fn decode_embedded_state_byte_vec_sequence(
+    encoded: &[u8],
+) -> Result<(Vec<&[u8]>, usize), NoritoError> {
+    let flags =
+        norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags);
+    let layout = norito::core::BinarySequenceLayout::from_flags(flags);
+    let plan = norito::core::plan_binary_sequence(encoded, flags, layout)?;
+    let mut values = try_embedded_decode_vec(plan.spans.len())?;
+    for span in &plan.spans {
+        let field = span.get(encoded)?;
+        let (value, used) = decode_embedded_state_byte_vec(field)?;
+        expect_payload_consumed(used, field.len(), "EmbeddedStateType byte sequence child")?;
+        values.push(value);
+    }
+    Ok((values, plan.used))
+}
+
+fn reserve_embedded_decode_items<T>(count: usize) -> Result<(), NoritoError> {
+    let bytes = count
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or(NoritoError::LengthMismatch)?;
+    norito::core::reserve_decode_allocation(bytes)
+}
+
+fn try_embedded_decode_vec<T>(capacity: usize) -> Result<Vec<T>, NoritoError> {
+    reserve_embedded_decode_items::<T>(capacity)?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| NoritoError::LengthMismatch)?;
+    if values.capacity() > capacity {
+        reserve_embedded_decode_items::<T>(values.capacity() - capacity)?;
+    }
+    Ok(values)
+}
+
+fn reserve_embedded_decode_capacity<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+) -> Result<(), NoritoError> {
+    let required = values
+        .len()
+        .checked_add(additional)
+        .ok_or(NoritoError::LengthMismatch)?;
+    let previous_capacity = values.capacity();
+    if required <= previous_capacity {
+        return Ok(());
+    }
+
+    // Grow geometrically so a deeply nested type cannot force one allocation
+    // and copy per decoder event. Known batches can still request their exact
+    // larger bound in one step.
+    let geometric_capacity = previous_capacity.checked_mul(2).unwrap_or(required);
+    let target_capacity = required.max(geometric_capacity).max(4);
+    let reserve = target_capacity
+        .checked_sub(values.len())
+        .ok_or(NoritoError::LengthMismatch)?;
+    // A growth may allocate a complete replacement buffer before releasing
+    // the old one. Charge that cumulative allocation before asking the
+    // allocator for memory; capacity reuse above remains free.
+    reserve_embedded_decode_items::<T>(target_capacity)?;
+    values
+        .try_reserve_exact(reserve)
+        .map_err(|_| NoritoError::LengthMismatch)?;
+    if values.capacity() > target_capacity {
+        reserve_embedded_decode_items::<T>(values.capacity() - target_capacity)?;
+    }
+    Ok(())
+}
+
+fn push_embedded_decode_item<T>(values: &mut Vec<T>, value: T) -> Result<(), NoritoError> {
+    reserve_embedded_decode_capacity(values, 1)?;
+    values.push(value);
+    Ok(())
+}
+
+fn boxed_embedded_decode_value<T>(value: T) -> Result<Box<T>, NoritoError> {
+    reserve_embedded_decode_items::<T>(1)?;
+    Ok(Box::new(value))
 }
 
 fn encode_embedded_state_field_payload(
@@ -640,8 +893,8 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
         }
     }
 
-    enum Event {
-        Decode { encoded: Vec<u8>, depth: usize },
+    enum Event<'a> {
+        Decode { encoded: &'a [u8], depth: usize },
         Finish(Constructor),
     }
 
@@ -650,10 +903,8 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
         contains_resource_handle: bool,
     }
 
-    let mut pending = vec![Event::Decode {
-        encoded: encoded.to_vec(),
-        depth: 1,
-    }];
+    let mut pending = Vec::new();
+    push_embedded_decode_item(&mut pending, Event::Decode { encoded, depth: 1 })?;
     let mut decoded_values = Vec::<DecodedValue>::new();
     while let Some(event) = pending.pop() {
         match event {
@@ -706,33 +957,31 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                                 ));
                             }
                         };
-                        decoded_values.push(DecodedValue {
-                            value,
-                            contains_resource_handle: false,
-                        });
+                        push_embedded_decode_item(
+                            &mut decoded_values,
+                            DecodedValue {
+                                value,
+                                contains_resource_handle: false,
+                            },
+                        )?;
                         continue;
                     }
                     EMBEDDED_STATE_TYPE_TAG_TUPLE => {
-                        let (children, used) =
-                            <Vec<Vec<u8>> as DecodeFromSlice>::decode_from_slice(payload)?;
+                        let (children, used) = decode_embedded_state_byte_vec_sequence(payload)?;
                         (Constructor::Tuple(children.len()), children, used)
                     }
                     EMBEDDED_STATE_TYPE_TAG_STRUCT => {
                         let (name, name_used) =
                             <String as DecodeFromSlice>::decode_from_slice(payload)?;
                         let (encoded_fields, fields_used) =
-                            <Vec<Vec<u8>> as DecodeFromSlice>::decode_from_slice(
-                                &payload[name_used..],
-                            )?;
-                        let mut field_names = Vec::with_capacity(encoded_fields.len());
-                        let mut children = Vec::with_capacity(encoded_fields.len());
+                            decode_embedded_state_byte_vec_sequence(&payload[name_used..])?;
+                        let mut field_names = try_embedded_decode_vec(encoded_fields.len())?;
+                        let mut children = try_embedded_decode_vec(encoded_fields.len())?;
                         for encoded_field in encoded_fields {
                             let (field_name, field_name_used) =
                                 <String as DecodeFromSlice>::decode_from_slice(&encoded_field)?;
                             let (field_type, field_type_used) =
-                                <Vec<u8> as DecodeFromSlice>::decode_from_slice(
-                                    &encoded_field[field_name_used..],
-                                )?;
+                                decode_embedded_state_byte_vec(&encoded_field[field_name_used..])?;
                             expect_payload_consumed(
                                 field_name_used + field_type_used,
                                 encoded_field.len(),
@@ -751,21 +1000,25 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                         let (key, key_used) = decode_embedded_state_owned_child(payload)?;
                         let (value, value_used) =
                             decode_embedded_state_owned_child(&payload[key_used..])?;
-                        (
-                            Constructor::StateMap,
-                            vec![key, value],
-                            key_used + value_used,
-                        )
+                        let mut children = try_embedded_decode_vec(2)?;
+                        children.push(key);
+                        children.push(value);
+                        (Constructor::StateMap, children, key_used + value_used)
                     }
                     EMBEDDED_STATE_TYPE_TAG_OPTION => {
                         let (value, value_used) = decode_embedded_state_owned_child(payload)?;
-                        (Constructor::Option, vec![value], value_used)
+                        let mut children = try_embedded_decode_vec(1)?;
+                        children.push(value);
+                        (Constructor::Option, children, value_used)
                     }
                     EMBEDDED_STATE_TYPE_TAG_RESULT => {
                         let (ok, ok_used) = decode_embedded_state_owned_child(payload)?;
                         let (err, err_used) =
                             decode_embedded_state_owned_child(&payload[ok_used..])?;
-                        (Constructor::Result, vec![ok, err], ok_used + err_used)
+                        let mut children = try_embedded_decode_vec(2)?;
+                        children.push(ok);
+                        children.push(err);
+                        (Constructor::Result, children, ok_used + err_used)
                     }
                     EMBEDDED_STATE_TYPE_TAG_LIST => {
                         let (element, element_used) = decode_embedded_state_owned_child(payload)?;
@@ -776,9 +1029,11 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                                 "embedded List capacity must be in 1..=64, got {capacity}"
                             )));
                         }
+                        let mut children = try_embedded_decode_vec(1)?;
+                        children.push(element);
                         (
                             Constructor::List(capacity),
-                            vec![element],
+                            children,
                             element_used + capacity_used,
                         )
                     }
@@ -790,6 +1045,11 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                     }
                 };
                 expect_payload_consumed(consumed, payload.len(), "EmbeddedStateType")?;
+                let event_count = children
+                    .len()
+                    .checked_add(1)
+                    .ok_or(NoritoError::LengthMismatch)?;
+                reserve_embedded_decode_capacity(&mut pending, event_count)?;
                 pending.push(Event::Finish(constructor));
                 pending.extend(children.into_iter().rev().map(|encoded| Event::Decode {
                     encoded,
@@ -807,64 +1067,80 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                                 "invalid iterative embedded state decoder state".to_owned(),
                             )
                         })?;
-                let children = decoded_values.split_off(children_start);
-                let contains_resource_handle =
-                    children.iter().any(|child| child.contains_resource_handle);
+                let contains_resource_handle = decoded_values[children_start..]
+                    .iter()
+                    .any(|child| child.contains_resource_handle);
                 let value = match constructor {
-                    Constructor::Tuple(_) => EmbeddedStateType::Tuple(
-                        children.into_iter().map(|child| child.value).collect(),
-                    ),
-                    Constructor::Struct { name, field_names } => EmbeddedStateType::Struct {
+                    Constructor::Tuple(count) => {
+                        let mut items = try_embedded_decode_vec(count)?;
+                        for _ in 0..count {
+                            let child = decoded_values.pop().ok_or_else(|| {
+                                NoritoError::Message(
+                                    "missing iterative embedded state tuple child".to_owned(),
+                                )
+                            })?;
+                            items.push(child.value);
+                        }
+                        items.reverse();
+                        EmbeddedStateType::Tuple(items)
+                    }
+                    Constructor::Struct {
                         name,
-                        fields: field_names
-                            .into_iter()
-                            .zip(children)
-                            .map(|(name, child)| EmbeddedStateFieldDescriptor {
-                                name,
+                        mut field_names,
+                    } => {
+                        let mut fields = try_embedded_decode_vec(field_names.len())?;
+                        while let Some(field_name) = field_names.pop() {
+                            let child = decoded_values.pop().ok_or_else(|| {
+                                NoritoError::Message(
+                                    "missing iterative embedded state struct child".to_owned(),
+                                )
+                            })?;
+                            fields.push(EmbeddedStateFieldDescriptor {
+                                name: field_name,
                                 ty: child.value,
-                            })
-                            .collect(),
-                    },
+                            });
+                        }
+                        fields.reverse();
+                        EmbeddedStateType::Struct { name, fields }
+                    }
                     Constructor::StateMap => {
-                        let mut child = children.into_iter();
-                        let key = child.next().ok_or_else(|| {
-                            NoritoError::Message(
-                                "missing iterative embedded state map key".to_owned(),
-                            )
-                        })?;
-                        let value = child.next().ok_or_else(|| {
+                        let value = decoded_values.pop().ok_or_else(|| {
                             NoritoError::Message(
                                 "missing iterative embedded state map value".to_owned(),
                             )
                         })?;
+                        let key = decoded_values.pop().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state map key".to_owned(),
+                            )
+                        })?;
                         EmbeddedStateType::StateMap {
-                            key: Box::new(key.value),
-                            value: Box::new(value.value),
+                            key: boxed_embedded_decode_value(key.value)?,
+                            value: boxed_embedded_decode_value(value.value)?,
                         }
                     }
                     Constructor::Option => {
-                        let value = children.into_iter().next().ok_or_else(|| {
+                        let value = decoded_values.pop().ok_or_else(|| {
                             NoritoError::Message(
                                 "missing iterative embedded state option value".to_owned(),
                             )
                         })?;
-                        EmbeddedStateType::Option(Box::new(value.value))
+                        EmbeddedStateType::Option(boxed_embedded_decode_value(value.value)?)
                     }
                     Constructor::Result => {
-                        let mut child = children.into_iter();
-                        let ok = child.next().ok_or_else(|| {
-                            NoritoError::Message(
-                                "missing iterative embedded state result ok value".to_owned(),
-                            )
-                        })?;
-                        let err = child.next().ok_or_else(|| {
+                        let err = decoded_values.pop().ok_or_else(|| {
                             NoritoError::Message(
                                 "missing iterative embedded state result error value".to_owned(),
                             )
                         })?;
+                        let ok = decoded_values.pop().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state result ok value".to_owned(),
+                            )
+                        })?;
                         EmbeddedStateType::Result {
-                            ok: Box::new(ok.value),
-                            err: Box::new(err.value),
+                            ok: boxed_embedded_decode_value(ok.value)?,
+                            err: boxed_embedded_decode_value(err.value)?,
                         }
                     }
                     Constructor::List(capacity) => {
@@ -873,22 +1149,32 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                                 "embedded List elements cannot contain resource handles".to_owned(),
                             ));
                         }
-                        let element = children.into_iter().next().ok_or_else(|| {
+                        let element = decoded_values.pop().ok_or_else(|| {
                             NoritoError::Message(
                                 "missing iterative embedded state list element".to_owned(),
                             )
                         })?;
                         EmbeddedStateType::List {
-                            element: Box::new(element.value),
+                            element: boxed_embedded_decode_value(element.value)?,
                             capacity,
                         }
                     }
                 };
-                decoded_values.push(DecodedValue {
-                    contains_resource_handle: matches!(value, EmbeddedStateType::StateMap { .. })
-                        || contains_resource_handle,
-                    value,
-                });
+                if decoded_values.len() != children_start {
+                    return Err(NoritoError::Message(
+                        "invalid iterative embedded state decoder child count".to_owned(),
+                    ));
+                }
+                push_embedded_decode_item(
+                    &mut decoded_values,
+                    DecodedValue {
+                        contains_resource_handle: matches!(
+                            value,
+                            EmbeddedStateType::StateMap { .. }
+                        ) || contains_resource_handle,
+                        value,
+                    },
+                )?;
             }
         }
     }
@@ -1047,8 +1333,8 @@ pub struct EmbeddedContractDebugInfoV1 {
 impl EmbeddedContractDebugInfoV1 {
     #[must_use]
     pub fn encode_section(&self) -> Vec<u8> {
-        let payload =
-            norito::to_bytes(self).expect("embedded contract debug encoding must succeed");
+        let payload = norito::encode_canonical(self)
+            .expect("embedded contract debug canonical encoding must succeed");
         let payload_len =
             u32::try_from(payload.len()).expect("embedded contract debug exceeds u32");
         let mut section = Vec::with_capacity(CONTRACT_DEBUG_SECTION_HEADER_SIZE + payload.len());
@@ -1062,8 +1348,8 @@ impl EmbeddedContractDebugInfoV1 {
 impl EmbeddedContractInterfaceV1 {
     #[must_use]
     pub fn encode_section(&self) -> Vec<u8> {
-        let payload =
-            norito::to_bytes(self).expect("embedded contract interface encoding must succeed");
+        let payload = norito::encode_canonical(self)
+            .expect("embedded contract interface canonical encoding must succeed");
         let payload_len =
             u32::try_from(payload.len()).expect("embedded contract interface exceeds u32");
         let mut section =
@@ -1338,10 +1624,9 @@ fn parse_contract_interface_section(
     if payload_end > bytes.len() {
         return Err(VMError::InvalidMetadata);
     }
-    let decoded = norito::decode_from_bytes::<EmbeddedContractInterfaceV1>(
-        &bytes[payload_start..payload_end],
-    )
-    .map_err(|_| VMError::InvalidMetadata)?;
+    let decoded =
+        norito::decode_canonical::<EmbeddedContractInterfaceV1>(&bytes[payload_start..payload_end])
+            .map_err(|_| VMError::InvalidMetadata)?;
     Ok((decoded, payload_end))
 }
 
@@ -1366,10 +1651,9 @@ fn parse_contract_debug_section(
     if payload_end > bytes.len() {
         return Err(VMError::InvalidMetadata);
     }
-    let decoded = norito::decode_from_bytes::<EmbeddedContractDebugInfoV1>(
-        &bytes[payload_start..payload_end],
-    )
-    .map_err(|_| VMError::InvalidMetadata)?;
+    let decoded =
+        norito::decode_canonical::<EmbeddedContractDebugInfoV1>(&bytes[payload_start..payload_end])
+            .map_err(|_| VMError::InvalidMetadata)?;
     Ok((decoded, payload_end))
 }
 
@@ -1595,6 +1879,43 @@ mod tests {
         }
     }
 
+    fn option_chain(wrappers: usize, leaf: EmbeddedStateType) -> EmbeddedStateType {
+        (0..wrappers).fold(leaf, |inner, _| EmbeddedStateType::Option(Box::new(inner)))
+    }
+
+    fn raw_bool_option_payload(wrappers: usize) -> Vec<u8> {
+        let mut payload = vec![EMBEDDED_STATE_TYPE_TAG_BOOL];
+        for _ in 0..wrappers {
+            let mut outer = vec![EMBEDDED_STATE_TYPE_TAG_OPTION];
+            encode_embedded_state_owned_child(&payload, &mut outer)
+                .expect("serialize adversarial nested payload");
+            payload = outer;
+        }
+        payload
+    }
+
+    fn test_section(magic: [u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut section = Vec::with_capacity(8 + payload.len());
+        section.extend_from_slice(&magic);
+        section.extend_from_slice(
+            &u32::try_from(payload.len())
+                .expect("test section length fits u32")
+                .to_le_bytes(),
+        );
+        section.extend_from_slice(payload);
+        section
+    }
+
+    fn alternate_frame<T>(value: &T) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize,
+    {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout test frame")
+    }
+
     #[test]
     fn embedded_state_field_descriptor_roundtrips() {
         let value = EmbeddedStateFieldDescriptor {
@@ -1618,6 +1939,101 @@ mod tests {
             norito::decode_from_bytes(&bytes).expect("decode embedded state type");
 
         assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn embedded_state_type_borrowed_children_honor_layout_and_allocation_limits() {
+        let value = EmbeddedStateType::Struct {
+            name: "Wide".to_owned(),
+            fields: (0..32)
+                .map(|index| EmbeddedStateFieldDescriptor {
+                    name: format!("field_{index:02}"),
+                    ty: EmbeddedStateType::Tuple(vec![
+                        EmbeddedStateType::Bool,
+                        EmbeddedStateType::Quantity,
+                    ]),
+                })
+                .collect(),
+        };
+        let packed_flags =
+            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_SEQ;
+        let _packed = norito::core::DecodeFlagsGuard::enter(packed_flags);
+        let payload =
+            encode_embedded_state_type_payload(&value).expect("encode packed embedded state type");
+        assert_eq!(
+            decode_embedded_state_type_payload(&payload)
+                .expect("decode packed tuple and struct children"),
+            value
+        );
+
+        let tight = norito::DecodeLimits::new(256, payload.len(), 512, payload.len(), 256);
+        assert!(matches!(
+            norito::with_decode_limits(tight, || { decode_embedded_state_type_payload(&payload) }),
+            Err(NoritoError::TotalAllocationExceeded { .. })
+        ));
+
+        let generous_allocation = payload
+            .len()
+            .checked_mul(64)
+            .and_then(|bytes| bytes.checked_add(64 * 1024))
+            .expect("test allocation limit fits usize");
+        let generous = norito::DecodeLimits::new(256, payload.len(), 512, generous_allocation, 256);
+        assert_eq!(
+            norito::with_decode_limits(generous, || {
+                decode_embedded_state_type_payload(&payload)
+            })
+            .expect("budgeted packed decoder accepts a sufficient allocation limit"),
+            value
+        );
+    }
+
+    #[test]
+    fn embedded_decode_push_charges_only_geometric_capacity_growth() {
+        let mut values = Vec::<u64>::new();
+        values
+            .try_reserve_exact(8)
+            .expect("preallocate decoder stack outside the decode budget");
+        let initial_capacity = values.capacity();
+        let no_allocation =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+
+        let error = norito::with_decode_limits(no_allocation, || {
+            for _ in 0..initial_capacity {
+                push_embedded_decode_item(&mut values, 0)?;
+            }
+            push_embedded_decode_item(&mut values, 0)
+        })
+        .expect_err("growing a full decoder stack must charge its new capacity");
+
+        assert!(matches!(error, NoritoError::TotalAllocationExceeded { .. }));
+        assert_eq!(
+            values.len(),
+            initial_capacity,
+            "a rejected growth must not insert the pending decoder item"
+        );
+        assert_eq!(
+            values.capacity(),
+            initial_capacity,
+            "the allocation budget must reject growth before allocating a replacement buffer"
+        );
+
+        let target_capacity = initial_capacity.saturating_mul(2).max(4);
+        let growth_budget = target_capacity
+            .checked_mul(core::mem::size_of::<u64>())
+            .expect("growth budget fits usize");
+        let one_growth = norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            growth_budget,
+            usize::MAX,
+        );
+        norito::with_decode_limits(one_growth, || push_embedded_decode_item(&mut values, 0))
+            .expect("one fully budgeted geometric growth succeeds");
+        assert!(
+            values.capacity() >= target_capacity,
+            "decoder stacks must grow geometrically instead of one slot at a time"
+        );
     }
 
     #[test]
@@ -1683,36 +2099,23 @@ mod tests {
             .name("embedded-state-depth-boundary".to_owned())
             .stack_size(128 * 1024)
             .spawn(|| {
-                fn option_chain(wrappers: usize) -> EmbeddedStateType {
-                    (0..wrappers).fold(EmbeddedStateType::Bool, |inner, _| {
-                        EmbeddedStateType::Option(Box::new(inner))
-                    })
-                }
-
-                fn raw_option_payload(wrappers: usize) -> Vec<u8> {
-                    let mut payload = vec![EMBEDDED_STATE_TYPE_TAG_BOOL];
-                    for _ in 0..wrappers {
-                        let mut outer = vec![EMBEDDED_STATE_TYPE_TAG_OPTION];
-                        encode_embedded_state_owned_child(&payload, &mut outer)
-                            .expect("serialize adversarial nested payload");
-                        payload = outer;
-                    }
-                    payload
-                }
-
                 let accepted_wrappers = MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 - 1;
-                encode_embedded_state_type_payload(&option_chain(accepted_wrappers))
-                    .expect("the exact nesting budget remains valid");
-                decode_embedded_state_type_payload(&raw_option_payload(accepted_wrappers))
+                encode_embedded_state_type_payload(&option_chain(
+                    accepted_wrappers,
+                    EmbeddedStateType::Bool,
+                ))
+                .expect("the exact nesting budget remains valid");
+                decode_embedded_state_type_payload(&raw_bool_option_payload(accepted_wrappers))
                     .expect("the exact decoding budget remains valid");
 
                 let error = encode_embedded_state_type_payload(&option_chain(
                     MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
+                    EmbeddedStateType::Bool,
                 ))
                 .expect_err("encoding above the state-type nesting budget must fail");
                 assert!(error.to_string().contains("nesting exceeds 256 levels"));
 
-                let error = decode_embedded_state_type_payload(&raw_option_payload(
+                let error = decode_embedded_state_type_payload(&raw_bool_option_payload(
                     MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
                 ))
                 .expect_err(
@@ -1725,6 +2128,146 @@ mod tests {
             .expect("spawn constrained-stack state-schema test")
             .join()
             .expect("state-schema depth checks must not overflow the native stack");
+    }
+
+    #[test]
+    fn embedded_state_type_equality_observes_nominal_and_structural_fields() {
+        assert!(nested_state_type() == nested_state_type());
+
+        let unequal = vec![
+            (
+                EmbeddedStateType::Tuple(vec![EmbeddedStateType::Int, EmbeddedStateType::Bool]),
+                EmbeddedStateType::Tuple(vec![EmbeddedStateType::Bool, EmbeddedStateType::Int]),
+            ),
+            (
+                EmbeddedStateType::Struct {
+                    name: "Left".to_owned(),
+                    fields: vec![EmbeddedStateFieldDescriptor {
+                        name: "value".to_owned(),
+                        ty: EmbeddedStateType::Int,
+                    }],
+                },
+                EmbeddedStateType::Struct {
+                    name: "Right".to_owned(),
+                    fields: vec![EmbeddedStateFieldDescriptor {
+                        name: "value".to_owned(),
+                        ty: EmbeddedStateType::Int,
+                    }],
+                },
+            ),
+            (
+                EmbeddedStateType::Struct {
+                    name: "Same".to_owned(),
+                    fields: vec![EmbeddedStateFieldDescriptor {
+                        name: "left".to_owned(),
+                        ty: EmbeddedStateType::Int,
+                    }],
+                },
+                EmbeddedStateType::Struct {
+                    name: "Same".to_owned(),
+                    fields: vec![EmbeddedStateFieldDescriptor {
+                        name: "right".to_owned(),
+                        ty: EmbeddedStateType::Int,
+                    }],
+                },
+            ),
+            (
+                EmbeddedStateType::StateMap {
+                    key: Box::new(EmbeddedStateType::AccountId),
+                    value: Box::new(EmbeddedStateType::Quantity),
+                },
+                EmbeddedStateType::StateMap {
+                    key: Box::new(EmbeddedStateType::AssetId),
+                    value: Box::new(EmbeddedStateType::Quantity),
+                },
+            ),
+            (
+                EmbeddedStateType::Option(Box::new(EmbeddedStateType::Int)),
+                EmbeddedStateType::Option(Box::new(EmbeddedStateType::String)),
+            ),
+            (
+                EmbeddedStateType::Result {
+                    ok: Box::new(EmbeddedStateType::Int),
+                    err: Box::new(EmbeddedStateType::String),
+                },
+                EmbeddedStateType::Result {
+                    ok: Box::new(EmbeddedStateType::String),
+                    err: Box::new(EmbeddedStateType::Int),
+                },
+            ),
+            (
+                EmbeddedStateType::List {
+                    element: Box::new(EmbeddedStateType::Quantity),
+                    capacity: 8,
+                },
+                EmbeddedStateType::List {
+                    element: Box::new(EmbeddedStateType::Quantity),
+                    capacity: 9,
+                },
+            ),
+        ];
+
+        for (left, right) in unequal {
+            assert!(left != right);
+        }
+    }
+
+    #[test]
+    fn embedded_state_type_equality_and_success_drop_are_stack_safe() {
+        std::thread::Builder::new()
+            .name("embedded-state-equality-drop-boundary".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let wrappers = MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 - 1;
+                let left = option_chain(wrappers, EmbeddedStateType::Bool);
+                let equal = option_chain(wrappers, EmbeddedStateType::Bool);
+                let unequal = option_chain(wrappers, EmbeddedStateType::Int);
+
+                assert!(left == equal);
+                assert!(left != unequal);
+
+                drop(left);
+                drop(equal);
+                drop(unequal);
+
+                let decoded =
+                    decode_embedded_state_type_payload(&raw_bool_option_payload(wrappers))
+                        .expect("decode the complete depth-255 wrapper boundary");
+                drop(decoded);
+            })
+            .expect("spawn constrained-stack equality/drop test")
+            .join()
+            .expect("depth-255 equality and destruction must not overflow the native stack");
+    }
+
+    #[test]
+    fn embedded_state_type_malformed_decode_cleanup_is_stack_safe() {
+        std::thread::Builder::new()
+            .name("embedded-state-error-drop-boundary".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let child_wrappers = MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 - 2;
+                let children = vec![raw_bool_option_payload(child_wrappers), vec![u8::MAX]];
+                let mut malformed_tuple = vec![EMBEDDED_STATE_TYPE_TAG_TUPLE];
+                children
+                    .serialize(&mut malformed_tuple)
+                    .expect("serialize tuple with malformed second child");
+
+                let result = decode_embedded_state_type_payload(&malformed_tuple);
+                assert!(
+                    result.is_err(),
+                    "the malformed second child must reject after the depth-255 first child"
+                );
+                drop(result);
+
+                let decoded =
+                    decode_embedded_state_type_payload(&[EMBEDDED_STATE_TYPE_TAG_QUANTITY])
+                        .expect("failed cleanup must not poison a later valid decode");
+                drop(decoded);
+            })
+            .expect("spawn constrained-stack decoder cleanup test")
+            .join()
+            .expect("malformed decoder cleanup must not overflow the native stack");
     }
 
     #[test]
@@ -1843,6 +2386,22 @@ mod tests {
 
         assert_eq!(next_offset, section.len());
         assert_eq!(decoded, interface);
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+            );
+            assert_eq!(interface.encode_section(), section);
+        }
+
+        let alternate = test_section(
+            CONTRACT_INTERFACE_SECTION_MAGIC,
+            &alternate_frame(&interface),
+        );
+        assert_eq!(
+            parse_contract_interface_section(&alternate, 0)
+                .expect_err("alternate-layout CNTR payload must be rejected"),
+            VMError::InvalidMetadata
+        );
 
         let mut artifact = ProgramMetadata::default().encode();
         artifact.extend_from_slice(&section);
@@ -1851,5 +2410,56 @@ mod tests {
         assert_eq!(parsed.header_len, HEADER_SIZE);
         assert_eq!(parsed.prefix_len(), section.len());
         assert_eq!(parsed.code_offset, HEADER_SIZE + section.len());
+    }
+
+    #[test]
+    fn contract_debug_section_is_canonical() {
+        let source = EmbeddedSourceLocation {
+            source_path: Some("contracts/payment.ko".to_owned()),
+            source_id: 7,
+            byte_start: 3,
+            byte_end: 19,
+            line: 2,
+            column: 4,
+        };
+        let debug = EmbeddedContractDebugInfoV1 {
+            source_map: vec![EmbeddedSourceMapEntryV1 {
+                function_name: "main".to_owned(),
+                pc_start: 0,
+                pc_end: 8,
+                source: source.clone(),
+            }],
+            budget_report: vec![EmbeddedFunctionBudgetReportV1 {
+                function_name: "main".to_owned(),
+                pc_start: 0,
+                pc_end: 8,
+                bytecode_bytes: 32,
+                bytecode_words: 8,
+                frame_bytes: 16,
+                jump_span_words: 2,
+                jump_range_risk: false,
+                source: Some(source),
+            }],
+        };
+
+        let section = debug.encode_section();
+        let (decoded, next_offset) =
+            parse_contract_debug_section(&section, 0).expect("parse canonical DBG1 section");
+        assert_eq!(decoded, debug);
+        assert_eq!(next_offset, section.len());
+
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+            );
+            assert_eq!(debug.encode_section(), section);
+        }
+
+        let alternate = test_section(CONTRACT_DEBUG_SECTION_MAGIC, &alternate_frame(&debug));
+        assert_eq!(
+            parse_contract_debug_section(&alternate, 0)
+                .expect_err("alternate-layout DBG1 payload must be rejected"),
+            VMError::InvalidMetadata
+        );
     }
 }

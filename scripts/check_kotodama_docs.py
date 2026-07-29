@@ -11,7 +11,8 @@ repository.
 
 The checker intentionally fails closed: the inventory must be well formed,
 every required document must contain source, fence directives and heredocs
-must be understood, and every extracted source must pass ``koto check``.
+must be understood, misspelled or omitted Kotodama fence labels are rejected,
+and every extracted source must pass ``koto check``.
 """
 
 from __future__ import annotations
@@ -33,9 +34,14 @@ DEFAULT_MANIFEST = Path("docs/source/kotodama_v1_docs.json")
 MANIFEST_SCHEMA = 2
 SOURCE_LANGUAGES = frozenset({"ko", "kotodama"})
 SOURCE_DIRECTIVES = frozenset({"zk"})
+SOURCE_LANGUAGE_ALIASES = frozenset({"koto"})
 _OPENING_FENCE = re.compile(r"^( {0,3})(?P<fence>`{3,}|~{3,})(?P<info>[^\r\n]*)$")
 _SOURCE_UNIT = re.compile(
     r"^\s*(?P<kind>seiyaku|誓約|module)\s+[A-Za-z_][A-Za-z0-9_]*\s*\{",
+    re.MULTILINE,
+)
+_SOURCE_KEYWORD = re.compile(
+    r"^\s*(?P<kind>seiyaku|誓約)(?=\s|$)",
     re.MULTILINE,
 )
 _HEREDOC_SOURCE = re.compile(
@@ -199,12 +205,19 @@ def load_document_set(manifest: Path, root: Path) -> DocumentSet:
     )
     if len(set(source_roots)) != len(source_roots):
         raise DocumentationCheckError("source_roots contains duplicate paths")
-    if not any(
-        grammar == source_root or source_root in grammar.parents
-        for source_root in source_roots
-    ):
+    uncovered_documents = tuple(
+        document
+        for document in documents
+        if not any(
+            document == source_root or source_root in document.parents
+            for source_root in source_roots
+        )
+    )
+    if uncovered_documents:
+        rendered = ", ".join(path.as_posix() for path in uncovered_documents)
         raise DocumentationCheckError(
-            "normative_grammar must be below one of the scanned source_roots"
+            "every source_document must be below a scanned source_root; "
+            f"uncovered: {rendered}"
         )
     return DocumentSet(
         grammar=grammar,
@@ -222,6 +235,49 @@ def _closing_fence(line: str, marker: str, minimum_length: int) -> bool:
     return marker_count >= minimum_length and not stripped[marker_count:].strip()
 
 
+def _edit_distance(left: str, right: str) -> int:
+    """Return the Levenshtein distance between two short language labels."""
+
+    previous = list(range(len(right) + 1))
+    for left_index, left_character in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_character in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1]
+                    + (left_character != right_character),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def _normalise_language_claim(token: str) -> str:
+    """Normalise common Markdown language-class wrappers for auditing."""
+
+    candidate = token.strip().strip("{}[](),;:")
+    candidate = candidate.lstrip(".")
+    lowered = candidate.lower()
+    for prefix in ("language-", "lang-"):
+        if lowered.startswith(prefix):
+            lowered = lowered[len(prefix) :]
+            break
+    return re.sub(r"[^a-z0-9]", "", lowered)
+
+
+def _looks_like_source_language(token: str) -> bool:
+    """Return whether an info-string field claims a Kotodama language."""
+
+    normalised = _normalise_language_claim(token)
+    if normalised in SOURCE_LANGUAGES or normalised in SOURCE_LANGUAGE_ALIASES:
+        return True
+    if "kotodama" in normalised:
+        return True
+    return len(normalised) >= 6 and _edit_distance(normalised, "kotodama") <= 2
+
+
 def _source_mode(info: str, document: Path, line: int) -> bool | None:
     fields = info.strip().split()
     if not fields:
@@ -232,6 +288,16 @@ def _source_mode(info: str, document: Path, line: int) -> bool | None:
             f"{document}:{line}: Kotodama fence language must be lowercase"
         )
     if language not in SOURCE_LANGUAGES:
+        claimed_fields = [
+            field for field in fields if _looks_like_source_language(field)
+        ]
+        if claimed_fields:
+            rendered = ", ".join(repr(field) for field in claimed_fields)
+            raise DocumentationCheckError(
+                f"{document}:{line}: non-canonical Kotodama fence language "
+                f"claim(s) {rendered}; use lowercase 'kotodama' or 'ko' as "
+                "the first info-string field"
+            )
         return None
 
     directives = fields[1:]
@@ -248,6 +314,49 @@ def _source_mode(info: str, document: Path, line: int) -> bool | None:
     return "zk" in directives
 
 
+def _without_ko_heredoc_bodies(text: str) -> str:
+    """Mask recognized ``*.ko`` heredoc bodies before fence-intent checks."""
+
+    lines = text.splitlines(keepends=True)
+    masked = list(lines)
+    index = 0
+    while index < len(lines):
+        opening = _HEREDOC_SOURCE.fullmatch(lines[index].rstrip("\r\n"))
+        if opening is None:
+            index += 1
+            continue
+        tag = opening.group("tag")
+        strip_tabs = opening.group("strip_tabs") is not None
+        index += 1
+        while index < len(lines):
+            candidate = lines[index].rstrip("\r\n")
+            if strip_tabs:
+                candidate = candidate.lstrip("\t")
+            if candidate == tag:
+                break
+            masked[index] = "\n" if lines[index].endswith(("\n", "\r")) else ""
+            index += 1
+        if index < len(lines):
+            masked[index] = "\n" if lines[index].endswith(("\n", "\r")) else ""
+            index += 1
+    return "".join(masked)
+
+
+def _clear_source_kind(text: str, *, include_incomplete: bool) -> str | None:
+    """Find source that is not already carried by a checked ``*.ko`` heredoc."""
+
+    clear_text = _without_ko_heredoc_bodies(text)
+    source_unit = _SOURCE_UNIT.search(clear_text)
+    if source_unit is not None:
+        return source_unit.group("kind")
+    if not include_incomplete:
+        return None
+    source_keyword = _SOURCE_KEYWORD.search(clear_text)
+    if source_keyword is not None:
+        return source_keyword.group("kind")
+    return None
+
+
 def extract_source_fences(document: Path, text: str) -> tuple[SourceFence, ...]:
     """Extract explicit source fences and ``*.ko`` shell heredocs."""
 
@@ -262,14 +371,6 @@ def extract_source_fences(document: Path, text: str) -> tuple[SourceFence, ...]:
             continue
 
         mode = _source_mode(opening.group("info"), document, index + 1)
-        if mode is None:
-            # Repository translations contain many unrelated and occasionally
-            # malformed Markdown fences. They are outside this language check;
-            # locate Kotodama openings directly so an unrelated shell block
-            # cannot hide a later source fence.
-            index += 1
-            continue
-
         marker_text = opening.group("fence")
         marker = marker_text[0]
         fence_length = len(marker_text)
@@ -280,11 +381,35 @@ def extract_source_fences(document: Path, text: str) -> tuple[SourceFence, ...]:
             lines[index].rstrip("\r\n"), marker, fence_length
         ):
             index += 1
-        if index == len(lines):
+        terminated = index < len(lines)
+        source = "".join(lines[body_start:index])
+
+        if mode is None:
+            language = opening.group("info").strip().split(maxsplit=1)
+            source_kind = _clear_source_kind(
+                source,
+                include_incomplete=not language,
+            )
+            if source_kind is not None:
+                label = repr(language[0]) if language else "no language label"
+                termination = "unterminated " if not terminated else ""
+                raise DocumentationCheckError(
+                    f"{document}:{opening_line}: {termination}fenced code block "
+                    f"with {label} contains apparent Kotodama source "
+                    f"({source_kind}); use lowercase 'kotodama' "
+                    "or 'ko'"
+                )
+            if not terminated:
+                # An unrelated unterminated block is malformed documentation,
+                # but it is outside this language-specific acceptance check.
+                break
+            index += 1
+            continue
+
+        if not terminated:
             raise DocumentationCheckError(
                 f"{document}:{opening_line}: unterminated fenced code block"
             )
-        source = "".join(lines[body_start:index])
         if not source.strip():
             raise DocumentationCheckError(
                 f"{document}:{opening_line}: Kotodama source fence is empty"

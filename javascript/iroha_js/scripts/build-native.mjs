@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Build the native `iroha_js_host` library and bind it to Git provenance. */
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -662,124 +662,376 @@ function readRunTrashMarker(markerPath, parent, runId, trashId) {
   });
 }
 
-function completeRunTrashMarker(marker, parent, failpoint) {
-  let current = readRunTrashMarker(
-    marker.markerPath,
-    parent,
-    marker.runId,
-    marker.trashId,
+function openRunOwnerWitness(path, identity, label) {
+  // Keep the exact owner inode open across retirement. A competing janitor
+  // only counts as converged when this descriptor reports that same inode
+  // unlinked; pathname ENOENT alone is not ownership evidence.
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY |
+      (constants.O_CLOEXEC ?? 0) |
+      (constants.O_NOFOLLOW ?? 0),
   );
-  if (lstatOrNull(current.path) !== null) {
+  try {
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (
+      !opened.isFile() ||
+      opened.isSymbolicLink() ||
+      opened.nlink !== 1n ||
+      !sameOutputIdentity(opened, identity)
+    ) {
+      throw new Error(`${label} changed while its retirement was witnessed.`);
+    }
+  } catch (error) {
+    closeSync(descriptor);
+    throw error;
+  }
+  return Object.freeze({ descriptor, identity });
+}
+
+function runOwnerWitnessProvesRemoval(witness) {
+  const current = fstatSync(witness.descriptor, { bigint: true });
+  return (
+    current.isFile() &&
+    !current.isSymbolicLink() &&
+    current.nlink === 0n &&
+    current.dev === witness.identity.dev &&
+    current.ino === witness.identity.ino &&
+    current.mode === witness.identity.mode &&
+    current.mtimeNs === witness.identity.mtimeNs &&
+    current.size === witness.identity.size
+  );
+}
+
+function readRunTrashMarkerOrCompleted(
+  markerPath,
+  parent,
+  runId,
+  trashId,
+  witness,
+) {
+  try {
+    return readRunTrashMarker(
+      markerPath,
+      parent,
+      runId,
+      trashId,
+    );
+  } catch (error) {
     assertDirectoryIdentity(
       parent,
       "Native build operating-system temporary directory",
     );
-    rmdirSync(current.path);
+    const paths = exactRunTrashPaths(parent, runId, trashId);
+    if (
+      lstatOrNull(paths.markerPath) === null &&
+      lstatOrNull(paths.path) === null &&
+      witness !== undefined &&
+      runOwnerWitnessProvesRemoval(witness)
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function completeRunTrashMarker(
+  marker,
+  parent,
+  failpoint,
+  suppliedWitness,
+) {
+  const witness =
+    suppliedWitness ??
+    openRunOwnerWitness(
+      marker.markerPath,
+      marker.markerIdentity,
+      "Native build run trash marker",
+    );
+  const closeWitness = suppliedWitness === undefined;
+  try {
+    if (
+      !sameRenamedOutputIdentity(
+        marker.markerIdentity,
+        witness.identity,
+      )
+    ) {
+      throw new Error(
+        "Native build run trash marker does not match its retirement witness.",
+      );
+    }
+    let current = readRunTrashMarkerOrCompleted(
+      marker.markerPath,
+      parent,
+      marker.runId,
+      marker.trashId,
+      witness,
+    );
+    if (current === null) return;
+    if (lstatOrNull(current.path) !== null) {
+      assertDirectoryIdentity(
+        parent,
+        "Native build operating-system temporary directory",
+      );
+      try {
+        rmdirSync(current.path);
+      } catch (error) {
+        if (
+          (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") ||
+          lstatOrNull(current.path) !== null
+        ) {
+          throw error;
+        }
+      }
+      syncDirectory(parent.canonicalPath);
+      failpoint("run-trash-directory-removed", {
+        markerPath: current.markerPath,
+        path: current.path,
+        runId: current.runId,
+      });
+    }
+    current = readRunTrashMarkerOrCompleted(
+      marker.markerPath,
+      parent,
+      marker.runId,
+      marker.trashId,
+      witness,
+    );
+    if (current === null) return;
+    assertDirectoryIdentity(
+      parent,
+      "Native build operating-system temporary directory",
+    );
+    try {
+      rmSync(current.markerPath);
+    } catch (error) {
+      if (
+        (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") ||
+        lstatOrNull(current.markerPath) !== null ||
+        lstatOrNull(current.path) !== null ||
+        !runOwnerWitnessProvesRemoval(witness)
+      ) {
+        throw error;
+      }
+      return;
+    }
     syncDirectory(parent.canonicalPath);
-    failpoint("run-trash-directory-removed", {
+    failpoint("run-trash-marker-removed", {
       markerPath: current.markerPath,
-      path: current.path,
       runId: current.runId,
     });
+  } finally {
+    if (closeWitness) closeSync(witness.descriptor);
   }
-  current = readRunTrashMarker(
-    marker.markerPath,
-    parent,
-    marker.runId,
-    marker.trashId,
-  );
+}
+
+function completeConvergedRunTrash(
+  paths,
+  parent,
+  runId,
+  trashId,
+  failpoint,
+  witness,
+) {
   assertDirectoryIdentity(
     parent,
     "Native build operating-system temporary directory",
   );
-  rmSync(current.markerPath);
-  syncDirectory(parent.canonicalPath);
-  failpoint("run-trash-marker-removed", {
-    markerPath: current.markerPath,
-    runId: current.runId,
-  });
+  if (lstatOrNull(paths.markerPath) !== null) {
+    const marker = readRunTrashMarkerOrCompleted(
+      paths.markerPath,
+      parent,
+      runId,
+      trashId,
+      witness,
+    );
+    if (marker !== null) {
+      if (
+        !sameRenamedOutputIdentity(
+          marker.markerIdentity,
+          witness.identity,
+        )
+      ) {
+        throw new Error(
+          "Native build run trash marker changed retirement identity.",
+        );
+      }
+      completeRunTrashMarker(marker, parent, failpoint, witness);
+    }
+    return true;
+  }
+  return (
+    lstatOrNull(paths.path) === null &&
+    runOwnerWitnessProvesRemoval(witness)
+  );
 }
 
 function removeOwnedRunTrash(trash, parent, trashId, failpoint) {
-  let current = readOwnedRunDirectory(
-    trash.path,
-    parent,
-    trash.runId,
-    "Native build owned run trash",
-  );
-  if (!runBelongsToCurrentPrincipal(current)) {
-    throw new Error("Native build run trash belongs to another owner.");
-  }
   const paths = exactRunTrashPaths(parent, trash.runId, trashId);
-  if (current.path !== paths.path || lstatOrNull(paths.markerPath) !== null) {
+  if (trash.path !== paths.path) {
     throw new Error("Native build run trash ownership is ambiguous.");
   }
-  for (const name of [...current.children.keys()].sort()) {
-    current = readOwnedRunDirectory(
-      current.path,
+  const witness = openRunOwnerWitness(
+    join(trash.path, RUN_OWNER_FILENAME),
+    trash.ownerIdentity,
+    "Native build run trash owner",
+  );
+  try {
+    let current;
+    try {
+      current = readOwnedRunDirectory(
+        trash.path,
+        parent,
+        trash.runId,
+        "Native build owned run trash",
+      );
+    } catch (error) {
+      if (
+        completeConvergedRunTrash(
+          paths,
+          parent,
+          trash.runId,
+          trashId,
+          failpoint,
+          witness,
+        )
+      ) {
+        return;
+      }
+      throw error;
+    }
+    if (!runBelongsToCurrentPrincipal(current)) {
+      throw new Error("Native build run trash belongs to another owner.");
+    }
+    if (lstatOrNull(paths.markerPath) !== null) {
+      throw new Error("Native build run trash ownership is ambiguous.");
+    }
+    for (const name of [...current.children.keys()].sort()) {
+      try {
+        current = readOwnedRunDirectory(
+          current.path,
+          parent,
+          current.runId,
+          "Native build owned run trash",
+        );
+      } catch (error) {
+        if (
+          completeConvergedRunTrash(
+            paths,
+            parent,
+            trash.runId,
+            trashId,
+            failpoint,
+            witness,
+          )
+        ) {
+          return;
+        }
+        throw error;
+      }
+      const expectedChild = current.children.get(name);
+      if (expectedChild === undefined) continue;
+      const childPath = join(current.path, name);
+      const child = lstatOrNull(childPath);
+      if (child === null) continue;
+      if (
+        !child.isDirectory() ||
+        child.isSymbolicLink() ||
+        !sameDirectoryIdentity(child, expectedChild) ||
+        realpathSync(childPath) !== childPath
+      ) {
+        throw new Error(
+          "Native build run trash child changed before removal.",
+        );
+      }
+      // The root and exact direct child have just been revalidated. Recursive
+      // payload cleanup is confined beneath this already-retired directory.
+      // Same-UID peers are trusted because Node has no portable descriptor-
+      // relative recursive removal API on POSIX and Windows.
+      rmSync(childPath, { recursive: true });
+      syncDirectory(current.path);
+      failpoint(`run-payload-removed:${name}`, {
+        path: current.path,
+        runId: current.runId,
+      });
+    }
+    try {
+      current = readOwnedRunDirectory(
+        current.path,
+        parent,
+        current.runId,
+        "Native build emptied run trash",
+      );
+    } catch (error) {
+      if (
+        completeConvergedRunTrash(
+          paths,
+          parent,
+          trash.runId,
+          trashId,
+          failpoint,
+          witness,
+        )
+      ) {
+        return;
+      }
+      throw error;
+    }
+    if (current.children.size !== 0) {
+      throw new Error(
+        "Native build run trash payload cleanup is incomplete.",
+      );
+    }
+    assertDirectoryIdentity(
+      parent,
+      "Native build operating-system temporary directory",
+    );
+    try {
+      renameSync(join(current.path, RUN_OWNER_FILENAME), paths.markerPath);
+    } catch (error) {
+      if (
+        completeConvergedRunTrash(
+          paths,
+          parent,
+          trash.runId,
+          trashId,
+          failpoint,
+          witness,
+        )
+      ) {
+        return;
+      }
+      throw error;
+    }
+    syncDirectory(current.path);
+    syncDirectory(parent.canonicalPath);
+    const marker = readRunTrashMarkerOrCompleted(
+      paths.markerPath,
       parent,
       current.runId,
-      "Native build owned run trash",
+      trashId,
+      witness,
     );
-    const expectedChild = current.children.get(name);
-    if (expectedChild === undefined) continue;
-    const childPath = join(current.path, name);
-    const child = lstatSync(childPath, { bigint: true });
+    if (marker === null) return;
     if (
-      !child.isDirectory() ||
-      child.isSymbolicLink() ||
-      !sameDirectoryIdentity(child, expectedChild) ||
-      realpathSync(childPath) !== childPath
+      !sameRenamedOutputIdentity(
+        marker.markerIdentity,
+        current.ownerIdentity,
+      )
     ) {
-      throw new Error("Native build run trash child changed before removal.");
+      throw new Error(
+        "Native build run owner changed during terminal retirement.",
+      );
     }
-    // The root and exact direct child have just been revalidated. Recursive
-    // payload cleanup is confined beneath this already-retired directory.
-    // Same-UID peers are trusted because Node has no portable descriptor-
-    // relative recursive removal API on POSIX and Windows.
-    rmSync(childPath, { recursive: true });
-    syncDirectory(current.path);
-    failpoint(`run-payload-removed:${name}`, {
-      path: current.path,
+    failpoint("run-owner-retired", {
+      markerPath: paths.markerPath,
+      path: paths.path,
       runId: current.runId,
     });
+    completeRunTrashMarker(marker, parent, failpoint, witness);
+  } finally {
+    closeSync(witness.descriptor);
   }
-  current = readOwnedRunDirectory(
-    current.path,
-    parent,
-    current.runId,
-    "Native build emptied run trash",
-  );
-  if (current.children.size !== 0) {
-    throw new Error("Native build run trash payload cleanup is incomplete.");
-  }
-  assertDirectoryIdentity(
-    parent,
-    "Native build operating-system temporary directory",
-  );
-  renameSync(join(current.path, RUN_OWNER_FILENAME), paths.markerPath);
-  syncDirectory(current.path);
-  syncDirectory(parent.canonicalPath);
-  const marker = readRunTrashMarker(
-    paths.markerPath,
-    parent,
-    current.runId,
-    trashId,
-  );
-  if (
-    !sameRenamedOutputIdentity(
-      marker.markerIdentity,
-      current.ownerIdentity,
-    )
-  ) {
-    throw new Error("Native build run owner changed during terminal retirement.");
-  }
-  failpoint("run-owner-retired", {
-    markerPath: paths.markerPath,
-    path: paths.path,
-    runId: current.runId,
-  });
-  completeRunTrashMarker(marker, parent, failpoint);
 }
 
 function retireOwnedRun(run, parent, failpoint) {
@@ -790,60 +1042,121 @@ function retireOwnedRun(run, parent, failpoint) {
     "Native build owned run container",
     { initializer: basename(run.path).startsWith(RUN_INITIALIZER_PREFIX) },
   );
-  failpoint("run-stale-verified", {
-    path: current.path,
-    runId: current.runId,
-  });
-  const verified = readOwnedRunDirectory(
-    current.path,
-    parent,
-    current.runId,
-    "Native build owned run container",
-    { initializer: basename(current.path).startsWith(RUN_INITIALIZER_PREFIX) },
+  const witness = openRunOwnerWitness(
+    join(current.path, RUN_OWNER_FILENAME),
+    current.ownerIdentity,
+    "Native build owned run owner",
   );
-  if (
-    !sameDirectoryIdentity(current.identity, verified.identity) ||
-    !sameOutputIdentity(current.ownerIdentity, verified.ownerIdentity)
-  ) {
-    throw new Error("Native build owned run changed before retirement.");
-  }
-  current = verified;
-  const trashId = newRunUuid();
-  const trashPaths = exactRunTrashPaths(parent, current.runId, trashId);
-  if (
-    lstatOrNull(trashPaths.path) !== null ||
-    lstatOrNull(trashPaths.markerPath) !== null
-  ) {
-    throw new Error("Native build run trash target already exists.");
-  }
-  assertDirectoryIdentity(
-    parent,
-    "Native build operating-system temporary directory",
-  );
-  renameSync(current.path, trashPaths.path);
-  failpoint("run-trash-renamed", {
-    path: trashPaths.path,
-    runId: current.runId,
-  });
-  syncDirectory(parent.canonicalPath);
-  failpoint("run-trash-synced", {
-    path: trashPaths.path,
-    runId: current.runId,
-  });
-  const trash = readOwnedRunDirectory(
-    trashPaths.path,
-    parent,
-    current.runId,
-    "Native build retired run trash",
-  );
-  if (
-    !sameDirectoryIdentity(trash.identity, current.identity) ||
-    !sameRenamedOutputIdentity(
-      trash.ownerIdentity,
-      current.ownerIdentity,
-    )
-  ) {
-    throw new Error("Native build run changed during trash retirement.");
+  let trash;
+  let trashId;
+  let trashPaths;
+  try {
+    failpoint("run-stale-verified", {
+      path: current.path,
+      runId: current.runId,
+    });
+    let verified;
+    try {
+      verified = readOwnedRunDirectory(
+        current.path,
+        parent,
+        current.runId,
+        "Native build owned run container",
+        {
+          initializer: basename(current.path).startsWith(
+            RUN_INITIALIZER_PREFIX,
+          ),
+        },
+      );
+    } catch (error) {
+      assertDirectoryIdentity(
+        parent,
+        "Native build operating-system temporary directory",
+      );
+      if (
+        lstatOrNull(current.path) === null &&
+        runOwnerWitnessProvesRemoval(witness)
+      ) {
+        return;
+      }
+      throw error;
+    }
+    if (
+      !sameDirectoryIdentity(current.identity, verified.identity) ||
+      !sameOutputIdentity(current.ownerIdentity, verified.ownerIdentity)
+    ) {
+      throw new Error("Native build owned run changed before retirement.");
+    }
+    current = verified;
+    trashId = newRunUuid();
+    trashPaths = exactRunTrashPaths(parent, current.runId, trashId);
+    if (
+      lstatOrNull(trashPaths.path) !== null ||
+      lstatOrNull(trashPaths.markerPath) !== null
+    ) {
+      throw new Error("Native build run trash target already exists.");
+    }
+    assertDirectoryIdentity(
+      parent,
+      "Native build operating-system temporary directory",
+    );
+    try {
+      renameSync(current.path, trashPaths.path);
+    } catch (error) {
+      assertDirectoryIdentity(
+        parent,
+        "Native build operating-system temporary directory",
+      );
+      if (
+        lstatOrNull(current.path) === null &&
+        runOwnerWitnessProvesRemoval(witness)
+      ) {
+        return;
+      }
+      throw error;
+    }
+    failpoint("run-trash-renamed", {
+      path: trashPaths.path,
+      runId: current.runId,
+    });
+    syncDirectory(parent.canonicalPath);
+    failpoint("run-trash-synced", {
+      path: trashPaths.path,
+      runId: current.runId,
+    });
+    try {
+      trash = readOwnedRunDirectory(
+        trashPaths.path,
+        parent,
+        current.runId,
+        "Native build retired run trash",
+      );
+    } catch (error) {
+      if (
+        completeConvergedRunTrash(
+          trashPaths,
+          parent,
+          current.runId,
+          trashId,
+          failpoint,
+          witness,
+        )
+      ) {
+        return;
+      }
+      throw error;
+    }
+    if (
+      !sameDirectoryIdentity(trash.identity, current.identity) ||
+      !sameRenamedOutputIdentity(
+        trash.ownerIdentity,
+        current.ownerIdentity,
+      )
+    ) {
+      throw new Error("Native build run changed during trash retirement.");
+    }
+  } finally {
+    closeSync(witness.descriptor);
   }
   removeOwnedRunTrash(trash, parent, trashId, failpoint);
 }
@@ -1020,13 +1333,81 @@ function cargoArtifactSourceIdentity(path) {
   });
 }
 
-function copyCargoArtifactToOwnedSeal(sourcePath, target, container) {
+function digestCargoArtifactSource(sourcePath, expectedIdentity) {
+  const before = cargoArtifactSourceIdentity(sourcePath);
+  if (
+    expectedIdentity !== undefined &&
+    !sameOutputIdentity(before, expectedIdentity)
+  ) {
+    throw new Error(
+      "Cargo native build artifact changed before digest verification.",
+    );
+  }
+  const descriptor = openSync(
+    sourcePath,
+    constants.O_RDONLY |
+      (constants.O_NOFOLLOW ?? 0) |
+      (constants.O_CLOEXEC ?? 0),
+  );
+  const digest = createHash("sha256");
+  let total = 0n;
+  let openedAfter;
+  try {
+    const openedBefore = fstatSync(descriptor, { bigint: true });
+    if (
+      !openedBefore.isFile() ||
+      openedBefore.isSymbolicLink() ||
+      openedBefore.nlink < 1n ||
+      !sameOutputIdentity(before, openedBefore)
+    ) {
+      throw new Error(
+        "Cargo native build artifact changed while it was opened for digest verification.",
+      );
+    }
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let bytesRead;
+    do {
+      bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead > 0) {
+        digest.update(buffer.subarray(0, bytesRead));
+        total += BigInt(bytesRead);
+      }
+    } while (bytesRead > 0);
+    openedAfter = fstatSync(descriptor, { bigint: true });
+  } finally {
+    closeSync(descriptor);
+  }
+  const after = cargoArtifactSourceIdentity(sourcePath);
+  if (
+    openedAfter === undefined ||
+    total !== before.size ||
+    !sameOutputIdentity(before, openedAfter) ||
+    !sameOutputIdentity(before, after)
+  ) {
+    throw new Error(
+      "Cargo native build artifact changed during digest verification.",
+    );
+  }
+  return Object.freeze({
+    identity: before,
+    sha256: digest.digest("hex"),
+  });
+}
+
+function copyCargoArtifactToOwnedSeal(
+  sourcePath,
+  target,
+  container,
+  failpoint,
+) {
   assertRunCargoTargetIdentity(target, container);
   const sealPath = join(target.path, RUN_CARGO_OUTPUT_SEAL_NAME);
   if (lstatOrNull(sealPath) !== null) {
     throw new Error("Native build private Cargo output seal already exists.");
   }
-  const sourceBefore = cargoArtifactSourceIdentity(sourcePath);
+  const sourceDigestBefore = digestCargoArtifactSource(sourcePath);
+  const sourceBefore = sourceDigestBefore.identity;
+  failpoint("cargo-output-source-digested", { sealPath, sourcePath });
   const noFollow = constants.O_NOFOLLOW ?? 0;
   const closeOnExec = constants.O_CLOEXEC ?? 0;
   const sourceDescriptor = openSync(
@@ -1037,6 +1418,7 @@ function copyCargoArtifactToOwnedSeal(sourcePath, target, container) {
   let sealCreationIdentity;
   let copyError;
   let copied = 0n;
+  const copiedDigest = createHash("sha256");
   try {
     const sourceOpened = fstatSync(sourceDescriptor, { bigint: true });
     if (
@@ -1074,6 +1456,9 @@ function copyCargoArtifactToOwnedSeal(sourcePath, target, container) {
         buffer.length,
         null,
       );
+      if (bytesRead > 0) {
+        copiedDigest.update(buffer.subarray(0, bytesRead));
+      }
       let written = 0;
       while (written < bytesRead) {
         const count = writeSync(
@@ -1105,6 +1490,11 @@ function copyCargoArtifactToOwnedSeal(sourcePath, target, container) {
         "Cargo native build artifact changed while it was privately sealed.",
       );
     }
+    if (copiedDigest.digest("hex") !== sourceDigestBefore.sha256) {
+      throw new Error(
+        "Cargo native build artifact digest changed while it was privately sealed.",
+      );
+    }
   } catch (error) {
     copyError = error;
   } finally {
@@ -1132,14 +1522,51 @@ function copyCargoArtifactToOwnedSeal(sourcePath, target, container) {
     }
     throw copyError;
   }
-  const sourceAfter = cargoArtifactSourceIdentity(sourcePath);
-  if (!sameOutputIdentity(sourceBefore, sourceAfter)) {
-    throw new Error("Cargo native build artifact changed after private sealing.");
+  let postCopyError;
+  let sourceDigestAfter;
+  let seal;
+  try {
+    failpoint("cargo-output-copied", { sealPath, sourcePath });
+    sourceDigestAfter = digestCargoArtifactSource(
+      sourcePath,
+      sourceBefore,
+    );
+    if (sourceDigestAfter.sha256 !== sourceDigestBefore.sha256) {
+      throw new Error(
+        "Cargo native build artifact digest changed after private sealing.",
+      );
+    }
+    syncDirectory(target.path);
+    seal = sealNativeOutput(sealPath);
+    if (
+      seal.identity.size !== copied ||
+      seal.sha256 !== sourceDigestBefore.sha256
+    ) {
+      throw new Error(
+        "Native build private output seal does not match its Cargo artifact.",
+      );
+    }
+  } catch (error) {
+    postCopyError = error;
   }
-  syncDirectory(target.path);
-  const seal = sealNativeOutput(sealPath);
-  if (seal.identity.size !== copied) {
-    throw new Error("Native build private output seal has the wrong size.");
+  if (postCopyError !== undefined) {
+    const failedSeal = lstatOrNull(sealPath);
+    if (
+      failedSeal === null ||
+      !failedSeal.isFile() ||
+      failedSeal.isSymbolicLink() ||
+      failedSeal.nlink !== 1n ||
+      failedSeal.dev !== sealCreationIdentity.dev ||
+      failedSeal.ino !== sealCreationIdentity.ino
+    ) {
+      throw new AggregateError(
+        [postCopyError],
+        "Native build output post-copy validation failed and its private seal changed identity.",
+      );
+    }
+    rmSync(sealPath);
+    syncDirectory(target.path);
+    throw postCopyError;
   }
   return Object.freeze({ path: sealPath, seal });
 }
@@ -2435,19 +2862,36 @@ function publishStagedNative({
   }
   let cleanupError;
   try {
-    if (stagePresent && lstatOrNull(stage.path) !== null) {
-      removeOwnedRegularFile(
-        stage,
-        finalDirectory,
-        stage.prefix,
-        "Native build staging file",
-      );
+    if (binaryPublished) {
+      if (
+        publishedOutputIdentity === undefined ||
+        lstatOrNull(finalPath) === null
+      ) {
+        throw new Error(
+          "Native build published target disappeared before cleanup.",
+        );
+      }
+      const currentPublished = outputIdentityOrNull(finalPath);
+      if (
+        !sameOutputIdentity(
+          currentPublished,
+          publishedOutputIdentity,
+        )
+      ) {
+        throw new Error(
+          "Native build published target changed before cleanup.",
+        );
+      }
     }
     if (
       !binaryPublished &&
-      publishedOutputIdentity !== undefined &&
-      lstatOrNull(finalPath) !== null
+      publishedOutputIdentity !== undefined
     ) {
+      if (lstatOrNull(finalPath) === null) {
+        throw new Error(
+          "Native build publication target disappeared before rollback.",
+        );
+      }
       const currentPublished = outputIdentityOrNull(finalPath);
       if (
         !sameOutputIdentity(
@@ -2459,10 +2903,37 @@ function publishStagedNative({
           "Native build publication target changed before rollback.",
         );
       }
-      rmSync(finalPath);
+      if (lstatOrNull(stage.path) !== null) {
+        throw new Error(
+          "Native build rollback staging path unexpectedly appeared.",
+        );
+      }
+      renameSync(finalPath, stage.path);
+      const rolledBackStage = outputIdentityOrNull(stage.path);
+      if (
+        !sameRenamedOutputIdentity(
+          currentPublished,
+          rolledBackStage,
+        )
+      ) {
+        throw new Error(
+          "Native build publication target changed during rollback retirement.",
+        );
+      }
+      stage = Object.freeze({
+        ...stage,
+        identity: rolledBackStage,
+      });
+      stagePresent = true;
       syncDirectory(finalDirectory);
+      publicationFailpoint("after-binary-rollback-rename");
     }
-    if (retired !== undefined && lstatOrNull(retired.path) !== null) {
+    if (retired !== undefined) {
+      if (lstatOrNull(retired.path) === null) {
+        throw new Error(
+          "Native build retired binary disappeared before cleanup.",
+        );
+      }
       if (binaryPublished) {
         removeOwnedRegularFile(
           retired,
@@ -2490,7 +2961,21 @@ function publishStagedNative({
           );
         }
         syncDirectory(finalDirectory);
+        publicationFailpoint("after-binary-rollback-restore");
       }
+    }
+    if (stagePresent) {
+      if (lstatOrNull(stage.path) === null) {
+        throw new Error(
+          "Native build staging file disappeared before cleanup.",
+        );
+      }
+      removeOwnedRegularFile(
+        stage,
+        finalDirectory,
+        stage.prefix,
+        "Native build staging file",
+      );
     }
   } catch (error) {
     cleanupError = error;
@@ -2851,9 +3336,17 @@ export function runNativeBuild({
       );
     }
     const cargoManifest = join(snapshot.snapshotRoot, "Cargo.toml");
+    const cargoLock = join(snapshot.snapshotRoot, "Cargo.lock");
     const buildArgs = [
       "build",
       "--locked",
+      "--offline",
+      "--jobs",
+      "1",
+      "-Z",
+      "unstable-options",
+      "--lockfile-path",
+      cargoLock,
       "--manifest-path",
       cargoManifest,
       "--package",
@@ -2896,6 +3389,7 @@ export function runNativeBuild({
       runNativePath,
       runCargoTarget,
       runContainer,
+      runContainerFailpoint,
     );
     const outputAfterCargo = privateOutput.seal;
     const sourceAfter = verifySourceSnapshot(snapshot);

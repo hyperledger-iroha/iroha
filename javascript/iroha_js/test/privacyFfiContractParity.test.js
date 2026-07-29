@@ -57,6 +57,7 @@ test("retired identifiers remain rejection fixtures, never accepted catalog rows
     "zkat-policy-private-auth-v1",
     "silent-threshold-anoncred-v0",
     "sis-hints-anoncred-pq-v0",
+    "sis-with-hints",
     "penumbra-masp-v1",
     "aztec-private-rollup-v1",
     "zk-ams-recursive-admission-v0",

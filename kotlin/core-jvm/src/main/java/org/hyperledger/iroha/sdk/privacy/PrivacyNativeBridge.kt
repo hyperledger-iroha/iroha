@@ -9,6 +9,18 @@ import java.util.Collections
  * live behind protocol-specific APIs and cannot be selected with free-form strings here.
  */
 class PrivacyNativeBridge private constructor() {
+    enum class ValidationStatusV1(val code: Int) {
+        VALID(0),
+        NULL_POINTER(1),
+        EMPTY(2),
+        ARCHIVE_TOO_LARGE(3),
+        DECODE_RESOURCE_LIMIT(4),
+        SCHEMA_MISMATCH(5),
+        NON_CANONICAL(6),
+        MALFORMED_ARCHIVE(7),
+        INVALID_SNAPSHOT(8),
+    }
+
     enum class ProtocolIdV1(val canonicalLabel: String) {
         ZK_ACE_PQ_AUTHORIZATION_V0("zk-ace-pq-authorization-v0"),
         ANONYMOUS_PGC_K_OUT_OF_N_V1("anonymous-pgc-k-out-of-n-v1"),
@@ -39,12 +51,8 @@ class PrivacyNativeBridge private constructor() {
 
     companion object {
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
-        const val PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024
-
-        private const val NORITO_HEADER_BYTES: Int = 40
-        private const val CAPABILITY_SCHEMA_BYTE: Int = 0x50
+        const val PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Int = 256 * 1024
         private const val LIBRARY_NAME: String = "connect_norito_bridge"
-        private val NORITO_MAGIC = byteArrayOf('N'.code.toByte(), 'R'.code.toByte(), 'T'.code.toByte(), '0'.code.toByte())
         private val PROTOCOLS: List<ProtocolIdV1> =
             Collections.unmodifiableList(ProtocolIdV1.values().toList())
         private val nativeAvailable: Boolean = loadLibrary()
@@ -74,21 +82,14 @@ class PrivacyNativeBridge private constructor() {
         internal fun requireCapabilityArchive(archive: ByteArray?): ByteArray {
             check(
                 archive != null &&
-                    archive.size >= NORITO_HEADER_BYTES &&
+                    archive.isNotEmpty() &&
                     archive.size <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
             ) {
                 "invalid privacy capability archive length"
             }
             requireNotNull(archive)
-            for (index in NORITO_MAGIC.indices) {
-                check(archive[index] == NORITO_MAGIC[index]) {
-                    "invalid privacy capability Norito magic"
-                }
-            }
-            for (index in 6 until 22) {
-                check(archive[index] == CAPABILITY_SCHEMA_BYTE.toByte()) {
-                    "invalid privacy capability schema"
-                }
+            check(nativeValidateCapabilities(archive) == ValidationStatusV1.VALID.code) {
+                "invalid typed privacy capability archive"
             }
             return archive.copyOf()
         }
@@ -97,7 +98,7 @@ class PrivacyNativeBridge private constructor() {
             try {
                 System.loadLibrary(LIBRARY_NAME)
                 nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION &&
-                    requireCapabilityArchive(nativeCapabilities()).size >= NORITO_HEADER_BYTES
+                    requireCapabilityArchive(nativeCapabilities()).isNotEmpty()
             } catch (_: RuntimeException) {
                 false
             } catch (_: LinkageError) {
@@ -107,5 +108,7 @@ class PrivacyNativeBridge private constructor() {
         @JvmStatic private external fun nativeBridgeAbiVersion(): Int
 
         @JvmStatic private external fun nativeCapabilities(): ByteArray?
+
+        @JvmStatic private external fun nativeValidateCapabilities(archive: ByteArray): Int
     }
 }

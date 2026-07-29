@@ -2006,7 +2006,7 @@ impl BfvRnsModulusChain {
     /// Returns [`BfvError`] when validation or canonical encoding fails.
     pub fn digest_for_parameters(&self, params: &BfvParameters) -> Result<Hash, BfvError> {
         self.validate_for_parameters(params)?;
-        let bytes = norito::to_bytes(self).map_err(|err| {
+        let bytes = norito::encode_canonical(self).map_err(|err| {
             BfvError::InvalidParameters(format!("RNS modulus-chain encoding failed: {err}"))
         })?;
         Ok(Hash::new_from_chunks(&[
@@ -5332,7 +5332,7 @@ impl BfvEvaluationKeyBundle {
             rotation_transcripts,
             bootstrap_transcript,
         };
-        let bytes = norito::to_bytes(&material).map_err(|err| {
+        let bytes = norito::encode_canonical(&material).map_err(|err| {
             BfvError::InvalidParameters(format!("refresh transcript digest encoding failed: {err}"))
         })?;
         Ok(Hash::new_from_chunks(&[
@@ -5391,7 +5391,7 @@ impl BfvEvaluationKeyBundle {
             bootstrap_round_digests,
             bootstrap_key: bootstrap_key.clone(),
         };
-        let bytes = norito::to_bytes(&material).map_err(|err| {
+        let bytes = norito::encode_canonical(&material).map_err(|err| {
             BfvError::InvalidParameters(format!(
                 "bootstrap key transcript proof statement encoding failed: {err}"
             ))
@@ -5457,7 +5457,7 @@ impl BfvEvaluationKeyBundle {
             max_refresh_rounds: bootstrap_key.max_refresh_rounds,
             full_bootstrap_material_digest,
         };
-        let bytes = norito::to_bytes(&material).map_err(|err| {
+        let bytes = norito::encode_canonical(&material).map_err(|err| {
             BfvError::InvalidParameters(format!(
                 "full-bootstrap material proof statement encoding failed: {err}"
             ))
@@ -5628,7 +5628,7 @@ impl BfvEvaluationKeyBundle {
     pub fn digest(&self, params: &BfvParameters) -> Result<Hash, BfvError> {
         self.validate(params)?;
         validate_evaluation_key_bundle_digest_refresh_material_v1(self)?;
-        let bytes = norito::to_bytes(self).map_err(|err| {
+        let bytes = norito::encode_canonical(self).map_err(|err| {
             BfvError::InvalidParameters(format!("evaluation key encoding failed: {err}"))
         })?;
         Ok(Hash::new_from_chunks(&[
@@ -5694,14 +5694,14 @@ pub fn bfv_full_bootstrap_galois_key_set_digest_v1(
     galois_keys: &[BfvGaloisKey],
 ) -> Result<Hash, BfvError> {
     validate_galois_key_set(params, galois_keys, "BFV full-bootstrap Galois key set")?;
-    let params_bytes = norito::to_bytes(params).map_err(|err| {
+    let params_bytes = norito::encode_canonical(params).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap Galois key set parameter encoding failed: {err}"
         ))
     })?;
     let mut key_material = galois_keys.to_vec();
     key_material.sort_by_key(|key| key.automorphism_power);
-    let key_bytes = norito::to_bytes(&key_material).map_err(|err| {
+    let key_bytes = norito::encode_canonical(&key_material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap Galois key set encoding failed: {err}"
         ))
@@ -5739,15 +5739,15 @@ pub fn decode_bfv_full_bootstrap_galois_key_set_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    let galois_keys = norito::decode_from_bytes::<Vec<BfvGaloisKey>>(bytes).map_err(|err| {
+    let galois_keys = norito::decode_canonical::<Vec<BfvGaloisKey>>(bytes).map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} must be Norito-encoded Galois key-set material: {err}"
+            "{label} must use canonical v1 bytes containing Norito-encoded Galois key-set material: {err}"
         ))
     })?;
     validate_galois_key_set(params, &galois_keys, "BFV full-bootstrap Galois key set")?;
     let mut canonical_keys = galois_keys.clone();
     canonical_keys.sort_by_key(|key| key.automorphism_power);
-    let canonical_bytes = norito::to_bytes(&canonical_keys).map_err(|err| {
+    let canonical_bytes = norito::encode_canonical(&canonical_keys).map_err(|err| {
         BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
     })?;
     if bytes != canonical_bytes {
@@ -6199,7 +6199,7 @@ pub fn registered_bfv_key_switch_decomposition_chain_digest(
     params: &BfvParameters,
 ) -> Result<Hash, BfvError> {
     let chain = registered_bfv_key_switch_decomposition_chain(params)?;
-    let bytes = norito::to_bytes(&chain).map_err(|err| {
+    let bytes = norito::encode_canonical(&chain).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "RNS key-switch decomposition-chain encoding failed: {err}"
         ))
@@ -6237,7 +6237,7 @@ pub fn registered_bfv_centered_scale_round_source_chain_digest(
     params: &BfvParameters,
 ) -> Result<Hash, BfvError> {
     let chain = registered_bfv_centered_scale_round_source_chain(params)?;
-    let bytes = norito::to_bytes(&chain).map_err(|err| {
+    let bytes = norito::encode_canonical(&chain).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "RNS centered scale-round source-chain encoding failed: {err}"
         ))
@@ -6254,7 +6254,7 @@ pub fn registered_bfv_centered_scale_round_source_chain_digest(
 /// Returns [`BfvError`] when the parameter set is not registered.
 pub fn registered_bfv_parameter_digest(params: &BfvParameters) -> Result<Hash, BfvError> {
     validate_registered_bfv_parameters(params)?;
-    let bytes = norito::to_bytes(params)
+    let bytes = norito::encode_canonical(params)
         .map_err(|err| BfvError::InvalidParameters(format!("parameter encoding failed: {err}")))?;
     Ok(Hash::new_from_chunks(&[
         BFV_PARAMETER_DIGEST_DOMAIN,
@@ -6277,7 +6277,7 @@ pub fn bfv_public_key_digest(
         params: *params,
         public_key: public_key.clone(),
     };
-    let bytes = norito::to_bytes(&material).map_err(|err| {
+    let bytes = norito::encode_canonical(&material).map_err(|err| {
         BfvError::InvalidParameters(format!("public key digest encoding failed: {err}"))
     })?;
     Ok(Hash::new_from_chunks(&[
@@ -6346,7 +6346,7 @@ pub fn bfv_ciphertext_digest(
         params: *params,
         ciphertext: ciphertext.clone(),
     };
-    let bytes = norito::to_bytes(&material).map_err(|err| {
+    let bytes = norito::encode_canonical(&material).map_err(|err| {
         BfvError::InvalidParameters(format!("ciphertext digest encoding failed: {err}"))
     })?;
     Ok(Hash::new_from_chunks(&[
@@ -6413,20 +6413,12 @@ where
             "{label} must not be all-zero"
         )));
     }
-    let material = norito::decode_from_bytes::<T>(bytes).map_err(|err| {
+    let material = norito::decode_canonical::<T>(bytes).map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} must be Norito-encoded BFV material: {err}"
+            "{label} must use canonical v1 bytes containing Norito-encoded BFV material: {err}"
         ))
     })?;
     validate(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -6715,7 +6707,7 @@ fn bfv_public_key_proof_statement_digest_for_mode(
         public_key: public_key.clone(),
         public_key_digest,
     };
-    let bytes = norito::to_bytes(&material).map_err(|err| {
+    let bytes = norito::encode_canonical(&material).map_err(|err| {
         BfvError::InvalidParameters(format!("public-key proof statement encoding failed: {err}"))
     })?;
     Ok(Hash::new_from_chunks(&[
@@ -6777,7 +6769,7 @@ fn bfv_ciphertext_proof_statement_digest_for_mode(
         ciphertext_digest,
         declared_bound,
     };
-    let bytes = norito::to_bytes(&material).map_err(|err| {
+    let bytes = norito::encode_canonical(&material).map_err(|err| {
         BfvError::InvalidParameters(format!("ciphertext proof statement encoding failed: {err}"))
     })?;
     Ok(Hash::new_from_chunks(&[
@@ -8562,20 +8554,12 @@ where
             "{label} must not be all-zero"
         )));
     }
-    let material = norito::decode_from_bytes::<T>(bytes).map_err(|err| {
+    let material = norito::decode_canonical::<T>(bytes).map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} must be Norito-encoded BFV proof input material: {err}"
+            "{label} must use canonical v1 bytes containing Norito-encoded BFV proof input material: {err}"
         ))
     })?;
     validate(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -8584,7 +8568,7 @@ fn bfv_admission_proof_input_material_digest_v1<T: Encode>(
     domain: &[u8],
     material: &T,
 ) -> Result<Hash, BfvError> {
-    let bytes = norito::to_bytes(material)
+    let bytes = norito::encode_canonical(material)
         .map_err(|err| BfvError::InvalidParameters(format!("{label} encoding failed: {err}")))?;
     Ok(Hash::new_from_chunks(&[domain, bytes.as_slice()]))
 }
@@ -10472,7 +10456,7 @@ fn bootstrap_key_zero_refresh_proof_statement_digest_for_mode(
         bootstrap_round_digests,
         bootstrap_key: bootstrap_key.clone(),
     };
-    let bytes = norito::to_bytes(&material).map_err(|err| {
+    let bytes = norito::encode_canonical(&material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "bootstrap key proof statement encoding failed: {err}"
         ))
@@ -10498,11 +10482,12 @@ fn bootstrap_key_refresh_digest_summary_v1(
         "bootstrap key zero_refresh",
         &bootstrap_key.zero_refresh,
     )?;
-    let zero_refresh_bytes = norito::to_bytes(&bootstrap_key.zero_refresh).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "bootstrap key zero_refresh summary encoding failed: {err}"
-        ))
-    })?;
+    let zero_refresh_bytes =
+        norito::encode_canonical(&bootstrap_key.zero_refresh).map_err(|err| {
+            BfvError::InvalidParameters(format!(
+                "bootstrap key zero_refresh summary encoding failed: {err}"
+            ))
+        })?;
     let zero_refresh_digest = Hash::new_from_chunks(&[
         BFV_BOOTSTRAP_KEY_ZERO_REFRESH_SUMMARY_DIGEST_DOMAIN,
         zero_refresh_bytes.as_slice(),
@@ -10523,7 +10508,7 @@ fn bootstrap_key_refresh_digest_summary_v1(
                     )
                 })?
                 .to_le_bytes();
-            let refresh_bytes = norito::to_bytes(refresh).map_err(|err| {
+            let refresh_bytes = norito::encode_canonical(refresh).map_err(|err| {
                 BfvError::InvalidParameters(format!(
                     "bootstrap key round_refreshes[{index}] summary encoding failed: {err}"
                 ))
@@ -10764,7 +10749,7 @@ pub fn bfv_full_bootstrap_circuit_material_digest(
     material: &BfvFullBootstrapCircuitMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_circuit_material_v1(params, material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap circuit material encoding failed: {err}"
         ))
@@ -11206,7 +11191,7 @@ fn hash_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
     digest_material: &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(digest_material)?;
-    let bytes = norito::to_bytes(digest_material).map_err(|err| {
+    let bytes = norito::encode_canonical(digest_material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap evaluator artifact set digest material encoding failed: {err}"
         ))
@@ -11274,7 +11259,7 @@ pub fn encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         role,
         payload: payload.to_vec(),
     };
-    let bytes = norito::to_bytes(&artifact).map_err(|err| {
+    let bytes = norito::encode_canonical(&artifact).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap artifact payload encoding failed: {err}"
         ))
@@ -11294,7 +11279,7 @@ fn validate_full_bootstrap_artifact_payload_canonical_bytes_v1<T: Encode>(
     payload: &[u8],
     value: &T,
 ) -> Result<(), BfvError> {
-    let canonical_payload = norito::to_bytes(value).map_err(|err| {
+    let canonical_payload = norito::encode_canonical(value).map_err(|err| {
         BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
     })?;
     if payload != canonical_payload {
@@ -11310,7 +11295,7 @@ fn validate_full_bootstrap_artifact_envelope_canonical_bytes_v1(
     bytes: &[u8],
     artifact: &BfvFullBootstrapCircuitArtifactPayloadV1,
 ) -> Result<(), BfvError> {
-    let canonical_bytes = norito::to_bytes(artifact).map_err(|err| {
+    let canonical_bytes = norito::encode_canonical(artifact).map_err(|err| {
         BfvError::InvalidParameters(format!("{label} canonical envelope encoding failed: {err}"))
     })?;
     if bytes != canonical_bytes {
@@ -11417,7 +11402,7 @@ pub fn encode_bfv_full_bootstrap_linear_transform_artifact_v1(
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_linear_transform_role(role)?;
     validate_bfv_full_bootstrap_linear_transform_v1(params, transform)?;
-    let payload = norito::to_bytes(transform).map_err(|err| {
+    let payload = norito::encode_canonical(transform).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap linear transform encoding failed: {err}"
         ))
@@ -11453,12 +11438,12 @@ pub fn decode_bfv_full_bootstrap_linear_transform_artifact_v1(
         bytes,
         expected_digest,
     )?;
-    let transform = norito::decode_from_bytes::<BfvFullBootstrapLinearTransformV1>(
+    let transform = norito::decode_canonical::<BfvFullBootstrapLinearTransformV1>(
         &artifact.payload,
     )
     .map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} payload must be a Norito-encoded BFV full-bootstrap linear transform: {err}"
+            "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap linear transform: {err}"
         ))
     })?;
     validate_bfv_full_bootstrap_linear_transform_v1(params, &transform)?;
@@ -11634,7 +11619,7 @@ pub fn encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
     key: &BfvFullBootstrapBlindRotationKeyV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_blind_rotation_key_v1(params, key)?;
-    let payload = norito::to_bytes(key).map_err(|err| {
+    let payload = norito::encode_canonical(key).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap blind rotation encoding failed: {err}"
         ))
@@ -11668,10 +11653,10 @@ pub fn decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
         bytes,
         expected_digest,
     )?;
-    let key = norito::decode_from_bytes::<BfvFullBootstrapBlindRotationKeyV1>(&artifact.payload)
+    let key = norito::decode_canonical::<BfvFullBootstrapBlindRotationKeyV1>(&artifact.payload)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
-                "{label} payload must be a Norito-encoded BFV full-bootstrap blind rotation key: {err}"
+                "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap blind rotation key: {err}"
             ))
         })?;
     validate_bfv_full_bootstrap_blind_rotation_key_v1(params, &key)?;
@@ -11749,7 +11734,7 @@ pub fn encode_bfv_full_bootstrap_sample_extraction_artifact_v1(
     sample_extraction: BfvFullBootstrapSampleExtractionV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
-    let payload = norito::to_bytes(&sample_extraction).map_err(|err| {
+    let payload = norito::encode_canonical(&sample_extraction).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap sample extraction encoding failed: {err}"
         ))
@@ -11789,7 +11774,7 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
         bytes,
         expected_digest,
     )?;
-    match norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionV1>(&artifact.payload) {
+    match norito::decode_canonical::<BfvFullBootstrapSampleExtractionV1>(&artifact.payload) {
         Ok(sample_extraction) => {
             validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
             validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
@@ -11800,13 +11785,12 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
             Ok(sample_extraction)
         }
         Err(sample_err) => {
-            let switch_key =
-                norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionSwitchKeyV1>(
-                    &artifact.payload,
-                )
-                .map_err(|switch_err| {
+            let switch_key = norito::decode_canonical::<
+                BfvFullBootstrapSampleExtractionSwitchKeyV1,
+            >(&artifact.payload)
+            .map_err(|switch_err| {
                     BfvError::InvalidParameters(format!(
-                        "{label} payload must be a Norito-encoded BFV full-bootstrap sample extraction or sample-extraction switch key: sample extraction: {sample_err}; switch key: {switch_err}"
+                        "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap sample extraction or sample-extraction switch key: sample extraction: {sample_err}; switch key: {switch_err}"
                     ))
                 })?;
             validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, &switch_key)?;
@@ -11833,7 +11817,7 @@ pub fn encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
     switch_key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, switch_key)?;
-    let payload = norito::to_bytes(switch_key).map_err(|err| {
+    let payload = norito::encode_canonical(switch_key).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap sample-extraction switch key encoding failed: {err}"
         ))
@@ -11867,13 +11851,12 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
         bytes,
         expected_digest,
     )?;
-    let switch_key =
-        norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionSwitchKeyV1>(
-            &artifact.payload,
-        )
-        .map_err(|err| {
+    let switch_key = norito::decode_canonical::<BfvFullBootstrapSampleExtractionSwitchKeyV1>(
+        &artifact.payload,
+    )
+    .map_err(|err| {
             BfvError::InvalidParameters(format!(
-                "{label} payload must be a Norito-encoded BFV full-bootstrap sample-extraction switch key: {err}"
+                "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap sample-extraction switch key: {err}"
             ))
         })?;
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, &switch_key)?;
@@ -12712,7 +12695,7 @@ pub fn encode_bfv_full_bootstrap_accumulator_artifact_v1(
     accumulator: &BfvFullBootstrapAccumulatorV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_accumulator_v1(params, accumulator)?;
-    let payload = norito::to_bytes(accumulator).map_err(|err| {
+    let payload = norito::encode_canonical(accumulator).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap accumulator encoding failed: {err}"
         ))
@@ -12746,10 +12729,10 @@ pub fn decode_bfv_full_bootstrap_accumulator_artifact_v1(
         bytes,
         expected_digest,
     )?;
-    let accumulator = norito::decode_from_bytes::<BfvFullBootstrapAccumulatorV1>(&artifact.payload)
+    let accumulator = norito::decode_canonical::<BfvFullBootstrapAccumulatorV1>(&artifact.payload)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
-                "{label} payload must be a Norito-encoded BFV full-bootstrap accumulator: {err}"
+                "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap accumulator: {err}"
             ))
         })?;
     validate_bfv_full_bootstrap_accumulator_v1(params, &accumulator)?;
@@ -13027,7 +13010,7 @@ pub fn bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(
     profile: &BfvFullBootstrapArithmeticTraceProfileV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_trace_profile_v1(profile)?;
-    let bytes = norito::to_bytes(profile).map_err(|err| {
+    let bytes = norito::encode_canonical(profile).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap arithmetic trace profile encoding failed: {err}"
         ))
@@ -13373,7 +13356,7 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_
     material: &BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap arithmetic AIR constraint-system material encoding failed: {err}"
         ))
@@ -13535,7 +13518,7 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(schema)?;
-    let payload = norito::to_bytes(schema).map_err(|err| {
+    let payload = norito::encode_canonical(schema).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap proof public-input schema payload encoding failed: {err}"
         ))
@@ -13563,7 +13546,7 @@ pub fn decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    let schema = norito::decode_from_bytes::<BfvFullBootstrapProofPublicInputSchemaV1>(bytes)
+    let schema = norito::decode_canonical::<BfvFullBootstrapProofPublicInputSchemaV1>(bytes)
         .map_err(|err| {
             if let Err(placeholder_err) =
                 validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
@@ -13573,18 +13556,10 @@ pub fn decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(
                 return placeholder_err;
             }
             BfvError::InvalidParameters(format!(
-                "{label} must be Norito-encoded BFV material: {err}"
+                "{label} must use canonical v1 bytes containing Norito-encoded BFV material: {err}"
             ))
         })?;
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(&schema)?;
-    let canonical_bytes = norito::to_bytes(&schema).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(schema)
 }
 
@@ -13860,7 +13835,7 @@ fn bfv_full_bootstrap_release_prover_contract_material_v1()
 fn bfv_full_bootstrap_release_prover_contract_digest_v1() -> Result<Hash, BfvError> {
     let material = bfv_full_bootstrap_release_prover_contract_material_v1();
     validate_bfv_full_bootstrap_release_prover_contract_material_v1(&material)?;
-    let bytes = norito::to_bytes(&material).map_err(|err| {
+    let bytes = norito::encode_canonical(&material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap release-prover contract material encoding failed: {err}"
         ))
@@ -14840,7 +14815,7 @@ pub fn encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(schema)?;
-    let payload = norito::to_bytes(schema).map_err(|err| {
+    let payload = norito::encode_canonical(schema).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap proof public-input schema encoding failed: {err}"
         ))
@@ -14875,21 +14850,13 @@ pub fn decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
         expected_digest,
     )?;
     let schema =
-        norito::decode_from_bytes::<BfvFullBootstrapProofPublicInputSchemaV1>(&artifact.payload)
+        norito::decode_canonical::<BfvFullBootstrapProofPublicInputSchemaV1>(&artifact.payload)
             .map_err(|err| {
                 BfvError::InvalidParameters(format!(
-                    "{label} payload must be a Norito-encoded BFV full-bootstrap proof public-input schema: {err}"
+                    "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap proof public-input schema: {err}"
                 ))
             })?;
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(&schema)?;
-    let canonical_payload = norito::to_bytes(&schema).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
-    })?;
-    if artifact.payload != canonical_payload {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must use canonical v1 bytes"
-        )));
-    }
     Ok(schema)
 }
 
@@ -14906,7 +14873,7 @@ pub fn encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
     material: &BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(material)?;
-    let payload = norito::to_bytes(material).map_err(|err| {
+    let payload = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap arithmetic AIR constraint-system material encoding failed: {err}"
         ))
@@ -14940,23 +14907,15 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
         bytes,
         expected_digest,
     )?;
-    let air_material = norito::decode_from_bytes::<
+    let air_material = norito::decode_canonical::<
         BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
     >(&artifact.payload)
     .map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} payload must be a Norito-encoded BFV full-bootstrap arithmetic AIR constraint-system material: {err}"
+            "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap arithmetic AIR constraint-system material: {err}"
         ))
     })?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&air_material)?;
-    let canonical_payload = norito::to_bytes(&air_material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
-    })?;
-    if artifact.payload != canonical_payload {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must use canonical v1 bytes"
-        )));
-    }
     let expected_content_digest =
         bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(&air_material)?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
@@ -15009,7 +14968,7 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
         generated_circuit_body_digest,
         generated_circuit_body,
     };
-    norito::to_bytes(&payload).map_err(|err| {
+    norito::encode_canonical(&payload).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap native verifier-key payload encoding failed: {err}"
         ))
@@ -15086,23 +15045,13 @@ pub fn decode_bfv_full_bootstrap_native_proof_key_material_v1(
     bytes: &[u8],
 ) -> Result<BfvFullBootstrapNativeProofKeyMaterialV1, BfvError> {
     validate_bfv_full_bootstrap_native_proof_key_material_shape_v1(bytes)?;
-    let material = norito::decode_from_bytes::<BfvFullBootstrapNativeProofKeyMaterialV1>(bytes)
+    let material = norito::decode_canonical::<BfvFullBootstrapNativeProofKeyMaterialV1>(bytes)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
-                "BFV full-bootstrap native proof key material must be a Norito-encoded native material payload: {err}"
+                "BFV full-bootstrap native proof key material must use canonical v1 bytes containing a Norito-encoded native material payload: {err}"
             ))
         })?;
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(&material)?;
-    let canonical_material = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap native proof key material canonical encoding failed: {err}"
-        ))
-    })?;
-    if bytes != canonical_material.as_slice() {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap native proof key material must use canonical v1 bytes".to_owned(),
-        ));
-    }
     Ok(material)
 }
 
@@ -15260,7 +15209,7 @@ pub fn encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
         rejects_stale_proof_key_artifacts: true,
         native_key_material: native_key_material.to_vec(),
     };
-    let encoded = norito::to_bytes(&envelope).map_err(|err| {
+    let encoded = norito::encode_canonical(&envelope).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap proof key material envelope encoding failed: {err}"
         ))
@@ -15923,10 +15872,10 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
             "BFV full-bootstrap max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
         )));
     }
-    let artifact = norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
+    let artifact = norito::decode_canonical::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
-                "{label} must be a Norito-encoded BFV full-bootstrap artifact payload: {err}"
+                "{label} must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap artifact payload: {err}"
             ))
         })?;
     validate_full_bootstrap_artifact_inner_payload_shape_v1(label, &artifact.payload)?;
@@ -15971,10 +15920,10 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
         )));
     }
     validate_full_bootstrap_artifact_envelope_canonical_bytes_v1(label, bytes, &artifact)?;
-    let key = norito::decode_from_bytes::<BfvFullBootstrapProofKeyV1>(&artifact.payload).map_err(
+    let key = norito::decode_canonical::<BfvFullBootstrapProofKeyV1>(&artifact.payload).map_err(
         |err| {
             BfvError::InvalidParameters(format!(
-                "{label} payload must be a Norito-encoded BFV full-bootstrap proof key: {err}"
+                "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap proof key: {err}"
             ))
         },
     )?;
@@ -15992,14 +15941,6 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
     )?;
     validate_bfv_full_bootstrap_proof_key_registered_profile_v1(params, max_bootstrap_depth, &key)?;
     validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(role, &key)?;
-    let canonical_payload = norito::to_bytes(&key).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
-    })?;
-    if artifact.payload != canonical_payload {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must use canonical v1 bytes"
-        )));
-    }
     Ok(key)
 }
 
@@ -16028,7 +15969,7 @@ pub fn encode_bfv_full_bootstrap_proof_key_artifact_v1(
     }
     validate_bfv_full_bootstrap_proof_key_registered_profile_v1(params, max_bootstrap_depth, key)?;
     validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(role, key)?;
-    let payload = norito::to_bytes(key).map_err(|err| {
+    let payload = norito::encode_canonical(key).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap proof key encoding failed: {err}"
         ))
@@ -16064,22 +16005,14 @@ pub fn decode_bfv_full_bootstrap_proof_key_artifact_v1(
         bytes,
         expected_digest,
     )?;
-    let key = norito::decode_from_bytes::<BfvFullBootstrapProofKeyV1>(&artifact.payload).map_err(
+    let key = norito::decode_canonical::<BfvFullBootstrapProofKeyV1>(&artifact.payload).map_err(
         |err| {
             BfvError::InvalidParameters(format!(
-                "{label} payload must be a Norito-encoded BFV full-bootstrap proof key: {err}"
+                "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap proof key: {err}"
             ))
         },
     )?;
     validate_bfv_full_bootstrap_proof_key_v1(material, role, &key)?;
-    let canonical_payload = norito::to_bytes(&key).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
-    })?;
-    if artifact.payload != canonical_payload {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must use canonical v1 bytes"
-        )));
-    }
     Ok(key)
 }
 
@@ -16634,20 +16567,12 @@ where
             "{label} must not be all-zero"
         )));
     }
-    let value = norito::decode_from_bytes::<T>(bytes).map_err(|err| {
+    let value = norito::decode_canonical::<T>(bytes).map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} must be a Norito-encoded release-audit object: {err}"
+            "{label} must use canonical v1 bytes containing a Norito-encoded release-audit object: {err}"
         ))
     })?;
     validate(&value)?;
-    let canonical_bytes = norito::to_bytes(&value).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(value)
 }
 
@@ -16660,7 +16585,7 @@ pub fn bfv_full_bootstrap_release_audit_evidence_digest_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_evidence_v1(evidence)?;
-    let bytes = norito::to_bytes(evidence).map_err(|err| {
+    let bytes = norito::encode_canonical(evidence).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap release audit evidence encoding failed: {err}"
         ))
@@ -17233,7 +17158,7 @@ pub fn bfv_full_bootstrap_release_audit_signoff_digest_v1(
     signoff: &BfvFullBootstrapReleaseAuditSignoffV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_signoff_v1(signoff)?;
-    let bytes = norito::to_bytes(signoff).map_err(|err| {
+    let bytes = norito::encode_canonical(signoff).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap release audit signoff encoding failed: {err}"
         ))
@@ -18128,7 +18053,7 @@ pub fn bfv_full_bootstrap_release_audit_record_digest_v1(
     record: &BfvFullBootstrapReleaseAuditRecordV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_record_v1(record)?;
-    let bytes = norito::to_bytes(record).map_err(|err| {
+    let bytes = norito::encode_canonical(record).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap release audit record encoding failed: {err}"
         ))
@@ -19209,7 +19134,7 @@ pub fn bfv_full_bootstrap_release_audit_manifest_digest_v1(
     manifest: &BfvFullBootstrapReleaseAuditManifestV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_manifest_v1(manifest)?;
-    let bytes = norito::to_bytes(manifest).map_err(|err| {
+    let bytes = norito::encode_canonical(manifest).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap release audit manifest encoding failed: {err}"
         ))
@@ -22023,7 +21948,7 @@ pub fn bfv_full_bootstrap_release_audit_package_digest_v1(
     package: &BfvFullBootstrapReleaseAuditPackageV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_package_v1(package)?;
-    let bytes = norito::to_bytes(package).map_err(|err| {
+    let bytes = norito::encode_canonical(package).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap release audit package encoding failed: {err}"
         ))
@@ -22059,25 +21984,13 @@ pub fn decode_bfv_full_bootstrap_release_audit_package_bytes_v1(
             "BFV full-bootstrap release audit package bytes must not be all-zero".to_owned(),
         ));
     }
-    let package =
-        norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditPackageV1>(bytes).map_err(
-            |err| {
-                BfvError::InvalidParameters(format!(
-                    "BFV full-bootstrap release audit package bytes must be a Norito-encoded package: {err}"
-                ))
-            },
-        )?;
+    let package = norito::decode_canonical::<BfvFullBootstrapReleaseAuditPackageV1>(bytes)
+        .map_err(|err| {
+            BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release audit package bytes must use canonical v1 bytes containing a Norito-encoded package: {err}"
+            ))
+        })?;
     validate_bfv_full_bootstrap_release_audit_package_v1(&package)?;
-    let canonical_bytes = norito::to_bytes(&package).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit package canonical encoding failed: {err}"
-        ))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap release audit package bytes must use canonical v1 bytes".to_owned(),
-        ));
-    }
     Ok(package)
 }
 
@@ -24647,7 +24560,7 @@ fn bfv_full_bootstrap_native_generated_circuit_body_digest_from_material_v1(
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(native)?;
     match native.key_role {
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
-            let payload = norito::decode_from_bytes::<
+            let payload = norito::decode_canonical::<
                 BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
             >(&native.native_payload)
             .map_err(|err| {
@@ -24659,7 +24572,7 @@ fn bfv_full_bootstrap_native_generated_circuit_body_digest_from_material_v1(
         }
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => {
             let payload =
-                norito::decode_from_bytes::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(
+                norito::decode_canonical::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(
                     &native.native_payload,
                 )
                 .map_err(|err| {
@@ -25193,7 +25106,7 @@ fn validate_bfv_full_bootstrap_release_audit_signed_generated_body_embedded_dige
     raw_commitments: &[(&str, &Hash)],
 ) -> Result<(), BfvError> {
     let generated_circuit_body = bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?;
-    let body = norito::decode_from_bytes::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
+    let body = norito::decode_canonical::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
         &generated_circuit_body,
     )
     .map_err(|err| {
@@ -26295,7 +26208,7 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_generated_body_digest_
     evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
     expected_generated_circuit_body: &[u8],
 ) -> Result<(), BfvError> {
-    let body = norito::decode_from_bytes::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
+    let body = norito::decode_canonical::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
         expected_generated_circuit_body,
     )
     .map_err(|err| {
@@ -26392,7 +26305,7 @@ fn hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
     digest_material: &BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(digest_material)?;
-    let bytes = norito::to_bytes(digest_material).map_err(|err| {
+    let bytes = norito::encode_canonical(digest_material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap circuit artifact bundle digest material encoding failed: {err}"
         ))
@@ -26681,7 +26594,7 @@ pub fn bfv_full_bootstrap_material_proof_input_material_digest_v1(
     material: &BfvFullBootstrapMaterialProofInputMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_material_proof_input_material_v1(material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap material proof input material encoding failed: {err}"
         ))
@@ -26712,21 +26625,14 @@ pub fn decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    let material = norito::decode_from_bytes::<BfvFullBootstrapMaterialProofInputMaterialV1>(bytes)
+    let material =
+        norito::decode_canonical::<BfvFullBootstrapMaterialProofInputMaterialV1>(bytes)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
-                "{label} must be Norito-encoded material proof input material: {err}"
+                "{label} must use canonical v1 bytes containing Norito-encoded material proof input material: {err}"
             ))
         })?;
     validate_bfv_full_bootstrap_material_proof_input_material_v1(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -27806,7 +27712,7 @@ pub fn bfv_full_bootstrap_execution_witness_digest_from_material_v1(
     material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_execution_witness_digest_material_v1(material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap execution witness digest material encoding failed: {err}"
         ))
@@ -27838,21 +27744,13 @@ pub fn decode_bfv_full_bootstrap_execution_witness_digest_material_bytes_v1(
         )));
     }
     let material =
-        norito::decode_from_bytes::<BfvFullBootstrapExecutionWitnessDigestMaterialV1>(bytes)
+        norito::decode_canonical::<BfvFullBootstrapExecutionWitnessDigestMaterialV1>(bytes)
             .map_err(|err| {
                 BfvError::InvalidParameters(format!(
-                    "{label} must be Norito-encoded execution witness material: {err}"
+                    "{label} must use canonical v1 bytes containing Norito-encoded execution witness material: {err}"
                 ))
             })?;
     validate_bfv_full_bootstrap_execution_witness_digest_material_v1(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -28083,7 +27981,7 @@ fn bfv_full_bootstrap_execution_proof_statement_and_witness_digest_from_witness_
         artifact_bundle_digest: witness_material.artifact_bundle_digest,
         claim,
     };
-    let bytes = norito::to_bytes(&statement).map_err(|err| {
+    let bytes = norito::encode_canonical(&statement).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "full-bootstrap execution proof statement encoding failed: {err}"
         ))
@@ -28347,7 +28245,7 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_digest_v1(
     material: &BfvFullBootstrapExecutionProofInputMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap execution proof input material encoding failed: {err}"
         ))
@@ -28378,23 +28276,15 @@ pub fn decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    let material = norito::decode_from_bytes::<BfvFullBootstrapExecutionProofInputMaterialV1>(
+    let material = norito::decode_canonical::<BfvFullBootstrapExecutionProofInputMaterialV1>(
         bytes,
     )
     .map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} must be Norito-encoded execution proof input material: {err}"
+            "{label} must use canonical v1 bytes containing Norito-encoded execution proof input material: {err}"
         ))
     })?;
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -29820,7 +29710,7 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
     material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap arithmetic trace public opening material encoding failed: {err}"
         ))
@@ -29852,21 +29742,13 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_
         )));
     }
     let material =
-        norito::decode_from_bytes::<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1>(bytes)
+        norito::decode_canonical::<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1>(bytes)
             .map_err(|err| {
                 BfvError::InvalidParameters(format!(
-                    "{label} must be Norito-encoded public opening material: {err}"
+                    "{label} must use canonical v1 bytes containing Norito-encoded public opening material: {err}"
                 ))
             })?;
     validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -30012,7 +29894,7 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_digest_v1(
     material: &BfvFullBootstrapArithmeticTraceMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap arithmetic trace material encoding failed: {err}"
         ))
@@ -30043,21 +29925,13 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    let material = norito::decode_from_bytes::<BfvFullBootstrapArithmeticTraceMaterialV1>(bytes)
+    let material = norito::decode_canonical::<BfvFullBootstrapArithmeticTraceMaterialV1>(bytes)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
-                "{label} must be Norito-encoded arithmetic trace material: {err}"
+                "{label} must use canonical v1 bytes containing Norito-encoded arithmetic trace material: {err}"
             ))
         })?;
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -30560,7 +30434,7 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1(
     material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap arithmetic AIR evaluation material encoding failed: {err}"
         ))
@@ -30592,21 +30466,13 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_v1(
         )));
     }
     let material =
-        norito::decode_from_bytes::<BfvFullBootstrapArithmeticAirEvaluationMaterialV1>(bytes)
+        norito::decode_canonical::<BfvFullBootstrapArithmeticAirEvaluationMaterialV1>(bytes)
             .map_err(|err| {
                 BfvError::InvalidParameters(format!(
-                    "{label} must be Norito-encoded AIR evaluation material: {err}"
+                    "{label} must use canonical v1 bytes containing Norito-encoded AIR evaluation material: {err}"
                 ))
             })?;
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -31263,7 +31129,7 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_digest_v1(
     material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_execution_prover_input_material_v1(material)?;
-    let bytes = norito::to_bytes(material).map_err(|err| {
+    let bytes = norito::encode_canonical(material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap execution prover input material encoding failed: {err}"
         ))
@@ -31295,21 +31161,13 @@ pub fn decode_bfv_full_bootstrap_execution_prover_input_material_bytes_v1(
         )));
     }
     let material =
-        norito::decode_from_bytes::<BfvFullBootstrapExecutionProverInputMaterialV1>(bytes)
+        norito::decode_canonical::<BfvFullBootstrapExecutionProverInputMaterialV1>(bytes)
             .map_err(|err| {
                 BfvError::InvalidParameters(format!(
-                    "{label} must be Norito-encoded execution prover input material: {err}"
+                    "{label} must use canonical v1 bytes containing Norito-encoded execution prover input material: {err}"
                 ))
             })?;
     validate_bfv_full_bootstrap_execution_prover_input_material_v1(&material)?;
-    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
-    if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
-    }
     Ok(material)
 }
 
@@ -32306,7 +32164,7 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_v1(
         artifact_bundle_digest,
         claim: claim.clone(),
     };
-    let bytes = norito::to_bytes(&statement).map_err(|err| {
+    let bytes = norito::encode_canonical(&statement).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "full-bootstrap execution proof statement encoding failed: {err}"
         ))
@@ -39306,7 +39164,7 @@ fn bfv_full_bootstrap_native_generated_circuit_body_v1(
     let proof_public_input_schema_payload_digest =
         canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()?;
     let release_prover_contract_digest = bfv_full_bootstrap_release_prover_contract_digest_v1()?;
-    let air_body = norito::to_bytes(&air_material).map_err(|err| {
+    let air_body = norito::encode_canonical(&air_material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap native generated circuit body AIR material encoding failed: {err}"
         ))
@@ -39369,7 +39227,7 @@ fn bfv_full_bootstrap_native_generated_circuit_body_v1(
         rejects_stale_proof_key_artifacts: true,
         arithmetic_air_constraint_system_body: air_body,
     };
-    norito::to_bytes(&body).map_err(|err| {
+    norito::encode_canonical(&body).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap native generated circuit body encoding failed: {err}"
         ))
@@ -39381,7 +39239,7 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
 ) -> Result<Hash, BfvError> {
     let material =
         bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(native_payload_circuit_id)?;
-    let bytes = norito::to_bytes(&material).map_err(|err| {
+    let bytes = norito::encode_canonical(&material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap native proof circuit fingerprint material encoding failed: {err}"
         ))
@@ -39426,7 +39284,7 @@ fn encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         queries: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1,
         merkle_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1,
     };
-    norito::to_bytes(&payload).map_err(|err| {
+    norito::encode_canonical(&payload).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap native transparent prover payload encoding failed: {err}"
         ))
@@ -39475,7 +39333,7 @@ fn encode_bfv_full_bootstrap_native_proof_key_material_v1(
         native_payload: native_payload.to_vec(),
     };
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(&material)?;
-    let encoded = norito::to_bytes(&material).map_err(|err| {
+    let encoded = norito::encode_canonical(&material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap native proof key material encoding failed: {err}"
         ))
@@ -40055,23 +39913,14 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
     native_payload_circuit_id: &str,
     generated_circuit_body: &[u8],
 ) -> Result<BfvFullBootstrapNativeGeneratedCircuitBodyV1, BfvError> {
-    let Ok(body) = norito::decode_from_bytes::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
+    let body = norito::decode_canonical::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
         generated_circuit_body,
-    ) else {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} generated circuit body is invalid"
-        )));
-    };
-    let canonical_body = norito::to_bytes(&body).map_err(|err| {
+    )
+    .map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} generated circuit body canonical encoding failed: {err}"
+            "{label} generated circuit body is invalid or does not use canonical v1 bytes: {err}"
         ))
     })?;
-    if generated_circuit_body != canonical_body {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} generated circuit body must use canonical v1 bytes"
-        )));
-    }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         &format!("{label} generated circuit body circuit id"),
         &body.circuit_id,
@@ -40091,25 +39940,15 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
         )));
     }
     validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(label, &body)?;
-    let air_material = norito::decode_from_bytes::<
+    let air_material = norito::decode_canonical::<
         BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
     >(&body.arithmetic_air_constraint_system_body)
     .map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} generated circuit body AIR material is invalid: {err}"
+            "{label} generated circuit body AIR material is invalid or does not use canonical v1 bytes: {err}"
         ))
     })?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&air_material)?;
-    let canonical_air_material = norito::to_bytes(&air_material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "{label} generated circuit body AIR material canonical encoding failed: {err}"
-        ))
-    })?;
-    if body.arithmetic_air_constraint_system_body != canonical_air_material {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} generated circuit body AIR material must use canonical v1 bytes"
-        )));
-    }
     let embedded_air_digest =
         bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(&air_material)?;
     if body.arithmetic_air_constraint_system_digest != embedded_air_digest {
@@ -40449,12 +40288,12 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         native_payload_circuit_id,
     )?;
     validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(bytes)?;
-    let payload = norito::decode_from_bytes::<
+    let payload = norito::decode_canonical::<
         BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
     >(bytes)
     .map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap native transparent prover payload is invalid: {err}"
+            "BFV full-bootstrap native transparent prover payload is invalid or does not use canonical v1 bytes: {err}"
         ))
     })?;
     if payload.version != BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1 {
@@ -40622,10 +40461,10 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
     )?;
     validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(bytes)?;
     let payload =
-        norito::decode_from_bytes::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(bytes)
+        norito::decode_canonical::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(bytes)
             .map_err(|err| {
                 BfvError::InvalidParameters(format!(
-                    "BFV full-bootstrap native verifier payload is invalid: {err}"
+                    "BFV full-bootstrap native verifier payload is invalid or does not use canonical v1 bytes: {err}"
                 ))
             })?;
     if payload.version != BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1 {
@@ -40903,7 +40742,7 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest
 ) -> Result<(), BfvError> {
     match material.key_role {
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
-            if let Ok(payload) = norito::decode_from_bytes::<
+            if let Ok(payload) = norito::decode_canonical::<
                 BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
             >(&material.native_payload)
             {
@@ -40915,7 +40754,7 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest
             }
         }
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => {
-            if let Ok(payload) = norito::decode_from_bytes::<
+            if let Ok(payload) = norito::decode_canonical::<
                 BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
             >(&material.native_payload)
             {
@@ -40942,7 +40781,7 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_
                 .to_owned(),
         ));
     }
-    if let Ok(body) = norito::decode_from_bytes::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
+    if let Ok(body) = norito::decode_canonical::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
         generated_circuit_body,
     ) {
         for (label, digest) in [
@@ -41022,25 +40861,15 @@ fn decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(
         "BFV full-bootstrap proof key material",
         &key.key_material,
     )?;
-    let envelope = norito::decode_from_bytes::<BfvFullBootstrapProofKeyMaterialEnvelopeV1>(
+    let envelope = norito::decode_canonical::<BfvFullBootstrapProofKeyMaterialEnvelopeV1>(
         &key.key_material,
     )
     .map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap proof key material must be a Norito-encoded proof-key material envelope: {err}"
+            "BFV full-bootstrap proof key material must use canonical v1 bytes containing a Norito-encoded proof-key material envelope: {err}"
         ))
     })?;
     validate_bfv_full_bootstrap_proof_key_material_envelope_matches_key_v1(key, &envelope)?;
-    let canonical_envelope = norito::to_bytes(&envelope).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap proof key material envelope canonical encoding failed: {err}"
-        ))
-    })?;
-    if key.key_material != canonical_envelope {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap proof key material envelope must use canonical v1 bytes".to_owned(),
-        ));
-    }
     Ok(envelope)
 }
 
@@ -41658,7 +41487,7 @@ fn decode_full_bootstrap_artifact_payload(
     let actual_digest = Hash::new(bytes);
     if actual_digest != *expected_digest {
         if let Ok(artifact) =
-            norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
+            norito::decode_canonical::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
         {
             validate_bfv_full_bootstrap_artifact_profile_digest_preflight_v1(label, &artifact)?;
         } else {
@@ -41670,10 +41499,10 @@ fn decode_full_bootstrap_artifact_payload(
             "{label} digest does not match governed full-bootstrap material"
         )));
     }
-    let artifact = norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
+    let artifact = norito::decode_canonical::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
-                "{label} must be a Norito-encoded BFV full-bootstrap artifact payload: {err}"
+                "{label} must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap artifact payload: {err}"
             ))
         })?;
     validate_full_bootstrap_artifact_payload_profile(
@@ -52834,6 +52663,221 @@ mod tests {
             .expect("decode sample full-bootstrap proof-key artifact envelope");
         norito::decode_from_bytes::<BfvFullBootstrapProofKeyV1>(&artifact.payload)
             .expect("decode sample full-bootstrap proof-key payload")
+    }
+
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode structurally valid alternate-layout Norito frame")
+    }
+
+    #[test]
+    fn full_bootstrap_canonical_encoders_ignore_ambient_norito_layout() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let circuit_id = BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
+        let schema = bfv_full_bootstrap_proof_public_input_schema_v1();
+        let schema_artifact =
+            sample_full_bootstrap_proof_public_input_schema_artifact_payload(&params);
+        let schema_digest = Hash::new(&schema_artifact);
+        let evaluator_artifact_set_digest =
+            Hash::new(b"BFV canonical codec evaluator artifact set digest");
+        let verifier_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(circuit_id)
+                .expect("encode canonical native verifier payload");
+        let verifier_material =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(circuit_id)
+                .expect("encode canonical native verifier material");
+        let verifier_envelope = sample_full_bootstrap_proof_key_material_envelope(
+            &params,
+            schema_digest,
+            evaluator_artifact_set_digest,
+            BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+        );
+        let (prover_artifact, verifier_artifact) =
+            sample_full_bootstrap_proof_key_artifact_payloads(
+                &params,
+                schema_digest,
+                evaluator_artifact_set_digest,
+            );
+        let schema_payload_digest =
+            bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v1(&schema)
+                .expect("hash canonical proof public-input schema");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_schema_artifact =
+            sample_full_bootstrap_proof_public_input_schema_artifact_payload(&params);
+        let ambient_verifier_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(circuit_id)
+                .expect("encode native verifier payload under alternate ambient layout");
+        let ambient_verifier_material =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(circuit_id)
+                .expect("encode native verifier material under alternate ambient layout");
+        let ambient_verifier_envelope = sample_full_bootstrap_proof_key_material_envelope(
+            &params,
+            schema_digest,
+            evaluator_artifact_set_digest,
+            BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+        );
+        let (ambient_prover_artifact, ambient_verifier_artifact) =
+            sample_full_bootstrap_proof_key_artifact_payloads(
+                &params,
+                schema_digest,
+                evaluator_artifact_set_digest,
+            );
+        let ambient_schema_payload_digest =
+            bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v1(&schema)
+                .expect("hash proof public-input schema under alternate ambient layout");
+        drop(ambient);
+
+        assert_eq!(ambient_schema_artifact, schema_artifact);
+        assert_eq!(ambient_verifier_payload, verifier_payload);
+        assert_eq!(ambient_verifier_material, verifier_material);
+        assert_eq!(ambient_verifier_envelope, verifier_envelope);
+        assert_eq!(ambient_prover_artifact, prover_artifact);
+        assert_eq!(ambient_verifier_artifact, verifier_artifact);
+        assert_eq!(ambient_schema_payload_digest, schema_payload_digest);
+    }
+
+    #[test]
+    fn full_bootstrap_external_proof_boundaries_reject_alternate_norito_layout() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let circuit_id = BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
+        let schema = bfv_full_bootstrap_proof_public_input_schema_v1();
+        let alternate_schema = encode_with_alternate_norito_layout(&schema);
+        let _: BfvFullBootstrapProofPublicInputSchemaV1 =
+            norito::decode_from_bytes(&alternate_schema)
+                .expect("alternate-layout schema must remain structurally decodable");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(&alternate_schema),
+            "canonical v1 bytes",
+            "proof public-input schema admission must reject alternate Norito layout",
+        );
+
+        let verifier_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(circuit_id)
+                .expect("encode canonical native verifier payload");
+        let verifier_payload_object: BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
+            norito::decode_from_bytes(&verifier_payload)
+                .expect("decode canonical native verifier payload");
+        let alternate_verifier_payload =
+            encode_with_alternate_norito_layout(&verifier_payload_object);
+        let _: BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
+            norito::decode_from_bytes(&alternate_verifier_payload)
+                .expect("alternate-layout verifier payload must remain structurally decodable");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                circuit_id,
+                &alternate_verifier_payload,
+            ),
+            "canonical v1 bytes",
+            "native verifier payload admission must reject alternate Norito layout",
+        );
+
+        let verifier_material =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(circuit_id)
+                .expect("encode canonical native verifier material");
+        let verifier_material_object: BfvFullBootstrapNativeProofKeyMaterialV1 =
+            norito::decode_from_bytes(&verifier_material)
+                .expect("decode canonical native verifier material");
+        let alternate_verifier_material =
+            encode_with_alternate_norito_layout(&verifier_material_object);
+        let _: BfvFullBootstrapNativeProofKeyMaterialV1 =
+            norito::decode_from_bytes(&alternate_verifier_material)
+                .expect("alternate-layout native material must remain structurally decodable");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(&alternate_verifier_material),
+            "canonical v1 bytes",
+            "native proof-key material admission must reject alternate outer Norito layout",
+        );
+
+        let mut nested_verifier_material = verifier_material_object;
+        nested_verifier_material.native_payload = alternate_verifier_payload;
+        nested_verifier_material.native_payload_digest =
+            sha256(&nested_verifier_material.native_payload);
+        let nested_verifier_material_bytes = norito::encode_canonical(&nested_verifier_material)
+            .expect("encode native material with alternate-layout nested verifier payload");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(&nested_verifier_material_bytes),
+            "canonical v1 bytes",
+            "native proof-key material admission must reject alternate nested verifier payload layout",
+        );
+
+        let schema_artifact =
+            sample_full_bootstrap_proof_public_input_schema_artifact_payload(&params);
+        let schema_digest = Hash::new(&schema_artifact);
+        let evaluator_artifact_set_digest =
+            Hash::new(b"BFV alternate-layout evaluator artifact set digest");
+        let (prover_artifact, _) = sample_full_bootstrap_proof_key_artifact_payloads(
+            &params,
+            schema_digest,
+            evaluator_artifact_set_digest,
+        );
+        let mut prover_artifact_object: BfvFullBootstrapCircuitArtifactPayloadV1 =
+            norito::decode_from_bytes(&prover_artifact)
+                .expect("decode canonical governed prover artifact envelope");
+        let alternate_prover_artifact =
+            encode_with_alternate_norito_layout(&prover_artifact_object);
+        let _: BfvFullBootstrapCircuitArtifactPayloadV1 =
+            norito::decode_from_bytes(&alternate_prover_artifact)
+                .expect("alternate-layout governed artifact must remain structurally decodable");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_bytes_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &alternate_prover_artifact,
+            ),
+            "canonical v1 bytes",
+            "governed proof-key admission must reject alternate outer artifact layout",
+        );
+
+        let mut prover_key: BfvFullBootstrapProofKeyV1 =
+            norito::decode_from_bytes(&prover_artifact_object.payload)
+                .expect("decode canonical governed prover-key payload");
+        prover_artifact_object.payload = encode_with_alternate_norito_layout(&prover_key);
+        let nested_prover_artifact = norito::encode_canonical(&prover_artifact_object)
+            .expect("encode canonical artifact with alternate-layout nested proof key");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_bytes_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &nested_prover_artifact,
+            ),
+            "canonical v1 bytes",
+            "governed proof-key admission must reject alternate nested proof-key layout",
+        );
+
+        let envelope: BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
+            norito::decode_from_bytes(&prover_key.key_material)
+                .expect("decode canonical proof-key material envelope");
+        prover_key.key_material = encode_with_alternate_norito_layout(&envelope);
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key),
+            "canonical v1 bytes",
+            "proof-key material admission must reject alternate nested envelope layout",
+        );
+    }
+
+    #[test]
+    fn full_bootstrap_galois_key_admission_bounds_forged_sequence_lengths() {
+        const FORGED_LENGTH: u64 = 1 << 40;
+        let params = ram_lfe_bfv_parameters_v1();
+        let body = FORGED_LENGTH.to_le_bytes();
+        let bytes = norito::core::frame_bare_with_header_flags::<Vec<BfvGaloisKey>>(
+            &body,
+            norito::core::default_encode_flags(),
+        )
+        .expect("frame forged Galois-key sequence length with a valid checksum");
+
+        assert_error_contains(
+            decode_bfv_full_bootstrap_galois_key_set_bytes_v1(&params, &bytes),
+            "exceed",
+            "Galois-key byte admission must reject forged sequence lengths within canonical decode resource limits",
+        );
     }
 
     #[test]
@@ -90154,6 +90198,30 @@ mod tests {
         );
         let proof_input_material_bytes =
             norito::to_bytes(&proof_input).expect("encode execution proof input material");
+        let alternate_proof_input_material_bytes =
+            encode_with_alternate_norito_layout(&proof_input);
+        let _: BfvFullBootstrapExecutionProofInputMaterialV1 = norito::decode_from_bytes(
+            &alternate_proof_input_material_bytes,
+        )
+        .expect("alternate-layout execution proof input must remain structurally decodable");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
+                &alternate_proof_input_material_bytes,
+            ),
+            "canonical v1 bytes",
+            "execution proof input admission must reject alternate Norito layout",
+        );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_proof_input_material_digest =
+            bfv_full_bootstrap_execution_proof_input_material_digest_v1(&proof_input)
+                .expect("hash execution proof input under alternate ambient layout");
+        drop(ambient);
+        assert_eq!(
+            ambient_proof_input_material_digest, proof_input_material_digest,
+            "execution proof-input hashing must ignore ambient Norito layout"
+        );
         assert_eq!(
             proof_input_material_digest,
             Hash::new_from_chunks(&[
@@ -100280,6 +100348,29 @@ mod tests {
         );
         let proof_input_material_bytes =
             norito::to_bytes(&proof_input).expect("encode material proof input material");
+        let alternate_proof_input_material_bytes =
+            encode_with_alternate_norito_layout(&proof_input);
+        let _: BfvFullBootstrapMaterialProofInputMaterialV1 =
+            norito::decode_from_bytes(&alternate_proof_input_material_bytes)
+                .expect("alternate-layout material proof input must remain structurally decodable");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
+                &alternate_proof_input_material_bytes,
+            ),
+            "canonical v1 bytes",
+            "material proof input admission must reject alternate Norito layout",
+        );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_proof_input_material_digest =
+            bfv_full_bootstrap_material_proof_input_material_digest_v1(&proof_input)
+                .expect("hash material proof input under alternate ambient layout");
+        drop(ambient);
+        assert_eq!(
+            ambient_proof_input_material_digest, proof_input_material_digest,
+            "material proof-input hashing must ignore ambient Norito layout"
+        );
         let public_key_bytes = norito::to_bytes(&public_key).expect("encode public key");
         let artifact_bundle_bytes =
             norito::to_bytes(&artifacts).expect("encode full-bootstrap artifact bundle");

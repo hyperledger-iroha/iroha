@@ -2,7 +2,7 @@
 lang: am
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ prover የስሪት መለያውን ሲያስፈጽም የወደፊት ስሪቶ
      - `from_balance_before >= amount` (የጋራ መግብር ከጋራ RNS መበስበስ ጋር)።
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - ሦስቱም እኩልታዎች አንድ ረድፍ ቡድን እንዲፈጁ ወደ ብጁ በር የታሸገ።2. ** የፖሲዶን ቃል ኪዳን እገዳ**
+   - ሦስቱም እኩልታዎች አንድ ረድፍ ቡድን እንዲፈጁ ወደ ብጁ በር የታሸገ።
+
+2. ** የፖሲዶን ቃል ኪዳን እገዳ**
    - ቀደም ሲል በሌሎች መግብሮች ውስጥ ጥቅም ላይ የዋለውን የተጋራ የPoseidon ፍለጋ ሰንጠረዥን በመጠቀም `poseidon_preimage_digest` እንደገና ያሰላል። በክትትል ውስጥ ምንም የፖሲዶን ዝውውር የለም።
 
 3. **መርክል መንገድ ብሎክ**
@@ -96,7 +98,9 @@ prover የስሪት መለያውን ሲያስፈጽም የወደፊት ስሪቶ
 5. ** ባች ሉፕ ***
    - ፕሮግራሞች ከ `transfer_asset` ግንበኞች ምልልስ በፊት እና `transfer_v1_batch_end()` ወደ `transfer_v1_batch_begin()` ይደውሉ። ስፋቱ ንቁ ሆኖ ሳለ አስተናጋጁ እያንዳንዱን ማስተላለፍ እና እንደ አንድ ነጠላ `TransferAssetBatch` እንደገና ይጫወታቸዋል፣ Poseidon/SMT አውድ በቡድን አንድ ጊዜ ይጠቀማል። እያንዳንዱ ተጨማሪ ዴልታ የሂሳብ እና ሁለት ቅጠል ቼኮችን ብቻ ይጨምራል። የግልባጭ ዲኮደር አሁን ባለብዙ ዴልታ ባችዎችን ተቀብሎ እንደ `TransferGadgetInput::deltas` ላካቸው ስለዚህ እቅድ አውጪው Norito ሳያነብ ምስክሮችን ማጠፍ ይችላል። Norito የሚጫነው (ለምሳሌ፡ CLI/SDKs) ያላቸው ኮንትራቶች `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` በመደወል ሙሉ ለሙሉ መዝለል ይችላሉ፣ ይህም አስተናጋጁን በአንድ syscall ውስጥ ሙሉ በሙሉ ኮድ የያዘ።
 
-# የአስተናጋጅ እና የፕሮቨር ለውጦች| ንብርብር | ለውጦች |
+# የአስተናጋጅ እና የፕሮቨር ለውጦች
+
+| ንብርብር | ለውጦች |
 |-------|--------|
 | `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) ጨምር ፕሮግራሞች መካከለኛ አይኤስአይኤስን ሳያስወጡ በርካታ `transfer_v1` ሲስካልሎችን ማሰር እንዲችሉ እና I18000004 (`0x2B`) ለቅድመ-የተመሰጠሩ ስብስቦች። |
 | `ivm::host` & ሙከራዎች | የኮር/ነባሪ አስተናጋጆች `transfer_v1`ን እንደ ባች አባሪ አድርገው ወሰናቸው ገባሪ በሆነበት ጊዜ፣ ላዩን `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`፣ እና የይስሙላ WSV አስተናጋጅ ማቋቋሚያ ግቤቶችን ከመፈጸማቸው በፊት የማገገሚያ ሙከራዎች ወሳኙን ሚዛን ሊያረጋግጡ ይችላሉ። ዝመናዎች።【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```የወጣው JSON አሁን `iroha_cli audit witness` በነባሪ የሚያወጣውን የ FASTPQ ባች ቅርሶችን ያንፀባርቃል (ለመጨቆን `--no-fastpq-batches` ይለፉ)፣ ስለዚህ `scripts/fastpq/check_row_usage.py` እና የ CI በር ሰው ሰራሽ አሂድ ከቀደምት ቅጽበተ-ፎቶዎች ጋር ሊለያይ ይችላል።
+```
+
+የወጣው JSON አሁን `iroha_cli audit witness` በነባሪ የሚያወጣውን የ FASTPQ ባች ቅርሶችን ያንፀባርቃል (ለመጨቆን `--no-fastpq-batches` ይለፉ)፣ ስለዚህ `scripts/fastpq/check_row_usage.py` እና የ CI በር ሰው ሰራሽ አሂድ ከቀደምት ቅጽበተ-ፎቶዎች ጋር ሊለያይ ይችላል።
 
 # የልቀት እቅድ
 

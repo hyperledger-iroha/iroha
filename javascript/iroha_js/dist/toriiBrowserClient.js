@@ -14,10 +14,15 @@ import {
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
-import { parsePrivacyCapabilitySnapshotV1 } from "./privacyCapabilities.js";
+import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS = new Set([
+  "headers",
+  "signal",
+  "successStatuses",
+]);
 const PIPELINE_SUCCESS_STATUS = "Applied";
 const PIPELINE_STATUS_VALUES = new Set([
   "Queued",
@@ -1541,10 +1546,14 @@ export class ToriiBrowserClient {
     });
   }
 
-  /** Fetch and fail-closed validate the committed privacy capability snapshot. */
-  async getPrivacyCapabilitiesV1(options = {}) {
-    const opts = requireObject(options, "getPrivacyCapabilitiesV1 options");
-    const payload = await this._json("GET", "/v1/privacy/capabilities", {
+  /** @internal Raw bounded transport for the optional privacy-capabilities API. */
+  async [privacyCapabilityTransportV1](options = {}) {
+    const opts = requireSupportedOptions(
+      options,
+      "getPrivacyCapabilitiesV1 options",
+      PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS,
+    );
+    return this._json("GET", "/v1/privacy/capabilities", {
       headers: { ...(opts.headers ?? {}), Accept: "application/json" },
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? [200],
@@ -1554,7 +1563,6 @@ export class ToriiBrowserClient {
         "privacy capabilities response",
       ),
     });
-    return parsePrivacyCapabilitySnapshotV1(payload);
   }
 
   /** Resolve a contract alias; caller-supplied canonical signing headers are preserved. */

@@ -143,6 +143,13 @@ fn contract_artifact_with_error_codes(error_codes: Vec<ContractErrorCodeDescript
 }
 
 fn contract_artifact_with_states(states: Vec<ivm::EmbeddedStateDescriptor>) -> Vec<u8> {
+    contract_artifact_with_access_hints_and_states(None, states)
+}
+
+fn contract_artifact_with_access_hints_and_states(
+    access_set_hints: Option<AccessSetHints>,
+    states: Vec<ivm::EmbeddedStateDescriptor>,
+) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -156,7 +163,7 @@ fn contract_artifact_with_states(states: Vec<ivm::EmbeddedStateDescriptor>) -> V
         compiler_fingerprint: "ivm-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
-        access_set_hints: None,
+        access_set_hints,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
         error_codes: Vec::new(),
@@ -1928,10 +1935,9 @@ fn verify_rejects_invalid_dynamic_access_hints() {
         Some(hints),
     );
     let err = ivm::verify_contract_artifact(&bytes).expect_err("wildcard dynamic hint must fail");
-    assert!(
-        err.to_string()
-            .contains("unsupported dynamic access base `state:*`")
-    );
+    assert!(err.to_string().contains(
+        "base_key must be `state:` followed by one canonical state declaration identifier"
+    ));
 
     let hints = AccessSetHints {
         read_keys: Vec::new(),
@@ -1950,9 +1956,77 @@ fn verify_rejects_invalid_dynamic_access_hints() {
         Some(hints),
     );
     let err = ivm::verify_contract_artifact(&bytes).expect_err("zero dynamic hint must fail");
+    assert!(err.to_string().contains("max_keys must be in 1..=64"));
+}
+
+#[test]
+fn verify_dynamic_access_hints_resolve_the_exact_declared_state_map() {
+    let hint = DynamicAccessHint {
+        base_key: "state:amount".to_owned(),
+        key_type: "quantity".to_owned(),
+        bound_kind: "range".to_owned(),
+        max_keys: 64,
+    };
+    let hints = AccessSetHints {
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        dynamic_reads: vec![hint.clone()],
+        dynamic_writes: Vec::new(),
+    };
+    let state = ivm::EmbeddedStateDescriptor {
+        name: "amount".to_owned(),
+        ty: ivm::EmbeddedStateType::StateMap {
+            key: Box::new(ivm::EmbeddedStateType::Quantity),
+            value: Box::new(ivm::EmbeddedStateType::Bool),
+        },
+    };
+    let artifact =
+        contract_artifact_with_access_hints_and_states(Some(hints.clone()), vec![state.clone()]);
+    ivm::verify_contract_artifact(&artifact)
+        .expect("exact dynamic hint must resolve to its declared StateMap");
+
+    let mut mismatched_hints = hints.clone();
+    mismatched_hints.dynamic_reads[0].key_type = "int".to_owned();
+    let artifact =
+        contract_artifact_with_access_hints_and_states(Some(mismatched_hints), vec![state]);
+    let error =
+        ivm::verify_contract_artifact(&artifact).expect_err("mismatched key type must fail");
     assert!(
-        err.to_string()
-            .contains("zero-bound dynamic access hint `state:Orders`")
+        error
+            .to_string()
+            .contains("declares key_type `int` but its StateMap key type is `quantity`")
+    );
+
+    let artifact = contract_artifact_with_access_hints_and_states(
+        Some(hints),
+        vec![ivm::EmbeddedStateDescriptor {
+            name: "amount".to_owned(),
+            ty: ivm::EmbeddedStateType::Quantity,
+        }],
+    );
+    let error = ivm::verify_contract_artifact(&artifact)
+        .expect_err("a dynamic hint must not target scalar state");
+    assert!(
+        error
+            .to_string()
+            .contains("must reference a declared top-level StateMap")
+    );
+
+    let artifact = contract_artifact_with_access_hints_and_states(
+        Some(AccessSetHints {
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            dynamic_reads: vec![hint],
+            dynamic_writes: Vec::new(),
+        }),
+        Vec::new(),
+    );
+    let error =
+        ivm::verify_contract_artifact(&artifact).expect_err("unknown dynamic base must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("must reference a declared top-level StateMap")
     );
 }
 

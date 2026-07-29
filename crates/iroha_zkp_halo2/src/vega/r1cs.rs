@@ -2,10 +2,12 @@
 
 use thiserror::Error;
 
+#[cfg(test)]
+use super::algebra::{eq_evals, inner_product};
 use super::{
     VegaT256ScalarV1 as Scalar,
-    algebra::{AlgebraError, eq_evals, inner_product},
-    commitment::{Commitment, CommitmentError, fold},
+    algebra::AlgebraError,
+    commitment::{Commitment, CommitmentError},
 };
 
 /// Failure while constructing or evaluating a Vega R1CS object.
@@ -82,6 +84,20 @@ impl SparseMatrix {
 
     pub(super) fn columns(&self) -> usize {
         self.columns
+    }
+
+    pub(super) fn entry_count(&self) -> usize {
+        self.coefficients.len()
+    }
+
+    pub(super) fn canonical_entries(&self) -> impl Iterator<Item = (usize, usize, Scalar)> + '_ {
+        self.row_offsets
+            .windows(2)
+            .enumerate()
+            .flat_map(move |(row, bounds)| {
+                (bounds[0]..bounds[1])
+                    .map(move |index| (row, self.column_indices[index], self.coefficients[index]))
+            })
     }
 
     pub(super) fn multiply(&self, vector: &[Scalar]) -> Result<Vec<Scalar>, R1csError> {
@@ -262,42 +278,7 @@ pub(super) struct RelaxedWitness {
     pub(super) error_blindings: Vec<Scalar>,
 }
 
-pub(super) fn fold_instances(
-    challenges: &[Scalar],
-    instances: &[Instance],
-) -> Result<Instance, R1csError> {
-    let expected = 1_usize
-        .checked_shl(u32::try_from(challenges.len()).map_err(|_| R1csError::InvalidDimension)?)
-        .ok_or(R1csError::InvalidDimension)?;
-    let first = instances.first().ok_or(R1csError::InvalidDimension)?;
-    if instances.len() != expected
-        || instances
-            .iter()
-            .any(|instance| instance.public_inputs.len() != first.public_inputs.len())
-    {
-        return Err(R1csError::InvalidDimension);
-    }
-    let weights = folding_weights(challenges, instances.len())?;
-    let commitments: Vec<_> = instances
-        .iter()
-        .map(|instance| &instance.witness_commitment)
-        .collect();
-    let witness_commitment = fold(&commitments, &weights)?;
-    let mut public_inputs = vec![Scalar::zero(); first.public_inputs.len()];
-    for (instance, weight) in instances.iter().zip(weights.iter().copied()) {
-        for (output, input) in public_inputs
-            .iter_mut()
-            .zip(instance.public_inputs.iter().copied())
-        {
-            *output += weight * input;
-        }
-    }
-    Ok(Instance {
-        witness_commitment,
-        public_inputs,
-    })
-}
-
+#[cfg(test)]
 pub(super) fn folding_weights(
     challenges: &[Scalar],
     count: usize,
@@ -366,6 +347,14 @@ mod tests {
         assert!(SparseMatrix::new(1, 1, &[(1, 0, s(1))]).is_err());
         assert!(SparseMatrix::new(1, 2, &[(0, 1, s(1)), (0, 0, s(1))]).is_err());
         assert!(SparseMatrix::new(1, 1, &[(0, 0, s(1)), (0, 0, s(2))]).is_err());
+    }
+
+    #[test]
+    fn sparse_matrix_exposes_the_complete_canonical_entry_order() {
+        let entries = [(0, 1, s(3)), (1, 0, s(4)), (1, 2, s(5))];
+        let matrix = SparseMatrix::new(2, 3, &entries).expect("canonical matrix");
+        assert_eq!(matrix.entry_count(), entries.len());
+        assert_eq!(matrix.canonical_entries().collect::<Vec<_>>(), entries);
     }
 
     #[test]

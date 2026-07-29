@@ -338,8 +338,10 @@ operator.
 
 ## Fixtures & QA
 - Deterministic fixtures live in `fixtures/sorafs_manifest/por/epoch_<id>/`.
-- Generator CLI (`cargo run -p sorafs_manifest --bin generate_por_fixtures`) accepts arguments:
-  - `--epoch-id`, `--manifest`, `--sample-tier`, `--seed`.
+- Generator CLI requires exactly one explicit mode:
+  `cargo run -p sorafs_manifest --bin generate_por_fixtures -- --write`
+  publishes the complete managed fixture set, while replacing `--write` with
+  `--check` verifies the checked-in paths and bytes without publishing.
 - Unit tests cover:
   - Seed recomputation vs stored values.
   - Sampling reproducibility across platforms (x86_64, aarch64).

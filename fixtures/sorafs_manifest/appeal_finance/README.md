@@ -29,7 +29,7 @@ reference-SDK inventory:
 ```sh
 cargo run -p iroha_data_model --features test-fixtures \
   --bin cancel_asset_lock_fixtures
-cargo run -p sorafs_manifest --bin generate_por_fixtures
+cargo run -p sorafs_manifest --bin generate_por_fixtures -- --write
 python3 scripts/check_sorafs_reference_sdk_fixtures.py
 ```
 

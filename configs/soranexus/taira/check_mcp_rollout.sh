@@ -529,9 +529,8 @@ JSONRPC_TOOLS_LIST='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 JSONRPC_INITIALIZE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"taira-rollout-smoke","version":"1"}}}'
 JSONRPC_INITIALIZED='{"jsonrpc":"2.0","method":"notifications/initialized"}'
 REQUIRED_TOOL_NAMES=(
-  "iroha.status"
+  "iroha.health"
   "iroha.sumeragi.status"
-  "iroha.time.now"
   "iroha.musubi.search"
   "iroha.musubi.release.get"
   "iroha.musubi.instructions.yank_release"
@@ -1008,6 +1007,64 @@ if actual_code != expected_code:
     )
 PY
   fi
+}
+
+check_time_snapshot() {
+  local label="$1"
+  local url="$2"
+
+  echo "==> ${label}: GET ${url}"
+  http_request GET "$url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "${label}: public node wall-clock route failed with HTTP ${last_status}; expected 200" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    exit 1
+  fi
+  python3 - "$label" "$last_body" <<'PY'
+import json
+import sys
+
+label, body_path = sys.argv[1:]
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member {key!r}")
+        result[key] = value
+    return result
+
+try:
+    with open(body_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+except (OSError, ValueError, json.JSONDecodeError) as error:
+    raise SystemExit(f"{label}: /v1/time/now returned invalid JSON: {error}") from error
+
+def fail(message):
+    raise SystemExit(f"{label}: /v1/time/now is not release-ready: {message}")
+
+if not isinstance(payload, dict):
+    fail("response is not an object")
+for field in ("now", "sample_count", "peer_count"):
+    value = payload.get(field)
+    if type(value) is not int or value <= 0:
+        fail(f"{field} must be a positive integer")
+for field in ("offset_ms", "confidence_ms"):
+    value = payload.get(field)
+    if type(value) is not int or (field == "confidence_ms" and value < 0):
+        fail(f"{field} must be an integer with the canonical range")
+if payload.get("enforcement_mode") != "reject":
+    fail("fail-closed time enforcement is not active")
+if payload.get("fallback") is not False:
+    fail("local-clock fallback is active")
+health = payload.get("health")
+if not isinstance(health, dict):
+    fail("health is not an object")
+for field in ("healthy", "min_samples_ok", "offset_ok", "confidence_ok"):
+    if health.get(field) is not True:
+        fail(f"health.{field} is not true")
+PY
 }
 
 check_status_snapshot() {
@@ -2013,6 +2070,7 @@ check_route_parity() {
   root_url="$(normalize_root_url "$root_url")"
   check_route_status "$label" GET "${root_url}/v1/sccp/capabilities" "200" \
     "SCCP capability discovery route"
+  check_time_snapshot "$label" "${root_url}/v1/time/now"
   check_route_status "$label" GET "${root_url}/v1/sccp/registry" "200" \
     "SCCP typed registry discovery route"
   check_route_status "$label" GET "${root_url}/v1/zk/proofs/count" "200" \
