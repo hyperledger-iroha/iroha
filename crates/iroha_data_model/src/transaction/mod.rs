@@ -23,10 +23,10 @@ pub use receipt::{
     TX_SUBMISSION_RECEIPT_DOMAIN, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
 };
 pub use signed::{
-    AuthorityFeePayment, ExecutionStep, FeeChargeKind, FeeChargeLimit, FeePaymentIntent,
-    FeePaymentIntentError, SignedTransaction, SponsorFeePayment, TransactionBuilder,
-    TransactionEntrypoint, TransactionPayload, TransactionResult, TransactionResultInner,
-    TransactionSignature,
+    AuthorityFeePayment, DEFAULT_TRANSACTION_TIME_TO_LIVE, ExecutionStep, FeeChargeKind,
+    FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError, SignedTransaction, SponsorFeePayment,
+    TransactionBuilder, TransactionEntrypoint, TransactionPayload, TransactionResult,
+    TransactionResultInner, TransactionSignature,
 };
 
 pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint};

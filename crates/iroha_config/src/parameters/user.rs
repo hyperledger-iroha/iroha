@@ -667,13 +667,34 @@ impl json::JsonDeserialize for ChainIdInConfig {
 }
 
 impl FromEnvStr for ChainIdInConfig {
-    type Error = Infallible;
+    type Error = iroha_data_model::error::ParseError;
 
     fn from_env_str(value: Cow<'_, str>) -> std::result::Result<Self, Self::Error>
     where
         Self: Sized,
     {
-        Ok(Self(ChainId::from(value)))
+        value.parse().map(Self)
+    }
+}
+
+#[cfg(test)]
+mod chain_id_config_tests {
+    use super::*;
+
+    #[test]
+    fn environment_chain_id_uses_the_canonical_data_model_parser() {
+        let valid = ChainIdInConfig::from_env_str(Cow::Borrowed("iroha.mainnet:v1-alpha_2"))
+            .expect("canonical chain id");
+        assert_eq!(valid.0.as_str(), "iroha.mainnet:v1-alpha_2");
+
+        for invalid in [
+            Cow::Borrowed(""),
+            Cow::Borrowed("-leading"),
+            Cow::Borrowed("contains space"),
+            Cow::Owned("x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES + 1)),
+        ] {
+            assert!(ChainIdInConfig::from_env_str(invalid).is_err());
+        }
     }
 }
 
@@ -7108,7 +7129,7 @@ pub struct Network {
     /// Debug-only outbound P2P application-frame loss percentage used by fault harnesses.
     #[config(default)]
     pub debug_packet_loss_outbound_percent: u8,
-    /// Maximum number of transactions sent or accepted per gossip batch.
+    /// Maximum number of transactions sent or accepted per gossip batch (canonical ceiling: 512).
     #[config(default = "defaults::network::TRANSACTION_GOSSIP_SIZE")]
     pub transaction_gossip_size: NonZeroU32,
     /// Interval between transaction gossip batches in milliseconds (clamped to >= 100ms).
@@ -7587,6 +7608,13 @@ impl Network {
         {
             panic!(
                 "network.relay_hub_addresses must be set when network.relay_mode is spoke or assist"
+            );
+        }
+        if transaction_gossip_size > defaults::network::TRANSACTION_GOSSIP_MAX_SIZE {
+            panic!(
+                "network.transaction_gossip_size must not exceed the canonical per-message maximum of {}, got {}",
+                defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
+                transaction_gossip_size,
             );
         }
 
@@ -22085,9 +22113,9 @@ impl SorafsHedgingBillingRuntimeConfig {
 /// User configuration for the committed finalized-ledger reputation runtime.
 ///
 /// This structure contains only non-secret policy and identity bindings.
-/// Finalized ledger access, threshold signing, Governance DAG publication, and
-/// native journal transaction submission are supplied through runtime-only
-/// daemon dependencies.
+/// Finalized ledger access, monotonic journal-checkpoint sealing, threshold
+/// signing, Governance DAG publication, and native journal transaction
+/// submission are supplied through runtime-only daemon dependencies.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsReputationRuntimeConfig {
     /// Enable the committed projector and external publication reconciler.
@@ -22133,6 +22161,12 @@ pub struct SorafsReputationRuntimeConfig {
     pub window_end_height: Option<u64>,
     /// Identity-pinned finalized-query adapter handle.
     pub finalized_query_handle: Option<String>,
+    /// Identity-pinned external monotonic journal-checkpoint provider handle.
+    pub journal_checkpoint_provider_handle: Option<String>,
+    /// Exact non-zero journal-checkpoint provider contract revision.
+    pub journal_checkpoint_provider_revision: Option<u64>,
+    /// Exact journal-checkpoint provider public-policy digest as lowercase non-zero hex.
+    pub journal_checkpoint_provider_policy_digest_hex: Option<String>,
     /// Identity-pinned runtime-only journal transaction submitter handle.
     pub journal_transaction_submitter_handle: Option<String>,
     /// Exact non-zero journal transaction submitter provider revision.
@@ -22230,6 +22264,9 @@ impl Default for SorafsReputationRuntimeConfig {
             window_start_height: None,
             window_end_height: None,
             finalized_query_handle: None,
+            journal_checkpoint_provider_handle: None,
+            journal_checkpoint_provider_revision: None,
+            journal_checkpoint_provider_policy_digest_hex: None,
             journal_transaction_submitter_handle: None,
             journal_transaction_submitter_revision: None,
             journal_transaction_submitter_policy_digest_hex: None,
@@ -22289,6 +22326,9 @@ impl SorafsReputationRuntimeConfig {
             self.window_start_height.is_some(),
             self.window_end_height.is_some(),
             self.finalized_query_handle.is_some(),
+            self.journal_checkpoint_provider_handle.is_some(),
+            self.journal_checkpoint_provider_revision.is_some(),
+            self.journal_checkpoint_provider_policy_digest_hex.is_some(),
             self.journal_transaction_submitter_handle.is_some(),
             self.journal_transaction_submitter_revision.is_some(),
             self.journal_transaction_submitter_policy_digest_hex
@@ -22550,6 +22590,11 @@ impl SorafsReputationRuntimeConfig {
             self.finalized_query_handle,
             emitter,
         );
+        let journal_checkpoint_provider_handle = runtime_handle(
+            "journal_checkpoint_provider_handle",
+            self.journal_checkpoint_provider_handle,
+            emitter,
+        );
         let journal_transaction_submitter_handle = runtime_handle(
             "journal_transaction_submitter_handle",
             self.journal_transaction_submitter_handle,
@@ -22619,6 +22664,16 @@ impl SorafsReputationRuntimeConfig {
         let journal_transaction_submitter_revision = runtime_revision(
             "journal_transaction_submitter_revision",
             self.journal_transaction_submitter_revision,
+            emitter,
+        );
+        let journal_checkpoint_provider_revision = runtime_revision(
+            "journal_checkpoint_provider_revision",
+            self.journal_checkpoint_provider_revision,
+            emitter,
+        );
+        let journal_checkpoint_provider_policy_digest = runtime_policy_digest(
+            "journal_checkpoint_provider_policy_digest_hex",
+            self.journal_checkpoint_provider_policy_digest_hex,
             emitter,
         );
         let journal_transaction_submitter_policy_digest = runtime_policy_digest(
@@ -22811,6 +22866,9 @@ impl SorafsReputationRuntimeConfig {
             window_start_height,
             window_end_height,
             finalized_query_handle: finalized_query_handle?,
+            journal_checkpoint_provider_handle: journal_checkpoint_provider_handle?,
+            journal_checkpoint_provider_revision: journal_checkpoint_provider_revision?,
+            journal_checkpoint_provider_policy_digest: journal_checkpoint_provider_policy_digest?,
             journal_transaction_submitter_handle: journal_transaction_submitter_handle?,
             journal_transaction_submitter_revision: journal_transaction_submitter_revision?,
             journal_transaction_submitter_policy_digest:
@@ -23746,6 +23804,11 @@ mod sorafs_reputation_runtime_config_tests {
             window_start_height: Some(10),
             window_end_height: Some(20),
             finalized_query_handle: Some("ledger.finalized.primary".to_owned()),
+            journal_checkpoint_provider_handle: Some(
+                "sealed.reputation.journal.primary".to_owned(),
+            ),
+            journal_checkpoint_provider_revision: Some(1),
+            journal_checkpoint_provider_policy_digest_hex: Some("60".repeat(32)),
             journal_transaction_submitter_handle: Some("queue.reputation.journal".to_owned()),
             journal_transaction_submitter_revision: Some(11),
             journal_transaction_submitter_policy_digest_hex: Some("61".repeat(32)),
@@ -23812,6 +23875,12 @@ mod sorafs_reputation_runtime_config_tests {
             parsed.journal_transaction_submitter_handle,
             "queue.reputation.journal"
         );
+        assert_eq!(
+            parsed.journal_checkpoint_provider_handle,
+            "sealed.reputation.journal.primary"
+        );
+        assert_eq!(parsed.journal_checkpoint_provider_revision, 1);
+        assert_eq!(parsed.journal_checkpoint_provider_policy_digest, [0x60; 32]);
         assert_eq!(parsed.journal_transaction_submitter_revision, 11);
         assert_eq!(
             parsed.journal_transaction_submitter_policy_digest,
@@ -23838,6 +23907,7 @@ mod sorafs_reputation_runtime_config_tests {
     fn enabled_policy_rejects_missing_or_nonproduction_dependencies() {
         let mut config = valid_config();
         config.finalized_query_handle = Some("null-query.test".to_owned());
+        config.journal_checkpoint_provider_handle = Some("mock-seal.test".to_owned());
         config.journal_transaction_submitter_handle = Some("mock-submit.test".to_owned());
         config.threshold_signer_handle = None;
         config.state_dir = PathBuf::from("relative/reputation");
@@ -23857,6 +23927,8 @@ mod sorafs_reputation_runtime_config_tests {
         let trust_policy_path = absolute_trust_policy_path();
         let mut omitted_revision = valid_config();
         omitted_revision.journal_transaction_submitter_revision = None;
+        let mut omitted_checkpoint_revision = valid_config();
+        omitted_checkpoint_revision.journal_checkpoint_provider_revision = None;
         let mut omitted_digest = valid_config();
         omitted_digest.threshold_signer_policy_digest_hex = None;
         let mut zero_revision = valid_config();
@@ -23870,6 +23942,7 @@ mod sorafs_reputation_runtime_config_tests {
 
         for config in [
             omitted_revision,
+            omitted_checkpoint_revision,
             omitted_digest,
             zero_revision,
             zero_digest,
@@ -34035,6 +34108,48 @@ publish_delay_seconds = 17
             actual.transaction_gossiper.gossip_resend_ticks,
             defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS
         );
+    }
+
+    #[test]
+    fn network_accepts_canonical_transaction_gossip_size_boundary() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert(
+            "transaction_gossip_size".into(),
+            Value::Integer(i64::from(
+                defaults::network::TRANSACTION_GOSSIP_MAX_SIZE.get(),
+            )),
+        );
+
+        let actual = load_root(table);
+
+        assert_eq!(
+            actual.transaction_gossiper.gossip_size,
+            defaults::network::TRANSACTION_GOSSIP_MAX_SIZE
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "network.transaction_gossip_size must not exceed the canonical per-message maximum"
+    )]
+    fn network_rejects_transaction_gossip_size_above_canonical_limit() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert(
+            "transaction_gossip_size".into(),
+            Value::Integer(i64::from(
+                defaults::network::TRANSACTION_GOSSIP_MAX_SIZE.get() + 1,
+            )),
+        );
+
+        let _ = load_root(table);
     }
 
     #[test]

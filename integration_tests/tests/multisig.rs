@@ -603,7 +603,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         SetKeyValue::account(
             multisig_account_id.clone(),
             proposal_key,
-            "still-pending".parse::<Json>().unwrap(),
+            Json::from("still-pending"),
         )
         .into(),
     ];
@@ -1671,7 +1671,7 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
         SetKeyValue::account(
             transaction_target.clone(),
             key.clone(),
-            "congratulations".parse::<Json>().unwrap(),
+            Json::from("congratulations"),
         )
         .into(),
     ];

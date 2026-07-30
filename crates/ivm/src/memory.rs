@@ -75,6 +75,7 @@ pub struct Memory {
     stack_limit: u64,
     heap_alloc: u64,
     heap_limit: u64,
+    heap_max_limit: u64,
     code_length: u64,
     /// Append-only cursor for the OUTPUT region. Enforces append-only semantics.
     output_cursor: u64,
@@ -101,6 +102,7 @@ pub struct Memory {
 pub(crate) struct MemoryGeometry {
     pub(crate) bytes: usize,
     pub(crate) stack_limit: u64,
+    pub(crate) heap_max_limit: u64,
     pub(crate) merkle_chunk_bytes: usize,
     pub(crate) merkle_leaves: usize,
 }
@@ -368,6 +370,7 @@ impl Memory {
             stack_limit: effective_stack,
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
+            heap_max_limit: Memory::HEAP_MAX_SIZE,
             code_length: code_size,
             output_cursor: 0,
             root: HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32])),
@@ -469,7 +472,7 @@ impl Memory {
             .heap_limit
             .checked_add(aligned)
             .ok_or(VMError::OutOfMemory)?;
-        if unlikely(new_limit > Memory::HEAP_MAX_SIZE) {
+        if unlikely(new_limit > self.heap_max_limit) {
             return Err(VMError::OutOfMemory);
         }
         self.heap_limit = new_limit;
@@ -481,6 +484,11 @@ impl Memory {
         self.heap_limit
     }
 
+    /// Per-instance ceiling for heap growth.
+    pub fn heap_max_limit(&self) -> u64 {
+        self.heap_max_limit
+    }
+
     /// Number of heap bytes currently owned by successful allocations.
     pub(crate) fn heap_allocated_len(&self) -> u64 {
         self.heap_alloc
@@ -488,10 +496,24 @@ impl Memory {
 
     /// Override the active heap limit, keeping the already-allocated region valid.
     pub fn set_heap_limit(&mut self, limit: u64) -> Result<(), VMError> {
-        if limit < self.heap_alloc || limit > Memory::HEAP_MAX_SIZE {
+        if limit < self.heap_alloc || limit > self.heap_max_limit {
             return Err(VMError::OutOfMemory);
         }
         self.heap_limit = limit;
+        Ok(())
+    }
+
+    /// Set the absolute per-instance heap ceiling and clamp the active limit to it.
+    ///
+    /// Unlike [`Self::set_heap_limit`], this limit cannot be bypassed by
+    /// [`Self::grow_heap`]. Hosts use it to apply deterministic governance
+    /// limits before guest execution.
+    pub fn set_heap_max_limit(&mut self, limit: u64) -> Result<(), VMError> {
+        if limit < self.heap_alloc || limit > Memory::HEAP_MAX_SIZE {
+            return Err(VMError::OutOfMemory);
+        }
+        self.heap_max_limit = limit;
+        self.heap_limit = self.heap_limit.min(limit);
         Ok(())
     }
 
@@ -941,6 +963,7 @@ impl Memory {
         self.tree.reset_leaves_from(&template.tree, &modified);
         self.heap_alloc = template.heap_alloc;
         self.heap_limit = template.heap_limit;
+        self.heap_max_limit = template.heap_max_limit;
         self.code_length = template.code_length;
         self.output_cursor = template.output_cursor;
         self.root = template.root;
@@ -955,6 +978,7 @@ impl Memory {
         MemoryGeometry {
             bytes: self.data.len(),
             stack_limit: self.stack_limit,
+            heap_max_limit: self.heap_max_limit,
             merkle_chunk_bytes: self.tree.chunk_size(),
             merkle_leaves: self.tree.leaf_count(),
         }
@@ -989,6 +1013,7 @@ impl Clone for Memory {
             stack_limit: self.stack_limit,
             heap_alloc: self.heap_alloc,
             heap_limit: self.heap_limit,
+            heap_max_limit: self.heap_max_limit,
             code_length: self.code_length,
             output_cursor: self.output_cursor,
             root: self.root,
@@ -1182,6 +1207,7 @@ mod tests {
             stack_limit: Memory::STACK_ALIGNMENT,
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
+            heap_max_limit: Memory::HEAP_MAX_SIZE,
             code_length: 0,
             output_cursor: 0,
             root,
@@ -1222,6 +1248,7 @@ mod tests {
             stack_limit: Memory::STACK_ALIGNMENT,
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
+            heap_max_limit: Memory::HEAP_MAX_SIZE,
             code_length: 0,
             output_cursor: 0,
             root,
@@ -1280,6 +1307,19 @@ mod tests {
         assert_eq!(mem.heap_alloc, 0);
         let small = mem.alloc(16).expect("small allocation succeeds");
         assert_eq!(small, Memory::HEAP_START);
+    }
+
+    #[test]
+    fn per_instance_heap_ceiling_cannot_be_bypassed_by_growth() {
+        let mut mem = Memory::new(0);
+        mem.set_heap_max_limit(64)
+            .expect("install governed heap ceiling");
+
+        assert_eq!(mem.heap_limit(), 64);
+        assert_eq!(mem.heap_max_limit(), 64);
+        assert_eq!(mem.alloc(64), Ok(Memory::HEAP_START));
+        assert_eq!(mem.grow_heap(8), Err(VMError::OutOfMemory));
+        assert_eq!(mem.alloc(1), Err(VMError::OutOfMemory));
     }
 
     #[test]

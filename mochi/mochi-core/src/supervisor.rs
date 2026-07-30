@@ -3593,7 +3593,11 @@ impl GenesisMaterial {
             }
             // Test-only escape hatch so integration harnesses can reuse the internal
             // genesis helper without shelling out to Kagami.
-            let chain = ChainId::from(chain_id.to_owned());
+            let chain = chain_id.parse::<ChainId>().map_err(|error| {
+                SupervisorError::KagamiInvocation(format!(
+                    "configured chain id must be canonical: {error}"
+                ))
+            })?;
             return crate::genesis::default_manifest(
                 chain,
                 genesis_public_key,

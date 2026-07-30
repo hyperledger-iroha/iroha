@@ -172,27 +172,12 @@ impl InnerLimiter {
             return true;
         }
 
-        let burst = self.burst;
-        let rate_per_sec = self.rate_per_sec;
-        let bucket = match self.buckets.get_mut(key) {
-            Some(bucket) => bucket,
-            None => {
-                self.insert_full_bucket(key, now);
-                self.buckets
-                    .get_mut(key)
-                    .expect("inserted rate-limit bucket must be present")
-            }
-        };
-        Self::refill_bucket(rate_per_sec, burst, bucket, now);
-
         let required = count as f64;
-        if bucket.tokens >= required {
-            bucket.tokens -= required;
-            true
-        } else {
-            bucket.tokens = bucket.tokens.fract();
-            false
+        if required > self.burst {
+            return false;
         }
+
+        self.allow_required(key, required, now)
     }
 }
 
@@ -270,10 +255,10 @@ impl RateLimiter {
             .allow_cost_capped_to_burst(key, cost, Instant::now())
     }
 
-    /// Returns true after consuming `count` single-token requests for the same key.
+    /// Atomically consumes `count` tokens for one key.
     ///
-    /// On rejection this preserves repeated [`Self::allow`] semantics by consuming
-    /// the whole-token prefix that would have passed before the first limited request.
+    /// Rejection leaves the bucket unchanged, including when `count` exceeds
+    /// the configured burst.
     #[allow(clippy::unused_async)]
     pub async fn allow_repeated(&self, key: &str, count: usize) -> bool {
         if self.inner.disabled || count == 0 {
@@ -998,14 +983,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn limiter_allow_repeated_matches_single_key_prefix_consumption() {
+    async fn limiter_allow_repeated_is_atomic() {
         let limiter = RateLimiter::new(Some(1), Some(2));
 
         assert!(!limiter.allow_repeated("batch", 3).await);
-        assert!(
-            !limiter.allow("batch").await,
-            "failed repeated check should consume the two requests that would have passed"
-        );
+        assert!(limiter.allow("batch").await);
+        assert!(limiter.allow("batch").await);
+        assert!(!limiter.allow("batch").await);
 
         let limiter = RateLimiter::new(Some(1), Some(3));
         assert!(limiter.allow_repeated("batch", 2).await);

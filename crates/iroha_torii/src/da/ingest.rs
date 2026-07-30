@@ -165,7 +165,8 @@ fn compute_da_manifest_artifacts(
     })?;
     let proof_scheme = lane_proof_scheme(nexus, request.lane_id, committed_height)?;
     let canonical = normalize_payload(request)?;
-    validate_request(request, canonical.len())?;
+    validate_request(request, canonical.len())
+        .map_err(|(status, message)| (status, message.to_owned()))?;
 
     let mut metadata = encrypt_governance_metadata(
         &request.metadata,
@@ -289,8 +290,8 @@ pub async fn handler_post_da_ingest(
         manifest,
         enforced_retention,
         retention_mismatch,
-        taikai_ssm_payload: mut taikai_ssm_payload,
-        taikai_trm_payload: mut taikai_trm_payload,
+        mut taikai_ssm_payload,
+        mut taikai_trm_payload,
         queued_at_secs,
     } = computed;
 
@@ -356,14 +357,37 @@ pub async fn handler_post_da_ingest(
                 );
             }
 
+            let taikai_stream_label =
+                matches!(request.blob_class, BlobClass::TaikaiSegment).then(|| {
+                    taikai::stream_label_from_metadata(&request.metadata)
+                        .unwrap_or_else(|| taikai_ingest::STREAM_LABEL_FALLBACK.to_string())
+                });
+            let compute_telemetry = telemetry.clone();
             let (
-                canonical,
-                chunk_store,
+                request,
                 manifest,
                 pdp_commitment,
                 pdp_commitment_bytes,
                 pdp_header_value,
+                taikai_artifacts,
             ) = run_da_ingest_compute_job(Arc::clone(&app.da_ingest_compute_inflight), move || {
+                let taikai_artifacts = if matches!(request.blob_class, BlobClass::TaikaiSegment) {
+                    let chunking_observer = |elapsed: Duration| {
+                        record_da_chunking_metrics(&compute_telemetry, elapsed);
+                    };
+                    match taikai_ingest::build_envelope(
+                        &request,
+                        &manifest,
+                        &chunk_store,
+                        canonical.as_slice(),
+                        Some(&chunking_observer),
+                    ) {
+                        Ok(value) => Some(value),
+                        Err(err) => return Ok(Err(err)),
+                    }
+                } else {
+                    None
+                };
                 let pdp_commitment = compute_pdp_commitment(
                     &manifest.manifest_hash,
                     &manifest.manifest,
@@ -373,17 +397,28 @@ pub async fn handler_post_da_ingest(
                 )?;
                 let pdp_commitment_bytes = encode_pdp_commitment_bytes(&pdp_commitment)?;
                 let pdp_header_value = pdp_commitment_header_value(&pdp_commitment_bytes)?;
-                Ok((
-                    canonical,
-                    chunk_store,
+                Ok(Ok((
+                    request,
                     manifest,
                     pdp_commitment,
                     pdp_commitment_bytes,
                     pdp_header_value,
-                ))
+                    taikai_artifacts,
+                )))
             })
             .await
             .map_err(|(status, message)| {
+                ResponseError::from(build_error_response(status, &message, format))
+            })?
+            .map_err(|(status, message)| {
+                if let Some(stream_label) = taikai_stream_label.as_deref() {
+                    taikai::record_taikai_ingest_error(
+                        &telemetry,
+                        cluster_label,
+                        stream_label,
+                        status,
+                    );
+                }
                 ResponseError::from(build_error_response(status, &message, format))
             })?;
 
@@ -555,30 +590,7 @@ pub async fn handler_post_da_ingest(
             }
 
             let mut taikai_alias_rotation_event = None;
-            if matches!(request.blob_class, BlobClass::TaikaiSegment) {
-                let taikai = match taikai_ingest::build_envelope(
-                    &request,
-                    &manifest,
-                    &chunk_store,
-                    canonical.as_slice(),
-                    Some(&chunking_observer),
-                ) {
-                    Ok(value) => value,
-                    Err((status, message)) => {
-                        let stream_label = taikai::stream_label_from_metadata(&request.metadata)
-                            .unwrap_or_else(|| taikai_ingest::STREAM_LABEL_FALLBACK.to_string());
-                        taikai::record_taikai_ingest_error(
-                            &telemetry,
-                            cluster_label,
-                            &stream_label,
-                            status,
-                        );
-                        return Err(ResponseError::from(build_error_response(
-                            status, &message, format,
-                        )));
-                    }
-                };
-
+            if let Some(taikai) = taikai_artifacts {
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let envelope_bytes = taikai.envelope_bytes.clone();

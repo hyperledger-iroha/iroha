@@ -4722,11 +4722,10 @@ impl ProviderIngestOutbox {
             if let Err(error) =
                 authority.compare_and_swap(self.policy.checkpoint_max_bytes, Some(current), &next)
             {
-                if matches!(
-                    error,
-                    ProviderIngestOutboxError::CheckpointAuthorityAmbiguous
-                        | ProviderIngestOutboxError::CheckpointProviderTimeout
-                ) {
+                // A timed-out worker is already sticky and preserves the typed
+                // timeout until this outbox is reopened. Poison only response
+                // loss whose ambiguity is not represented by worker state.
+                if error == ProviderIngestOutboxError::CheckpointAuthorityAmbiguous {
                     live.durability_failure =
                         Some("sealed provider-ingest commit outcome is ambiguous".to_owned());
                 }
@@ -6833,6 +6832,15 @@ mod tests {
         assert_eq!(
             outbox.observe_finalized_snapshot(cursor(11), finalized_block_time_ms(cursor(11))),
             Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
+        );
+        assert!(
+            outbox
+                .state
+                .lock()
+                .expect("outbox state")
+                .durability_failure
+                .is_none(),
+            "the sticky worker timeout must not be replaced by durability poison"
         );
         let load_calls_after_timeout = runtime.operation_calls(TestCheckpointOperation::LoadLatest);
         assert_eq!(
@@ -9186,14 +9194,11 @@ mod tests {
             outbox.claim_completion_signing(job_id, wrong_chain, 102),
             Err(ProviderIngestOutboxError::InvalidSigningContext)
         );
-        let mut oversized_chain = valid.clone();
-        oversized_chain.chain_id = ChainId::from(
-            "x".repeat(provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1 + 1),
-        );
-        oversized_chain.expected_payload.chain = oversized_chain.chain_id.clone();
-        assert_eq!(
-            outbox.claim_completion_signing(job_id, oversized_chain, 102),
-            Err(ProviderIngestOutboxError::InvalidSigningContext)
+        assert!(
+            "x".repeat(provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1 + 1)
+                .parse::<ChainId>()
+                .is_err(),
+            "oversized chain id must fail before reaching the signing context"
         );
         let mut wrong_owner = valid.clone();
         wrong_owner.provider_owner = completed_by(0x77);

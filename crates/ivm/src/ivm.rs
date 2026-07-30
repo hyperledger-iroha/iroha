@@ -1552,6 +1552,8 @@ pub struct RuntimeTemplateResetError {
     template_memory_bytes: usize,
     current_stack_limit: u64,
     template_stack_limit: u64,
+    current_heap_max_limit: u64,
+    template_heap_max_limit: u64,
     current_merkle_chunk_bytes: usize,
     template_merkle_chunk_bytes: usize,
     current_merkle_leaves: usize,
@@ -1565,6 +1567,8 @@ impl RuntimeTemplateResetError {
             template_memory_bytes: error.template.bytes,
             current_stack_limit: error.current.stack_limit,
             template_stack_limit: error.template.stack_limit,
+            current_heap_max_limit: error.current.heap_max_limit,
+            template_heap_max_limit: error.template.heap_max_limit,
             current_merkle_chunk_bytes: error.current.merkle_chunk_bytes,
             template_merkle_chunk_bytes: error.template.merkle_chunk_bytes,
             current_merkle_leaves: error.current.merkle_leaves,
@@ -1577,13 +1581,15 @@ impl std::fmt::Display for RuntimeTemplateResetError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "runtime-template memory geometry mismatch: VM has {} bytes, {} stack bytes, {}-byte Merkle chunks, and {} Merkle leaves; template has {} bytes, {} stack bytes, {}-byte Merkle chunks, and {} Merkle leaves",
+            "runtime-template memory geometry mismatch: VM has {} bytes, {} stack bytes, {} heap-ceiling bytes, {}-byte Merkle chunks, and {} Merkle leaves; template has {} bytes, {} stack bytes, {} heap-ceiling bytes, {}-byte Merkle chunks, and {} Merkle leaves",
             self.current_memory_bytes,
             self.current_stack_limit,
+            self.current_heap_max_limit,
             self.current_merkle_chunk_bytes,
             self.current_merkle_leaves,
             self.template_memory_bytes,
             self.template_stack_limit,
+            self.template_heap_max_limit,
             self.template_merkle_chunk_bytes,
             self.template_merkle_leaves
         )
@@ -1699,13 +1705,6 @@ pub struct IVM {
     acceleration_policy: AccelerationPolicy,
     hardware_capabilities: HardwareCapabilities,
 }
-
-impl std::panic::RefUnwindSafe for IVM {}
-
-// The embedded host is private and all host access requires `&mut self`.
-// Cloned VMs intentionally drop the host, and worker sharing wraps host state
-// behind a mutex, so sharing `&IVM` cannot expose a non-`Sync` host reference.
-unsafe impl Sync for IVM {}
 
 impl Clone for IVM {
     fn clone(&self) -> Self {
@@ -1830,8 +1829,6 @@ impl IVM {
     const GAS_SHA256_BASE: u64 = 10;
     const GAS_SHA256_PER_BYTE: u64 = 1;
     const GAS_ED25519_VERIFY: u64 = 1000;
-    const GAS_ED25519_BATCH_PER_ENTRY: u64 = 500;
-    const MAX_ED25519_BATCH_ENTRIES: usize = 512;
     #[allow(dead_code)]
     const GAS_DILITHIUM_VERIFY: u64 = 5000;
 
@@ -3744,8 +3741,7 @@ impl IVM {
             .is_ok()
     }
 
-    /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
-    pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
+    fn inspect_owned_public_tlv_payload_len(&self, ptr: u64) -> Result<usize, VMError> {
         self.ensure_public_memory(ptr, 7)?;
         let hdr = self
             .memory
@@ -3763,6 +3759,17 @@ impl IVM {
         // declassify a private payload through a boolean decoder result.
         self.ensure_public_memory(ptr, total)?;
         self.ensure_owned_tlv_range(ptr, total)?;
+        Ok(len)
+    }
+
+    /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
+    pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
+        let len = self.inspect_owned_public_tlv_payload_len(ptr)?;
+        let total = 7usize
+            .checked_add(len)
+            .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
+            .ok_or(VMError::NoritoInvalid)?;
+        let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
         let envelope = self
             .memory
             .load_region(ptr, total)
@@ -3892,109 +3899,6 @@ impl IVM {
         self.input_bump_next = off;
     }
 
-    /// Attempt to verify an Ed25519 batch with the CUDA backend.
-    ///
-    /// Returns:
-    /// - `None` if CUDA is disabled or unavailable (caller should fall back to CPU).
-    /// - `Some(Ok(()))` if every entry verified successfully on the GPU.
-    /// - `Some(Err(index))` if a malformed entry or invalid signature was detected.
-    fn verify_ed25519_batch_cuda(
-        &self,
-        request: &crate::signature::Ed25519BatchRequest,
-    ) -> Option<Result<(), usize>> {
-        if !self.use_cuda {
-            return None;
-        }
-        for (index, entry) in request.entries.iter().enumerate() {
-            let sig_bytes: [u8; 64] = match entry.signature.as_slice().try_into() {
-                Ok(bytes) => bytes,
-                Err(_) => return Some(Err(index)),
-            };
-            if crate::signature::signature_bytes_are_all_zero(&sig_bytes) {
-                return Some(Err(index));
-            }
-            if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes) {
-                return Some(Err(index));
-            }
-            let pk_bytes: [u8; 32] = match entry.public_key.as_slice().try_into() {
-                Ok(bytes) => bytes,
-                Err(_) => return Some(Err(index)),
-            };
-            if crate::signature::ed25519_public_key_bytes_are_invalid(&pk_bytes) {
-                return Some(Err(index));
-            }
-            match crate::cuda::ed25519_verify_cuda(entry.message.as_slice(), &sig_bytes, &pk_bytes)
-            {
-                Some(true) => continue,
-                Some(false) => return Some(Err(index)),
-                None => return None,
-            }
-        }
-        Some(Ok(()))
-    }
-
-    #[cfg(all(feature = "metal", target_os = "macos"))]
-    fn verify_ed25519_batch_metal(
-        &self,
-        request: &crate::signature::Ed25519BatchRequest,
-    ) -> Option<Result<(), usize>> {
-        if !self.use_metal || !crate::vector::metal_available() {
-            return None;
-        }
-        use ed25519_dalek::Signature;
-
-        let mut sigs = Vec::with_capacity(request.entries.len());
-        let mut pks = Vec::with_capacity(request.entries.len());
-        let mut hrams = Vec::with_capacity(request.entries.len());
-
-        for (index, entry) in request.entries.iter().enumerate() {
-            let sig_bytes: [u8; 64] = match entry.signature.as_slice().try_into() {
-                Ok(bytes) => bytes,
-                Err(_) => return Some(Err(index)),
-            };
-            if crate::signature::signature_bytes_are_all_zero(&sig_bytes) {
-                return Some(Err(index));
-            }
-            if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes) {
-                return Some(Err(index));
-            }
-            let pk_bytes: [u8; 32] = match entry.public_key.as_slice().try_into() {
-                Ok(bytes) => bytes,
-                Err(_) => return Some(Err(index)),
-            };
-            let Some(pk) = crate::signature::parse_ed25519_public_key_for_verification(&pk_bytes)
-            else {
-                return Some(Err(index));
-            };
-            let hram = crate::signature::ed25519_challenge_scalar_bytes(
-                &sig_bytes,
-                pk.as_bytes(),
-                entry.message.as_slice(),
-            );
-
-            // Ensure signature parses to preserve canonical checks before GPU launch.
-            if Signature::from_slice(&sig_bytes).is_err() {
-                return Some(Err(index));
-            }
-
-            sigs.push(sig_bytes);
-            pks.push(pk_bytes);
-            hrams.push(hram);
-        }
-
-        match crate::vector::metal_ed25519_verify_batch(&sigs, &pks, &hrams) {
-            Some(results) => {
-                for (idx, ok) in results.into_iter().enumerate() {
-                    if !ok {
-                        return Some(Err(idx));
-                    }
-                }
-                Some(Ok(()))
-            }
-            None => None,
-        }
-    }
-
     /// ABI version extracted from the program header.
     pub fn abi_version(&self) -> u8 {
         self.metadata.abi_version
@@ -4043,28 +3947,33 @@ impl IVM {
         let host_for_workers_ref = &host_for_workers;
 
         let cache_id = WORKER_CACHE_ID.fetch_add(1, Ordering::Relaxed);
-        let result = parallel::execute_block_predicted(&self.scheduler, block, |tx| {
-            WORKER_CACHE.with(|slot| {
-                let mut slot = slot.borrow_mut();
-                if slot.as_ref().map(|cache| cache.id) != Some(cache_id) {
-                    let resources =
-                        WorkerResources::new(template_ref, host_for_workers_ref.0.as_ref());
-                    *slot = Some(WorkerCache {
-                        id: cache_id,
-                        resources,
-                    });
-                }
-                let cache = slot.as_mut().expect("worker cache must be initialized");
-                cache.resources.execute(tx)
+        let scheduled = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            parallel::execute_block_predicted(&self.scheduler, block, |tx| {
+                WORKER_CACHE.with(|slot| {
+                    let mut slot = slot.borrow_mut();
+                    if slot.as_ref().map(|cache| cache.id) != Some(cache_id) {
+                        let resources =
+                            WorkerResources::new(template_ref, host_for_workers_ref.0.as_ref());
+                        *slot = Some(WorkerCache {
+                            id: cache_id,
+                            resources,
+                        });
+                    }
+                    let cache = slot.as_mut().expect("worker cache must be initialized");
+                    cache.resources.execute(tx)
+                })
             })
-        });
+        }));
 
         if let Some(shared_host) = shared_host {
             let mut guard = shared_host.lock().unwrap_or_else(|err| err.into_inner());
             self.host = guard.take();
         }
 
-        result
+        match scheduled {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Sequential block execution path used when the host is not concurrency-safe.
@@ -6875,75 +6784,88 @@ impl IVM {
                             return Err(VMError::PrivacyViolation);
                         }
                         let mut fail_index = 0u64;
-                        let request = self.validate_public_crypto_tlv(self.registers.get(rs1))?;
-                        let ok = if let Some(tlv_req) = request {
-                            let is_norito = tlv_req.type_id_raw()
-                                == crate::pointer_abi::PointerType::NoritoBytes as u16;
-                            is_norito
-                                && match norito::decode_from_bytes::<
-                                    crate::signature::Ed25519BatchRequest,
-                                >(tlv_req.payload)
-                                {
-                                    Ok(req) => {
-                                        if req.entries.is_empty() {
-                                            false
-                                        } else if req.entries.len()
-                                            > Self::MAX_ED25519_BATCH_ENTRIES
-                                        {
-                                            fail_index = req.entries.len() as u64;
-                                            false
-                                        } else {
-                                            let extra_cost = Self::GAS_ED25519_BATCH_PER_ENTRY
-                                                .saturating_mul(req.entries.len() as u64);
-                                            if self.gas_remaining < extra_cost {
-                                                return Err(VMError::OutOfGas);
-                                            }
-                                            self.gas_remaining -= extra_cost;
+                        let request_ptr = self.registers.get(rs1);
+                        let payload_len =
+                            match self.inspect_owned_public_tlv_payload_len(request_ptr) {
+                                Ok(payload_len) => Some(payload_len),
+                                Err(VMError::PrivacyViolation) => {
+                                    return Err(VMError::PrivacyViolation);
+                                }
+                                Err(_) => None,
+                            };
+                        let ok = if let Some(payload_len) = payload_len {
+                            if payload_len > crate::gas::ED25519_BATCH_MAX_PAYLOAD_BYTES {
+                                false
+                            } else {
+                                let payload_len = u64::try_from(payload_len)
+                                    .map_err(|_| VMError::GasCostOverflow)?;
+                                self.debit_gas(crate::gas::ed25519_batch_extra_gas(
+                                    payload_len,
+                                    0,
+                                ))?;
 
-                                            #[cfg(all(feature = "metal", target_os = "macos"))]
-                                            let batch_result = self
-                                                .verify_ed25519_batch_cuda(&req)
-                                                .or_else(|| self.verify_ed25519_batch_metal(&req));
-                                            #[cfg(not(all(
-                                                feature = "metal",
-                                                target_os = "macos"
-                                            )))]
-                                            let batch_result = self.verify_ed25519_batch_cuda(&req);
+                                let request = self
+                                    .validate_public_crypto_tlv(request_ptr)?
+                                    .and_then(|tlv_req| {
+                                        (tlv_req.type_id_raw()
+                                            == crate::pointer_abi::PointerType::NoritoBytes as u16)
+                                            .then(|| {
+                                                norito::decode_from_bytes_with_limits::<
+                                                    crate::signature::Ed25519BatchRequest,
+                                                >(
+                                                    tlv_req.payload,
+                                                    crate::gas::ED25519_BATCH_DECODE_LIMITS,
+                                                )
+                                                .ok()
+                                            })
+                                            .flatten()
+                                    });
 
-                                            match batch_result {
-                                                Some(Ok(())) => true,
-                                                Some(Err(index)) => {
-                                                    fail_index = index as u64;
-                                                    false
-                                                }
-                                                None => {
-                                                    match crate::signature::verify_ed25519_batch(
-                                                        &req,
-                                                        Self::MAX_ED25519_BATCH_ENTRIES,
-                                                    ) {
-                                                        Ok(()) => true,
-                                                        Err(err) => {
-                                                            fail_index = match err {
-                                                        crate::signature::Ed25519BatchError::Empty => 0,
-                                                        crate::signature::Ed25519BatchError::TooMany { actual, .. } => {
-                                                            actual as u64
-                                                        }
-                                                        crate::signature::Ed25519BatchError::InvalidEntry {
-                                                            index,
-                                                        } => index as u64,
-                                                        crate::signature::Ed25519BatchError::SignatureFailed {
-                                                            index,
-                                                        } => index as u64,
-                                                    };
-                                                            false
-                                                        }
+                                if let Some(request) = request {
+                                    if request.entries.is_empty() {
+                                        false
+                                    } else if request.entries.len()
+                                        > crate::gas::ED25519_BATCH_MAX_ENTRIES
+                                    {
+                                        fail_index = u64::try_from(request.entries.len())
+                                            .map_err(|_| VMError::GasCostOverflow)?;
+                                        false
+                                    } else {
+                                        let entry_count = u64::try_from(request.entries.len())
+                                            .map_err(|_| VMError::GasCostOverflow)?;
+                                        self.debit_gas(crate::gas::ed25519_batch_extra_gas(
+                                            0,
+                                            entry_count,
+                                        ))?;
+                                        match crate::signature::verify_ed25519_batch(
+                                            &request,
+                                            crate::gas::ED25519_BATCH_MAX_ENTRIES,
+                                        ) {
+                                            Ok(()) => true,
+                                            Err(err) => {
+                                                fail_index = match err {
+                                                    crate::signature::Ed25519BatchError::Empty => 0,
+                                                    crate::signature::Ed25519BatchError::TooMany {
+                                                        actual,
+                                                        ..
+                                                    } => u64::try_from(actual)
+                                                        .map_err(|_| VMError::GasCostOverflow)?,
+                                                    crate::signature::Ed25519BatchError::InvalidEntry {
+                                                        index,
                                                     }
-                                                }
+                                                    | crate::signature::Ed25519BatchError::SignatureFailed {
+                                                        index,
+                                                    } => u64::try_from(index)
+                                                        .map_err(|_| VMError::GasCostOverflow)?,
+                                                };
+                                                false
                                             }
                                         }
                                     }
-                                    Err(_) => false,
+                                } else {
+                                    false
                                 }
+                            }
                         } else {
                             false
                         };
@@ -8232,6 +8154,10 @@ fn schedule_batches(metas: &[InstrMeta]) -> Vec<Vec<usize>> {
 
 impl IVM {
     /// Execute a slice of instructions using simple ILP scheduling.
+    ///
+    /// Gas for each independent batch is reserved before any worker starts.
+    /// Once work begins, the full reservation remains charged even if an
+    /// instruction in that batch faults.
     pub fn execute_block_parallel(&mut self, block: &[SimpleInstruction]) -> Result<(), VMError> {
         let zk_memory_access = self.zk_mode
             && block.iter().any(|instruction| {
@@ -8263,6 +8189,16 @@ impl IVM {
         let batches = schedule_batches(&metas);
 
         for batch in batches {
+            let batch_gas = batch.iter().try_fold(0_u64, |total, &idx| {
+                total
+                    .checked_add(cost_of(&block[idx], vls[idx]))
+                    .ok_or(VMError::OutOfGas)
+            })?;
+            if self.gas_remaining < batch_gas {
+                return Err(VMError::OutOfGas);
+            }
+            self.gas_remaining -= batch_gas;
+
             let regs_snapshot = self.registers.snapshot();
             let tags_snapshot = self.registers.snapshot_tags();
             let vector_enabled = self.vector_enabled;
@@ -8292,12 +8228,7 @@ impl IVM {
             let mut results = results_lock.into_inner().expect("results mutex poisoned");
 
             results.sort_by_key(|(i, _)| *i);
-            for (idx, result) in results {
-                let cost = cost_of(&block[idx], vls[idx]);
-                if self.gas_remaining < cost {
-                    return Err(VMError::OutOfGas);
-                }
-                self.gas_remaining -= cost;
+            for (_, result) in results {
                 let updates = result?;
                 for upd in updates {
                     match upd {
@@ -9471,6 +9402,30 @@ mod tests {
                 .as_ptr(),
             mismatched_allocation
         ));
+    }
+
+    #[test]
+    fn runtime_template_rejects_a_different_heap_authority() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
+            .expect("template program loads");
+        let template = vm.runtime_template();
+
+        vm.memory
+            .set_heap_max_limit(Memory::HEAP_MAX_SIZE - Memory::STACK_ALIGNMENT)
+            .expect("smaller heap authority is valid");
+        vm.set_register(7, 99);
+        let error = vm
+            .reset_from_runtime_template(&template)
+            .expect_err("different heap authority must reject warm reset");
+
+        assert!(error.to_string().contains("heap-ceiling bytes"));
+        assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
+        assert_eq!(
+            vm.memory.heap_max_limit(),
+            Memory::HEAP_MAX_SIZE - Memory::STACK_ALIGNMENT,
+        );
     }
 
     #[test]

@@ -121,7 +121,7 @@ public struct TransferRequest: Sendable {
                 destination: String,
                 description: String?,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil,
+                ttlMs: UInt64? = 100_000,
                 nonce: UInt32? = nil) {
         self.chainId = chainId
         self.authority = authority
@@ -151,7 +151,7 @@ public struct MintRequest {
                 quantity: String,
                 destination: String,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil,
+                ttlMs: UInt64? = 100_000,
                 nonce: UInt32? = nil) {
         self.chainId = chainId
         self.authority = authority
@@ -180,7 +180,7 @@ public struct BurnRequest {
                 quantity: String,
                 destination: String,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil,
+                ttlMs: UInt64? = 100_000,
                 nonce: UInt32? = nil) {
         self.chainId = chainId
         self.authority = authority
@@ -246,7 +246,7 @@ public struct SetMetadataRequest {
                 key: String,
                 value: NoritoJSON,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.target = target
@@ -262,7 +262,7 @@ public struct SetMetadataRequest {
                 key: String,
                 value: ToriiJSONValue,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) throws {
+                ttlMs: UInt64? = 100_000) throws {
         let encoded = try NoritoJSON(value)
         self.init(chainId: chainId,
                   authority: authority,
@@ -287,7 +287,7 @@ public struct RemoveMetadataRequest {
                 target: MetadataTarget,
                 key: String,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.target = target
@@ -310,7 +310,7 @@ public struct MultisigRegisterRequest {
                 accountId: String,
                 spec: MultisigSpecPayload,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.accountId = accountId
@@ -333,7 +333,7 @@ public struct ClaimIdentifierRequest {
                 accountId: String,
                 receipt: ToriiIdentifierResolutionReceipt,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.accountId = accountId
@@ -361,7 +361,7 @@ public struct CommitContractDeploymentRequest {
                 leaseExpiryMs: UInt64? = nil,
                 expectedPreviousContractAddress: String? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.expectedDeployNonce = expectedDeployNonce
@@ -450,7 +450,7 @@ public struct RegisterZkAssetRequest {
                 unshieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 shieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
@@ -498,7 +498,7 @@ public struct ShieldRequest {
                 noteCommitment: Data,
                 payload: ConfidentialEncryptedPayload,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) throws {
+                ttlMs: UInt64? = 100_000) throws {
         guard noteCommitment.count == 32 else {
             throw ShieldRequestError.invalidNoteCommitmentLength
         }
@@ -563,7 +563,7 @@ public struct UnshieldRequest {
                 proof: ProofAttachment,
                 rootHint: Data? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) throws {
+                ttlMs: UInt64? = 100_000) throws {
         guard !inputs.isEmpty else {
             throw UnshieldRequestError.inputsEmpty
         }
@@ -644,7 +644,7 @@ public struct ZkTransferRequest {
                 proof: ProofAttachment,
                 rootHint: Data? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) throws {
+                ttlMs: UInt64? = 100_000) throws {
         guard !inputs.isEmpty else {
             throw ZkTransferRequestError.inputsEmpty
         }
@@ -707,11 +707,6 @@ public enum BallotDirection: UInt8, Sendable {
     case abstain = 2
 }
 
-public enum CouncilDerivation: UInt8, Sendable {
-    case vrf = 0
-    case backup = 1
-}
-
 public struct ProposeDeployContractRequest {
     public let chainId: String
     public let authority: String
@@ -733,7 +728,7 @@ public struct ProposeDeployContractRequest {
                 window: GovernanceWindow? = nil,
                 mode: GovernanceVotingMode? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.contractAddress = contractAddress
@@ -766,7 +761,7 @@ public struct CastPlainBallotRequest {
                 durationBlocks: UInt64,
                 direction: BallotDirection,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.referendumId = referendumId
@@ -794,7 +789,7 @@ public struct CastZkBallotRequest {
                 proofB64: String,
                 publicInputs: NoritoJSON,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.electionId = electionId
@@ -810,7 +805,7 @@ public struct CastZkBallotRequest {
                 proofB64: String,
                 publicInputs: ToriiJSONValue,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) throws {
+                ttlMs: UInt64? = 100_000) throws {
         let encoded = try NoritoJSON(publicInputs)
         self.init(chainId: chainId,
                   authority: authority,
@@ -837,7 +832,7 @@ public struct EnactReferendumRequest {
                 preimageHashHex: String,
                 window: GovernanceWindow,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.referendumIdHex = referendumIdHex
@@ -861,7 +856,7 @@ public struct FinalizeReferendumRequest {
                 referendumId: String,
                 proposalIdHex: String,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.referendumId = referendumId
@@ -876,8 +871,6 @@ public struct PersistCouncilRequest {
     public let authority: String
     public let epoch: UInt64
     public let members: [String]
-    public let candidatesCount: UInt32
-    public let derivedBy: CouncilDerivation
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
@@ -885,16 +878,12 @@ public struct PersistCouncilRequest {
                 authority: String,
                 epoch: UInt64,
                 members: [String],
-                candidatesCount: UInt32,
-                derivedBy: CouncilDerivation,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = nil) {
+                ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.epoch = epoch
         self.members = members
-        self.candidatesCount = candidatesCount
-        self.derivedBy = derivedBy
         self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
@@ -1445,7 +1434,7 @@ public final class IrohaSDK: @unchecked Sendable {
         authority: String,
         entries: [TransactionBatchEntry],
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         nonce: UInt32? = nil,
         signingKey: SigningKey
     ) throws -> SignedTransactionEnvelope {
@@ -1467,7 +1456,7 @@ public final class IrohaSDK: @unchecked Sendable {
         authority: String,
         entries: [TransactionBatchEntry],
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         nonce: UInt32? = nil,
         keypair: Keypair
     ) throws -> SignedTransactionEnvelope {
@@ -1489,7 +1478,7 @@ public final class IrohaSDK: @unchecked Sendable {
         plan: AliasTransactionPlanV1,
         bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         signingKey: SigningKey,
         frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
             NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
@@ -1512,7 +1501,7 @@ public final class IrohaSDK: @unchecked Sendable {
         plan: AliasTransactionPlanV1,
         bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         keypair: Keypair,
         frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
             NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
@@ -1536,7 +1525,7 @@ public final class IrohaSDK: @unchecked Sendable {
         plan: AliasTransactionPlanV1,
         bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         signingKey: SigningKey,
         frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
             NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
@@ -1560,7 +1549,7 @@ public final class IrohaSDK: @unchecked Sendable {
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         signingKey: SigningKey,
         frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
             NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
@@ -1583,7 +1572,7 @@ public final class IrohaSDK: @unchecked Sendable {
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         keypair: Keypair,
         frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
             NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
@@ -1609,7 +1598,7 @@ public final class IrohaSDK: @unchecked Sendable {
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         signingKey: SigningKey,
         frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
             NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
@@ -1635,7 +1624,7 @@ public final class IrohaSDK: @unchecked Sendable {
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
-        ttlMs: UInt64? = nil,
+        ttlMs: UInt64? = 100_000,
         keypair: Keypair,
         frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
             NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle

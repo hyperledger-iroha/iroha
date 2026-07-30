@@ -517,7 +517,8 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
         seed_committed_height(&mut state, 7);
 
         let (authority, keypair) = gen_account_in("nexus");
-        let chain_id = ChainId::from(format!("nexus-multilane-corrupt-{}", case.name));
+        let chain_id = ChainId::try_from(format!("nexus-multilane-corrupt-{}", case.name))
+            .expect("canonical multilane test chain id");
         let mut lanes_seen = std::collections::BTreeSet::new();
 
         for idx in 0..128 {

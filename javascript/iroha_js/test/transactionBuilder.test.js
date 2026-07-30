@@ -3058,8 +3058,6 @@ test("buildPersistCouncilForEpochTransaction wraps council", () => {
         record: {
           epoch: 1,
           members: [AUTHORITY_ID_INPUT],
-          candidatesCount: 5,
-          derivedBy: "Vrf",
         },
         privateKey: PRIVATE_KEY,
       }),

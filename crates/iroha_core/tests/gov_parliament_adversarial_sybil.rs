@@ -137,9 +137,8 @@ fn seed_sortition_term_from_candidates(
         epoch,
         members: draw.members,
         alternates: draw.alternates,
-        verified: u32::try_from(draw.verified).expect("verified count should fit u32"),
         candidate_count: u32::try_from(candidates.len()).expect("candidate count should fit u32"),
-        derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Vrf,
+        derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
     };
     let bodies = draw::derive_parliament_bodies(&gov_cfg, &chain, epoch, &beacon, &term);
     (chain, beacon, term, bodies)
@@ -283,10 +282,9 @@ fn seed_captured_parliament(
         epoch: 0,
         members: members.clone(),
         alternates: alternates.clone(),
-        verified: u32::try_from(members.len()).expect("member count should fit u32"),
         candidate_count: u32::try_from(members.len().saturating_add(alternates.len()))
             .expect("candidate count should fit u32"),
-        derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Fallback,
+        derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
     };
     stx.world.council_mut().insert(0, council.clone());
     let bodies = iroha_core::governance::draw::derive_parliament_bodies(

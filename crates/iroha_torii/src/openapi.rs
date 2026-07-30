@@ -4002,53 +4002,6 @@ fn governance_paths() -> Map {
             vec![path_param("account_id", "Account id.")],
         )),
     );
-    #[cfg(feature = "gov_vrf")]
-    {
-        paths.insert(
-            "/v1/gov/council/persist".to_owned(),
-            Value::Object(json_post_operation(
-                "Governance",
-                "Persist a council roster.",
-                "Persist a governance council roster for an epoch.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
-        );
-        paths.insert(
-            "/v1/gov/council/replace".to_owned(),
-            Value::Object(json_post_operation(
-                "Governance",
-                "Replace a council member.",
-                "Replace a council member using the next alternate.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
-        );
-    }
-    paths.insert(
-        "/v1/gov/council/audit".to_owned(),
-        Value::Object(json_get_operation(
-            "Governance",
-            "Audit council derivation.",
-            "Return governance council derivation audit data.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    #[cfg(feature = "gov_vrf")]
-    paths.insert(
-        "/v1/gov/council/derive-vrf".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Derive council VRF inputs.",
-            "Derive VRF inputs for council selection.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
     paths
 }
 
@@ -7685,10 +7638,26 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Request storage token.",
-            "Request a storage access token.",
+            "Request a storage access token. Exactly one configured Torii API token is required even when listener-wide API-token enforcement is disabled; the client label is diagnostic and does not define the issuance quota.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![
+                string_header_param(
+                    "X-API-Token",
+                    "Required Torii API credential used as the stream-token issuance quota subject.",
+                    true,
+                ),
+                string_header_param(
+                    "X-SoraFS-Client",
+                    "Required visible-ASCII diagnostic client label; not an authentication or quota identity.",
+                    true,
+                ),
+                string_header_param(
+                    "X-SoraFS-Nonce",
+                    "Required visible-ASCII correlation nonce echoed in the response.",
+                    true,
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -11507,7 +11476,6 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/da/pin-intents/prove"
                     | "/v1/da/pin-intents/verify"
                     | "/v1/domains/query"
-                    | "/v1/gov/council/derive-vrf"
                     | "/v1/multisig/proposals/query"
                     | "/v1/multisig/proposals/resolve"
                     | "/v1/multisig/spec"
@@ -30410,6 +30378,37 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_storage_token_openapi_requires_the_credential_and_diagnostic_headers() {
+        use iroha_torii_shared::route_catalog::AuthenticationPolicy;
+
+        assert_eq!(
+            iroha_torii_shared::route_catalog::sorafs::STORAGE_TOKEN.authentication(),
+            AuthenticationPolicy::RequiredApiToken
+        );
+        let document = generate_spec();
+        let operation = openapi_operation(&document, "/v1/sorafs/storage/token", "post");
+        assert_eq!(
+            operation_header_requirements(operation)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ("X-API-Token".to_owned(), true),
+                ("X-SoraFS-Client".to_owned(), true),
+                ("X-SoraFS-Nonce".to_owned(), true),
+            ])
+        );
+        assert!(
+            operation
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| {
+                    description.contains("listener-wide API-token enforcement is disabled")
+                        && description.contains("client label is diagnostic")
+                })
+        );
+    }
+
+    #[test]
     fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
         const PATH: &str = "/v1/sorafs/pin/{digest_hex}";
         const RETIRED_TOP_LEVEL_FIELDS: [&str; 10] = [
@@ -31749,14 +31748,13 @@ mod tests {
             feature = "schema",
             feature = "p2p_ws",
             feature = "connect",
-            feature = "gov_vrf",
             feature = "zk-verify-batch",
             feature = "push"
         ))]
         assert_eq!(
             expected.len(),
-            444,
-            "the supported full Torii documentation profile must remain exactly 444 cataloged operations"
+            440,
+            "the supported full Torii documentation profile must remain exactly 440 cataloged operations"
         );
 
         let spec = generate_spec();
@@ -32048,9 +32046,6 @@ mod tests {
         );
         #[cfg(feature = "connect")]
         descriptors.extend_from_slice(route_catalog::connect::ROUTES);
-        #[cfg(feature = "gov_vrf")]
-        descriptors.extend_from_slice(route_catalog::governance_vrf::ROUTES);
-
         for descriptor in descriptors {
             assert!(descriptor.projections().openapi());
             let method = match descriptor.method() {
@@ -34077,18 +34072,10 @@ mod tests {
         assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CITIZEN_DRAFT));
         assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
-        #[cfg(feature = "gov_vrf")]
-        {
-            assert!(paths.contains_key("/v1/gov/council/persist"));
-            assert!(paths.contains_key("/v1/gov/council/replace"));
-            assert!(paths.contains_key("/v1/gov/council/derive-vrf"));
-        }
-        #[cfg(not(feature = "gov_vrf"))]
-        {
-            assert!(!paths.contains_key("/v1/gov/council/persist"));
-            assert!(!paths.contains_key("/v1/gov/council/replace"));
-            assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
-        }
+        assert!(!paths.contains_key("/v1/gov/council/audit"));
+        assert!(!paths.contains_key("/v1/gov/council/persist"));
+        assert!(!paths.contains_key("/v1/gov/council/replace"));
+        assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/plan"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/publish"));

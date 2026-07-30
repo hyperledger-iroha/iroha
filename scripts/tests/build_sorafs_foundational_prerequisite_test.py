@@ -369,6 +369,50 @@ def gateway_load_summary(
             "staging_report_digest_hex": "bc" * 32,
             "suite_report_digest_hex": "cd" * 32,
         }
+        if kind_name == "staging_load":
+            streams = [
+                {"name": f"gateway-load-stream-{index:04d}"}
+                for index in range(1_200)
+            ]
+            providers = [
+                {"name": "gateway-load-provider-a"},
+                {"name": "gateway-load-provider-b"},
+                {"name": "gateway-load-provider-c"},
+                {"name": "gateway-load-provider-d"},
+            ]
+            fingerprint.update(
+                {
+                    "schema": kind_schema,
+                    "fixture_bundle_digest_hex": "ef" * 32,
+                    "gateway_version": "iroha-gateway 1.0.0-rc.1",
+                    "hardware_profile": {
+                        "name": "gateway-load-hardware-c6i-2xlarge"
+                    },
+                    "cache_coverage": {
+                        "cold_cache_exercised": True,
+                        "warm_cache_exercised": True,
+                        "mixed_cache_exercised": True,
+                    },
+                    "duration_seconds": 86_400,
+                    "stream_count": len(streams),
+                    "streams": streams,
+                    "peak_concurrent_range_streams": 1_000,
+                    "provider_count": len(providers),
+                    "providers": providers,
+                    "load_conditions": {
+                        "corruption_injection_bps": 100,
+                        "revocation_exercised": True,
+                        "malformed_flood_exercised": True,
+                        "denylist_pressure_exercised": True,
+                        "rate_limit_pressure_exercised": True,
+                        "failover_exercised": True,
+                    },
+                    "success_rate_bps": 9_950,
+                    "error_rate_bps": 50,
+                    "p95_latency_ms": 1_200,
+                    "p99_latency_ms": 2_200,
+                }
+            )
         required_rows[kind_name] = {
             "schema": kind_schema,
             "present": True,

@@ -14080,7 +14080,10 @@ tls_alpn_01 = true
 
 impl Run for GatewayGenerateHostsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let chain_id = ChainId::from(self.chain_id.as_str());
+        let chain_id = self
+            .chain_id
+            .parse::<ChainId>()
+            .wrap_err("--chain-id must be canonical")?;
         let provider = parse_hex_array::<32>(&self.provider_id, "provider_id")?;
         let summary = HostMappingInput {
             chain_id: chain_id.as_str(),

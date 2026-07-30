@@ -21,6 +21,38 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
     }
 
+    func testValidateRejectsNonCanonicalChainIds() throws {
+        let authority = try i105(seed: 2)
+        let invalid = [
+            "-leading",
+            "trailing_",
+            "contains space",
+            "unicode-\u{00E9}",
+            String(repeating: "a", count: 129),
+        ]
+        for chainId in invalid {
+            XCTAssertThrowsError(
+                try TransactionInputValidator.validate(
+                    chainId: chainId,
+                    authorityId: authority,
+                    assetDefinitionId: sampleAid
+                )
+            ) { error in
+                XCTAssertEqual(error as? TransactionInputError, .invalidChainId(chainId))
+            }
+        }
+    }
+
+    func testValidateAcceptsCanonicalChainId() throws {
+        let authority = try i105(seed: 3)
+        let ids = try TransactionInputValidator.validate(
+            chainId: "iroha.mainnet:v1-alpha_2",
+            authorityId: authority,
+            assetDefinitionId: sampleAid
+        )
+        XCTAssertEqual(ids.chainId, "iroha.mainnet:v1-alpha_2")
+    }
+
     func testValidateRejectsMalformedAuthority() {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",

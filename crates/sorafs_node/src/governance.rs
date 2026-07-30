@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fmt,
     fs::{self, File},
@@ -1600,6 +1600,15 @@ struct PublishIndexEntryForCar {
     json_path: String,
     encoded_blake3: String,
     encoded_len: usize,
+}
+
+/// One weekly rollup recovered from the fully authenticated runtime DAG.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthoritativeAppealFinanceWeeklyRollup {
+    /// BLAKE3 digest of the exact canonical source payload.
+    pub(crate) encoded_blake3: String,
+    /// Typed payload authenticated by the signed runtime DAG.
+    pub(crate) rollup: SoraFsAppealFinanceWeeklyRollupV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -5880,6 +5889,16 @@ fn validate_existing_runtime_dag_root(
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
 ) -> Result<(), GovernancePublishError> {
+    authoritative_appeal_finance_weekly_rollups(root, signer, store)?;
+    Ok(())
+}
+
+/// Authenticate the complete runtime DAG and return its signed weekly rollups.
+pub(crate) fn authoritative_appeal_finance_weekly_rollups(
+    root: &Path,
+    signer: &GovernanceRuntimeDagSigner,
+    store: &GovernanceRuntimeDagCheckpointStore,
+) -> Result<Vec<AuthoritativeAppealFinanceWeeklyRollup>, GovernancePublishError> {
     let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
     let index_exists = match fs::symlink_metadata(&index_path) {
         Ok(_) => true,
@@ -5893,7 +5912,7 @@ fn validate_existing_runtime_dag_root(
                 "governance runtime DAG artifacts exist without their signed index",
             ));
         }
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let index = read_runtime_dag_index(root, signer, store, &index_path)?;
@@ -5930,6 +5949,8 @@ fn validate_existing_runtime_dag_root(
     let mut expected_by_encoded_blake3 = JsonMap::new();
     let mut expected_by_source_payload_blake3 = JsonMap::new();
     let mut expected_by_payload_kind = JsonMap::new();
+    let mut authoritative_weekly_rollups = Vec::new();
+    let mut authoritative_weekly_rollup_digests = BTreeSet::new();
     for (position, entry) in indexed_blocks.iter().enumerate() {
         let entry = entry.as_object().ok_or_else(|| {
             GovernancePublishError::other(
@@ -6022,14 +6043,36 @@ fn validate_existing_runtime_dag_root(
             )
         })?;
         let source_digest = *blake3::hash(&source_bytes).as_bytes();
+        let source_digest_hex = hex::encode(source_digest);
         if required_runtime_u64(entry, "source_payload_len")? != source_len
             || required_runtime_string(entry, "source_payload_blake3")?
-                != hex::encode(source_digest)
+                != source_digest_hex.as_str()
             || canonical_runtime_source_payload_bytes(&block.node.payload)? != source_bytes
         {
             return Err(GovernancePublishError::other(
                 "governance runtime DAG source payload does not match its signed node",
             ));
+        }
+        if let GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(rollup) = &block.node.payload {
+            if source_path.extension().and_then(OsStr::to_str) != Some("to") {
+                return Err(GovernancePublishError::other(
+                    "signed appeal finance weekly rollup source path must use the canonical `.to` extension",
+                ));
+            }
+            rollup.validate().map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "signed appeal finance weekly rollup failed validation: {error}"
+                ))
+            })?;
+            if !authoritative_weekly_rollup_digests.insert(source_digest_hex.clone()) {
+                return Err(GovernancePublishError::other(
+                    "signed governance runtime DAG contains a duplicate appeal finance weekly rollup",
+                ));
+            }
+            authoritative_weekly_rollups.push(AuthoritativeAppealFinanceWeeklyRollup {
+                encoded_blake3: source_digest_hex.clone(),
+                rollup: rollup.clone(),
+            });
         }
 
         let json_path_string = required_runtime_string(entry, "json_path")?;
@@ -6047,7 +6090,7 @@ fn validate_existing_runtime_dag_root(
         );
         append_runtime_index_position(
             &mut expected_by_source_payload_blake3,
-            &hex::encode(source_digest),
+            &source_digest_hex,
             position_u64,
         );
         indexed_block_paths.push(block_path);
@@ -6141,7 +6184,7 @@ fn validate_existing_runtime_dag_root(
             ));
         }
     }
-    Ok(())
+    Ok(authoritative_weekly_rollups)
 }
 
 pub(crate) fn runtime_dag_producer_root_digest(

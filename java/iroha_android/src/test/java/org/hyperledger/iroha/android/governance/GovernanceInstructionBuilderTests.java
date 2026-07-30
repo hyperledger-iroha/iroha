@@ -35,7 +35,6 @@ public final class GovernanceInstructionBuilderTests {
     enactReferendumRoundTrip();
     finalizeReferendumRoundTrip();
     persistCouncilRoundTrip();
-    persistCouncilRejectsNonVrfDerivation();
     System.out.println("[IrohaAndroid] GovernanceInstructionBuilderTests passed.");
   }
 
@@ -335,26 +334,9 @@ public final class GovernanceInstructionBuilderTests {
             .addMember(memberA)
             .addMember(memberB)
             .addAlternate(alternate)
-            .setCandidatesCount(5)
-            .setVerified(2)
-            .setDerivedBy(GovernanceInstructionUtils.CouncilDerivationKind.VRF)
             .build();
     assert instruction.members().equals(List.of(memberA, memberB)) : "members mismatch";
     assert instruction.alternates().equals(List.of(alternate)) : "alternates mismatch";
-    assert instruction.candidatesCount() == 5 : "candidates mismatch";
-    assert instruction.verified() == 2 : "verified mismatch";
-    assert instruction.derivedBy() == GovernanceInstructionUtils.CouncilDerivationKind.VRF
-        : "derived_by mismatch";
-  }
-
-  private static void persistCouncilRejectsNonVrfDerivation() {
-    boolean failed = false;
-    try {
-      GovernanceInstructionUtils.CouncilDerivationKind.parse("manual");
-    } catch (final IllegalArgumentException expected) {
-      failed = true;
-    }
-    assert failed : "non-VRF council derivation must be rejected";
   }
 
   private static String sampleI105(final int fill) {

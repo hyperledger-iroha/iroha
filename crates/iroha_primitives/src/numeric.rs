@@ -2665,7 +2665,11 @@ impl NoritoSerialize for Numeric {
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        None
+        scale_::NumericScaleHelperView {
+            mantissa: scale_::BigIntView(&self.mantissa),
+            scale: self.scale(),
+        }
+        .encoded_len_exact()
     }
 }
 
@@ -2942,6 +2946,30 @@ impl core::fmt::Display for Numeric {
 }
 
 mod scale_ {
+    /// Borrowed wire-compatible view of a numeric mantissa.
+    pub(super) struct BigIntView<'a>(
+        /// Canonical bounded integer serialized by the view.
+        pub(super) &'a crate::bigint::BigInt,
+    );
+
+    impl norito::core::NoritoSerialize for BigIntView<'_> {
+        fn schema_hash() -> [u8; 16] {
+            <crate::bigint::BigInt as norito::core::NoritoSerialize>::schema_hash()
+        }
+
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            norito::core::NoritoSerialize::serialize(self.0, writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            norito::core::NoritoSerialize::encoded_len_hint(self.0)
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            norito::core::NoritoSerialize::encoded_len_exact(self.0)
+        }
+    }
+
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
@@ -2951,6 +2979,18 @@ mod scale_ {
         #[codec(compact)]
         pub(super) mantissa: crate::bigint::BigInt,
         /// Scale carried by the numeric helper.
+        #[codec(compact)]
+        pub(super) scale: u32,
+    }
+
+    #[allow(unexpected_cfgs)]
+    #[derive(norito::Encode)]
+    /// Borrowed wire-compatible view used to size a canonical numeric.
+    pub(super) struct NumericScaleHelperView<'a> {
+        /// Borrowed canonical mantissa.
+        #[codec(compact)]
+        pub(super) mantissa: BigIntView<'a>,
+        /// Canonical decimal scale.
         #[codec(compact)]
         pub(super) scale: u32,
     }
@@ -3093,6 +3133,57 @@ mod tests {
 
         assert_eq!(decoded, expected);
         assert_eq!(used, canonical.len());
+    }
+
+    #[test]
+    fn numeric_exact_norito_length_matches_canonical_payload() {
+        let assert_exact_length = |value: &Numeric| {
+            let owned = scale_::NumericScaleHelper {
+                mantissa: value.mantissa.clone(),
+                scale: value.scale(),
+            };
+            let borrowed = scale_::NumericScaleHelperView {
+                mantissa: scale_::BigIntView(&value.mantissa),
+                scale: value.scale(),
+            };
+            let owned_payload = norito::codec::Encode::encode(&owned);
+            let borrowed_payload = norito::codec::Encode::encode(&borrowed);
+
+            assert_eq!(borrowed_payload, owned_payload);
+            assert_eq!(
+                norito::codec::Encode::encode(value),
+                owned_payload,
+                "Numeric must retain the helper payload layout"
+            );
+            assert_eq!(owned.encoded_len_exact(), Some(owned_payload.len()));
+            assert_eq!(borrowed.encoded_len_exact(), Some(owned_payload.len()));
+            assert_eq!(value.encoded_len_exact(), Some(owned_payload.len()));
+        };
+
+        for value in [
+            "-327.69",
+            "-128",
+            "-1",
+            "0",
+            "0.000000001",
+            "1.25",
+            "127",
+            "128",
+            "327.68",
+        ] {
+            let value: Numeric = value.parse().expect("canonical numeric");
+            assert_exact_length(&value);
+        }
+
+        let signed_limit = ReferenceInt::one() << (MAX_MANTISSA_BITS - 1);
+        for mantissa in [-signed_limit.clone(), signed_limit - 1_u8] {
+            let mantissa = BigInt::from_inner(mantissa).expect("bounded numeric mantissa");
+            let value =
+                Numeric::try_new(mantissa, MAX_DECIMAL_SCALE).expect("canonical numeric extremum");
+            assert_eq!(value.scale(), MAX_DECIMAL_SCALE);
+            assert_eq!(value.mantissa.twos_byte_len(), MAX_MANTISSA_BYTES);
+            assert_exact_length(&value);
+        }
     }
 
     #[test]

@@ -36,9 +36,8 @@ fn derive_bodies_populates_all_rosters() {
         epoch: 4,
         members: vec![account(b'A'), account(b'B'), account(b'C'), account(b'D')],
         alternates: vec![account(b'E')],
-        verified: 3,
         candidate_count: 5,
-        derived_by: CouncilDerivationKind::Vrf,
+        derived_by: CouncilDerivationKind::Sortition,
     };
 
     let bodies = derive_parliament_bodies(&cfg, &chain, council.epoch, &beacon, &council);
@@ -58,7 +57,6 @@ fn derive_bodies_populates_all_rosters() {
             .get(&body)
             .unwrap_or_else(|| panic!("{body:?} roster missing"));
         assert_eq!(roster.epoch, council.epoch);
-        assert_eq!(roster.verified, council.verified);
         assert!(!roster.members.is_empty(), "expected members for {body:?}");
     }
 

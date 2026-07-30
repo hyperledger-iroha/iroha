@@ -7026,7 +7026,7 @@ impl Default for DataspaceGossip {
 pub struct TransactionGossiper {
     /// Transaction gossip interval.
     pub gossip_period: Duration,
-    /// Maximum number of transactions sent or accepted per gossip message.
+    /// Maximum number of transactions sent or accepted per gossip message (canonical ceiling: 512).
     pub gossip_size: NonZeroU32,
     /// Number of gossip periods to wait before re-sending the same transactions.
     pub gossip_resend_ticks: NonZeroU32,
@@ -9592,6 +9592,12 @@ pub struct SorafsReputationRuntime {
     pub window_end_height: u64,
     /// Identity-pinned finalized-query adapter handle.
     pub finalized_query_handle: String,
+    /// Identity-pinned external monotonic journal-checkpoint provider handle.
+    pub journal_checkpoint_provider_handle: String,
+    /// Exact non-zero journal-checkpoint provider contract revision.
+    pub journal_checkpoint_provider_revision: u64,
+    /// Exact journal-checkpoint provider public-policy digest.
+    pub journal_checkpoint_provider_policy_digest: [u8; 32],
     /// Identity-pinned runtime-only journal transaction submitter handle.
     pub journal_transaction_submitter_handle: String,
     /// Exact non-zero journal transaction submitter adapter and public-policy revision.

@@ -886,43 +886,35 @@ mod handshake_payload_tests {
     #[test]
     fn decode_crypto_manifest_meta_rejects_raw_quoted_legacy_payload() {
         let raw = r#""{"allowed_curve_ids":[1,3,4],"allowed_signing":["ed25519","secp256k1","bls_normal"],"default_hash":"blake2b-256","sm2_distid_default":"1234567812345678","sm_openssl_preview":false}""#;
-        let payload = Json::from_string_unchecked(raw.to_owned());
-        let err = decode_crypto_manifest_meta(&payload)
-            .expect_err("raw-quoted compatibility payload must be rejected");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            Json::from_raw_json(raw.to_owned()).is_err(),
+            "raw-quoted compatibility payload must be rejected at construction"
         );
     }
 
     #[test]
     fn decode_crypto_manifest_meta_rejects_backslash_escaped_object_payload() {
         let raw = r#"{\"allowed_curve_ids\":[1,3,4],\"allowed_signing\":[\"ed25519\",\"secp256k1\",\"bls_normal\"],\"default_hash\":\"blake2b-256\",\"sm2_distid_default\":\"1234567812345678\",\"sm_openssl_preview\":false}"#;
-        let payload = Json::from_string_unchecked(raw.to_owned());
-        let err = decode_crypto_manifest_meta(&payload)
-            .expect_err("backslash-escaped compatibility payload must be rejected");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            Json::from_raw_json(raw.to_owned()).is_err(),
+            "backslash-escaped compatibility payload must be rejected at construction"
         );
     }
 
     #[test]
     fn decode_crypto_manifest_meta_rejects_mangled_key_value_separators() {
         let raw = r#"{"allowed_curve_ids""[1,3,4],"allowed_signing""["ed25519","secp256k1","bls_normal"],"default_hash""blake2b-256","sm2_distid_default""1234567812345678","sm_openssl_preview"false}"#;
-        let payload = Json::from_string_unchecked(raw.to_owned());
-        let err = decode_crypto_manifest_meta(&payload)
-            .expect_err("mangled compatibility payload must be rejected");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            Json::from_raw_json(raw.to_owned()).is_err(),
+            "mangled compatibility payload must be rejected at construction"
         );
     }
 
     #[test]
     fn decode_confidential_registry_meta_handles_normal_json() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let payload = Json::from_string_unchecked(format!("{{\"vk_set_hash\":\"{hash}\"}}"));
+        let payload = Json::from_raw_json(format!("{{\"vk_set_hash\":\"{hash}\"}}"))
+            .expect("valid confidential registry JSON");
         let decoded =
             decode_confidential_registry_meta(&payload).expect("decode confidential payload");
         assert_eq!(decoded.vk_set_hash.as_deref(), Some(hash));
@@ -931,18 +923,16 @@ mod handshake_payload_tests {
     #[test]
     fn decode_confidential_registry_meta_rejects_mangled_key_value_separators() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let payload = Json::from_string_unchecked(format!("{{\"vk_set_hash\"\"{hash}\"}}"));
-        let err = decode_confidential_registry_meta(&payload)
-            .expect_err("mangled compatibility payload must fail");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            Json::from_raw_json(format!("{{\"vk_set_hash\"\"{hash}\"}}")).is_err(),
+            "mangled compatibility payload must fail at construction"
         );
     }
 
     #[test]
     fn parse_confidential_registry_hash_treats_json_null_as_absent() {
-        let payload = Json::from_string_unchecked("{\"vk_set_hash\":null}".to_string());
+        let payload = Json::from_raw_json("{\"vk_set_hash\":null}".to_string())
+            .expect("valid null confidential registry JSON");
         let decoded =
             parse_confidential_registry_hash(&payload).expect("decode null confidential payload");
         assert_eq!(decoded, None);
@@ -1351,8 +1341,9 @@ pub struct Iroha {
 /// role-separated `PoTR` signers, exact-view billing queries, threshold/HSM
 /// signers, immutable publication, acknowledgement, sealed witness storage,
 /// authenticated Governance DAG publication/readback/head updates, sealed
-/// monotonic Governance DAG checkpoints, and the Soracloud mutation/provenance
-/// signer are the reference-node boundaries for
+/// monotonic Governance DAG checkpoints, externally sealed reputation journal
+/// checkpoints, and the Soracloud mutation/provenance signer are the
+/// reference-node boundaries for
 /// ledger access, PKCS#11, managed-KMS, and threshold services. Provider
 /// credentials, unwrapped keys, PRF shares, seeds, and outputs must stay inside
 /// those implementations and must never be sourced from `iroha_config`.
@@ -1418,6 +1409,9 @@ pub struct IrohaRuntimeDeps {
     sorafs_gateway_acme_client: Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>>,
+    sorafs_reputation_journal_checkpoint_provider: Option<
+        Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
+    >,
     sorafs_reputation_journal_transaction_submitter:
         Option<Arc<dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1>>,
     sorafs_reputation_threshold_signer:
@@ -1498,6 +1492,7 @@ impl IrohaRuntimeDeps {
             && self.sorafs_potr_runtime_signer_roles.is_none()
             && self.sorafs_gateway_acme_client.is_none()
             && self.sorafs_gateway_compliance_feed_transport.is_none()
+            && self.sorafs_reputation_journal_checkpoint_provider.is_none()
             && self
                 .sorafs_reputation_journal_transaction_submitter
                 .is_none()
@@ -1920,6 +1915,17 @@ impl IrohaRuntimeDeps {
         >,
     ) -> Self {
         self.sorafs_reputation_journal_transaction_submitter = Some(submitter);
+        self
+    }
+
+    /// Attach the externally sealed monotonic checkpoint provider for the
+    /// native reputation journal outbox.
+    #[must_use]
+    pub fn with_sorafs_reputation_journal_checkpoint_provider(
+        mut self,
+        provider: Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
+    ) -> Self {
+        self.sorafs_reputation_journal_checkpoint_provider = Some(provider);
         self
     }
 
@@ -8528,22 +8534,25 @@ mod snapshot_read_error_tests {
 
 fn validate_reputation_runtime_provider_presence(
     runtime_enabled: bool,
-    provider_presence: [bool; 3],
+    provider_presence: [bool; 4],
 ) -> Result<(), &'static str> {
     if runtime_enabled {
         match provider_presence {
-            [true, true, true] => Ok(()),
-            [false, _, _] => Err(
+            [true, true, true, true] => Ok(()),
+            [false, _, _, _] => Err(
+                "enabled SoraFS reputation runtime requires an injected monotonic journal-checkpoint provider",
+            ),
+            [true, false, _, _] => Err(
                 "enabled SoraFS reputation runtime requires an injected authenticated journal-transaction submitter",
             ),
-            [true, false, _] => Err(
+            [true, true, false, _] => Err(
                 "enabled SoraFS reputation runtime requires an injected external threshold signer",
             ),
-            [true, true, false] => Err(
+            [true, true, true, false] => Err(
                 "enabled SoraFS reputation runtime requires an injected authenticated Governance DAG adapter",
             ),
         }
-    } else if provider_presence == [false; 3] {
+    } else if provider_presence == [false; 4] {
         Ok(())
     } else {
         Err("disabled SoraFS reputation runtime rejects unexpected runtime providers")
@@ -8896,6 +8905,9 @@ impl Iroha {
         validate_reputation_runtime_provider_presence(
             config.torii.sorafs_storage.reputation_runtime.is_some(),
             [
+                runtime_deps
+                    .sorafs_reputation_journal_checkpoint_provider
+                    .is_some(),
                 runtime_deps
                     .sorafs_reputation_journal_transaction_submitter
                     .is_some(),
@@ -10701,6 +10713,9 @@ impl Iroha {
         let sorafs_reputation_journal_transaction_submitter_override = runtime_deps
             .sorafs_reputation_journal_transaction_submitter
             .clone();
+        let sorafs_reputation_journal_checkpoint_provider = runtime_deps
+            .sorafs_reputation_journal_checkpoint_provider
+            .clone();
         let sorafs_reputation_threshold_signer =
             runtime_deps.sorafs_reputation_threshold_signer.clone();
         let sorafs_reputation_governance_dag =
@@ -11010,6 +11025,7 @@ impl Iroha {
             });
             let dependencies = sorafs_reputation_runtime::ReputationRuntimeDependenciesV1::require(
                 Some(finalized_query),
+                sorafs_reputation_journal_checkpoint_provider,
                 Some(journal_transaction_submitter),
                 sorafs_reputation_threshold_signer,
                 sorafs_reputation_governance_dag,
@@ -15899,6 +15915,7 @@ fn build_consensus_config_caps(
         // before the handshake is exposed to peers.
         v2_config_fingerprint: [0; 32],
         nexus_policy_digest,
+        ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
     })
 }
 
@@ -16880,11 +16897,12 @@ mod tests {
 
     #[test]
     fn reputation_runtime_provider_presence_fails_closed_in_both_modes() {
-        assert!(validate_reputation_runtime_provider_presence(false, [false; 3]).is_ok());
+        assert!(validate_reputation_runtime_provider_presence(false, [false; 4]).is_ok());
         for provider_presence in [
-            [true, false, false],
-            [false, true, false],
-            [false, false, true],
+            [true, false, false, false],
+            [false, true, false, false],
+            [false, false, true, false],
+            [false, false, false, true],
         ] {
             assert_eq!(
                 validate_reputation_runtime_provider_presence(false, provider_presence),
@@ -16892,20 +16910,24 @@ mod tests {
             );
         }
         assert!(
-            validate_reputation_runtime_provider_presence(true, [true; 3]).is_ok(),
+            validate_reputation_runtime_provider_presence(true, [true; 4]).is_ok(),
             "enabled reputation runtime passes presence validation before exact qualification"
         );
         for (provider_presence, expected_error) in [
             (
-                [false, true, true],
+                [false, true, true, true],
+                "enabled SoraFS reputation runtime requires an injected monotonic journal-checkpoint provider",
+            ),
+            (
+                [true, false, true, true],
                 "enabled SoraFS reputation runtime requires an injected authenticated journal-transaction submitter",
             ),
             (
-                [true, false, true],
+                [true, true, false, true],
                 "enabled SoraFS reputation runtime requires an injected external threshold signer",
             ),
             (
-                [true, true, false],
+                [true, true, true, false],
                 "enabled SoraFS reputation runtime requires an injected authenticated Governance DAG adapter",
             ),
         ] {
@@ -17000,6 +17022,10 @@ mod tests {
             reputation_startup
                 .contains("sorafs_reputation_journal_transaction_submitter_override.ok_or_else"),
             "enabled reputation startup must explicitly require the injected submitter"
+        );
+        assert!(
+            reputation_startup.contains("sorafs_reputation_journal_checkpoint_provider"),
+            "enabled reputation startup must pass the injected monotonic journal checkpoint provider"
         );
     }
 
@@ -20326,6 +20352,10 @@ mod tests {
 
             assert_eq!(caps.v2_config_fingerprint, [0; 32]);
             assert_eq!(caps.nexus_policy_digest, expected_nexus_policy_digest);
+            assert_eq!(
+                caps.ivm_gas_schedule_hash,
+                <[u8; 32]>::from(ivm::gas::schedule_hash())
+            );
         }
 
         #[test]

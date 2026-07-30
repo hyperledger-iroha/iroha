@@ -32,6 +32,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS gateway compliance serving policy is unavailable"
+              description: |
+                At least one gateway in cluster unavailable has lacked a
+                fresh verified serving catalog for five minutes. Serving must remain
+                fail closed; restore the last-known-good catalog before promotion.
       - alertname: SoraFSGatewayComplianceCatalogExpiring
         eval_time: 4m
         exp_alerts: []
@@ -43,6 +47,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS gateway compliance catalog expires within 15 minutes"
+              description: |
+                The verified serving catalog in cluster expiring has
+                less than 15 minutes of validity. Complete threshold approval and
+                regional acknowledgement before the serving path fails closed.
       - alertname: SoraFSGatewayComplianceCatalogSequenceSkew
         eval_time: 4m
         exp_alerts: []
@@ -54,6 +62,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS gateway compliance catalog sequence differs across replicas"
+              description: |
+                Ready gateway replicas in cluster skew are serving
+                different catalog sequences. Pause promotion and reconcile regional
+                acknowledgements, checkpoint lineage, and last-known-good state.
       - alertname: SoraFSGatewayComplianceControlErrorRatioHigh
         eval_time: 9m
         exp_alerts: []
@@ -66,6 +78,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS gateway compliance control error ratio is high"
+              description: |
+                Control operation promote in cluster
+                control has exceeded a five-percent error ratio for
+                ten minutes. Inspect bounded failure classes and operator auth.
       - alertname: SoraFSGatewayComplianceServingFailure
         eval_time: 1m
         exp_alerts: []
@@ -78,6 +94,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS gateway compliance serving evaluation failed closed"
+              description: |
+                A serving evaluation in cluster serving failed with
+                class expired_catalog in the last five minutes. Confirm catalog
+                freshness and controller persistence before resuming traffic.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_gateway_compliance_ready{cluster="healthy",instance="a"}'

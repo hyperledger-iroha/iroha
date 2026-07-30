@@ -87,7 +87,6 @@ use iroha_data_model::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    domain::DomainId,
     events::prelude::*,
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS},
@@ -13586,63 +13585,6 @@ pub(crate) mod valid {
                                     .map(|rm| rm.object.clone())
                             })
                     };
-                    let domain_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::Domain(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        DomainId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
-                    let asset_definition_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::AssetDefinition(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        AssetDefinitionId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
-                    let nft_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::Nft(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        iroha_data_model::nft::NftId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
                     let asset_transfer_target = |instruction: &InstructionBox| {
                         instruction
                             .as_any()
@@ -13689,11 +13631,8 @@ pub(crate) mod valid {
                             let mut unsupported = false;
                             let mut reject: Option<TransactionRejectionReason> = None;
                             for instr in ovl.instructions() {
-                                if let Some(transfer) = asset_transfer_target(instr) {
-                                    if detached_is_genesis
-                                        || ovl.instruction_count() != 1
-                                        || transfer.source().account() != &p.authority
-                                    {
+                                if asset_transfer_target(instr).is_some() {
+                                    if detached_is_genesis || ovl.instruction_count() != 1 {
                                         unsupported = true;
                                         break;
                                     }
@@ -13738,86 +13677,6 @@ pub(crate) mod valid {
                                                     TransactionRejectionReason::Validation(
                                                         iroha_data_model::ValidationFail::NotPermitted(
                                                             "Can't set value to the metadata of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = domain_transfer_target(instr) {
-                                        match delta.can_transfer_domain(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                            alias_resolution_time_ms,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer domain of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = asset_definition_transfer_target(instr)
-                                    {
-                                        match delta.can_transfer_asset_definition(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer asset definition of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = nft_transfer_target(instr) {
-                                        match delta.can_transfer_nft(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer NFT of another account"
                                                                 .to_owned(),
                                                         ),
                                                     ),
@@ -15535,10 +15394,17 @@ pub(crate) mod valid {
 
         /// Commit using the exact cryptographically verified Sumeragi-v2 finality artifact.
         ///
-        /// This is the sole block-signature quorum bypass. It reauthenticates the artifact and
-        /// binds its header, canonical resultless proposal digest, exact
-        /// result-bearing execution digest, and execution commitment to this
-        /// validated block before changing the lifecycle type.
+        /// This is the production Sumeragi-v2 finality path that replaces a
+        /// block-signature quorum with a verified finality artifact. It
+        /// reauthenticates the artifact and binds its header, canonical
+        /// resultless proposal digest, exact result-bearing execution digest,
+        /// and execution commitment to this validated block before changing
+        /// the lifecycle type.
+        ///
+        /// Other explicitly named APIs can also omit the ordinary quorum:
+        /// [`Self::commit_with_signers`] accepts a caller-authorized bypass,
+        /// while [`Self::commit_unchecked`] intentionally performs no block
+        /// signature checks.
         pub fn commit_with_verified_v2_artifact(
             self,
             artifact: &consensus_v2::finality::V2FinalityArtifact,
@@ -32911,7 +32777,8 @@ seiyaku MeteredFailure {
     #[test]
     fn successful_live_batches_accumulate_parent_block_gas() {
         for parallel_apply in [false, true] {
-            let chain_id = ChainId::from(format!("live-batch-parent-gas-{parallel_apply}"));
+            let chain_id = ChainId::try_from(format!("live-batch-parent-gas-{parallel_apply}"))
+                .expect("canonical live-batch test chain id");
             let (authority, keypair) = gen_account_in("wonderland");
             let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
             let world = World::with(
@@ -34912,9 +34779,10 @@ seiyaku MeteredFailure {
     #[allow(clippy::too_many_lines)]
     fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay() {
         for parallel_apply in [false, true] {
-            let chain_id = ChainId::from(format!(
+            let chain_id = ChainId::try_from(format!(
                 "contract-deployment-bootstrap-block-{parallel_apply}"
-            ));
+            ))
+            .expect("canonical contract-deployment test chain id");
             let leader = crate::block::checked_keypair();
             let (authority, authority_keypair) = gen_account_in("bootstrap");
             let (adversary, adversary_keypair) = gen_account_in("adversary");

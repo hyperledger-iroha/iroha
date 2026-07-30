@@ -67,6 +67,9 @@ internal class TransactionPayloadAdapter private constructor(
             val creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER)
             val executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER)
             val ttl: Optional<Long> = decodeSizedField(decoder, TTL_ADAPTER)
+            require(ttl.isPresent) {
+                "TransactionPayload.time_to_live_ms must be signature-bound"
+            }
             val nonceRaw: Optional<Long> = decodeSizedField(decoder, NONCE_ADAPTER)
             val feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER)
             val metadata = LinkedHashMap(decodeSizedField(decoder, METADATA_ADAPTER))
@@ -78,7 +81,7 @@ internal class TransactionPayloadAdapter private constructor(
                 authority = authority,
                 creationTimeMs = creationTimeMs,
                 executable = executable,
-                timeToLiveMs = ttl.orElse(null),
+                timeToLiveMs = ttl.get(),
                 nonce = nonceRaw.orElse(null),
                 feePayment = feePayment,
                 metadata = metadata,

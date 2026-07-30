@@ -2070,31 +2070,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
         ),
         (10332, "iroha.gov.unlocks.stats", norito::json!({})),
         (10333, "iroha.gov.council.current", norito::json!({})),
-        #[cfg(feature = "gov_vrf")]
-        (
-            10334,
-            "iroha.gov.council.persist",
-            norito::json!({
-                "body": {}
-            }),
-        ),
-        #[cfg(feature = "gov_vrf")]
-        (
-            10335,
-            "iroha.gov.council.replace",
-            norito::json!({
-                "body": {}
-            }),
-        ),
-        (10336, "iroha.gov.council.audit", norito::json!({})),
-        #[cfg(feature = "gov_vrf")]
-        (
-            10337,
-            "iroha.gov.council.derive_vrf",
-            norito::json!({
-                "body": {}
-            }),
-        ),
         (
             10338,
             "iroha.gov.enact",
@@ -2733,45 +2708,23 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.gov.council.current"),
         "expected agent-friendly governance council snapshot MCP tool"
     );
-    #[cfg(feature = "gov_vrf")]
-    {
-        assert!(
-            names.iter().any(|name| name == "iroha.gov.council.persist"),
-            "expected agent-friendly governance council persist MCP tool"
-        );
-        assert!(
-            names.iter().any(|name| name == "iroha.gov.council.replace"),
-            "expected agent-friendly governance council replace MCP tool"
-        );
-    }
-    #[cfg(not(feature = "gov_vrf"))]
-    {
-        assert!(
-            !names.iter().any(|name| name == "iroha.gov.council.persist"),
-            "governance council persist MCP tool should be absent without gov_vrf"
-        );
-        assert!(
-            !names.iter().any(|name| name == "iroha.gov.council.replace"),
-            "governance council replace MCP tool should be absent without gov_vrf"
-        );
-    }
     assert!(
-        names.iter().any(|name| name == "iroha.gov.council.audit"),
-        "expected agent-friendly governance council audit MCP tool"
+        !names.iter().any(|name| name == "iroha.gov.council.persist"),
+        "removed governance council persist MCP tool must remain absent"
     );
-    #[cfg(feature = "gov_vrf")]
     assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.gov.council.derive_vrf"),
-        "expected agent-friendly governance council derive-vrf MCP tool"
+        !names.iter().any(|name| name == "iroha.gov.council.replace"),
+        "removed governance council replace MCP tool must remain absent"
     );
-    #[cfg(not(feature = "gov_vrf"))]
+    assert!(
+        !names.iter().any(|name| name == "iroha.gov.council.audit"),
+        "removed governance council audit MCP tool must remain absent"
+    );
     assert!(
         !names
             .iter()
             .any(|name| name == "iroha.gov.council.derive_vrf"),
-        "governance council derive-vrf MCP tool should be absent without gov_vrf"
+        "removed governance council derive-vrf MCP tool must remain absent"
     );
     assert!(
         names.iter().any(|name| name == "iroha.gov.enact"),

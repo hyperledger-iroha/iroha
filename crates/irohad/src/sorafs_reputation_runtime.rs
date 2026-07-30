@@ -17,14 +17,16 @@ use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_data_model::{
     ChainId,
-    query::sorafs::prelude::{
-        FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
-    },
+    query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
     sorafs::{capacity::ProviderId, reputation::PorTerminalOutcomeV1},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_manifest::{
     ReputationSnapshotTrustPolicyV1, ReputationWeightsV1, reputation::REPUTATION_WEIGHTS_VERSION_V1,
+};
+#[cfg(test)]
+use sorafs_node::reputation::runtime::{
+    ReputationJournalCheckpointExternalErrorV1, ReputationJournalSealedCheckpointRecordV1,
 };
 use sorafs_node::reputation::{
     ReputationIngestMetricsSnapshot, ReputationIngestPolicyV1, ReputationIngestService,
@@ -34,12 +36,12 @@ use sorafs_node::reputation::{
         ReputationCommittedProjectorRuntimeV1, ReputationCommittedReadApiV1,
         ReputationCommittedReadProjectionV1, ReputationFinalizedQueryPolicyV1,
         ReputationFinalizedQueryV1, ReputationGovernanceDagClientV1,
+        ReputationJournalCheckpointRuntimeV1, ReputationJournalCheckpointSealingPolicyV1,
         ReputationJournalDeliveryFinalizedViewV1, ReputationJournalDeliveryMetricsV1,
         ReputationJournalDeliveryPolicyV1, ReputationJournalDeliveryWorkerV1,
         ReputationJournalProducerOutboxV1, ReputationJournalProducerPolicyV1,
-        ReputationJournalSourceFinalizedViewV1, ReputationJournalTransactionSubmitterV1,
-        ReputationNativeOutcomeAdmissionApiV1, ReputationPublicationPolicyV1,
-        ReputationPublicationReconcilerV1, ReputationRuntimeError,
+        ReputationJournalTransactionSubmitterV1, ReputationNativeOutcomeAdmissionApiV1,
+        ReputationPublicationPolicyV1, ReputationPublicationReconcilerV1, ReputationRuntimeError,
         ReputationRuntimeProviderQualificationV1, ReputationRuntimeStatusV1,
         ReputationRuntimeSupervisorV1, ReputationThresholdSignerClientV1,
         reputation_journal_submitter_policy_digest_v1,
@@ -62,6 +64,7 @@ type ReputationJoinedReconciliationResult =
 #[derive(Clone)]
 pub(crate) struct ReputationRuntimeDependenciesV1 {
     pub(crate) finalized_query: Arc<dyn ReputationFinalizedQueryV1>,
+    pub(crate) journal_checkpoint_provider: Arc<dyn ReputationJournalCheckpointRuntimeV1>,
     pub(crate) journal_transaction_submitter: Arc<dyn ReputationJournalTransactionSubmitterV1>,
     pub(crate) threshold_signer: Arc<dyn ReputationThresholdSignerClientV1>,
     pub(crate) governance_dag: Arc<dyn ReputationGovernanceDagClientV1>,
@@ -72,6 +75,7 @@ impl ReputationRuntimeDependenciesV1 {
     /// Require every runtime-only production adapter before daemon assembly.
     pub(crate) fn require(
         finalized_query: Option<Arc<dyn ReputationFinalizedQueryV1>>,
+        journal_checkpoint_provider: Option<Arc<dyn ReputationJournalCheckpointRuntimeV1>>,
         journal_transaction_submitter: Option<Arc<dyn ReputationJournalTransactionSubmitterV1>>,
         threshold_signer: Option<Arc<dyn ReputationThresholdSignerClientV1>>,
         governance_dag: Option<Arc<dyn ReputationGovernanceDagClientV1>>,
@@ -79,6 +83,9 @@ impl ReputationRuntimeDependenciesV1 {
     ) -> Result<Self> {
         let finalized_query = finalized_query.ok_or_else(|| {
             eyre::eyre!("missing immutable historical exact-anchor finalized-query adapter")
+        })?;
+        let journal_checkpoint_provider = journal_checkpoint_provider.ok_or_else(|| {
+            eyre::eyre!("missing external monotonic reputation journal-checkpoint provider")
         })?;
         let journal_transaction_submitter = journal_transaction_submitter.ok_or_else(|| {
             eyre::eyre!("missing runtime-only reputation journal transaction submitter")
@@ -90,6 +97,7 @@ impl ReputationRuntimeDependenciesV1 {
         })?;
         Ok(Self {
             finalized_query,
+            journal_checkpoint_provider,
             journal_transaction_submitter,
             threshold_signer,
             governance_dag,
@@ -262,6 +270,18 @@ struct ActiveReputationRuntimeV1 {
     liveness: Arc<ReputationDaemonLiveness>,
 }
 
+impl ActiveReputationRuntimeV1 {
+    fn check_external_bindings(&self) -> Result<(), ReputationRuntimeError> {
+        self.runtime.check_external_bindings()?;
+        if let Some(retention_control) = &self.retention_control {
+            retention_control
+                .revalidate()
+                .map_err(|_| ReputationRuntimeError::RuntimeBindingChanged)?;
+        }
+        Ok(())
+    }
+}
+
 impl ReputationRuntimeHandleV1 {
     fn from_active(active: ActiveReputationRuntimeV1) -> Self {
         Self {
@@ -301,7 +321,7 @@ impl ReputationRuntimeHandleV1 {
             );
         };
         drop(slot);
-        active.runtime.check_external_bindings()?;
+        active.check_external_bindings()?;
         Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
     }
 
@@ -430,13 +450,13 @@ impl ReputationRuntimeHandleV1 {
         ReputationRuntimeError,
     > {
         let active = self.active()?;
-        active.runtime.check_external_bindings()?;
+        active.check_external_bindings()?;
         let result = active
             .runtime
             .por_journal_producer()
             .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)?
             .enqueue_terminal(provider_id, outcome);
-        active.runtime.check_external_bindings()?;
+        active.check_external_bindings()?;
         result
     }
 }
@@ -781,6 +801,7 @@ fn record_reputation_tick_result(
 struct ReputationRuntimePoliciesV1 {
     ingest: ReputationIngestPolicyV1,
     query: ReputationFinalizedQueryPolicyV1,
+    journal_checkpoint_sealing: ReputationJournalCheckpointSealingPolicyV1,
     journal_delivery: ReputationJournalDeliveryPolicyV1,
     publication: ReputationPublicationPolicyV1,
 }
@@ -816,6 +837,7 @@ fn assemble_active(
     let ReputationRuntimePoliciesV1 {
         ingest,
         query,
+        journal_checkpoint_sealing,
         journal_delivery,
         publication,
     } = policies;
@@ -836,13 +858,16 @@ fn assemble_active(
         bootstrap_delivery_view.authority_policy.policy.clone(),
     )
     .wrap_err("construct reputation journal producer policy")?;
-    let journal_outbox = ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
-        &config.state_dir,
-        producer_policy,
-        &bootstrap_delivery_view.authority_policy_history,
-        bootstrap_delivery_view.journal_page.finalized_cursor,
-    )
-    .wrap_err("open and recover durable reputation journal producer outbox")?;
+    let journal_outbox =
+        ReputationJournalProducerOutboxV1::open_sealed_with_authority_policy_history(
+            &config.state_dir,
+            producer_policy,
+            &bootstrap_delivery_view.authority_policy_history,
+            bootstrap_delivery_view.journal_page.finalized_cursor,
+            journal_checkpoint_sealing,
+            dependencies.journal_checkpoint_provider,
+        )
+        .wrap_err("open and recover durable reputation journal producer outbox")?;
     let journal_outbox = Arc::new(journal_outbox);
     let journal_delivery = ReputationJournalDeliveryWorkerV1::new(
         journal_outbox,
@@ -907,6 +932,12 @@ fn build_and_qualify_runtime_policies(
 ) -> Result<ReputationRuntimePoliciesV1> {
     let ingest = build_reputation_ingest_policy(config, chain_id, trust_policy)?;
     let query = build_reputation_finalized_query_policy(config, &ingest)?;
+    let journal_checkpoint_sealing = ReputationJournalCheckpointSealingPolicyV1::try_new(
+        config.journal_checkpoint_provider_handle.clone(),
+        config.journal_checkpoint_provider_revision,
+        config.journal_checkpoint_provider_policy_digest,
+    )
+    .wrap_err("construct reputation journal-checkpoint sealing policy")?;
     let journal_delivery_policy = ReputationJournalDeliveryPolicyV1::strict_v1(
         chain_id.clone(),
         config.finalized_query_handle.clone(),
@@ -944,6 +975,11 @@ fn build_and_qualify_runtime_policies(
         dependencies.finalized_query.handle(),
     )?;
     validate_dependency_handle(
+        "journal checkpoint",
+        &config.journal_checkpoint_provider_handle,
+        dependencies.journal_checkpoint_provider.handle(),
+    )?;
+    validate_dependency_handle(
         "journal transaction submitter",
         &config.journal_transaction_submitter_handle,
         dependencies.journal_transaction_submitter.handle(),
@@ -961,6 +997,9 @@ fn build_and_qualify_runtime_policies(
     query
         .revalidate_provider(dependencies.finalized_query.as_ref())
         .wrap_err("committed reputation finalized-query adapter is not qualified")?;
+    journal_checkpoint_sealing
+        .revalidate_provider(dependencies.journal_checkpoint_provider.as_ref())
+        .wrap_err("reputation journal-checkpoint provider is not qualified")?;
     journal_delivery_policy
         .revalidate_query_provider(dependencies.finalized_query.as_ref())
         .wrap_err("reputation journal finalized-query adapter is not qualified")?;
@@ -976,6 +1015,7 @@ fn build_and_qualify_runtime_policies(
     Ok(ReputationRuntimePoliciesV1 {
         ingest,
         query,
+        journal_checkpoint_sealing,
         journal_delivery: journal_delivery_policy,
         publication: publication_policy,
     })
@@ -1077,6 +1117,10 @@ fn revalidate_before_durable_state(
         .revalidate_provider(dependencies.finalized_query.as_ref())
         .wrap_err("finalized-query qualification changed before durable state")?;
     policies
+        .journal_checkpoint_sealing
+        .revalidate_provider(dependencies.journal_checkpoint_provider.as_ref())
+        .wrap_err("journal-checkpoint provider qualification changed before durable state")?;
+    policies
         .journal_delivery
         .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
         .wrap_err("journal-submitter qualification changed before durable state")?;
@@ -1173,6 +1217,8 @@ fn validate_actual_config(config: &SorafsReputationRuntime) -> Result<()> {
         })
         || config.window_start_height == 0
         || config.window_end_height < config.window_start_height
+        || config.journal_checkpoint_provider_revision == 0
+        || config.journal_checkpoint_provider_policy_digest == [0; 32]
         || config.journal_transaction_submitter_revision == 0
         || config.journal_transaction_submitter_policy_digest == [0; 32]
         || config.threshold_signer_revision == 0
@@ -1186,6 +1232,7 @@ fn validate_actual_config(config: &SorafsReputationRuntime) -> Result<()> {
     }
     for handle in [
         &config.finalized_query_handle,
+        &config.journal_checkpoint_provider_handle,
         &config.journal_transaction_submitter_handle,
         &config.threshold_signer_handle,
         &config.governance_dag_handle,
@@ -1269,6 +1316,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
+        query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId,
         sorafs::{
             capacity::ProviderId,
             moderation_ledger::{RepairFinalizedEventCursorV1, RepairFinalizedEventPageV1},
@@ -1298,9 +1346,10 @@ mod tests {
         REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
         ReputationFinalizedAnchorV1, ReputationGovernanceDagPublicationRequestV1,
         ReputationGovernanceDagReadbackV1, ReputationJournalDeliveryFinalizedViewV1,
-        ReputationJournalTransactionRequestV1, ReputationJournalTransactionSubmitOutcomeV1,
-        ReputationRuntimeProviderV1, ReputationThresholdSigningRequestV1,
-        reputation_governance_dag_policy_digest_v1, reputation_journal_submitter_policy_digest_v1,
+        ReputationJournalSourceFinalizedViewV1, ReputationJournalTransactionRequestV1,
+        ReputationJournalTransactionSubmitOutcomeV1, ReputationRuntimeProviderV1,
+        ReputationThresholdSigningRequestV1, reputation_governance_dag_policy_digest_v1,
+        reputation_journal_submitter_policy_digest_v1,
     };
     use tempfile::TempDir;
 
@@ -1362,6 +1411,68 @@ mod tests {
             self.revalidate()?;
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             self.reconciliations.fetch_add(1, Ordering::AcqRel);
+            Ok(
+                crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlOutcomeV1::NoRequest,
+            )
+        }
+    }
+
+    #[derive(Debug)]
+    struct DriftingRetentionControl {
+        drift_armed: AtomicBool,
+        remaining_good_revalidations: AtomicU64,
+    }
+
+    impl DriftingRetentionControl {
+        fn new() -> Self {
+            Self {
+                drift_armed: AtomicBool::new(false),
+                remaining_good_revalidations: AtomicU64::new(0),
+            }
+        }
+
+        fn arm_after(&self, good_revalidations: u64) {
+            self.remaining_good_revalidations
+                .store(good_revalidations, Ordering::SeqCst);
+            self.drift_armed.store(true, Ordering::SeqCst);
+        }
+
+        fn restore(&self) {
+            self.drift_armed.store(false, Ordering::SeqCst);
+        }
+    }
+
+    impl ReputationFinalizedArchiveRetentionControlV1 for DriftingRetentionControl {
+        fn revalidate(
+            &self,
+        ) -> std::result::Result<
+            (),
+            crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlErrorV1,
+        >{
+            if self.drift_armed.load(Ordering::SeqCst)
+                && self
+                    .remaining_good_revalidations
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_err()
+            {
+                return Err(
+                    crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlErrorV1::Boundary {
+                        reason: "test retention authority changed",
+                    },
+                );
+            }
+            Ok(())
+        }
+
+        fn reconcile_once(
+            &self,
+        ) -> std::result::Result<
+            crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlOutcomeV1,
+            crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlErrorV1,
+        >{
+            self.revalidate()?;
             Ok(
                 crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlOutcomeV1::NoRequest,
             )
@@ -1624,6 +1735,68 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct PendingJournalCheckpointProvider {
+        handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
+        latest: Mutex<Option<ReputationJournalSealedCheckpointRecordV1>>,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
+    }
+
+    impl ReputationRuntimeProviderV1 for PendingJournalCheckpointProvider {
+        fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ReputationRuntimeProviderQualificationV1,
+            ReputationExternalFailureV1,
+        > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
+            Ok(self.qualification)
+        }
+    }
+
+    impl ReputationJournalCheckpointRuntimeV1 for PendingJournalCheckpointProvider {
+        fn load_latest(
+            &self,
+        ) -> std::result::Result<
+            Option<ReputationJournalSealedCheckpointRecordV1>,
+            ReputationJournalCheckpointExternalErrorV1,
+        > {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
+            Ok(self
+                .latest
+                .lock()
+                .expect("journal checkpoint provider lock")
+                .clone())
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            expected_revision: Option<[u8; 32]>,
+            next: &ReputationJournalSealedCheckpointRecordV1,
+        ) -> std::result::Result<(), ReputationJournalCheckpointExternalErrorV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
+            let mut latest = self
+                .latest
+                .lock()
+                .expect("journal checkpoint provider lock");
+            if latest
+                .as_ref()
+                .map(ReputationJournalSealedCheckpointRecordV1::revision)
+                != expected_revision
+            {
+                return Err(ReputationJournalCheckpointExternalErrorV1::Rejected);
+            }
+            *latest = Some(next.clone());
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
     struct PendingJournalSubmitter {
         handle: String,
         qualification: ReputationRuntimeProviderQualificationV1,
@@ -1803,6 +1976,7 @@ mod tests {
         trust_policy: &ReputationSnapshotTrustPolicyV1,
     ) -> SorafsReputationRuntime {
         let finalized_archive_root = state_dir.with_extension("finalized-archive");
+        let journal_checkpoint_provider_handle = "sealed.reputation.journal.primary".to_owned();
         let journal_transaction_submitter_handle = "queue.reputation.journal".to_owned();
         let threshold_signer_handle = "hsm.reputation.threshold".to_owned();
         let governance_dag_handle = "governance.dag.publisher".to_owned();
@@ -1839,6 +2013,10 @@ mod tests {
             window_start_height: 1,
             window_end_height: 10,
             finalized_query_handle: "ledger.finalized.primary".to_owned(),
+            journal_checkpoint_provider_handle,
+            journal_checkpoint_provider_revision:
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            journal_checkpoint_provider_policy_digest: [0x64; 32],
             journal_transaction_submitter_handle,
             journal_transaction_submitter_revision: journal_transaction_submitter_qualification
                 .revision(),
@@ -1932,6 +2110,15 @@ mod tests {
                 malformed_bootstrap_continuation: false,
                 external_calls: external_calls.clone(),
             }),
+            journal_checkpoint_provider: Arc::new(PendingJournalCheckpointProvider {
+                handle: config.journal_checkpoint_provider_handle.clone(),
+                qualification: ReputationRuntimeProviderQualificationV1::new(
+                    config.journal_checkpoint_provider_revision,
+                    config.journal_checkpoint_provider_policy_digest,
+                ),
+                latest: Mutex::new(None),
+                external_calls: external_calls.clone(),
+            }),
             journal_transaction_submitter: Arc::new(PendingJournalSubmitter {
                 handle: config.journal_transaction_submitter_handle.clone(),
                 qualification: submitter_qualification,
@@ -1977,6 +2164,26 @@ mod tests {
             CountingRetentionControl::with_external_calls(true, Arc::clone(&calls)),
         ));
         (dependencies, calls)
+    }
+
+    fn por_terminal(marker: u8) -> PorTerminalOutcomeV1 {
+        PorTerminalOutcomeV1 {
+            challenge_id: [marker; 32],
+            manifest_digest: [marker.wrapping_add(1); 32],
+            epoch_id: 7,
+            drand_round: 11,
+            forced: false,
+            sample_count: 4,
+            failed_samples: 0,
+            issued_at_unix_ms: 1_800_000_000_000,
+            deadline_at_unix_ms: 1_800_000_001_000,
+            responded_at_unix_ms: Some(1_800_000_000_500),
+            decided_at_unix_ms: 1_800_000_001_500,
+            proof_digest: Some([marker.wrapping_add(2); 32]),
+            repair_task_id: None,
+            verifier_latency_ms: Some(1_000),
+            status: PorTerminalStatusV1::Verified,
+        }
     }
 
     #[tokio::test]
@@ -2215,6 +2422,140 @@ mod tests {
     }
 
     #[test]
+    fn native_admission_rejects_stale_retention_before_mutation() {
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-native-retention-stale");
+        let trust_policy = trust_policy();
+        let mut config = config(
+            temp.path().join("native-admission-retention-stale-state"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        config.finalized_archive_retention_authority = Some(
+            iroha_config::parameters::actual::SorafsReputationFinalizedArchiveRetentionAuthority {
+                handle: "sealed.reputation.archive.primary".to_owned(),
+                revision: 7,
+                policy_digest: [0xA7; 32],
+            },
+        );
+        let mut runtime_dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            &config.finalized_query_handle,
+        );
+        let retention = Arc::new(CountingRetentionControl::new(true));
+        runtime_dependencies.retention_control = Some(retention.clone());
+        let handle = assemble(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            runtime_dependencies,
+        )
+        .expect("assemble retention-bound native admission runtime");
+        let producer_before = handle
+            .active()
+            .expect("active runtime")
+            .runtime
+            .status()
+            .expect("runtime status")
+            .journal_delivery
+            .expect("journal delivery")
+            .producer;
+
+        retention.ready.store(false, Ordering::Release);
+        assert_eq!(
+            handle.activation_state(),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        );
+        assert_eq!(
+            handle.record_por_terminal(ProviderId::new([0x71; 32]), por_terminal(0x72)),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        );
+
+        let producer_after = handle
+            .active()
+            .expect("active runtime")
+            .runtime
+            .status()
+            .expect("runtime status")
+            .journal_delivery
+            .expect("journal delivery")
+            .producer;
+        assert_eq!(
+            producer_after, producer_before,
+            "a stale pre-enqueue retention binding must not mutate the durable outbox"
+        );
+    }
+
+    #[test]
+    fn native_admission_replays_after_post_enqueue_retention_drift() {
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-native-retention-drift");
+        let trust_policy = trust_policy();
+        let mut config = config(
+            temp.path().join("native-admission-retention-drift-state"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        config.finalized_archive_retention_authority = Some(
+            iroha_config::parameters::actual::SorafsReputationFinalizedArchiveRetentionAuthority {
+                handle: "sealed.reputation.archive.primary".to_owned(),
+                revision: 7,
+                policy_digest: [0xA7; 32],
+            },
+        );
+        let mut runtime_dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            &config.finalized_query_handle,
+        );
+        let retention = Arc::new(DriftingRetentionControl::new());
+        runtime_dependencies.retention_control = Some(retention.clone());
+        let handle = assemble(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            runtime_dependencies,
+        )
+        .expect("assemble drifting-retention native admission runtime");
+        let provider_id = ProviderId::new([0x73; 32]);
+        let terminal = por_terminal(0x74);
+
+        retention.arm_after(1);
+        assert_eq!(
+            handle.record_por_terminal(provider_id, terminal),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        );
+        let producer_after_drift = handle
+            .active()
+            .expect("active runtime")
+            .runtime
+            .status()
+            .expect("runtime status")
+            .journal_delivery
+            .expect("journal delivery")
+            .producer;
+        assert_eq!(
+            producer_after_drift.ready, 1,
+            "post-enqueue drift must retain the one durable admission"
+        );
+
+        retention.restore();
+        assert!(matches!(
+            handle
+                .record_por_terminal(provider_id, terminal)
+                .expect("exact retry after restoring retention binding"),
+            sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay { .. }
+        ));
+        assert_eq!(
+            handle.activation_state(),
+            Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
+        );
+    }
+
+    #[test]
     fn production_config_rejects_null_test_handles_and_unsafe_paths() {
         let temp = TempDir::new().expect("tempdir");
         let chain_id = ChainId::from("reputation-runtime-config-test");
@@ -2449,6 +2790,7 @@ mod tests {
         assert!(
             ReputationRuntimeDependenciesV1::require(
                 None,
+                Some(Arc::clone(&complete.journal_checkpoint_provider)),
                 Some(Arc::clone(&complete.journal_transaction_submitter)),
                 Some(Arc::clone(&complete.threshold_signer)),
                 Some(Arc::clone(&complete.governance_dag)),
@@ -2460,6 +2802,7 @@ mod tests {
             ReputationRuntimeDependenciesV1::require(
                 Some(Arc::clone(&complete.finalized_query)),
                 None,
+                Some(Arc::clone(&complete.journal_transaction_submitter)),
                 Some(Arc::clone(&complete.threshold_signer)),
                 Some(Arc::clone(&complete.governance_dag)),
                 None,
@@ -2469,6 +2812,18 @@ mod tests {
         assert!(
             ReputationRuntimeDependenciesV1::require(
                 Some(Arc::clone(&complete.finalized_query)),
+                Some(Arc::clone(&complete.journal_checkpoint_provider)),
+                None,
+                Some(Arc::clone(&complete.threshold_signer)),
+                Some(Arc::clone(&complete.governance_dag)),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            ReputationRuntimeDependenciesV1::require(
+                Some(Arc::clone(&complete.finalized_query)),
+                Some(Arc::clone(&complete.journal_checkpoint_provider)),
                 Some(Arc::clone(&complete.journal_transaction_submitter)),
                 None,
                 Some(Arc::clone(&complete.governance_dag)),
@@ -2479,6 +2834,7 @@ mod tests {
         assert!(
             ReputationRuntimeDependenciesV1::require(
                 Some(Arc::clone(&complete.finalized_query)),
+                Some(Arc::clone(&complete.journal_checkpoint_provider)),
                 Some(Arc::clone(&complete.journal_transaction_submitter)),
                 Some(Arc::clone(&complete.threshold_signer)),
                 None,

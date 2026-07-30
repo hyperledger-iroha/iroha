@@ -68,7 +68,7 @@ impl From<MintRoseArgs> for Json {
     fn from(details: MintRoseArgs) -> Self {
         let json =
             json::to_json(&details).expect("MintRoseArgs JSON serialization should not fail");
-        Json::from_string_unchecked(json)
+        Json::from_raw_json(json).expect("MintRoseArgs serializer must emit valid bounded JSON")
     }
 }
 

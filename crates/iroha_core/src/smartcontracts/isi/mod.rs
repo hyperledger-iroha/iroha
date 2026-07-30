@@ -3352,7 +3352,7 @@ mod tests {
     }
 
     #[test]
-    async fn registering_zero_repeat_trigger_is_noop() -> Result<()> {
+    async fn registering_zero_repeat_trigger_is_rejected() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
@@ -3375,19 +3375,27 @@ mod tests {
                     .under_authority(account_id.clone()),
             ),
         ));
-        register_trigger.execute(&account_id, &mut state_transaction)?;
+        let error = register_trigger
+            .execute(&account_id, &mut state_transaction)
+            .expect_err("a depleted trigger must not be accepted for registration");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message == "trigger repeat count must be greater than zero"
+        ));
 
         state_transaction.apply();
         state_block.commit().unwrap();
 
-        // The trigger should not be present/active
+        // Rejection must leave trigger state unchanged.
         let active = state
             .view()
             .world
             .triggers()
             .inspect_by_id(&trigger_id, |_| ())
             .is_some();
-        assert!(!active, "zero-repeat triggers must not be registered");
+        assert!(!active, "a rejected zero-repeat trigger must not be stored");
 
         Ok(())
     }

@@ -233,8 +233,6 @@ const COMPILED_CATALOG_FEATURES: &[&str] = &[
     "p2p_ws",
     #[cfg(feature = "connect")]
     "connect",
-    #[cfg(feature = "gov_vrf")]
-    "gov_vrf",
 ];
 
 // OpenAPI-derived tools fail closed against this catalog. A route which has not
@@ -404,14 +402,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_unlocks_stats_tool());
     tools.push(iroha_gov_council_current_tool());
     tools.push(iroha_gov_citizens_count_tool());
-    #[cfg(feature = "gov_vrf")]
-    {
-        tools.push(iroha_gov_council_persist_tool());
-        tools.push(iroha_gov_council_replace_tool());
-    }
-    tools.push(iroha_gov_council_audit_tool());
-    #[cfg(feature = "gov_vrf")]
-    tools.push(iroha_gov_council_derive_vrf_tool());
     tools.push(iroha_gov_enact_tool());
     tools.push(iroha_gov_finalize_tool());
     tools.push(iroha_aliases_resolve_tool());
@@ -665,10 +655,7 @@ fn manual_tool_effect_from_name(name: &str) -> ToolEffect {
 fn is_operator_tool_name(name: &str) -> bool {
     matches!(
         name,
-        "iroha.gov.protected_namespaces.update"
-            | "iroha.gov.council.persist"
-            | "iroha.gov.council.replace"
-            | "iroha.sumeragi.evidence.submit"
+        "iroha.gov.protected_namespaces.update" | "iroha.sumeragi.evidence.submit"
     )
 }
 
@@ -686,7 +673,6 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.accounts.onboard.plan"
             | "iroha.da.commitments.prove"
             | "iroha.da.pin_intents.prove"
-            | "iroha.gov.council.derive_vrf"
             | "iroha.node.query_projection_checkpoint"
             | "iroha.node.query_projection_checkpoint_plan"
             | "iroha.node.query_projection_shard_catalog"
@@ -1460,33 +1446,6 @@ async fn handle_tools_call(
         }
         "iroha.gov.citizens.count" => {
             match dispatch_iroha_gov_citizens_count(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        #[cfg(feature = "gov_vrf")]
-        "iroha.gov.council.persist" => {
-            match dispatch_iroha_gov_council_persist(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        #[cfg(feature = "gov_vrf")]
-        "iroha.gov.council.replace" => {
-            match dispatch_iroha_gov_council_replace(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.council.audit" => {
-            match dispatch_iroha_gov_council_audit(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        #[cfg(feature = "gov_vrf")]
-        "iroha.gov.council.derive_vrf" => {
-            match dispatch_iroha_gov_council_derive_vrf(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -5015,99 +4974,6 @@ async fn dispatch_iroha_gov_citizens_count(
     .await
 }
 
-#[cfg(feature = "gov_vrf")]
-async fn dispatch_iroha_gov_council_persist(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/council/persist",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-#[cfg(feature = "gov_vrf")]
-async fn dispatch_iroha_gov_council_replace(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/council/replace",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_gov_council_audit(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/gov/council/audit",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-#[cfg(feature = "gov_vrf")]
-async fn dispatch_iroha_gov_council_derive_vrf(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/council/derive-vrf",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
 async fn dispatch_iroha_gov_enact(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -8613,10 +8479,9 @@ fn value_to_string(value: &Value) -> Option<String> {
     json::to_string(value).ok()
 }
 
-fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) {
+fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), String> {
     for header_name in [
         header::AUTHORIZATION,
-        HeaderName::from_static(HEADER_X_API_TOKEN),
         HeaderName::from_static(HEADER_X_IROHA_ACCOUNT),
         HeaderName::from_static(HEADER_X_IROHA_SIGNATURE),
     ] {
@@ -8624,6 +8489,19 @@ fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) {
             out.insert(header_name, value.clone());
         }
     }
+    let api_token_header = HeaderName::from_static(HEADER_X_API_TOKEN);
+    let mut api_tokens = inbound.get_all(&api_token_header).iter();
+    if let Some(value) = api_tokens.next() {
+        if api_tokens.next().is_some() {
+            return Err(format!(
+                "multiple {HEADER_X_API_TOKEN} headers are not allowed"
+            ));
+        }
+        let mut value = value.clone();
+        value.set_sensitive(true);
+        out.insert(api_token_header, value);
+    }
+    Ok(())
 }
 
 fn forward_dispatch_auth_headers(
@@ -8632,7 +8510,7 @@ fn forward_dispatch_auth_headers(
     method: &Method,
     path_and_query: &str,
 ) -> Result<(), String> {
-    forward_auth_headers(out, inbound);
+    forward_auth_headers(out, inbound)?;
     if is_onboarding_dispatch_route(method, path_and_query) {
         forward_onboarding_auth_header(out, inbound)?;
     }
@@ -11369,55 +11247,6 @@ fn iroha_gov_citizens_count_tool() -> ToolSpec {
             }
         }),
     }
-}
-
-#[cfg(feature = "gov_vrf")]
-fn iroha_gov_council_persist_tool() -> ToolSpec {
-    iroha_gov_post_tool(
-        "iroha.gov.council.persist",
-        "Persist a governance council roster (`/v1/gov/council/persist`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/council/persist",
-    )
-}
-
-#[cfg(feature = "gov_vrf")]
-fn iroha_gov_council_replace_tool() -> ToolSpec {
-    iroha_gov_post_tool(
-        "iroha.gov.council.replace",
-        "Replace a governance council member (`/v1/gov/council/replace`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/council/replace",
-    )
-}
-
-fn iroha_gov_council_audit_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.council.audit".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.council.audit"),
-        description: "Fetch governance council derivation audit data (`/v1/gov/council/audit`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/council/audit".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-#[cfg(feature = "gov_vrf")]
-fn iroha_gov_council_derive_vrf_tool() -> ToolSpec {
-    iroha_gov_post_tool(
-        "iroha.gov.council.derive_vrf",
-        "Derive governance council VRF inputs (`/v1/gov/council/derive-vrf`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/council/derive-vrf",
-    )
 }
 
 fn iroha_gov_enact_tool() -> ToolSpec {
@@ -14408,6 +14237,31 @@ mod tests {
         *guard = Some(router);
     }
 
+    fn install_api_token_probe_router(app: &mut SharedAppState, configured_tokens: &[&str]) {
+        let state = std::sync::Arc::get_mut(app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = std::sync::Arc::new(
+            configured_tokens
+                .iter()
+                .map(|token| (*token).to_owned())
+                .collect(),
+        );
+        let router = axum::Router::new()
+            .route(
+                "/v1/api-token-probe",
+                axum::routing::get(|| async { StatusCode::NO_CONTENT }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                std::sync::Arc::clone(app),
+                crate::enforce_api_token,
+            ));
+        let mut guard = app
+            .mcp_dispatch_router
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(router);
+    }
+
     #[test]
     fn capabilities_payload_includes_toolset_version() {
         let tool = sample_tool("iroha.health", Method::GET, ToolEffect::Read);
@@ -14913,6 +14767,28 @@ mod tests {
         assert!(!out.contains_key("x-iroha-nonce"));
         assert!(!out.contains_key("x-iroha-witness"));
         assert!(!out.contains_key("x-iroha-internal-route"));
+    }
+
+    #[test]
+    fn dispatch_auth_forwarding_rejects_duplicate_api_tokens() {
+        let mut inbound = HeaderMap::new();
+        inbound.append(
+            HEADER_X_API_TOKEN,
+            HeaderValue::from_static("configured-token"),
+        );
+        inbound.append(
+            HEADER_X_API_TOKEN,
+            HeaderValue::from_static("configured-token"),
+        );
+
+        let error = forward_dispatch_auth_headers(
+            &mut HeaderMap::new(),
+            &inbound,
+            &Method::GET,
+            "/v1/api-token-probe",
+        )
+        .expect_err("MCP redispatch must preserve exact-one API-token semantics");
+        assert!(error.contains("multiple x-api-token"));
     }
 
     #[test]
@@ -15983,48 +15859,25 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.citizens.count")
         );
-        #[cfg(feature = "gov_vrf")]
-        {
-            assert!(
-                tools
-                    .iter()
-                    .any(|tool| tool.name == "iroha.gov.council.persist")
-            );
-            assert!(
-                tools
-                    .iter()
-                    .any(|tool| tool.name == "iroha.gov.council.replace")
-            );
-        }
-        #[cfg(not(feature = "gov_vrf"))]
-        {
-            assert!(
-                !tools
-                    .iter()
-                    .any(|tool| tool.name == "iroha.gov.council.persist")
-            );
-            assert!(
-                !tools
-                    .iter()
-                    .any(|tool| tool.name == "iroha.gov.council.replace")
-            );
-        }
         assert!(
-            tools
+            !tools
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.council.audit")
         );
-        #[cfg(feature = "gov_vrf")]
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.gov.council.derive_vrf")
-        );
-        #[cfg(not(feature = "gov_vrf"))]
         assert!(
             !tools
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.council.derive_vrf")
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.council.persist")
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.council.replace")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.gov.enact"));
         assert!(tools.iter().any(|tool| tool.name == "iroha.gov.finalize"));
@@ -16452,6 +16305,69 @@ mod tests {
         );
         assert_eq!(body.get("remote").and_then(Value::as_str), Some("0.0.0.0"));
         assert!(body.get("header").is_some_and(Value::is_null));
+    }
+
+    #[tokio::test]
+    async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured() {
+        let mut app = mk_app_state_for_tests();
+        install_api_token_probe_router(&mut app, &[]);
+
+        let result = dispatch_route(
+            &app,
+            &HeaderMap::new(),
+            Method::GET,
+            "/v1/api-token-probe",
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .await
+        .expect("inner router returns the authentication response");
+
+        assert_eq!(result.get("status").and_then(Value::as_u64), Some(503));
+    }
+
+    #[tokio::test]
+    async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
+        let mut app = mk_app_state_for_tests();
+        install_api_token_probe_router(&mut app, &["configured-token"]);
+        let extra_headers = norito::json!({
+            "x-api-token": "configured-token"
+        });
+
+        let rejected = dispatch_route(
+            &app,
+            &HeaderMap::new(),
+            Method::GET,
+            "/v1/api-token-probe",
+            Some(&extra_headers),
+            Vec::new(),
+            None,
+            None,
+        )
+        .await
+        .expect("inner router returns the authentication response");
+        assert_eq!(rejected.get("status").and_then(Value::as_u64), Some(401));
+
+        let mut inbound = HeaderMap::new();
+        inbound.insert(
+            HEADER_X_API_TOKEN,
+            HeaderValue::from_static("configured-token"),
+        );
+        let accepted = dispatch_route(
+            &app,
+            &inbound,
+            Method::GET,
+            "/v1/api-token-probe",
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .await
+        .expect("single trusted outer token dispatches");
+        assert_eq!(accepted.get("status").and_then(Value::as_u64), Some(204));
     }
 
     #[test]

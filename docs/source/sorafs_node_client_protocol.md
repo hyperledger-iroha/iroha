@@ -554,9 +554,16 @@ Range-enabled gateways mint signed stream tokens through
 `POST /v1/sorafs/storage/token`. Clients must supply canonical headers and
 the canonical request payload:
 
-- Header `X-SoraFS-Client`: a 1–128 byte visible-ASCII quota key for the caller.
-  This header does not authenticate the caller by itself. Missing, whitespace,
-  control-character, and oversized values are rejected with HTTP `400`.
+- Header `X-API-Token`: exactly one configured Torii API credential. Stream
+  token issuance requires this credential even when the deployment-wide
+  `torii.require_api_token` switch is false. A missing or invalid credential is
+  rejected with HTTP `401`; enabling issuance without at least one canonical
+  `torii.api_tokens` credential is rejected at node startup. An inconsistent
+  runtime state still fails closed with HTTP `503`.
+- Header `X-SoraFS-Client`: a 1–128 byte visible-ASCII diagnostic label echoed
+  to the caller. It is not authentication and is not a quota key. Missing,
+  whitespace, control-character, and oversized values are rejected with HTTP
+  `400`.
 - Header `X-SoraFS-Nonce`: a 1–128 byte visible-ASCII value echoed verbatim in
   the response. Missing, whitespace, control-character, and oversized values
   are rejected with HTTP `400`.
@@ -578,11 +585,14 @@ runtime signer, the handler responds with:
   - `X-SoraFS-Verifying-Key` — lowercase hex-encoded Ed25519 verifying key that
     signed the token. Clients cache this key to verify `signature_hex`.
   - `X-SoraFS-Token-Id` — the canonical identifier for the issued token body.
-  - `X-SoraFS-Client-Quota-Remaining` — remaining issuance requests in the
-    current 60 s window. Zero/unlimited issuance policies are rejected. When
-    the quota is exhausted the gateway returns `429` together with
-    `Retry-After` indicating when the window resets and
-    `X-SoraFS-Client-Quota-Remaining: 0`.
+  - `X-SoraFS-Issuance-Quota-Remaining` — remaining issuance requests in the
+    current 60 s window for the authenticated API credential, not the echoed
+    client label. The gateway stores only a domain-separated credential digest
+    as the quota subject, so changing `X-SoraFS-Client` cannot reset the
+    allowance. Zero/unlimited issuance policies are rejected. When the quota
+    is exhausted the gateway returns `429` together with `Retry-After`
+    indicating when the window resets and
+    `X-SoraFS-Issuance-Quota-Remaining: 0`.
   - `Cache-Control: no-store` — responses are never cacheable.
 - Body:
 
@@ -623,10 +633,11 @@ unless a runtime-injected HSM/KMS signer reports the configured non-secret
 key path, or environment enablement is accepted; signer credentials and private
 key material remain runtime-only.
 
-Issuance-client and per-token quota state are bounded and prune only expired or
-idle windows. A full state table never evicts an active budget (which would
-reset its quota); the gateway instead returns HTTP `503` with `Retry-After: 1`.
-Clock rollback and poisoned accounting state also fail closed with `503`.
+Authenticated-credential issuance and per-token quota state are bounded and
+prune only expired or idle windows. A full state table never evicts an active
+budget (which would reset its quota); the gateway instead returns HTTP `503`
+with `Retry-After: 1`. Clock rollback and poisoned accounting state also fail
+closed with `503`.
 
 ### Chunk Range Fetch RPC
 

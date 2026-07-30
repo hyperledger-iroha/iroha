@@ -218,10 +218,13 @@ mod tests {
     #[test]
     fn metadata_serialization_matches_vec_layout() {
         let mut metadata = Metadata::default();
-        metadata.insert(Name::from_str("alpha").unwrap(), Json::from("\"value\""));
+        metadata.insert(
+            Name::from_str("alpha").unwrap(),
+            Json::from_raw_json("\"value\"".to_owned()).expect("valid JSON string fixture"),
+        );
         metadata.insert(
             Name::from_str("beta").unwrap(),
-            Json::from("{\"nested\":true}"),
+            Json::from_raw_json("{\"nested\":true}".to_owned()).expect("valid nested JSON fixture"),
         );
 
         let mut metadata_bytes = Vec::new();
@@ -252,8 +255,14 @@ mod tests {
     #[test]
     fn metadata_roundtrip_preserves_entries() {
         let mut metadata = Metadata::default();
-        metadata.insert(Name::from_str("foo").unwrap(), Json::from("1"));
-        metadata.insert(Name::from_str("bar").unwrap(), Json::from("[1,2,3]"));
+        metadata.insert(
+            Name::from_str("foo").unwrap(),
+            Json::from_raw_json("1".to_owned()).expect("valid numeric JSON fixture"),
+        );
+        metadata.insert(
+            Name::from_str("bar").unwrap(),
+            Json::from_raw_json("[1,2,3]".to_owned()).expect("valid array JSON fixture"),
+        );
 
         let bytes = encode_adaptive(&metadata);
         let decoded: Metadata = decode_adaptive(&bytes).expect("decode metadata");

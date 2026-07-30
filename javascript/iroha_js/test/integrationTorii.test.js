@@ -3971,26 +3971,6 @@ test(
       });
     }
 
-    let audit = null;
-    try {
-      audit = await client.getGovernanceCouncilAudit({ epoch: council.epoch });
-    } catch (error) {
-      if (shouldSkipGovernanceCouncilEndpoints(error)) {
-        t.diagnostic("governance council audit endpoint unavailable; skipping audit assertions");
-      } else {
-        throw error;
-      }
-    }
-
-    if (audit) {
-      assertNonNegativeInteger(audit.epoch, "council audit epoch");
-      assertHexString(audit.seed_hex, "council audit seed_hex");
-      assertHexString(audit.beacon_hex, "council audit beacon_hex");
-      assertNonNegativeInteger(audit.members_count, "council audit members_count");
-      assertNonNegativeInteger(audit.candidate_count, "council audit candidate_count");
-      assert.equal(typeof audit.chain_id, "string", "council audit chain_id must be a string");
-      assert.notEqual(audit.chain_id.length, 0, "council audit chain_id must not be empty");
-    }
   },
 );
 

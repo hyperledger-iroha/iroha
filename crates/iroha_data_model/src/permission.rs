@@ -123,7 +123,8 @@ mod tests {
         .expect("deserialize permission");
         let canonical = Permission::new(
             "CanDoThing".into(),
-            Json::from_string_unchecked("{\"a\":1,\"z\":\"A\"}".to_owned()),
+            Json::from_raw_json("{\"a\":1,\"z\":\"A\"}".to_owned())
+                .expect("valid canonical payload"),
         );
 
         assert_eq!(decoded.payload().get(), "{\"a\":1,\"z\":\"A\"}");
@@ -137,7 +138,7 @@ mod tests {
                 .expect("deserialize permission");
         let canonical = Permission::new(
             "CanDoThing".into(),
-            Json::from_string_unchecked("{\"a\":1,\"z\":0}".to_owned()),
+            Json::from_raw_json("{\"a\":1,\"z\":0}".to_owned()).expect("valid canonical payload"),
         );
 
         assert_eq!(stored.payload().get(), "{\"a\":1,\"z\":0}");

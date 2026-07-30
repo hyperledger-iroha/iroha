@@ -13,8 +13,7 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::{Domain, DomainId},
     isi::governance::{
-        CitizenServiceEvent, CouncilDerivationKind, PersistCouncilForEpoch,
-        RecordCitizenServiceOutcome, RegisterCitizen,
+        CitizenServiceEvent, PersistCouncilForEpoch, RecordCitizenServiceOutcome, RegisterCitizen,
     },
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
@@ -114,9 +113,6 @@ fn council_persist_enforces_service_discipline() {
             epoch: 1,
             members: vec![ALICE_ID.clone()],
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count: 1,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("first council persist succeeds");
@@ -134,9 +130,6 @@ fn council_persist_enforces_service_discipline() {
             epoch: 1,
             members: vec![ALICE_ID.clone()],
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count: 1,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .unwrap_err()
@@ -168,9 +161,6 @@ fn council_persist_enforces_service_discipline() {
             epoch: 1,
             members: vec![ALICE_ID.clone()],
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count: 1,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("first council persist succeeds");
@@ -179,9 +169,6 @@ fn council_persist_enforces_service_discipline() {
             epoch: 2,
             members: vec![ALICE_ID.clone()],
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count: 1,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .unwrap_err()
@@ -217,9 +204,6 @@ fn council_persist_requires_manage_permission_before_mutating_state() {
         epoch: 1,
         members: vec![ALICE_ID.clone()],
         alternates: Vec::new(),
-        verified: 0,
-        candidates_count: 1,
-        derived_by: CouncilDerivationKind::Fallback,
     }
     .execute(&ALICE_ID, &mut tx)
     .expect_err("permissionless council persist must fail");
@@ -263,9 +247,6 @@ fn council_persist_rejects_unregistered_and_underbonded_roster_entries() {
             epoch: 1,
             members: vec![ALICE_ID.clone()],
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count: 1,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .expect_err("unregistered member must fail");
@@ -295,9 +276,6 @@ fn council_persist_rejects_unregistered_and_underbonded_roster_entries() {
             epoch: 1,
             members: vec![ALICE_ID.clone()],
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count: 1,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .expect_err("underbonded member must fail");
@@ -341,9 +319,6 @@ fn council_persist_rejects_unregistered_and_underbonded_roster_entries() {
             epoch: 1,
             members: vec![ALICE_ID.clone()],
             alternates: vec![CARPENTER_ID.clone()],
-            verified: 0,
-            candidates_count: 2,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .expect_err("underbonded alternate must fail");
@@ -382,9 +357,6 @@ fn council_persist_rejects_duplicate_or_overlapping_roster_entries_without_seat_
             epoch: 1,
             members: vec![ALICE_ID.clone(), ALICE_ID.clone()],
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count: 1,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .expect_err("duplicate member must fail");
@@ -422,9 +394,6 @@ fn council_persist_rejects_duplicate_or_overlapping_roster_entries_without_seat_
             epoch: 1,
             members: vec![ALICE_ID.clone()],
             alternates: vec![ALICE_ID.clone()],
-            verified: 0,
-            candidates_count: 1,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .expect_err("member/alternate overlap must fail");
@@ -468,9 +437,6 @@ fn council_persist_rejects_duplicate_or_overlapping_roster_entries_without_seat_
             epoch: 1,
             members: vec![ALICE_ID.clone()],
             alternates: vec![CARPENTER_ID.clone(), CARPENTER_ID.clone()],
-            verified: 0,
-            candidates_count: 2,
-            derived_by: CouncilDerivationKind::Fallback,
         }
         .execute(&ALICE_ID, &mut tx)
         .expect_err("duplicate alternate must fail");

@@ -6,7 +6,7 @@ mod deploy;
 mod shared;
 mod vote;
 
-use self::council::{CouncilArgs, CouncilSubcommand};
+use self::council::CouncilArgs;
 use crate::{Run, RunContext};
 use eyre::Result;
 
@@ -32,13 +32,8 @@ pub enum Command {
     /// Lock helpers
     #[command(subcommand)]
     Locks(LocksCommand),
-    /// Get current sortition council or manage council VRF flows.
-    Council {
-        #[command(flatten)]
-        args: CouncilArgs,
-        #[command(subcommand)]
-        action: Option<CouncilSubcommand>,
-    },
+    /// Get the latest explicitly persisted council roster.
+    Council(CouncilArgs),
     /// Unlock helpers (expired lock stats)
     #[command(subcommand)]
     Unlock(UnlockCommand),
@@ -64,14 +59,7 @@ impl Run for Command {
             Command::Vote(args) => args.run(context),
             Command::Proposal(cmd) => cmd.run(context),
             Command::Locks(cmd) => cmd.run(context),
-            Command::Council { args, action } => match action {
-                Some(CouncilSubcommand::DeriveVrf(cmd)) => cmd.run(context),
-                Some(CouncilSubcommand::Persist(cmd)) => cmd.run(context),
-                Some(CouncilSubcommand::GenVrf(cmd)) => cmd.run(context),
-                Some(CouncilSubcommand::DeriveAndPersist(cmd)) => cmd.run(context),
-                Some(CouncilSubcommand::Replace(cmd)) => cmd.run(context),
-                None => args.run(context),
-            },
+            Command::Council(args) => args.run(context),
             Command::Unlock(cmd) => cmd.run(context),
             Command::Referendum(cmd) => cmd.run(context),
             Command::Tally(cmd) => cmd.run(context),

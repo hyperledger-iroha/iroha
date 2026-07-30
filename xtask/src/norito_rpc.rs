@@ -30,6 +30,7 @@ use iroha_primitives::json::Json;
 use norito::{
     NoritoSerialize,
     codec::{Decode, Encode},
+    core::DecodeFromSlice,
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
 use sha2::{Digest as ShaDigest, Sha256};
@@ -643,7 +644,8 @@ impl RawPayloadFixture {
 
 impl RawPayload {
     fn to_builder(&self) -> Result<TransactionBuilder> {
-        let chain_id = ChainId::from_str(&self.chain).expect("ChainId parsing must be infallible");
+        let chain_id = ChainId::from_str(&self.chain)
+            .with_context(|| format!("invalid canonical chain id '{}'", self.chain))?;
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
 

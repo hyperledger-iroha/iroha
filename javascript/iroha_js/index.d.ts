@@ -5020,8 +5020,6 @@ export interface ToriiGovernanceUnlockStats {
   last_sweep_height: number;
 }
 
-export type ToriiGovernanceCouncilVariant = "Normal" | "Small" | string;
-
 export interface ToriiGovernanceCouncilMember {
   account_id: string;
 }
@@ -5031,77 +5029,7 @@ export interface ToriiGovernanceCouncilCurrentResponse {
   members: ReadonlyArray<ToriiGovernanceCouncilMember>;
   alternates: ReadonlyArray<ToriiGovernanceCouncilMember>;
   candidate_count: number;
-  verified: number;
-  derived_by: string;
-}
-
-export interface ToriiGovernanceCouncilCandidateInput {
-  accountId: string;
-  variant: ToriiGovernanceCouncilVariant;
-  pk?: BinaryLike | string;
-  pkB64?: string;
-  publicKey?: BinaryLike | string;
-  publicKeyB64?: string;
-  proof?: BinaryLike | string;
-  proofB64?: string;
-  signature?: BinaryLike | string;
-  signatureB64?: string;
-}
-
-export interface ToriiGovernanceCouncilDeriveRequest {
-  committeeSize?: number | string | bigint;
-  alternateSize?: number | string | bigint;
-  epoch?: number | string | bigint | null;
-  candidates: ReadonlyArray<ToriiGovernanceCouncilCandidateInput>;
-}
-
-export interface ToriiGovernanceCouncilDeriveResponse {
-  epoch: number;
-  members: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  alternates: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  total_candidates: number;
-  verified: number;
-  derived_by: string;
-}
-
-export interface ToriiGovernanceCouncilPersistRequest
-  extends ToriiGovernanceCouncilDeriveRequest {
-  authority?: string | null;
-  privateKey?: string | null;
-}
-
-export type ToriiGovernanceCouncilPersistResponse =
-  ToriiGovernanceCouncilDeriveResponse;
-
-export interface ToriiGovernanceCouncilReplaceRequest {
-  missing: string;
-  epoch?: number | string | bigint | null;
-  authority?: string | null;
-  privateKey?: string | null;
-}
-
-export interface ToriiGovernanceCouncilReplaceResponse {
-  epoch: number;
-  members: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  alternates: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  replaced: boolean;
-}
-
-export interface ToriiGovernanceCouncilAuditOptions {
-  epoch?: number | string | bigint | null;
-  signal?: AbortSignal;
-}
-
-export interface ToriiGovernanceCouncilAuditResponse {
-  epoch: number;
-  seed_hex: string;
-  beacon_hex: string;
-  members_count: number;
-  candidate_count: number;
-  alternates_count: number;
-  verified: number;
-  derived_by: string;
-  chain_id: string;
+  derived_by: "Sortition" | "Manual";
 }
 
 export interface ToriiProtectedNamespacesApplyResponse {
@@ -7700,9 +7628,6 @@ export interface PersistCouncilForEpochInstructionInput {
   epoch: NumericLike;
   members: ReadonlyArray<string>;
   alternates?: ReadonlyArray<string>;
-  verified?: NumericLike;
-  candidatesCount: NumericLike;
-  derivedBy?: "Vrf" | string;
 }
 
 export interface RegisterZkAssetInstructionInput {
@@ -11514,21 +11439,6 @@ export declare class ToriiClient {
   getGovernanceCouncilCurrent(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiGovernanceCouncilCurrentResponse>;
-  governanceDeriveCouncilVrf(
-    payload: ToriiGovernanceCouncilDeriveRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceCouncilDeriveResponse>;
-  governancePersistCouncil(
-    payload: ToriiGovernanceCouncilPersistRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceCouncilPersistResponse>;
-  governanceReplaceCouncil(
-    payload: ToriiGovernanceCouncilReplaceRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceCouncilReplaceResponse>;
-  getGovernanceCouncilAudit(
-    options?: ToriiGovernanceCouncilAuditOptions,
-  ): Promise<ToriiGovernanceCouncilAuditResponse>;
   draftMinistryAgendaProposal(
     payload: MinistryAgendaProposalDraftRequest,
     options?: { signal?: AbortSignal },

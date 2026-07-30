@@ -15,24 +15,13 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
   private final long epoch;
   private final List<String> members;
   private final List<String> alternates;
-  private final int verified;
-  private final int candidatesCount;
-  private final GovernanceInstructionUtils.CouncilDerivationKind derivedBy;
   private final Map<String, String> arguments;
 
   private PersistCouncilForEpochInstruction(final Builder builder) {
-    this(builder, builder.canonicalArguments());
-  }
-
-  private PersistCouncilForEpochInstruction(
-      final Builder builder, final Map<String, String> argumentOrder) {
     this.epoch = builder.epoch;
     this.members = List.copyOf(builder.members);
     this.alternates = List.copyOf(builder.alternates);
-    this.verified = builder.verified;
-    this.candidatesCount = builder.candidatesCount;
-    this.derivedBy = builder.derivedBy;
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Map.copyOf(builder.canonicalArguments());
   }
 
   public long epoch() {
@@ -45,18 +34,6 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
 
   public List<String> alternates() {
     return alternates;
-  }
-
-  public int verified() {
-    return verified;
-  }
-
-  public int candidatesCount() {
-    return candidatesCount;
-  }
-
-  public GovernanceInstructionUtils.CouncilDerivationKind derivedBy() {
-    return derivedBy;
   }
 
   @Override
@@ -76,14 +53,7 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
   public static PersistCouncilForEpochInstruction fromArguments(
       final Map<String, String> arguments) {
     final Builder builder =
-        builder()
-            .setEpoch(parseLong(require(arguments, "epoch"), "epoch"))
-            .setVerified(
-                parseInt(arguments.getOrDefault("verified", "0"), "verified"))
-            .setCandidatesCount(parseInt(require(arguments, "candidates_count"), "candidates_count"))
-            .setDerivedBy(
-                GovernanceInstructionUtils.CouncilDerivationKind.parse(
-                    require(arguments, "derived_by")));
+        builder().setEpoch(parseLong(require(arguments, "epoch"), "epoch"));
 
     final String membersCsv = arguments.get("members");
     if (membersCsv != null && !membersCsv.isBlank()) {
@@ -103,7 +73,7 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
         }
       }
     }
-    return new PersistCouncilForEpochInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   private static String require(final Map<String, String> arguments, final String key) {
@@ -126,18 +96,6 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
     }
   }
 
-  private static int parseInt(final String value, final String field) {
-    try {
-      final int parsed = Integer.parseInt(value);
-      if (parsed < 0) {
-        throw new IllegalArgumentException(field + " must be non-negative");
-      }
-      return parsed;
-    } catch (final NumberFormatException ex) {
-      throw new IllegalArgumentException(field + " must be numeric: " + value, ex);
-    }
-  }
-
   @Override
   public boolean equals(final Object obj) {
     if (this == obj) {
@@ -147,25 +105,19 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
       return false;
     }
     return epoch == other.epoch
-        && candidatesCount == other.candidatesCount
-        && verified == other.verified
         && Objects.equals(members, other.members)
-        && Objects.equals(alternates, other.alternates)
-        && derivedBy == other.derivedBy;
+        && Objects.equals(alternates, other.alternates);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(epoch, members, alternates, verified, candidatesCount, derivedBy);
+    return Objects.hash(epoch, members, alternates);
   }
 
   public static final class Builder {
     private Long epoch;
     private final List<String> members = new ArrayList<>();
     private final List<String> alternates = new ArrayList<>();
-    private Integer candidatesCount;
-    private Integer verified;
-    private GovernanceInstructionUtils.CouncilDerivationKind derivedBy;
 
     private Builder() {}
 
@@ -207,46 +159,12 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
       return this;
     }
 
-    public Builder setCandidatesCount(final int candidatesCount) {
-      if (candidatesCount < 0) {
-        throw new IllegalArgumentException("candidatesCount must be non-negative");
-      }
-      this.candidatesCount = candidatesCount;
-      return this;
-    }
-
-    public Builder setVerified(final int verified) {
-      if (verified < 0) {
-        throw new IllegalArgumentException("verified must be non-negative");
-      }
-      this.verified = verified;
-      return this;
-    }
-
-    public Builder setDerivedBy(final GovernanceInstructionUtils.CouncilDerivationKind derivedBy) {
-      this.derivedBy = Objects.requireNonNull(derivedBy, "derivedBy");
-      return this;
-    }
-
-    public Builder setDerivedBy(final String derivedBy) {
-      return setDerivedBy(GovernanceInstructionUtils.CouncilDerivationKind.parse(derivedBy));
-    }
-
     public PersistCouncilForEpochInstruction build() {
       if (epoch == null) {
         throw new IllegalStateException("epoch must be provided");
       }
       if (members.isEmpty()) {
         throw new IllegalStateException("members must contain at least one account id");
-      }
-      if (verified == null) {
-        verified = 0;
-      }
-      if (candidatesCount == null) {
-        throw new IllegalStateException("candidatesCount must be provided");
-      }
-      if (derivedBy == null) {
-        throw new IllegalStateException("derivedBy must be provided");
       }
       return new PersistCouncilForEpochInstruction(this);
     }
@@ -265,9 +183,6 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
         alternatesJoiner.add(alternate);
       }
       args.put("alternates", alternatesJoiner.toString());
-      args.put("verified", Integer.toString(verified));
-      args.put("candidates_count", Integer.toString(candidatesCount));
-      args.put("derived_by", derivedBy.wireValue());
       return args;
     }
   }

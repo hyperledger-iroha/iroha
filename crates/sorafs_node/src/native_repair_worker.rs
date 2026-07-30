@@ -673,7 +673,9 @@ mod tests {
 
     fn evidence_context(chain_id: &str) -> NativeRepairExecutionContextV1 {
         NativeRepairExecutionContextV1 {
-            chain_id: ChainId::from(chain_id),
+            chain_id: chain_id
+                .parse()
+                .expect("native repair fixture chain id must be canonical"),
             finalized_cursor: RepairFinalizedCursorV1 {
                 height: 17,
                 block_hash: [0x44; 32],

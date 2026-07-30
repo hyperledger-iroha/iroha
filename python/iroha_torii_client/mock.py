@@ -117,9 +117,6 @@ class _MockState:
         self.accounts: Dict[str, Dict[str, Any]] = {}
         self.gov_referenda: Dict[str, Dict[str, Any]] = {}
         self.gov_council_current: Dict[str, Any] = {}
-        self.gov_council_audit: Dict[str, Any] = {}
-        self.gov_council_derive_result: Dict[str, Any] = {}
-        self.gov_council_persist_result: Dict[str, Any] = {}
         self.gov_contracts: Dict[str, Dict[str, Any]] = {}
         self.contract_manifests: Dict[str, Dict[str, Any]] = {}
         self.contract_code_bytes: Dict[str, Dict[str, Any]] = {}
@@ -211,13 +208,6 @@ class _MockState:
             return self._gov_ballot_zk(body)
         if method == "GET" and path == "/v1/gov/council/current":
             return _json_response(HTTPStatus.OK, self.gov_council_current)
-        if method == "GET" and path == "/v1/gov/council/audit":
-            epoch = _parse_int(params.get("epoch"))
-            return self._gov_council_audit(epoch)
-        if method == "POST" and path == "/v1/gov/council/derive-vrf":
-            return self._gov_council_derive(body)
-        if method == "POST" and path == "/v1/gov/council/persist":
-            return self._gov_council_persist(body)
         if method == "GET" and path.startswith("/v1/contracts/code-bytes/"):
             code_hash = path.split("/")[-1]
             return self._contracts_code_bytes(code_hash)
@@ -332,14 +322,6 @@ class _MockState:
             self.accounts.clear()
             self.gov_referenda.clear()
             self.gov_council_current = {"epoch": 0, "members": []}
-            self.gov_council_audit = {
-                "epoch": 0,
-                "seed_hex": "00" * 32,
-                "chain_id": "00000000-0000-0000-0000-000000000000",
-                "beacon_hex": "00" * 32,
-            }
-            self.gov_council_derive_result = {"ok": True, "epoch": 0, "members": []}
-            self.gov_council_persist_result = {"ok": True, "epoch": 0, "members": []}
             self.gov_contracts.clear()
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
@@ -662,35 +644,6 @@ class _MockState:
             self.gov_council_current = dict(council_current)
         else:
             self.gov_council_current = {"epoch": 0, "members": []}
-
-        council_audit = payload.get("council_audit")
-        if council_audit is not None:
-            if not isinstance(council_audit, dict):
-                raise ValueError("council_audit must be an object")
-            self.gov_council_audit = dict(council_audit)
-        else:
-            self.gov_council_audit = {
-                "epoch": 0,
-                "seed_hex": "00" * 32,
-                "chain_id": "00000000-0000-0000-0000-000000000000",
-                "beacon_hex": "00" * 32,
-            }
-
-        derive_result = payload.get("council_derive_response")
-        if derive_result is not None:
-            if not isinstance(derive_result, dict):
-                raise ValueError("council_derive_response must be an object")
-            self.gov_council_derive_result = dict(derive_result)
-        else:
-            self.gov_council_derive_result = {"ok": True, "epoch": 0, "members": []}
-
-        persist_result = payload.get("council_persist_response")
-        if persist_result is not None:
-            if not isinstance(persist_result, dict):
-                raise ValueError("council_persist_response must be an object")
-            self.gov_council_persist_result = dict(persist_result)
-        else:
-            self.gov_council_persist_result = {"ok": True, "epoch": 0, "members": []}
 
         gov_contracts_payload = payload.get("gov_contracts")
         if gov_contracts_payload is not None:
@@ -1042,28 +995,6 @@ class _MockState:
         payload.setdefault("found", True)
         payload.setdefault("contract_address", contract_address)
         return _json_response(HTTPStatus.OK, payload)
-
-    def _gov_council_audit(self, epoch: Optional[int]) -> _Response:
-        payload = dict(self.gov_council_audit)
-        if epoch is not None and "epoch" not in payload:
-            payload["epoch"] = epoch
-        return _json_response(HTTPStatus.OK, payload)
-
-    def _gov_council_derive(self, body: bytes) -> _Response:
-        if body:
-            try:
-                json.loads(body.decode("utf-8") or "{}")
-            except json.JSONDecodeError as err:
-                raise ValueError(f"invalid council derive payload: {err}") from err
-        return _json_response(HTTPStatus.OK, self.gov_council_derive_result)
-
-    def _gov_council_persist(self, body: bytes) -> _Response:
-        if body:
-            try:
-                json.loads(body.decode("utf-8") or "{}")
-            except json.JSONDecodeError as err:
-                raise ValueError(f"invalid council persist payload: {err}") from err
-        return _json_response(HTTPStatus.OK, self.gov_council_persist_result)
 
     def _contracts_manifest_get(self, code_hash: str) -> _Response:
         key = code_hash.lower()

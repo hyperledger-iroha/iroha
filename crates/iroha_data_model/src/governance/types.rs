@@ -933,10 +933,7 @@ pub struct ParliamentRoster {
     /// Alternates that may replace missing members (ordered).
     #[norito(default)]
     pub alternates: Vec<AccountId>,
-    /// Number of candidates whose VRF proofs verified successfully.
-    #[norito(default)]
-    pub verified: u32,
-    /// Total candidates considered (verified + rejected).
+    /// Total eligible candidates considered by sortition, or roster entries for a manual roster.
     #[norito(default)]
     pub candidate_count: u32,
     /// Derivation method used to compute the roster.
@@ -1245,9 +1242,8 @@ mod tests {
             epoch: 3,
             members: members.clone(),
             alternates: alternates.clone(),
-            verified: 2,
             candidate_count: 3,
-            derived_by: CouncilDerivationKind::Vrf,
+            derived_by: CouncilDerivationKind::Sortition,
         };
         let mut rosters = BTreeMap::new();
         rosters.insert(ParliamentBody::RulesCommittee, roster.clone());

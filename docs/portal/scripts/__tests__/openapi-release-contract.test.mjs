@@ -16,7 +16,7 @@ test('OpenAPI CI uses a locked graph and detached-only signing', async () => {
   assert.match(gate, /--signature-envelope/);
 });
 
-test('OpenAPI CI is clean, ancestor/source-bound, and two-pass', async () => {
+test('OpenAPI CI replays complete bundles from independent clean sources', async () => {
   const gate = await readFile(join(repoRoot, 'ci', 'check_openapi_spec.sh'), 'utf8');
 
   assert.match(gate, /require_clean_checkout/);
@@ -33,13 +33,75 @@ test('OpenAPI CI is clean, ancestor/source-bound, and two-pass', async () => {
     ).length,
     2,
   );
-  assert.equal(
-    Array.from(gate.matchAll(/run_xtask openapi --output/g)).length,
-    2,
+  assert.match(
+    gate,
+    /build_unsigned_replay_bundle "\$\{REPLAY_WORKTREE_FIRST\}" "\$\{REPLAY_BUNDLE_FIRST\}"/,
   );
   assert.match(
     gate,
-    /diff -u "\$\{GENERATED_SPEC_FIRST\}" "\$\{GENERATED_SPEC_SECOND\}"/,
+    /build_unsigned_replay_bundle "\$\{REPLAY_WORKTREE_SECOND\}" "\$\{REPLAY_BUNDLE_SECOND\}"/,
+  );
+  assert.match(gate, /create_replay_worktree "\$\{REPLAY_WORKTREE_FIRST\}"/);
+  assert.match(gate, /create_replay_worktree "\$\{REPLAY_WORKTREE_SECOND\}"/);
+  assert.match(
+    gate,
+    /REPLAY_COMMIT="\$\(git -C "\$\{REPO_ROOT\}" rev-parse --verify "HEAD\^\{commit\}"\)"/,
+  );
+  assert.match(
+    gate,
+    /worktree add --quiet --detach "\$\{worktree\}" "\$\{REPLAY_COMMIT\}"/,
+  );
+  assert.match(
+    gate,
+    /const sourcePath = await realpath\(sourceArgument\);/,
+  );
+  assert.match(gate, /provisionOpenApiCargoLock,/);
+  assert.match(gate, /const summary = await provisionOpenApiCargoLock\(\{/);
+  assert.match(gate, /repoRoot: worktreeRoot,/);
+  assert.match(gate, /summary\.status !== 'installed'/);
+  assert.match(gate, /summary\.source !== 'operator'/);
+  assert.match(gate, /summary\.path !== 'Cargo\.lock'/);
+  assert.match(gate, /"\$\{REPO_ROOT\}\/Cargo\.lock"/);
+  assert.doesNotMatch(gate, /cp "\$\{REPO_ROOT\}\/Cargo\.lock"/);
+  assert.match(gate, /REPLAY_CARGO_TARGET_DIR="\$\{TMP_DIR\}\/cargo-target"/);
+  assert.doesNotMatch(gate, /REPLAY_CARGO_TARGET_DIR="\$\{REPO_ROOT\}/);
+  assert.match(gate, /CARGO_TARGET_DIR="\$\{REPLAY_CARGO_TARGET_DIR\}"/);
+  assert.doesNotMatch(
+    gate,
+    /allowedSignersFile: join\(outputDir, 'allowed_signers\.json'\)/,
+  );
+  assert.match(gate, /allowedSignersFile,/);
+  assert.match(gate, /"\$\{ALLOWED_SIGNERS_PATH\}"/);
+  assert.match(
+    gate,
+    /cp -R "\$\{REPLAY_BASELINE\}\/\." "\$\{output_dir\}\/"/,
+  );
+  assert.match(gate, /run_xtask_in_repo "\$\{source_root\}" openapi --unsigned-manifest/);
+  assert.match(gate, /const \{syncOpenApi\} = await import\(syncModule\)/);
+  assert.match(gate, /requireSigned: false/);
+  assert.match(gate, /is not clean and unsigned/);
+  const expectedGeneratedArtifacts = [
+    'torii.json',
+    'manifest.json',
+    'versions/current/torii.json',
+    'versions/current/manifest.json',
+    'versions.json',
+  ];
+  const artifactBlock = gate.match(
+    /GENERATED_RELEASE_ARTIFACTS=\(\n(?<artifacts>[\s\S]*?)\n\)/,
+  );
+  assert.ok(artifactBlock?.groups?.artifacts);
+  assert.deepEqual(
+    Array.from(
+      artifactBlock.groups.artifacts.matchAll(/^\s+"([^"]+)"$/gm),
+      (match) => match[1],
+    ),
+    expectedGeneratedArtifacts,
+  );
+  assert.match(gate, /diff -u "\$\{first\}" "\$\{second\}"/);
+  assert.match(
+    gate,
+    /diff -ru "\$\{REPLAY_BUNDLE_FIRST\}" "\$\{REPLAY_BUNDLE_SECOND\}"/,
   );
   assert.match(
     gate,
@@ -100,6 +162,7 @@ test('OpenAPI workflow actions and tooling tests are pinned', async () => {
     'kotlin/**',
     'mochi/**',
     'python/iroha_python/**',
+    'python/iroha_torii_client/**',
     'release/openapi-generator-inputs-v1.txt',
     'release/version-map.toml',
     'scripts/android_codegen_docs.py',

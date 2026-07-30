@@ -228,9 +228,11 @@ implemented helpers and the remaining service gates.
   boundary. Finance report derivation and Governance DAG publication must
   reconcile that handoff with committed custody and remain exactly-once.
 - `SorafsReconciliationReportV1` can embed an appeal-finance reconciliation
-  summary derived from local weekly rollup publish-index entries and JSON
-  sidecars, including source report count, case count, treasury-bound XOR, and
-  forfeited reward XOR.
+  summary derived from typed weekly rollups authenticated by the signed
+  Governance DAG, its sealed producer checkpoint, and exact canonical `.to`
+  source bytes. Publish-index labels and JSON mirrors are display inventory
+  only and cannot supply reconciliation totals. The summary includes source
+  report count, case count, treasury-bound XOR, and forfeited reward XOR.
 
 ## Pricing Model
 

@@ -712,9 +712,8 @@ fn evaluate_bfv_affine(
         return Err(RamLfeError::CommitmentMismatch);
     }
 
-    let ciphertext: BfvIdentifierCiphertext =
-        norito::decode_from_bytes(&request.normalized_input)
-            .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
+    let ciphertext: BfvIdentifierCiphertext = norito::decode_from_bytes(&request.normalized_input)
+        .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     let circuit = derive_secret_affine_circuit(secret, &public_parameters, commitment, request)?;
     let outputs =
         evaluate_affine_circuit(&public_parameters.parameters, &circuit, &ciphertext.slots)
@@ -757,9 +756,8 @@ fn evaluate_bfv_programmed(
     let public_parameters = decode_bfv_programmed_public_parameters(&commitment.public_parameters)?;
     let encryption = &public_parameters.encryption;
 
-    let ciphertext: BfvIdentifierCiphertext =
-        norito::decode_from_bytes(&request.normalized_input)
-            .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
+    let ciphertext: BfvIdentifierCiphertext = norito::decode_from_bytes(&request.normalized_input)
+        .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     if ciphertext.slots.is_empty() {
         return Err(RamLfeError::EmptyInput);
     }

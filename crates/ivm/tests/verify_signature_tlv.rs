@@ -567,10 +567,7 @@ fn opcode_verify_ed25519_batch_reports_all_zero_signature_index() {
             public_key: pk_bytes.to_vec(),
         },
     ];
-    let request = Ed25519BatchRequest {
-        seed: [2u8; 32],
-        entries,
-    };
+    let request = Ed25519BatchRequest { entries };
     let payload = norito::to_bytes(&request).expect("encode request");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
 
@@ -618,10 +615,7 @@ fn opcode_verify_ed25519_batch_reports_malformed_signature_r_index() {
                 public_key: pk_bytes.to_vec(),
             },
         ];
-        let request = Ed25519BatchRequest {
-            seed: [3u8; 32],
-            entries,
-        };
+        let request = Ed25519BatchRequest { entries };
         let payload = norito::to_bytes(&request).expect("encode request");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
 
@@ -659,10 +653,7 @@ fn opcode_verify_ed25519_batch_via_tlv_success() {
             }
         })
         .collect();
-    let request = Ed25519BatchRequest {
-        seed: [0u8; 32],
-        entries,
-    };
+    let request = Ed25519BatchRequest { entries };
     let payload = norito::to_bytes(&request).expect("encode request");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
 
@@ -700,10 +691,7 @@ fn opcode_verify_ed25519_batch_via_tlv_reports_failure_index() {
             public_key: pk_bytes.to_vec(),
         },
     ];
-    let request = Ed25519BatchRequest {
-        seed: [1u8; 32],
-        entries,
-    };
+    let request = Ed25519BatchRequest { entries };
     let payload = norito::to_bytes(&request).expect("encode request");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
 
@@ -720,6 +708,64 @@ fn opcode_verify_ed25519_batch_via_tlv_reports_failure_index() {
     vm.run().unwrap();
     assert_eq!(vm.register(6), 0, "batch should fail");
     assert_eq!(vm.register(2), 1, "second entry flagged as failing");
+}
+
+#[test]
+fn opcode_verify_ed25519_batch_debits_payload_before_hash_validation() {
+    use ed25519_dalek::Signer;
+
+    let sk = ed25519_test_key(4);
+    let message = b"meter-before-hash";
+    let request = Ed25519BatchRequest {
+        entries: vec![Ed25519BatchEntry {
+            message: message.to_vec(),
+            signature: sk.sign(message).to_bytes().to_vec(),
+            public_key: sk.verifying_key().to_bytes().to_vec(),
+        }],
+    };
+    let payload = norito::to_bytes(&request).expect("encode request");
+    let mut tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+    *tlv.last_mut().expect("TLV checksum") ^= 1;
+
+    let word = encoding::wide::encode_rr(instruction::wide::crypto::ED25519BATCHVERIFY, 5, 1, 2);
+    let base_gas = ivm::gas::cost_of(word);
+    let payload_gas = ivm::gas::ed25519_batch_extra_gas(payload.len() as u64, 0);
+    let initial_gas = base_gas + payload_gas - 1;
+    let mut vm = IVM::new(initial_gas);
+    let ptr = vm.alloc_input_tlv(&tlv).expect("alloc request");
+    vm.set_register(1, ptr);
+    let halt = encoding::wide::encode_halt().to_le_bytes();
+    let mut code = Vec::new();
+    code.extend_from_slice(&word.to_le_bytes());
+    code.extend_from_slice(&halt);
+    vm.load_program(&assemble(&code)).unwrap();
+
+    assert_eq!(vm.run(), Err(VMError::OutOfGas));
+    assert_eq!(vm.gas_remaining, payload_gas - 1);
+}
+
+#[test]
+fn opcode_verify_ed25519_batch_rejects_oversized_payload_before_hashing() {
+    let payload = vec![0u8; ivm::gas::ED25519_BATCH_MAX_PAYLOAD_BYTES + 1];
+    let mut tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+    *tlv.last_mut().expect("TLV checksum") ^= 1;
+
+    let word = encoding::wide::encode_rr(instruction::wide::crypto::ED25519BATCHVERIFY, 5, 1, 2);
+    let initial_gas = 10_000;
+    let mut vm = IVM::new(initial_gas);
+    let ptr = vm.alloc_host_tlv(&tlv).expect("alloc oversized request");
+    vm.set_register(1, ptr);
+    vm.set_register(2, 123);
+    let halt = encoding::wide::encode_halt().to_le_bytes();
+    let mut code = Vec::new();
+    code.extend_from_slice(&word.to_le_bytes());
+    code.extend_from_slice(&halt);
+    vm.load_program(&assemble(&code)).unwrap();
+    vm.run().unwrap();
+
+    assert_eq!(vm.register(5), 0);
+    assert_eq!(vm.register(2), 0);
+    assert_eq!(initial_gas - vm.gas_remaining, ivm::gas::cost_of(word));
 }
 
 #[test]

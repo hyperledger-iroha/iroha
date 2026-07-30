@@ -3510,21 +3510,19 @@ mod tests {
         );
 
         let oversized_chain = "a".repeat(STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1 + 1);
-        for invalid_chain in [
-            "",
-            "Iroha3-taira",
-            "iroha3 taira",
-            "iroha3/taira",
-            oversized_chain.as_str(),
-        ] {
-            assert_eq!(
-                derive_stream_token_gateway_id_v1(
-                    &ChainId::from(invalid_chain.to_owned()),
-                    "gateway.dxb-1"
-                ),
-                Err(StreamTokenRequestContextErrorV1::InvalidChainId)
+        for invalid_chain in ["", "iroha3 taira", "iroha3/taira", oversized_chain.as_str()] {
+            assert!(
+                invalid_chain.parse::<ChainId>().is_err(),
+                "globally invalid chain identity reached the stream-token layer"
             );
         }
+        let uppercase = "Iroha3-taira"
+            .parse::<ChainId>()
+            .expect("uppercase is valid in the case-sensitive global ChainId grammar");
+        assert_eq!(
+            derive_stream_token_gateway_id_v1(&uppercase, "gateway.dxb-1"),
+            Err(StreamTokenRequestContextErrorV1::InvalidChainId)
+        );
         let oversized_gateway = "a".repeat(STREAM_TOKEN_COMPLIANCE_GATEWAY_ID_MAX_BYTES_V1 + 1);
         for invalid_gateway in [
             "",

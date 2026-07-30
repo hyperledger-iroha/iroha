@@ -2942,21 +2942,12 @@ mod tests {
         ));
         assert!(forwarder.pending(8).unwrap().is_empty());
 
-        for invalid_chain_id in [
-            ChainId::from(""),
-            ChainId::from("x".repeat(ORDERBOOK_TRANSACTION_MAX_CHAIN_ID_BYTES_V1 + 1)),
-        ] {
-            let mut invalid_context = context.clone();
-            invalid_context.chain_id = invalid_chain_id;
-            assert!(matches!(
-                forwarder.enqueue_unsigned_operation(
-                    match_operation(&invalid_context),
-                    &invalid_context
-                ),
-                Err(OrderbookTransactionForwarderError::InvalidGovernanceContext)
-            ));
-            assert!(forwarder.pending(8).unwrap().is_empty());
-        }
+        assert!("".parse::<ChainId>().is_err());
+        assert!(
+            "x".repeat(ORDERBOOK_TRANSACTION_MAX_CHAIN_ID_BYTES_V1 + 1)
+                .parse::<ChainId>()
+                .is_err()
+        );
 
         let mut invalid = settlement_operation(&context, [0x81; 32]);
         if let OrderbookOperationV1::SettlementReceipt(instruction) = &invalid {

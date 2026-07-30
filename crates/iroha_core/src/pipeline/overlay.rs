@@ -136,6 +136,10 @@ struct OverlayLifecycleCompletion {
     pending: code::PendingContractLifecycle,
 }
 
+fn smart_contract_heap_limit(state: &impl StateReadOnly) -> u64 {
+    state.world().parameters().smart_contract().memory().get()
+}
+
 fn validate_overlay_contract_runtime_context(
     world: &impl WorldReadOnly,
     context: &crate::executor::ContractRuntimeExecutionContext,
@@ -2219,7 +2223,7 @@ where
     let force_live_rebuild = VmAccessFence::requires_live_rebuild(&amx_analysis);
     let prepared_contract_cache = ivm_cache.prepared_contract_cache();
     let mut vm = ivm_cache
-        .checkout_generic_runtime(summary, tx_gas_limit)
+        .checkout_generic_runtime(summary, tx_gas_limit, smart_contract_heap_limit(state_ro))
         .map_err(OverlayBuildError::IvmLoad)?;
 
     let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
@@ -2389,7 +2393,7 @@ where
                 None,
             )?;
             let mut vm = summary
-                .checkout_runtime(gas_limit)
+                .checkout_runtime(gas_limit, smart_contract_heap_limit(state_ro))
                 .map_err(OverlayBuildError::IvmLoad)?;
             let contract_subject =
                 code::fetch_bound_contract_subject(state_ro, &call.contract_address).ok_or_else(
@@ -2573,7 +2577,7 @@ where
                 entrypoint: selector,
             });
             let mut vm = summary
-                .checkout_runtime(gas_limit)
+                .checkout_runtime(gas_limit, smart_contract_heap_limit(state_ro))
                 .map_err(OverlayBuildError::IvmLoad)?;
 
             // Run CoreHost to collect queued ISIs
@@ -2934,7 +2938,7 @@ where
                 reused_argument_record.as_ref(),
             )?;
             let mut vm = summary
-                .checkout_runtime(tx_gas_limit)
+                .checkout_runtime(tx_gas_limit, smart_contract_heap_limit(state_ro))
                 .map_err(OverlayBuildError::IvmLoad)?;
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_program_prepare", program_prepare_start);
@@ -3143,7 +3147,7 @@ where
                 entrypoint: selector,
             });
             let mut vm = summary
-                .checkout_runtime(tx_gas_limit)
+                .checkout_runtime(tx_gas_limit, smart_contract_heap_limit(state_ro))
                 .map_err(OverlayBuildError::IvmLoad)?;
             #[cfg(feature = "telemetry")]
             observe_overlay_stage_ms(state_ro, "overlay_program_prepare", program_prepare_start);
@@ -3431,7 +3435,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 reused_argument_record.as_ref(),
             )?;
             let mut vm = summary
-                .checkout_runtime(tx_gas_limit)
+                .checkout_runtime(tx_gas_limit, smart_contract_heap_limit(state_ro))
                 .map_err(OverlayBuildError::IvmLoad)?;
             let contract_subject =
                 code::fetch_bound_contract_subject(state_ro, &call.contract_address).ok_or_else(
@@ -3619,7 +3623,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 entrypoint: selector,
             });
             let mut vm = summary
-                .checkout_runtime(tx_gas_limit)
+                .checkout_runtime(tx_gas_limit, smart_contract_heap_limit(state_ro))
                 .map_err(OverlayBuildError::IvmLoad)?;
             let mut host = if let Some(context) = contract_call_context.as_ref() {
                 crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
@@ -10753,7 +10757,7 @@ where
     let (contract_call_context, contract_runtime_context, entrypoint_authorization) =
         authorize_and_prepare_raw_contract_dispatch(state_ro, tx, summary, gas_limit)?;
     let mut vm = summary
-        .checkout_runtime(gas_limit)
+        .checkout_runtime(gas_limit, smart_contract_heap_limit(state_ro))
         .map_err(OverlayBuildError::IvmLoad)?;
     vm.set_zk_trace_enabled(true);
     let accounts = state_ro.accounts_snapshot();
@@ -11439,7 +11443,7 @@ where
     let (contract_call_context, contract_runtime_context, entrypoint_authorization) =
         authorize_and_prepare_raw_contract_dispatch(state_ro, tx, &summary, gas_limit)?;
     let mut vm = summary
-        .checkout_runtime(gas_limit)
+        .checkout_runtime(gas_limit, smart_contract_heap_limit(state_ro))
         .map_err(OverlayBuildError::IvmLoad)?;
     vm.set_zk_trace_enabled(true);
 

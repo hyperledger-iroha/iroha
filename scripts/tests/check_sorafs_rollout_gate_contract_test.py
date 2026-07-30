@@ -27285,7 +27285,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert '"bad\\u202eerror"' in readiness_test
     assert '"bad\\u200dkey"' in readiness_test
     assert '"prod\\u202esecret"' in readiness_test
-    assert "summary.get(\"status\") != evidence_gate_status(error_values)" in checker
+    assert (
+        "summary.get(\"status\") != aggregate_summary_status("
+        in checker
+    )
     assert (
         "aggregate summary ready deployment must include deployment_id and environment"
         in checker

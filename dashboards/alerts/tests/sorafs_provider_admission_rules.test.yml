@@ -20,6 +20,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS provider advert missing admission envelope"
+              description: |
+                Torii rejected provider adverts because no governance admission
+                envelope was available. Check `torii.sorafs.admission_envelopes_dir`
+                on the affected gateways and confirm the latest provider renewal
+                bundle has been distributed.
       - alertname: SoraFSProviderAdmissionEnvelopeExpired
         eval_time: 4m
         exp_alerts:
@@ -27,6 +32,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS provider advert or admission envelope expired"
+              description: |
+                Torii rejected stale SoraFS provider admission material. Rotate the
+                provider advert or renewal envelope before gateways lose usable
+                provider capacity.
       - alertname: SoraFSProviderAdmissionPolicyRejectSpike
         eval_time: 7m
         exp_alerts:
@@ -35,6 +44,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS provider admission policy rejects elevated"
+              description: |
+                Provider adverts are failing admission for reason=digest_error.
+                Inspect the provider admission dashboard and compare the advert body
+                against the governance envelope before accepting new traffic.
       - alertname: SoraFSProviderAdmissionDowngradeWarnings
         eval_time: 7m
         exp_alerts:
@@ -43,6 +56,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS provider advert downgrade warnings elevated"
+              description: |
+                Provider adverts are being accepted with downgrade warnings
+                (reason=missing_stream_budget). Coordinate operator upgrades before
+                missing capabilities turn into admission rejections.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_admission_total{result="accepted",reason="stored"}'

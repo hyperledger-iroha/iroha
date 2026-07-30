@@ -40,7 +40,6 @@ iroha_torii = { workspace = true, features = [
     "schema",
     "p2p_ws",
     "connect",
-    "gov_vrf",
     "zk-verify-batch",
     "push",
 ] }

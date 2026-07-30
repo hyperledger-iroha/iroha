@@ -51,6 +51,13 @@ use crate::{
 };
 use iroha_primitives::numeric::Quantity;
 
+/// Default signature-bound lifetime assigned by [`TransactionBuilder`].
+///
+/// Networks govern the admission ceiling through
+/// [`crate::parameter::TransactionParameters::max_time_to_live_ms`]. This
+/// default matches the default client transaction lifetime.
+pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
+
 fn verify_typed_signature_for_signer<T: Encode>(
     signature: &SignatureOf<T>,
     signer: &PublicKey,
@@ -176,7 +183,8 @@ mod model {
         pub creation_time_ms: u64,
         /// ISI or IVM smart contract bytecode.
         pub instructions: Executable,
-        /// If transaction is not committed by this time it will be dropped.
+        /// Required signature-bound lifetime. `None` exists only so malformed
+        /// wire input can be decoded and rejected deterministically.
         pub time_to_live_ms: Option<NonZeroU64>,
         /// Random value to make different hashes for transactions which occur repeatedly and simultaneously.
         pub nonce: Option<NonZeroU32>,
@@ -652,6 +660,9 @@ pub enum TransactionSignatureError {
     /// The signature-bound fee payment intent is malformed or ambiguous.
     #[error("invalid fee payment intent: {0}")]
     InvalidFeePaymentIntent(String),
+    /// A signable transaction payload omitted its signature-bound lifetime.
+    #[error("transaction time_to_live_ms is required")]
+    MissingTimeToLive,
     /// Collected multisig signatures do not satisfy the policy threshold.
     #[error("insufficient multisig weight: collected {collected}, required {required}")]
     InsufficientMultisigWeight {
@@ -1246,7 +1257,10 @@ impl TransactionPayload {
         &self.authority
     }
 
-    /// If the transaction is not committed by this time it will be dropped.
+    /// Return the required signature-bound transaction lifetime.
+    ///
+    /// `None` identifies malformed decoded input; safe builders always assign
+    /// a non-zero value and transaction admission rejects `None`.
     #[inline]
     pub fn time_to_live(&self) -> Option<Duration> {
         self.time_to_live_ms
@@ -1345,7 +1359,9 @@ impl SignedTransaction {
         self
     }
 
-    /// If transaction is not committed by this time it will be dropped.
+    /// Return the required signature-bound transaction lifetime.
+    ///
+    /// `None` identifies malformed decoded input.
     #[inline]
     pub fn time_to_live(&self) -> Option<Duration> {
         self.payload.time_to_live()
@@ -2065,7 +2081,13 @@ impl TransactionBuilder {
                 authority,
                 creation_time_ms,
                 nonce: None,
-                time_to_live_ms: None,
+                time_to_live_ms: Some(
+                    NonZeroU64::new(
+                        u64::try_from(DEFAULT_TRANSACTION_TIME_TO_LIVE.as_millis())
+                            .expect("default transaction TTL fits in u64 milliseconds"),
+                    )
+                    .expect("default transaction TTL is non-zero"),
+                ),
                 instructions: Vec::<InstructionBox>::new().into(),
                 fee_payment,
                 metadata: Metadata::default(),
@@ -2101,9 +2123,10 @@ impl TransactionBuilder {
 }
 
 impl TransactionBuilder {
-    fn validate_payload_fee_payment(
-        payload: &TransactionPayload,
-    ) -> Result<(), TransactionSignatureError> {
+    fn validate_payload(payload: &TransactionPayload) -> Result<(), TransactionSignatureError> {
+        if payload.time_to_live_ms.is_none() {
+            return Err(TransactionSignatureError::MissingTimeToLive);
+        }
         payload
             .fee_payment
             .validate()
@@ -2121,7 +2144,7 @@ impl TransactionBuilder {
     /// Returns an error when the payload's fee intent or metadata violates the
     /// canonical signature-bound fee policy.
     pub fn from_payload(payload: TransactionPayload) -> Result<Self, TransactionSignatureError> {
-        Self::validate_payload_fee_payment(&payload)?;
+        Self::validate_payload(&payload)?;
         Ok(Self {
             payload,
             multisig_signatures: None,
@@ -2138,7 +2161,7 @@ impl TransactionBuilder {
     /// Returns an error when the payload's fee intent or metadata violates the
     /// canonical signature-bound fee policy.
     pub fn into_payload(self) -> Result<TransactionPayload, TransactionSignatureError> {
-        Self::validate_payload_fee_payment(&self.payload)?;
+        Self::validate_payload(&self.payload)?;
         Ok(self.payload)
     }
 
@@ -2223,18 +2246,16 @@ impl TransactionBuilder {
 
     /// Set time-to-live for this transaction
     ///
-    /// Note: `Duration::ZERO` is a legitimate value meaning "expire immediately".
-    /// Since the payload stores TTL as `Option<NonZeroU64>` milliseconds, we
-    /// approximate zero by storing `Some(1)` millisecond to preserve the
-    /// distinction from `None` (which means "use node default TTL").
+    /// A zero duration leaves the builder with an invalid missing lifetime;
+    /// fallible payload/signing workflows then return
+    /// [`TransactionSignatureError::MissingTimeToLive`].
     pub fn set_ttl(&mut self, time_to_live: Duration) -> &mut Self {
         let ttl: u64 = time_to_live
             .as_millis()
             .try_into()
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
 
-        self.payload.time_to_live_ms =
-            Some(NonZeroU64::new(if ttl == 0 { 1 } else { ttl }).expect("nonzero"));
+        self.payload.time_to_live_ms = NonZeroU64::new(ttl);
 
         self
     }
@@ -2275,6 +2296,8 @@ impl TransactionBuilder {
             payload,
             multisig_signatures: None,
         };
+        Self::validate_payload(&builder.payload)
+            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
         if builder.encode_payload() != bytes {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -2321,7 +2344,7 @@ impl TransactionBuilder {
 
         let payload = self.payload;
 
-        Self::validate_payload_fee_payment(&payload)?;
+        Self::validate_payload(&payload)?;
 
         let expected = payload
             .authority
@@ -2366,7 +2389,7 @@ impl TransactionBuilder {
         signers: impl IntoIterator<Item = &'a iroha_crypto::PrivateKey>,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
         let payload = self.payload;
-        Self::validate_payload_fee_payment(&payload)?;
+        Self::validate_payload(&payload)?;
         let mut bundle = self
             .multisig_signatures
             .unwrap_or_else(|| MultisigSignatures::new(Vec::new()));
@@ -5027,7 +5050,7 @@ mod ttl_tests {
     }
 
     #[test]
-    fn zero_ttl_is_preserved_not_none() {
+    fn zero_ttl_is_rejected_before_signing() {
         let chain: ChainId = "test-chain".parse().unwrap();
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
@@ -5040,9 +5063,51 @@ mod ttl_tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
         builder.set_ttl(Duration::from_millis(0));
-        // Internally we approximate zero by 1ms to distinguish from None
-        let ttl = builder.clone().sign(&private_key).time_to_live();
-        assert_eq!(ttl, Some(Duration::from_millis(1)));
+        assert!(matches!(
+            builder.try_sign(&private_key),
+            Err(TransactionSignatureError::MissingTimeToLive)
+        ));
+    }
+
+    #[test]
+    fn builder_assigns_a_signature_bound_default_ttl() {
+        let key_pair = checked_random_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let tx = TransactionBuilder::new(
+            "default-ttl-chain".parse().expect("chain id"),
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(key_pair.private_key());
+
+        assert_eq!(tx.time_to_live(), Some(DEFAULT_TRANSACTION_TIME_TO_LIVE));
+    }
+
+    #[test]
+    fn signing_workflows_reject_payloads_without_ttl() {
+        let key_pair = checked_random_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut payload = TransactionBuilder::new(
+            "missing-ttl-chain".parse().expect("chain id"),
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .into_payload()
+        .expect("default payload");
+        payload.time_to_live_ms = None;
+
+        assert!(matches!(
+            TransactionBuilder::from_payload(payload.clone()),
+            Err(TransactionSignatureError::MissingTimeToLive)
+        ));
+
+        let bytes = norito::codec::encode_adaptive(&payload);
+        let error = TransactionBuilder::decode_payload(&bytes)
+            .expect_err("external signing decode must reject a payload without TTL");
+        assert!(
+            error.to_string().contains("time_to_live_ms is required"),
+            "unexpected decode error: {error}"
+        );
     }
 
     #[test]

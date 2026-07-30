@@ -5,6 +5,41 @@ pub use normal::NormalPrivateKey as BlsNormalPrivateKey;
 /// Default BLS public key (G2 signature, G1 public key).
 pub use normal::NormalPublicKey as BlsNormalPublicKey;
 /// Compact BLS suite (smaller signatures, slower ops).
+///
+/// Raw-key same-message aggregate verification is intentionally not part of
+/// the public API because it is unsafe without verified proofs of possession.
+/// Use [`crate::bls_small_verify_aggregate_same_message`] instead.
+///
+/// ```compile_fail
+/// use iroha_crypto::BlsSmall;
+///
+/// let signature = [0_u8; 48];
+/// let public_key = [0_u8; 96];
+/// let signatures: [&[u8]; 1] = [&signature];
+/// let public_keys: [&[u8]; 1] = [&public_key];
+/// let _ = BlsSmall::verify_aggregate_same_message(
+///     b"same message",
+///     &signatures,
+///     &public_keys,
+/// );
+/// ```
+///
+/// Pre-aggregated same-message verification has the same requirement and is
+/// deliberately not exposed for BLS-small. Pass the individual signatures and
+/// PoPs to [`crate::bls_small_verify_aggregate_same_message`] instead.
+///
+/// ```compile_fail
+/// use iroha_crypto::BlsSmall;
+///
+/// let aggregate_signature = [0_u8; 48];
+/// let public_key = [0_u8; 96];
+/// let public_keys: [&[u8]; 1] = [&public_key];
+/// let _ = BlsSmall::verify_preaggregated_same_message(
+///     b"same message",
+///     &aggregate_signature,
+///     &public_keys,
+/// );
+/// ```
 pub use small::SmallBls as BlsSmall;
 /// Compact BLS private key (smaller signatures).
 pub use small::SmallPrivateKey as BlsSmallPrivateKey;
@@ -98,9 +133,9 @@ mod small {
 #[cfg(test)]
 mod tests;
 
-// Public helpers to access aggregate-style verification from outside without
-// exposing the internal configuration types.
-pub fn verify_aggregate_same_message_normal(
+// Crate-local helpers let the PoP-enforcing public wrappers share the
+// aggregate implementations without exposing raw-key same-message checks.
+pub(crate) fn verify_aggregate_same_message_normal(
     message: &[u8],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
@@ -112,7 +147,7 @@ pub fn verify_aggregate_same_message_normal(
     )
 }
 
-pub fn verify_aggregate_same_message_small(
+pub(crate) fn verify_aggregate_same_message_small(
     message: &[u8],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
@@ -124,7 +159,10 @@ pub fn verify_aggregate_same_message_small(
     )
 }
 
-/// Multi-message aggregate verification (distinct messages), normal variant.
+/// Exact per-signature verification across distinct messages, normal variant.
+///
+/// Success proves every signature is valid for the public key and message at
+/// the same index.
 #[allow(dead_code)]
 pub fn verify_aggregate_multi_message_normal(
     messages: &[&[u8]],
@@ -138,7 +176,10 @@ pub fn verify_aggregate_multi_message_normal(
     )
 }
 
-/// Multi-message aggregate verification (distinct messages), small variant.
+/// Exact per-signature verification across distinct messages, small variant.
+///
+/// Success proves every signature is valid for the public key and message at
+/// the same index.
 #[allow(dead_code)]
 pub fn verify_aggregate_multi_message_small(
     messages: &[&[u8]],
@@ -161,7 +202,7 @@ pub fn aggregate_same_message_normal(signatures: &[&[u8]]) -> Result<Vec<u8>, cr
 
 /// Verify a pre-aggregated signature for the same-message case (normal variant).
 #[cfg(feature = "bls")]
-pub fn verify_preaggregated_same_message_normal(
+pub(crate) fn verify_preaggregated_same_message_normal(
     message: &[u8],
     aggregated_signature: &[u8],
     public_keys: &[&[u8]],

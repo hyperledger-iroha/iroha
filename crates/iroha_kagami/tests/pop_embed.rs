@@ -11,8 +11,8 @@ use common::{PopFixture, generate_pop, minimal_manifest_with_topology, write_raw
 
 #[test]
 fn pop_and_embed_populates_pop_hex_entries() -> Result<()> {
-    let pop1 = generate_pop("seedA")?;
-    let pop2 = generate_pop("seedB")?;
+    let pop1 = generate_pop(&"51".repeat(32))?;
+    let pop2 = generate_pop(&"52".repeat(32))?;
     let PopFixture {
         peer_id: peer1,
         pop_hex: pop_hex1,

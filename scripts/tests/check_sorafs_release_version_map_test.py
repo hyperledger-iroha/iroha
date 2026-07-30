@@ -191,7 +191,7 @@ def test_main_validates_repository_map(capsys: pytest.CaptureFixture[str]) -> No
     assert version_map.main([]) == 0
     summary = json.loads(capsys.readouterr().out)
     assert summary["schema"] == version_map.SCHEMA
-    assert summary["package_count"] == 12
+    assert summary["package_count"] == 13
 
 
 def test_required_first_release_inventory_rejects_replaced_package(
@@ -233,6 +233,7 @@ def test_first_release_sdk_versions_are_final_and_swift_is_tag_pinned() -> None:
     assert versions["iroha-android-java"] == "0.1.0"
     assert versions["norito-java"] == "0.1.0"
     assert versions["iroha-swift"] == "0.1.0"
+    assert versions["iroha-torii-client"] == "0.0.1"
     assert all(
         "SNAPSHOT" not in version and "preview" not in version
         for version in versions.values()

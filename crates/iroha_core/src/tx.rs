@@ -1780,7 +1780,8 @@ impl<'tx> AcceptedTransaction<'tx> {
             }
             TransactionSignatureError::AuthorityKeyMismatch
             | TransactionSignatureError::CryptoError(_) => SignatureRejectionCode::InvalidSignature,
-            TransactionSignatureError::InvalidFeePaymentIntent(_) => {
+            TransactionSignatureError::InvalidFeePaymentIntent(_)
+            | TransactionSignatureError::MissingTimeToLive => {
                 SignatureRejectionCode::MalformedSignature
             }
             TransactionSignatureError::UnexpectedMultisigSignatures
@@ -2296,10 +2297,31 @@ impl<'tx> AcceptedTransaction<'tx> {
         reject_retired_heartbeat_metadata(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
 
-        if let Some(ttl) = tx.time_to_live()
-            && let Some(expires_at) = tx.creation_time().checked_add(ttl)
-            && now > expires_at
-        {
+        let ttl = tx.time_to_live().ok_or_else(|| {
+            AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                reason: "Transaction `time_to_live_ms` is required and must be signature-bound"
+                    .into(),
+            })
+        })?;
+        let ttl_ms = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
+        let max_ttl_ms = limits.max_time_to_live_ms().get();
+        if ttl_ms > max_ttl_ms {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: format!(
+                        "Transaction time-to-live {ttl_ms} ms exceeds the governed limit \
+                         {max_ttl_ms} ms"
+                    ),
+                },
+            ));
+        }
+        let expires_at = tx.creation_time().checked_add(ttl).ok_or_else(|| {
+            AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                reason: "Transaction creation time plus time-to-live exceeds the timestamp range"
+                    .into(),
+            })
+        })?;
+        if now > expires_at {
             return Err(AcceptTransactionFail::TransactionExpired {
                 expires_at_ms: expires_at.as_millis(),
                 now_ms: now.as_millis(),
@@ -8213,6 +8235,80 @@ pub mod tests {
             err,
             AcceptTransactionFail::TransactionExpired { .. }
         ));
+    }
+
+    #[test]
+    fn stateless_admission_rejects_missing_signature_bound_ttl() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let chain: ChainId = "required-ttl-chain".parse().expect("chain id");
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "required ttl".to_owned())])
+        .sign(keypair.private_key());
+        let encoded = norito::json::to_json(&signed).expect("serialize transaction");
+        let ttl_field = format!(
+            "\"time_to_live_ms\":{}",
+            iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE.as_millis()
+        );
+        assert!(
+            encoded.contains(&ttl_field),
+            "fixture must carry the builder's signature-bound TTL: {encoded}"
+        );
+        let malformed_json = encoded.replacen(&ttl_field, "\"time_to_live_ms\":null", 1);
+        let malformed: SignedTransaction =
+            norito::json::from_str(&malformed_json).expect("decode malformed wire fixture");
+
+        let error = AcceptedTransaction::validate_with_now(
+            &malformed,
+            &chain,
+            Duration::ZERO,
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+            malformed.creation_time(),
+        )
+        .expect_err("missing TTL must never be stateless-valid");
+        match error {
+            AcceptTransactionFail::TransactionLimit(limit) => assert!(
+                limit.reason.contains("time_to_live_ms") && limit.reason.contains("required"),
+                "unexpected missing-TTL reason: {limit:?}"
+            ),
+            other => panic!("expected TransactionLimit for missing TTL, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stateless_admission_enforces_governed_maximum_ttl() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let chain: ChainId = "bounded-ttl-chain".parse().expect("chain id");
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "bounded ttl".to_owned())]);
+        builder.set_ttl(Duration::from_millis(5_001));
+        let signed = builder.sign(keypair.private_key());
+        let limits = TransactionParameters::default().with_max_time_to_live_ms(nonzero!(5_000_u64));
+
+        let error = AcceptedTransaction::validate_with_now(
+            &signed,
+            &chain,
+            Duration::ZERO,
+            limits,
+            &iroha_config::parameters::actual::Crypto::default(),
+            signed.creation_time(),
+        )
+        .expect_err("TTL above the governed maximum must be rejected");
+        match error {
+            AcceptTransactionFail::TransactionLimit(limit) => assert!(
+                limit.reason.contains("5001") && limit.reason.contains("5000"),
+                "unexpected maximum-TTL reason: {limit:?}"
+            ),
+            other => panic!("expected TransactionLimit for excessive TTL, got {other:?}"),
+        }
     }
 
     #[test]

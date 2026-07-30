@@ -112,9 +112,9 @@ use iroha_data_model::{
         asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
-            CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
-            ProposeValidationFeePolicy, RegisterCitizen, VotingMode,
+            CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
+            PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
+            RegisterCitizen, VotingMode,
         },
         ministry::SubmitAgendaProposal,
         rwa::{
@@ -1183,11 +1183,24 @@ pub fn build_kaigi_roster_join_proof(
     build_kaigi_roster_join_proof_bytes(seed.as_ref(), &roster_root)
 }
 
+fn checked_keygen_seed(seed: Uint8Array) -> napi::Result<Vec<u8>> {
+    if seed.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "key-generation seed must be exactly 32 bytes",
+        ));
+    }
+    Ok(seed.to_vec())
+}
+
 /// Generate an Ed25519 key pair using `iroha_crypto`.
+///
+/// When supplied, `seed` must be a secret 32-byte value with at least 256 bits
+/// of entropy. Omit it for operating-system-random production keys.
 #[napi]
 pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
     let keypair = match seed {
-        Some(seed) => KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519),
+        Some(seed) => KeyPair::try_from_seed(checked_keygen_seed(seed)?, Algorithm::Ed25519),
         None => KeyPair::try_random_with_algorithm(Algorithm::Ed25519),
     }
     .map_err(norito_to_napi)?;
@@ -1274,6 +1287,9 @@ pub fn normalize_crypto_algorithm_js(algorithm: Option<String>) -> napi::Result<
 }
 
 /// Generate or deterministically derive a key pair for any supported Iroha signing algorithm.
+///
+/// When supplied, `seed` must be a secret 32-byte value with at least 256 bits
+/// of entropy. Omit it for operating-system-random production keys.
 #[napi(js_name = "cryptoKeypair")]
 #[allow(clippy::needless_pass_by_value)]
 pub fn crypto_keypair(
@@ -1282,7 +1298,7 @@ pub fn crypto_keypair(
 ) -> napi::Result<JsKeyPair> {
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let keypair = match seed {
-        Some(seed) => KeyPair::try_from_seed(seed.to_vec(), algorithm),
+        Some(seed) => KeyPair::try_from_seed(checked_keygen_seed(seed)?, algorithm),
         None => KeyPair::try_random_with_algorithm(algorithm),
     }
     .map_err(norito_to_napi)?;
@@ -7847,29 +7863,6 @@ fn parse_optional_voting_mode(
     }
 }
 
-fn parse_council_derivation_kind(
-    value: json::Value,
-    context: &str,
-) -> napi::Result<CouncilDerivationKind> {
-    let label = parse_string_value(value, context)?;
-    match label.as_str() {
-        "Vrf" | "vrf" | "VRF" => Ok(CouncilDerivationKind::Vrf),
-        "Fallback" | "fallback" | "FALLBACK" => Ok(CouncilDerivationKind::Fallback),
-        other => Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must be either \"Vrf\" or \"Fallback\" (found {other})"),
-        )),
-    }
-}
-
-fn council_derivation_to_json(kind: CouncilDerivationKind) -> json::Value {
-    let label = match kind {
-        CouncilDerivationKind::Vrf => "Vrf",
-        CouncilDerivationKind::Fallback => "Fallback",
-    };
-    json::Value::String(label.to_owned())
-}
-
 fn voting_mode_to_json(mode: VotingMode) -> &'static str {
     match mode {
         VotingMode::Zk => "Zk",
@@ -9961,29 +9954,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     .unwrap_or_else(|| json::Value::Array(Vec::new()));
                 let alternates: Vec<AccountId> =
                     json::from_value(alternates_value).map_err(norito_to_napi)?;
-                let verified = parse_u32_value(
-                    fields
-                        .remove("verified")
-                        .unwrap_or_else(|| json::Value::Number(json::Number::from(0u64))),
-                    "PersistCouncilForEpoch.verified",
-                )?;
-                let candidates_count = parse_u32_value(
-                    required_value(&mut fields, "candidates_count", "PersistCouncilForEpoch")?,
-                    "PersistCouncilForEpoch.candidates_count",
-                )?;
-                let derived_by_value =
-                    required_value(&mut fields, "derived_by", "PersistCouncilForEpoch")?;
-                let derived_by = parse_council_derivation_kind(
-                    derived_by_value,
-                    "PersistCouncilForEpoch.derived_by",
-                )?;
                 let persist = PersistCouncilForEpoch {
                     epoch,
                     members,
                     alternates,
-                    verified,
-                    candidates_count,
-                    derived_by,
                 };
                 return Ok(Box::new(persist).into_instruction_box());
             }
@@ -11385,18 +11359,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "alternates".to_owned(),
             json::to_value(&persist.alternates).map_err(norito_to_napi)?,
         );
-        inner.insert(
-            "verified".to_owned(),
-            json::to_value(&persist.verified).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "candidates_count".to_owned(),
-            json::to_value(&persist.candidates_count).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "derived_by".to_owned(),
-            council_derivation_to_json(persist.derived_by),
-        );
         let mut outer = json::Map::new();
         outer.insert(
             "PersistCouncilForEpoch".to_owned(),
@@ -11886,6 +11848,12 @@ fn configure_transaction_builder(
 
     if let Some(ms) = ttl_ms {
         let millis = js_number_to_u64(ms, "ttl_ms")?;
+        if millis == 0 {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "ttl_ms must be positive",
+            ));
+        }
         builder.set_ttl(Duration::from_millis(millis));
     }
 
@@ -12858,9 +12826,14 @@ pub fn build_transfer_asset_payload(
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     let instruction: InstructionBox =
         Transfer::asset_quantity(source, quantity, destination).into();
+    let chain_id = chain_id.parse::<ChainId>().map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid canonical chain id: {error}"),
+        )
+    })?;
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(ChainId::from(chain_id), authority, fee_payment)
-            .with_instructions([instruction]),
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_instructions([instruction]),
         metadata,
         None,
         creation_time_ms,
@@ -14447,9 +14420,9 @@ mod tests {
             Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
-                AtWindow, CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-                FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
-                ProposeValidationFeePolicy, RegisterCitizen, VotingMode,
+                AtWindow, CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
+                PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
+                RegisterCitizen, VotingMode,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -15025,6 +14998,18 @@ seiyaku Privacy {
 
         assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
         assert_eq!(keypair.public_key.as_ref(), expected_public_key);
+    }
+
+    #[test]
+    fn keypair_bindings_reject_non_cryptographic_seed_lengths() {
+        let short = Uint8Array::from(b"human password".to_vec());
+        let err = ed25519_keypair(Some(short)).expect_err("short Ed25519 seed must fail");
+        assert!(err.reason.contains("exactly 32 bytes"));
+
+        let short = Uint8Array::from(b"human password".to_vec());
+        let err = crypto_keypair(Some("secp256k1".to_owned()), Some(short))
+            .expect_err("short generic seed must fail");
+        assert!(err.reason.contains("exactly 32 bytes"));
     }
 
     #[test]
@@ -18597,9 +18582,6 @@ seiyaku Privacy {
             epoch: 10,
             members: vec![member.clone()],
             alternates: vec![member.clone()],
-            verified: 2,
-            candidates_count: 5,
-            derived_by: CouncilDerivationKind::Fallback,
         })
         .into_instruction_box();
 
@@ -18615,15 +18597,6 @@ seiyaku Privacy {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize PersistCouncilForEpoch");
         assert_eq!(reconstructed, instruction);
-
-        let derived = json_value
-            .as_object()
-            .unwrap()
-            .get("PersistCouncilForEpoch")
-            .and_then(|value| value.get("derived_by"))
-            .and_then(|value| value.as_str())
-            .expect("derived_by string present");
-        assert_eq!(derived, "Fallback");
 
         let member_json = json_value
             .as_object()

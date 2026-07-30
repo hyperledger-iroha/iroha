@@ -2,7 +2,10 @@
 
 A `genesis.json` file defines the first transactions that run when an Iroha network starts. The file is a JSON object with these fields:
 
-- `chain` – unique chain identifier.
+- `chain` – the deployment-unique chain identifier. It is exact,
+  case-sensitive ASCII, is at most 128 bytes, begins and ends with an
+  alphanumeric character, and otherwise permits only alphanumerics plus
+  `.`, `_`, `:`, and `-`.
 - `executor` (optional) – path to the executor bytecode (`.to`). If present,
   genesis includes an Upgrade instruction as the first transaction. If omitted,
   no upgrade is performed and the built‑in executor is used.
@@ -14,6 +17,15 @@ A `genesis.json` file defines the first transactions that run when an Iroha netw
   - `ivm_triggers` – triggers with IVM bytecode executables.
   - `topology` – initial peer topology. Each entry keeps the peer id and PoP together: `{ "peer": "<public_key>", "pop_hex": "<hex>" }`. `pop_hex` may be omitted while composing, but must be present before signing.
 - `crypto` – cryptography snapshot mirrored from `iroha_config.crypto` (`default_hash`, `allowed_signing`, `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`). `allowed_curve_ids` mirrors `crypto.curves.allowed_curve_ids` so manifests can advertise which controller curves the cluster accepts. Tooling enforces SM combinations: manifests that list `sm2` must also switch the hash to `sm3-256`, while builds compiled without the `sm` feature reject `sm2` entirely. Normalization injects a `crypto_manifest_meta` custom parameter into the signed genesis; nodes refuse to start if the injected payload disagrees with the advertised snapshot.
+
+The signed genesis block is the deployment trust anchor, not the chain label
+by itself. Every genesis transaction is signed over the exact `chain` value,
+and node startup verifies that all of those values equal the configured chain
+before accepting the genesis public-key signature. Peer bootstrap additionally
+checks the requested chain, public key, and optional pinned genesis hash.
+Operators must therefore assign a different chain identifier to each distinct
+deployment; intentionally reusing both a chain identifier and its signing
+authority declares the same transaction replay domain.
 
 Example (`kagami genesis generate default --consensus-mode npos` output, instructions trimmed):
 
@@ -183,6 +195,9 @@ Kagami and the node code ensure this ordering so that, for example, parameters a
 Notes:
 - Kagami’s “default” template registers a sample domain and accounts, mints a few assets, and grants minimal permissions using only built‑in ISIs – no `.to` required.
 - If you do include an executor upgrade, it must be the first transaction. Kagami enforces this when generating/signing.
+- The executor must implement the migration entrypoint and return a canonical
+  Norito migration result. Production nodes always run that guest entrypoint;
+  they do not infer migration behavior from bytecode size or IVM header fields.
 - Use `kagami genesis validate` to catch invalid `Name` values (e.g., whitespace) and malformed instructions before signing.
 
 ## Running with Docker/Swarm

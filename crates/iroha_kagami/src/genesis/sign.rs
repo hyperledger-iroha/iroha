@@ -76,8 +76,11 @@ pub struct Args {
         value_name = "PATH"
     )]
     private_key_file: Option<PathBuf>,
-    /// Seed string to derive the genesis key (testing convenience).
-    #[clap(long, conflicts_with = "private_key", value_name = "SEED")]
+    /// A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters.
+    ///
+    /// This is a testing convenience. Production operators should prefer an
+    /// owner-held private-key file.
+    #[clap(long = "seed-hex", conflicts_with = "private_key", value_name = "HEX")]
     seed: Option<String>,
     /// Algorithm of the genesis key (must match the genesis public key).
     #[clap(long, default_value = "ed25519", value_name = "ALGORITHM")]
@@ -91,10 +94,8 @@ pub struct Args {
 }
 
 const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
-const DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN: &str = "ivm.universal";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
-const DEFAULT_NPOS_BOOTSTRAP_ESCROW_SEED: &[u8] = b"npos-escrow-account";
 
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,
@@ -147,21 +148,6 @@ impl BootstrapRegistrations {
             asset_defs,
         }
     }
-}
-
-fn bootstrap_escrow_account_id(
-    genesis_public_key: &iroha_crypto::PublicKey,
-) -> Result<AccountId, color_eyre::eyre::Error> {
-    let escrow_key_pair = KeyPair::try_from_seed(
-        genesis_public_key
-            .to_string()
-            .bytes()
-            .chain(DEFAULT_NPOS_BOOTSTRAP_ESCROW_SEED.iter().copied())
-            .collect(),
-        iroha_crypto::Algorithm::default(),
-    )
-    .wrap_err("failed to derive NPoS bootstrap escrow account key pair")?;
-    Ok(AccountId::new(escrow_key_pair.public_key().clone()))
 }
 
 fn manifest_has_npos_bootstrap(manifest: &RawGenesisTransaction) -> bool {
@@ -308,11 +294,30 @@ fn configured_npos_bootstrap_stake_asset_id(
     Ok(stake_asset_id)
 }
 
+fn configured_npos_bootstrap_escrow_account_id(
+    manifest: &RawGenesisTransaction,
+    config: Option<&actual::Root>,
+) -> Result<AccountId, color_eyre::eyre::Error> {
+    let literal = if let Some(config) = config {
+        config.nexus.staking.stake_escrow_account_id.clone()
+    } else {
+        staged_default_nexus(manifest)?
+            .staking
+            .stake_escrow_account_id
+    };
+    AccountId::parse_encoded(&literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|error| {
+            eyre!(
+                "NPoS auto-bootstrap requires `nexus.staking.stake_escrow_account_id` to be a canonical account literal, found `{literal}`: {error}"
+            )
+        })
+}
+
 fn append_npos_bootstrap(
     builder: GenesisBuilder,
     registrations: &mut BootstrapRegistrations,
     topology: &[PeerId],
-    escrow_domain_id: &DomainId,
     escrow_account_id: &AccountId,
     stake_asset_id: &AssetDefinitionId,
 ) -> Result<GenesisBuilder, color_eyre::eyre::Error> {
@@ -330,11 +335,6 @@ fn append_npos_bootstrap(
                 builder.append_instruction(Register::domain(Domain::new(nexus_domain.clone())));
             registrations.domains.insert(nexus_domain);
         }
-    }
-    if !registrations.domains.contains(escrow_domain_id) {
-        builder =
-            builder.append_instruction(Register::domain(Domain::new(escrow_domain_id.clone())));
-        registrations.domains.insert(escrow_domain_id.clone());
     }
     if !registrations.accounts.contains(escrow_account_id) {
         builder =
@@ -824,6 +824,14 @@ impl<T: Write> RunArgs<T> for Args {
                 "genesis signing key does not match the public key pinned by --config"
             ));
         }
+        let bootstrap_escrow_account_id = if needs_npos_bootstrap {
+            Some(configured_npos_bootstrap_escrow_account_id(
+                &genesis,
+                peer_config.as_ref(),
+            )?)
+        } else {
+            None
+        };
         let direct_sign_safe = topology_override.is_none() && !needs_npos_bootstrap;
         let prepared_genesis = if direct_sign_safe {
             genesis.with_consensus_mode(consensus_mode)
@@ -838,15 +846,14 @@ impl<T: Write> RunArgs<T> for Args {
                 builder = builder.next_transaction().set_topology(entries);
             }
             if needs_npos_bootstrap {
-                let ivm_domain =
-                    DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN)?;
-                let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key())?;
+                let escrow_account_id = bootstrap_escrow_account_id
+                    .as_ref()
+                    .expect("NPoS bootstrap escrow resolved above");
                 builder = append_npos_bootstrap(
                     builder,
                     &mut bootstrap_registrations,
                     &topology_peers,
-                    &ivm_domain,
-                    &escrow_account_id,
+                    escrow_account_id,
                     &bootstrap_stake_asset_id,
                 )?;
             }
@@ -927,10 +934,12 @@ fn load_genesis_key(
             KeyPair::from_private_key(sk).wrap_err("derive genesis key pair from private key")
         }
         (None, Some(path), None) => load_genesis_key_file(path, algorithm),
-        (None, None, Some(seed)) => KeyPair::try_from_seed(seed.as_bytes().to_vec(), algorithm)
-            .wrap_err("derive seeded genesis key pair"),
+        (None, None, Some(seed)) => {
+            let seed = crate::crypto::parse_keygen_seed_hex(seed)?;
+            KeyPair::try_from_seed(seed, algorithm).wrap_err("derive seeded genesis key pair")
+        }
         (None, None, None) => Err(eyre!(
-            "genesis signing requires a private key; pass --private-key-file, --private-key, or --seed"
+            "genesis signing requires a private key; pass --private-key-file, --private-key, or --seed-hex"
         )),
         _ => unreachable!("clap enforces key-source conflicts"),
     }
@@ -1628,9 +1637,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let temp = tempfile::tempdir().expect("bound manifest temp dir");
         let bound_manifest_path = temp.path().join("genesis.bound.json");
         let genesis_file = minimal_genesis_file();
-        let seed = "bound-manifest-output-regression";
-        let genesis_key_pair = KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
-            .expect("derive genesis signing key");
+        let seed = "41".repeat(32);
+        let genesis_key_pair = KeyPair::try_from_seed(
+            crate::crypto::parse_keygen_seed_hex(&seed).expect("decode fixture seed"),
+            Algorithm::Ed25519,
+        )
+        .expect("derive genesis signing key");
         let unbound_manifest = RawGenesisTransaction::from_path(&genesis_file)
             .expect("parse unbound genesis manifest");
         let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1701,7 +1713,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}={topology_pop}", topology_peer.public_key())],
             private_key: None,
             private_key_file: None,
-            seed: Some(seed.to_owned()),
+            seed: Some(seed),
             algorithm: Algorithm::Ed25519,
             config: Some(config_path),
             consensus_mode: None,
@@ -1860,7 +1872,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
     #[test]
     fn load_genesis_key_accepts_seed_and_algorithm() {
-        let kp = load_genesis_key(None, None, Some("seed-123"), Algorithm::Secp256k1)
+        let seed = "42".repeat(32);
+        let kp = load_genesis_key(None, None, Some(&seed), Algorithm::Secp256k1)
             .expect("seed path should work");
         assert_eq!(
             kp.public_key()
@@ -2091,9 +2104,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
 
-        let seed = "sign-direct-manifest-regression";
-        let key_pair = KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
-            .expect("derive checked genesis fixture key");
+        let seed = "43".repeat(32);
+        let key_pair = KeyPair::try_from_seed(
+            crate::crypto::parse_keygen_seed_hex(&seed).expect("decode fixture seed"),
+            Algorithm::Ed25519,
+        )
+        .expect("derive checked genesis fixture key");
         let expected = manifest
             .clone()
             .build_and_sign_with_confidential_policy_hash(
@@ -2110,7 +2126,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![],
             private_key: None,
             private_key_file: None,
-            seed: Some(seed.to_owned()),
+            seed: Some(seed),
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
@@ -2324,6 +2340,30 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
     #[test]
     fn sign_auto_bootstraps_npos_validators_for_topology() {
+        let genesis_file = npos_genesis_file();
+        let manifest =
+            RawGenesisTransaction::from_path(&genesis_file).expect("parse NPoS genesis fixture");
+        let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
+        let expected_escrow = configured_npos_bootstrap_escrow_account_id(&manifest, None)
+            .expect("resolve default staking escrow");
+        let private_key_hex = test_private_key_hex();
+        let genesis_key_pair =
+            load_genesis_key(Some(&private_key_hex), None, None, Algorithm::Ed25519)
+                .expect("load fixture genesis signer");
+        let legacy_orphan = AccountId::new(
+            KeyPair::try_from_seed(
+                genesis_key_pair
+                    .public_key()
+                    .to_string()
+                    .bytes()
+                    .chain(b"npos-escrow-account".iter().copied())
+                    .collect(),
+                Algorithm::default(),
+            )
+            .expect("derive legacy orphan identity")
+            .public_key()
+            .clone(),
+        );
         let peer = PeerId::new(
             checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
@@ -2331,12 +2371,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
         let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
         let args = Args {
-            genesis_file: npos_genesis_file(),
+            genesis_file,
             out_file: None,
             bound_manifest_out: None,
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
-            private_key: Some(test_private_key_hex()),
+            private_key: Some(private_key_hex),
             private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
@@ -2352,9 +2392,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
         let mut validators = std::collections::BTreeSet::new();
         let mut minted_asset_ids = std::collections::BTreeSet::new();
+        let mut registered_accounts = std::collections::BTreeSet::new();
         for tx in block.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instr in instructions {
+                    if let Some(register) = instr.as_any().downcast_ref::<Register<Account>>() {
+                        registered_accounts.insert(register.object.id.clone());
+                    }
                     if let Some(register) =
                         instr.as_any().downcast_ref::<RegisterPublicLaneValidator>()
                     {
@@ -2378,6 +2422,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert!(
             minted_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
             "private NPoS bootstrap should keep using the synthetic local stake asset"
+        );
+        assert!(
+            registered_accounts.contains(&expected_escrow),
+            "auto-bootstrap must register the escrow account selected by nexus.staking"
+        );
+        assert!(
+            !registered_accounts.contains(&legacy_orphan),
+            "auto-bootstrap must not emit an orphan account derived from public genesis data"
         );
     }
 

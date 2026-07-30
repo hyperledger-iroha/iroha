@@ -41,6 +41,7 @@ fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     ConsensusConfigCaps {
         nexus_policy_digest: [0xA5; 32],
         v2_config_fingerprint: [0xC3; 32],
+        ivm_gas_schedule_hash: [0xE7; 32],
     }
 }
 
@@ -58,6 +59,7 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
     assert_eq!(decoded, expected);
     assert_eq!(decoded.nexus_policy_digest, [0xA5; 32]);
     assert_eq!(decoded.v2_config_fingerprint, [0xC3; 32]);
+    assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
 }
 
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {

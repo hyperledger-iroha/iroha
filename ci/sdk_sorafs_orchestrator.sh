@@ -514,6 +514,15 @@ run_javascript_parity() {
   )
 }
 
+run_swift_parity() {
+  (
+    cd "${REPO_ROOT}/IrohaSwift"
+    swift test --filter SorafsOrchestratorParityTests
+    swift test --filter CancelAssetLockV1Tests
+    swift test --filter SorafsReferenceValidatorsTests
+  )
+}
+
 run_sdk_test rust "orchestrator parity" \
   cargo test -p sorafs_orchestrator rust_orchestrator_fetch_suite_is_deterministic -- --nocapture
 
@@ -523,7 +532,7 @@ run_sdk_test python "bindings parity (iroha_python_rs)" \
 run_sdk_test javascript "orchestrator parity" \
   run_javascript_parity
 
-run_sdk_test swift "orchestrator parity" \
-  bash -c 'cd '"${REPO_ROOT}/IrohaSwift"' && swift test --filter SorafsOrchestratorParityTests'
+run_sdk_test swift "orchestrator and appeal-finance parity" \
+  run_swift_parity
 
 echo "[sorafs-sdk] all orchestrator parity suites passed"

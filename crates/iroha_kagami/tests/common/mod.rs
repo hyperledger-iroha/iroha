@@ -16,7 +16,7 @@ pub struct PopFixture {
     pub pop_hex: String,
 }
 
-/// Run `kagami genesis pop` with the provided seed.
+/// Run `kagami genesis pop` with the provided 32-byte hexadecimal seed.
 pub fn generate_pop(seed: &str) -> Result<PopFixture> {
     let output = Command::new(env!("CARGO_BIN_EXE_kagami"))
         .args([
@@ -24,7 +24,7 @@ pub fn generate_pop(seed: &str) -> Result<PopFixture> {
             "pop",
             "--algorithm",
             "bls_normal",
-            "--seed",
+            "--seed-hex",
             seed,
             "--json",
         ])

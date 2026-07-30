@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RULES_FILE="${1:-docs/source/references/prometheus.rules.sumeragi_vrf.yml}"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
-RULES_PATH="${PROJECT_ROOT}/${RULES_FILE}"
 
-if [[ ! -f "${RULES_PATH}" ]]; then
-  printf 'Rules file not found: %s\n' "${RULES_PATH}" >&2
-  exit 1
+if [[ "$#" -eq 0 ]]; then
+  set -- docs/source/references/prometheus.rules.sumeragi_vrf.yml
 fi
 
+RULES_FILES=("$@")
+RULES_PATHS=()
+for rules_file in "${RULES_FILES[@]}"; do
+  rules_path="${PROJECT_ROOT}/${rules_file}"
+  if [[ ! -f "${rules_path}" ]]; then
+    printf 'Rules file not found: %s\n' "${rules_path}" >&2
+    exit 1
+  fi
+  RULES_PATHS+=("${rules_path}")
+done
+
 if command -v promtool >/dev/null 2>&1; then
-  promtool check rules "${RULES_PATH}"
+  promtool check rules "${RULES_PATHS[@]}"
   exit 0
 fi
 
 if command -v docker >/dev/null 2>&1; then
-  docker run --rm -v "${PROJECT_ROOT}:/workspace" prom/prometheus promtool check rules \
-    "${RULES_FILE}"
+  docker run --rm --entrypoint /bin/promtool \
+    -v "${PROJECT_ROOT}:/workspace:ro" \
+    --workdir /workspace \
+    prom/prometheus check rules "${RULES_FILES[@]}"
   exit 0
 fi
 

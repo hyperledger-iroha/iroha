@@ -200,6 +200,27 @@ pub mod isi {
         ))
     }
 
+    fn validate_ivm_heap_parameter(parameter: &Parameter) -> Result<(), Error> {
+        use iroha_data_model::parameter::SmartContractParameter;
+
+        let (name, limit) = match parameter {
+            Parameter::SmartContract(SmartContractParameter::Memory(limit)) => {
+                ("smart_contract.memory", limit.get())
+            }
+            Parameter::Executor(SmartContractParameter::Memory(limit)) => {
+                ("executor.memory", limit.get())
+            }
+            _ => return Ok(()),
+        };
+        if limit > iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES {
+            return Err(invalid_smart_contract_parameter(format!(
+                "{name} exceeds the ABI V1 heap window: {limit} > {} bytes",
+                iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES
+            )));
+        }
+        Ok(())
+    }
+
     #[derive(crate::json_macros::JsonDeserialize)]
     struct GovernedGasRate {
         asset: String,
@@ -2663,7 +2684,7 @@ pub mod isi {
             candidates
                 .iter()
                 .map(|(account_id, bond)| (account_id, bond.clone())),
-            iroha_data_model::isi::governance::CouncilDerivationKind::Vrf,
+            iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
         );
         let roster_root = compute_parliament_roster_root(&bodies)?;
         Ok(crate::state::GovernanceParliamentSnapshot {
@@ -9752,27 +9773,22 @@ pub mod isi {
             for (account, record) in updated_citizens {
                 state_transaction.world.citizens.insert(account, record);
             }
-            // Idempotent insert: if entry exists and draw metadata match, accept; if different, overwrite.
+            let candidate_count =
+                u32::try_from(self.members.len().saturating_add(self.alternates.len()))
+                    .unwrap_or(u32::MAX);
+            // This instruction is the privileged manual-roster path. Derivation metadata is
+            // ledger-owned so callers cannot assert that unverified cryptographic work occurred.
             let mut rec = crate::state::CouncilState {
                 epoch: self.epoch,
                 members: self.members.clone(),
                 alternates: self.alternates.clone(),
-                verified: self.verified,
-                candidate_count: self.candidates_count,
-                derived_by: self.derived_by,
+                candidate_count,
+                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
             };
             if let Some(existing) = state_transaction.world.council.get(&self.epoch) {
                 let same_members = existing.members == self.members;
                 let same_alternates = existing.alternates == self.alternates;
-                let same_verification = existing.verified == self.verified;
-                let same_candidate_count = existing.candidate_count == self.candidates_count;
-                let same_derivation = existing.derived_by == self.derived_by;
-                if same_members
-                    && same_alternates
-                    && same_verification
-                    && same_candidate_count
-                    && same_derivation
-                {
+                if same_members && same_alternates {
                     rec = existing.clone();
                     let already_recorded = state_transaction
                         .world
@@ -9799,9 +9815,9 @@ pub mod isi {
                         epoch: self.epoch,
                         members_count,
                         alternates_count,
-                        verified: self.verified,
-                        candidates_count: self.candidates_count,
-                        derived_by: self.derived_by,
+                        candidates_count: candidate_count,
+                        derived_by:
+                            iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
                     },
                 ),
             ));
@@ -20518,6 +20534,7 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
                 validate_governed_pipeline_gas_parameter(custom)?;
                 validate_reputation_archive_retention_request(custom, state_transaction)?;
@@ -20735,6 +20752,7 @@ pub mod isi {
                 Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,
                 Transaction(transaction.max_decompressed_bytes) => TransactionParameter::MaxDecompressedBytes,
                 Transaction(transaction.max_metadata_depth) => TransactionParameter::MaxMetadataDepth,
+                Transaction(transaction.max_time_to_live_ms) => TransactionParameter::MaxTimeToLiveMs,
 
                 SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
                 SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
@@ -20862,7 +20880,10 @@ pub mod isi {
                 SetParameter,
                 bridge::{RecordBridgeReceipt, SubmitBridgeProof},
             },
-            parameter::system::{SumeragiNposParameters, SumeragiParameter},
+            parameter::{
+                SmartContractParameter,
+                system::{SumeragiNposParameters, SumeragiParameter},
+            },
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
@@ -29117,7 +29138,6 @@ seiyaku GovernanceLifecycle {
                                     epoch: 1,
                                     members: vec![account_id.clone()],
                                     alternates: Vec::new(),
-                                    verified: 0,
                                     candidate_count: 0,
                                     derived_by: Default::default(),
                                 },
@@ -36356,6 +36376,52 @@ seiyaku GovernanceLifecycle {
 
             let params = stx.world.parameters.get().sumeragi().clone();
             assert_eq!(params.max_clock_drift_ms(), 333);
+        }
+
+        #[test]
+        fn set_parameter_rejects_heap_limits_outside_the_abi_window() {
+            assert_eq!(
+                iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES,
+                ivm::Memory::HEAP_MAX_SIZE
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            for parameter in [
+                Parameter::SmartContract(SmartContractParameter::Memory(NonZeroU64::MAX)),
+                Parameter::Executor(SmartContractParameter::Memory(NonZeroU64::MAX)),
+            ] {
+                let error = SetParameter::new(parameter)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("heap limit above the ABI address window must fail");
+                assert!(
+                    error.to_string().contains("exceeds the ABI V1 heap window"),
+                    "unexpected heap-limit error: {error}"
+                );
+            }
+
+            let maximum =
+                NonZeroU64::new(ivm::Memory::HEAP_MAX_SIZE).expect("ABI heap window is non-zero");
+            SetParameter::new(Parameter::SmartContract(SmartContractParameter::Memory(
+                maximum,
+            )))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("exact ABI heap ceiling is valid");
+            SetParameter::new(Parameter::Executor(SmartContractParameter::Memory(maximum)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact executor ABI heap ceiling is valid");
+            assert_eq!(
+                stx.world.parameters.get().smart_contract().memory().get(),
+                ivm::Memory::HEAP_MAX_SIZE
+            );
+            assert_eq!(
+                stx.world.parameters.get().executor().memory().get(),
+                ivm::Memory::HEAP_MAX_SIZE
+            );
         }
 
         #[test]

@@ -123,6 +123,8 @@ pub enum IrohaRuntimeProviderSlotV1 {
     ReputationFinalizedArchiveRetentionAuthority = 48,
     /// Soracloud runtime mutation and purpose-separated provenance signer.
     SoracloudRuntimeMutationSigner = 49,
+    /// Reputation journal externally sealed monotonic checkpoint provider.
+    ReputationJournalCheckpoint = 50,
 }
 
 impl IrohaRuntimeProviderSlotV1 {
@@ -1589,7 +1591,20 @@ fn collect_reputation_billing_bindings(
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     let storage = &config.torii.sorafs_storage;
     if let Some(reputation) = storage.reputation_runtime.as_ref() {
+        let checkpoint_slot = IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint;
+        sorafs_node::reputation::runtime::ReputationJournalCheckpointSealingPolicyV1::try_new(
+            reputation.journal_checkpoint_provider_handle.clone(),
+            reputation.journal_checkpoint_provider_revision,
+            reputation.journal_checkpoint_provider_policy_digest,
+        )
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(checkpoint_slot))?;
         for (slot, handle, revision, policy_digest) in [
+            (
+                checkpoint_slot,
+                reputation.journal_checkpoint_provider_handle.as_str(),
+                reputation.journal_checkpoint_provider_revision,
+                reputation.journal_checkpoint_provider_policy_digest,
+            ),
             (
                 IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter,
                 reputation.journal_transaction_submitter_handle.as_str(),
@@ -1910,6 +1925,7 @@ fn resolve_runtime_deps_from_bindings(
     qualify_native_transaction_signers(bindings, &mut dependencies)?;
     qualify_soracloud_runtime_signer(bindings, &mut dependencies)?;
     qualify_provider_ingest_dependencies(bindings, &dependencies)?;
+    qualify_reputation_journal_checkpoint_dependency(bindings, &dependencies)?;
     qualify_reputation_retention_dependency(bindings, &dependencies)?;
     qualify_por_replay_archive_dependency(bindings, &dependencies)?;
     qualify_evidence_viewer_archive_dependency(bindings, &dependencies)?;
@@ -2532,7 +2548,10 @@ fn qualify_provider_ingest_dependencies(
             Ok(qualification)
         };
         let expected_qualification = observe()?;
-        let chain_id = iroha_data_model::ChainId::from(bindings.chain_id().to_owned());
+        let chain_id = bindings
+            .chain_id()
+            .parse::<iroha_data_model::ChainId>()
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
         if let Some(record) = authority.load_latest(&chain_id).map_err(|error| {
             match error {
             iroha_core::query::provider_ingest_finalized::
@@ -2601,7 +2620,10 @@ fn qualify_reputation_retention_dependency(
         Ok(qualification)
     };
     let expected_qualification = observe()?;
-    let chain_id = iroha_data_model::ChainId::from(bindings.chain_id().to_owned());
+    let chain_id = bindings
+        .chain_id()
+        .parse::<iroha_data_model::ChainId>()
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
     if let Some(record) = authority.load_latest(&chain_id).map_err(|error| {
         match error {
         iroha_core::query::reputation_finalized::
@@ -2623,6 +2645,83 @@ fn qualify_reputation_retention_dependency(
         }
     }
     observe()?;
+    Ok(())
+}
+
+fn qualify_reputation_journal_checkpoint_dependency(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let Some(expected) = bindings
+        .iter()
+        .find(|binding| binding.slot() == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint)
+    else {
+        return Ok(());
+    };
+    let provider = dependencies
+        .sorafs_reputation_journal_checkpoint_provider
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    if !is_production_runtime_handle(provider.handle()) {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
+    }
+    if provider.handle() != expected.handle() {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    let expected_revision =
+        expected
+            .revision()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                expected.slot(),
+            ))?;
+    let expected_policy_digest =
+        expected
+            .policy_digest()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                expected.slot(),
+            ))?;
+    sorafs_node::reputation::runtime::ReputationJournalCheckpointSealingPolicyV1::try_new(
+        expected.handle().to_owned(),
+        expected_revision,
+        expected_policy_digest,
+    )
+    .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let expected_qualification =
+        sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1::new(
+            expected_revision,
+            expected_policy_digest,
+        );
+    let first = provider
+        .qualification()
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
+    if first != expected_qualification || provider.handle() != expected.handle() {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    let record = provider.load_latest().map_err(|error| match error {
+        sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1::Unavailable => {
+            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+        }
+        sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1::Rejected
+        | sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1::Ambiguous => {
+            IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+        }
+    })?;
+    if record.is_some_and(|record| {
+        record
+            .to_canonical_bytes(
+                sorafs_node::reputation::runtime::
+                    REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
+            )
+            .is_err()
+    }) {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    let second = provider
+        .qualification()
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
+    if second != first || provider.handle() != expected.handle() {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
     Ok(())
 }
 
@@ -2801,6 +2900,9 @@ fn dependency_is_present(
         Slot::ReputationJournalTransactionSubmitter => deps
             .sorafs_reputation_journal_transaction_submitter
             .is_some(),
+        Slot::ReputationJournalCheckpoint => {
+            deps.sorafs_reputation_journal_checkpoint_provider.is_some()
+        }
         Slot::ReputationThresholdSigner => deps.sorafs_reputation_threshold_signer.is_some(),
         Slot::ReputationGovernanceDag => deps.sorafs_reputation_governance_dag.is_some(),
         Slot::ReputationFinalizedArchiveRetentionAuthority => {
@@ -3062,6 +3164,12 @@ fn has_unrequested_reputation_billing_dependency(
 
     dependency_is_unrequested(
         bindings,
+        Slot::ReputationJournalCheckpoint,
+        dependencies
+            .sorafs_reputation_journal_checkpoint_provider
+            .is_some(),
+    ) || dependency_is_unrequested(
+        bindings,
         Slot::ReputationJournalTransactionSubmitter,
         dependencies
             .sorafs_reputation_journal_transaction_submitter
@@ -3211,6 +3319,83 @@ mod tests {
     const FENCED_PRIVACY_HANDLE: &str = "governance-cas:transparency:privacy-primary";
     const FENCED_PRIVACY_QUALIFICATION: sorafs_node::GovernanceDagRuntimeProviderQualificationV1 =
         sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(13, [0x91; 32]);
+    const REPUTATION_CHECKPOINT_HANDLE: &str =
+        "sealed://sorafs/reputation/journal-checkpoint-primary";
+    const REPUTATION_CHECKPOINT_QUALIFICATION:
+        sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1 =
+        sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1::new(
+            sorafs_node::reputation::runtime::REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            [0xA4; 32],
+        );
+
+    #[derive(Debug)]
+    struct ReputationJournalCheckpointProvider {
+        handle: &'static str,
+        first: sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1,
+        later: Option<sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1>,
+        qualification_calls: AtomicUsize,
+        load_error:
+            Option<sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1>,
+    }
+
+    impl ReputationJournalCheckpointProvider {
+        fn exact() -> Self {
+            Self {
+                handle: REPUTATION_CHECKPOINT_HANDLE,
+                first: REPUTATION_CHECKPOINT_QUALIFICATION,
+                later: None,
+                qualification_calls: AtomicUsize::new(0),
+                load_error: None,
+            }
+        }
+    }
+
+    impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
+        for ReputationJournalCheckpointProvider
+    {
+        fn handle(&self) -> &str {
+            self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1,
+            sorafs_node::reputation::runtime::ReputationExternalFailureV1,
+        > {
+            let call = self.qualification_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(if call == 0 {
+                self.first
+            } else {
+                self.later.unwrap_or(self.first)
+            })
+        }
+    }
+
+    impl sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1
+        for ReputationJournalCheckpointProvider
+    {
+        fn load_latest(
+            &self,
+        ) -> Result<
+            Option<sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1>,
+            sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1,
+        > {
+            self.load_error.map_or(Ok(None), Err)
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            _expected_revision: Option<[u8; 32]>,
+            _next: &sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1,
+        ) -> Result<(), sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1>
+        {
+            Err(
+                sorafs_node::reputation::runtime::
+                    ReputationJournalCheckpointExternalErrorV1::Rejected,
+            )
+        }
+    }
 
     fn evidence_archive_public_key() -> [u8; 32] {
         let key_pair = KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519)
@@ -3412,6 +3597,7 @@ mod tests {
             Slot::EvidenceViewerCompactionArchive,
             Slot::ReputationFinalizedArchiveRetentionAuthority,
             Slot::SoracloudRuntimeMutationSigner,
+            Slot::ReputationJournalCheckpoint,
         ];
         for (index, slot) in slots.into_iter().enumerate() {
             assert_eq!(
@@ -4788,6 +4974,10 @@ mod tests {
                 window_start_height: 1,
                 window_end_height: 10,
                 finalized_query_handle: "ledger://sorafs/reputation/finalized-primary".to_owned(),
+                journal_checkpoint_provider_handle:
+                    "sealed://sorafs/reputation/journal-primary".to_owned(),
+                journal_checkpoint_provider_revision: 1,
+                journal_checkpoint_provider_policy_digest: [0x60; 32],
                 journal_transaction_submitter_handle:
                     "queue://sorafs/reputation/journal-primary".to_owned(),
                 journal_transaction_submitter_revision: 11,
@@ -5919,6 +6109,12 @@ mod tests {
         assert_eq!(retention.policy_digest(), Some([0xC9; 32]));
         for (slot, handle, revision, policy_digest) in [
             (
+                IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint,
+                "sealed://sorafs/reputation/journal-primary",
+                1,
+                [0x60; 32],
+            ),
+            (
                 IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter,
                 "queue://sorafs/reputation/journal-primary",
                 11,
@@ -5967,7 +6163,7 @@ mod tests {
 
     #[test]
     fn reputation_catalog_rejects_zero_public_qualification_bindings() {
-        for mutation in 0..6 {
+        for mutation in 0..8 {
             let mut config = default_runtime_config();
             configure_reputation_runtime(&mut config);
             let reputation = config
@@ -5977,18 +6173,149 @@ mod tests {
                 .as_mut()
                 .expect("configured reputation runtime");
             match mutation {
-                0 => reputation.journal_transaction_submitter_revision = 0,
-                1 => reputation.journal_transaction_submitter_policy_digest = [0; 32],
-                2 => reputation.threshold_signer_revision = 0,
-                3 => reputation.threshold_signer_policy_digest = [0; 32],
-                4 => reputation.governance_dag_revision = 0,
-                5 => reputation.governance_dag_policy_digest = [0; 32],
+                0 => reputation.journal_checkpoint_provider_revision = 0,
+                1 => reputation.journal_checkpoint_provider_policy_digest = [0; 32],
+                2 => reputation.journal_transaction_submitter_revision = 0,
+                3 => reputation.journal_transaction_submitter_policy_digest = [0; 32],
+                4 => reputation.threshold_signer_revision = 0,
+                5 => reputation.threshold_signer_policy_digest = [0; 32],
+                6 => reputation.governance_dag_revision = 0,
+                7 => reputation.governance_dag_policy_digest = [0; 32],
                 _ => unreachable!(),
             }
             assert!(matches!(
                 IrohaRuntimeProviderBindingsV1::try_from_config(&config),
                 Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(_))
             ));
+        }
+    }
+
+    fn reputation_checkpoint_request() -> IrohaRuntimeProviderBindingsV1 {
+        IrohaRuntimeProviderBindingsV1 {
+            chain_id: "reputation-checkpoint-registry-test".to_owned(),
+            bindings: vec![
+                IrohaRuntimeProviderBindingV1::try_new(
+                    IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint,
+                    REPUTATION_CHECKPOINT_HANDLE,
+                    Some(REPUTATION_CHECKPOINT_QUALIFICATION.revision()),
+                    Some(REPUTATION_CHECKPOINT_QUALIFICATION.policy_digest()),
+                )
+                .expect("valid reputation checkpoint binding"),
+            ],
+        }
+    }
+
+    fn resolve_reputation_checkpoint(
+        requested: &IrohaRuntimeProviderBindingsV1,
+        provider: ReputationJournalCheckpointProvider,
+    ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
+        let registry = FixedRegistry(
+            IrohaRuntimeDeps::default()
+                .with_sorafs_reputation_journal_checkpoint_provider(Arc::new(provider)),
+        );
+        resolve_runtime_deps_from_bindings(requested, Some(&registry))
+    }
+
+    #[test]
+    fn reputation_checkpoint_resolution_is_exactly_scoped_and_qualified() {
+        let requested = reputation_checkpoint_request();
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&requested, Some(&EmptyRegistry)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
+        ));
+        assert!(
+            resolve_reputation_checkpoint(
+                &requested,
+                ReputationJournalCheckpointProvider::exact(),
+            )
+            .is_ok()
+        );
+
+        let unrequested = IrohaRuntimeProviderBindingsV1 {
+            chain_id: "reputation-checkpoint-registry-test".to_owned(),
+            bindings: Vec::new(),
+        };
+        assert!(matches!(
+            resolve_reputation_checkpoint(
+                &unrequested,
+                ReputationJournalCheckpointProvider::exact(),
+            ),
+            Err(IrohaRuntimeProviderRegistryErrorV1::UnexpectedProviders)
+        ));
+
+        let mut substituted = ReputationJournalCheckpointProvider::exact();
+        substituted.handle = "sealed://sorafs/reputation/substituted-checkpoint";
+        assert!(matches!(
+            resolve_reputation_checkpoint(&requested, substituted),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+
+        let mut stale = ReputationJournalCheckpointProvider::exact();
+        stale.first =
+            sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_CHECKPOINT_QUALIFICATION.revision(),
+                [0xA5; 32],
+            );
+        assert!(matches!(
+            resolve_reputation_checkpoint(&requested, stale),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+
+        let mut drifting = ReputationJournalCheckpointProvider::exact();
+        drifting.later = Some(
+            sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_CHECKPOINT_QUALIFICATION.revision(),
+                [0xA6; 32],
+            ),
+        );
+        assert!(matches!(
+            resolve_reputation_checkpoint(&requested, drifting),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+
+        let mut unavailable = ReputationJournalCheckpointProvider::exact();
+        unavailable.load_error = Some(
+            sorafs_node::reputation::runtime::
+                ReputationJournalCheckpointExternalErrorV1::Unavailable,
+        );
+        assert!(matches!(
+            resolve_reputation_checkpoint(&requested, unavailable),
+            Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+        ));
+
+        let mut ambiguous = ReputationJournalCheckpointProvider::exact();
+        ambiguous.load_error = Some(
+            sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1::Ambiguous,
+        );
+        assert!(matches!(
+            resolve_reputation_checkpoint(&requested, ambiguous),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+    }
+
+    #[test]
+    fn reputation_checkpoint_binding_rejects_non_v1_profile_and_test_handle() {
+        for mutation in 0..2 {
+            let mut config = default_runtime_config();
+            configure_reputation_runtime(&mut config);
+            let reputation = config
+                .torii
+                .sorafs_storage
+                .reputation_runtime
+                .as_mut()
+                .expect("configured reputation runtime");
+            if mutation == 0 {
+                reputation.journal_checkpoint_provider_revision = 2;
+            } else {
+                reputation.journal_checkpoint_provider_handle =
+                    "sealed://sorafs/reputation/test-checkpoint".to_owned();
+            }
+            assert_eq!(
+                IrohaRuntimeProviderBindingsV1::try_from_config(&config),
+                Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint,
+                ))
+            );
         }
     }
 

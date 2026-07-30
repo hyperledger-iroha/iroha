@@ -26,10 +26,7 @@ pub struct ParliamentTerm {
     /// Alternates (ordered) to replace members who decline/are ineligible.
     #[norito(default)]
     pub alternates: Vec<AccountId>,
-    /// Count of candidates whose VRF proofs verified for this term.
-    #[norito(default)]
-    pub verified: u32,
-    /// Total candidates considered (verified + rejected).
+    /// Total eligible candidates considered, or roster entries for a manual roster.
     #[norito(default)]
     pub candidate_count: u32,
     /// Derivation method used to compute the roster.

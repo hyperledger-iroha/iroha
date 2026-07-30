@@ -181,7 +181,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
                 "ci/check_privacy_sdk_guard.sh"
             ),
             "fetch_name": "Prime privacy Python SDK Cargo dependencies",
-            "python_path_count": 4,
+            "python_path_count": 5,
         },
     }
     setup_python_path = "${{ steps.privacy-python.outputs.python-path }}"
@@ -194,7 +194,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     assert workflow.count("update-environment: false") == 2
     assert "cache: pip" not in workflow
     assert "cache-dependency-path: python/iroha_python/requirements-ci.lock" not in workflow
-    assert workflow.count(setup_python_path) == 7
+    assert workflow.count(setup_python_path) == 8
     for job, policy in cargo_jobs.items():
         match = re.search(
             rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
