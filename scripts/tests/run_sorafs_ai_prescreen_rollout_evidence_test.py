@@ -18,6 +18,10 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+from sorafs_rollout_runner_test_support import (  # noqa: E402
+    write_topology_qualification,
+)
+
 
 def write_payload(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,6 +52,13 @@ def complete_args(tmp_path: Path) -> list[str]:
         "1800400000",
         "--now-unix",
         "1800400000",
+        "--topology-qualification-summary",
+        str(
+            write_topology_qualification(
+                tmp_path / "topology-qualification.json",
+                deployment_id="ai-prescreen-production-20260701",
+            )
+        ),
         "--max-evidence-age-secs",
         "604800",
         "--manifest",

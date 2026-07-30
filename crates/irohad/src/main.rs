@@ -11464,8 +11464,11 @@ impl Iroha {
         // handle loss. Any pre-shutdown return means the supervised configuration
         // authority failed; restarting only this relay would preserve stale ACL or
         // handshake policy and is therefore deliberately not recoverable.
+        let confidential_gas = config.confidential.gas;
         supervisor.monitor(tokio::task::spawn(async move {
-            if let Err(err) = config_updates_relay(kiso, logger, net_for_relay).await {
+            if let Err(err) =
+                config_updates_relay(kiso, logger, net_for_relay, confidential_gas).await
+            {
                 iroha_logger::error!(?err, "Config updates relay exited");
             }
         }));
@@ -11698,23 +11701,19 @@ async fn config_updates_relay(
     kiso: KisoHandle,
     logger: LoggerHandle,
     network: iroha_core::IrohaNetwork,
+    confidential_gas: iroha_config::parameters::actual::ConfidentialGas,
 ) -> EyreResult<()> {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = confidential_gas;
+
     let mut log_level_update = kiso.subscribe_on_logger_updates().await?;
     let mut acl_update = kiso.subscribe_on_network_acl_updates().await?;
     let mut handshake_update = kiso.subscribe_on_soranet_handshake_updates().await?;
     #[cfg(feature = "telemetry")]
-    let mut confidential_gas_update = kiso.subscribe_on_confidential_gas_updates().await?;
-    #[cfg(feature = "telemetry")]
     let confidential_metrics_handle = iroha_telemetry::metrics::global().cloned();
     #[cfg(feature = "telemetry")]
-    if let (Some(metrics), gas) = (
-        confidential_metrics_handle.as_ref(),
-        *confidential_gas_update.borrow(),
-    ) {
-        metrics.set_confidential_gas_schedule(&gas);
-    }
-    #[cfg(feature = "telemetry")]
     if let Some(metrics) = confidential_metrics_handle.as_ref() {
+        metrics.set_confidential_gas_schedule(&confidential_gas);
         let digest = ivm::gas::schedule_hash();
         metrics.set_ivm_gas_schedule_hash(digest.as_ref());
     }
@@ -11763,17 +11762,6 @@ async fn config_updates_relay(
                     break;
                 }
             },
-            result = confidential_gas_update.changed() => {
-                if let Ok(()) = result {
-                    if let Some(metrics) = confidential_metrics_handle.as_ref() {
-                        let gas = *confidential_gas_update.borrow_and_update();
-                        metrics.set_confidential_gas_schedule(&gas);
-                    }
-                } else {
-                    iroha_logger::debug!("Exiting config updates relay (confidential gas channel closed)");
-                    break;
-                }
-            }
         };
     }
 

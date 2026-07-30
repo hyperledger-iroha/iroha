@@ -14,11 +14,11 @@ workspace = true
 debug = []
 
 [dependencies]
-iroha_data_model.workspace = true
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 iroha_smart_contract_codec.workspace = true
 
 getrandom = { version = "0.3.4" }
-norito.workspace = true
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 [dev-dependencies]
 # Removed `webassembly-test` due to outdated dependency chain causing

@@ -1,0 +1,13 @@
+# Schema-complete, payload-free production topology shape. It contains public
+# identities, opaque runtime handles, and digests only. It is not live
+# qualification evidence; use operator-reviewed production values and keep
+# credentials, private keys, tokens, model bytes, and PII runtime-only.
+
+--manifest
+scripts/examples/sorafs_l1_deployment_qualification_manifest.json.example
+--deployment-id
+sorafs-mainnet-2026-07
+--environment
+production
+--summary-out
+artifacts/sorafs/production-readiness/l1-topology-qualification.json

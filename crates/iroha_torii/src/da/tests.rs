@@ -4525,12 +4525,17 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
 #[test]
 fn build_chunk_commitments_rejects_oversized_chunk_length() {
     let mut request = sample_request();
-    request.chunk_size = 256;
-    request.payload = vec![0xA5; 1024];
+    request.chunk_size = MIN_CHUNK_SIZE_BYTES;
+    let oversized_chunk_size = MIN_CHUNK_SIZE_BYTES * 2;
+    request.payload = vec![
+        0xA5;
+        usize::try_from(oversized_chunk_size)
+            .expect("test chunk size fits the host address space")
+    ];
     request.total_size = request.payload.len() as u64;
 
     let canonical = normalize_payload(&request).expect("normalize payload");
-    let oversized_profile = chunk_profile_for_request(1024);
+    let oversized_profile = chunk_profile_for_request(oversized_chunk_size);
     let mut chunk_store = ChunkStore::with_profile(oversized_profile);
     chunk_store
         .ingest_bytes(canonical.as_slice())

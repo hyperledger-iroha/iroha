@@ -1,16 +1,17 @@
-// Lint triggers somewhere in Encode/Decode
-
 //! Enum discriminant schema tests.
 use iroha_schema::prelude::*;
-use norito::{Decode, Encode};
+use norito::{
+    Decode, Encode,
+    codec::{DecodeAll as _, Encode as _},
+};
 
-#[derive(IntoSchema, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, IntoSchema, Encode, Decode)]
 enum Foo {
-    #[codec(index = 1)]
-    A,
+    #[codec(index = 10)]
+    A = 10,
     B,
-    C,
-    #[codec(index = 99)]
+    C = 300,
+    #[codec(index = 999)]
     D,
 }
 
@@ -27,22 +28,22 @@ fn discriminant() {
                 variants: vec![
                     EnumVariant {
                         tag: "A".to_owned(),
-                        discriminant: 1,
+                        discriminant: 10,
                         ty: None,
                     },
                     EnumVariant {
                         tag: "B".to_owned(),
-                        discriminant: 1,
+                        discriminant: 11,
                         ty: None,
                     },
                     EnumVariant {
                         tag: "C".to_owned(),
-                        discriminant: 2,
+                        discriminant: 300,
                         ty: None,
                     },
                     EnumVariant {
                         tag: "D".to_owned(),
-                        discriminant: 99,
+                        discriminant: 999,
                         ty: None,
                     },
                 ],
@@ -52,4 +53,21 @@ fn discriminant() {
     .into_iter()
     .collect::<BTreeMap<_, _>>();
     assert_eq!(Foo::schema(), expected_meta);
+}
+
+#[test]
+fn schema_discriminants_match_encoded_u32_tags() {
+    let cases = [(Foo::A, 10_u32), (Foo::B, 11), (Foo::C, 300), (Foo::D, 999)];
+
+    for (value, expected) in cases {
+        let encoded = value.encode();
+        assert_eq!(
+            u32::from_le_bytes(encoded[..4].try_into().expect("enum tag")),
+            expected
+        );
+        assert_eq!(
+            Foo::decode_all(&mut encoded.as_slice()).expect("roundtrip"),
+            value
+        );
+    }
 }

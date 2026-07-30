@@ -10227,66 +10227,61 @@ pub(crate) fn enforce_manifest_is_pre_registered<R: StateReadOnly>(
     ))
 }
 
-fn normalize_halo2_ipa_circuit_id(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa/") {
-        return (!rest.is_empty()).then(|| trimmed.to_string());
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-    }
-    if let Some(rest) = trimmed.strip_prefix(crate::zk::ZK_BACKEND_HALO2_IPA) {
-        if let Some(rest) = rest.strip_prefix("::") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-        if let Some(rest) = rest.strip_prefix(':') {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-        if let Some(rest) = rest.strip_prefix('/') {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-    }
-    Some(format!("halo2/pasta/ipa/{trimmed}"))
-}
-
-fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed == backend {
-        return None;
-    }
-    if let Some(rest) = trimmed.strip_prefix(backend) {
-        if let Some(rest) = rest.strip_prefix(':') {
-            return (!rest.is_empty()).then(|| trimmed.to_string());
-        }
-        if let Some(rest) = rest.strip_prefix('/') {
-            return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
-        }
-    }
-    Some(format!("{backend}:{trimmed}"))
-}
-
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
     if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
         match (
-            normalize_halo2_ipa_circuit_id(record_id),
-            normalize_halo2_ipa_circuit_id(env_id),
+            crate::zk::normalize_halo2_ipa_circuit_id(record_id),
+            crate::zk::normalize_halo2_ipa_circuit_id(env_id),
         ) {
             (Some(rec), Some(env)) => rec == env,
-            _ => record_id == env_id,
+            _ => false,
         }
     } else if crate::zk::is_stark_fri_v1_backend(backend) {
         match (
-            normalize_stark_fri_circuit_id(backend, record_id),
-            normalize_stark_fri_circuit_id(backend, env_id),
+            crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, record_id),
+            crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, env_id),
         ) {
             (Some(rec), Some(env)) => rec == env,
-            _ => record_id == env_id,
+            _ => false,
         }
     } else {
         record_id == env_id
+    }
+}
+
+#[cfg(test)]
+mod circuit_id_match_tests {
+    use super::circuit_id_matches;
+
+    #[test]
+    fn circuit_id_matching_uses_the_verifier_canonicalizers_and_fails_closed() {
+        assert!(circuit_id_matches(
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/ipa/tiny-add",
+        ));
+        assert!(!circuit_id_matches(
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+        ));
+        assert!(!circuit_id_matches(
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+            "INVALID",
+            "INVALID",
+        ));
+
+        let stark_backend = "stark/fri/sha256-goldilocks";
+        assert!(circuit_id_matches(
+            stark_backend,
+            "ivm-execution-v1",
+            "stark/fri/sha256-goldilocks:ivm-execution-v1",
+        ));
+        assert!(!circuit_id_matches(
+            stark_backend,
+            stark_backend,
+            stark_backend,
+        ));
     }
 }
 
@@ -10607,7 +10602,7 @@ const IVM_OVERLAY_BIND_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa/ivm-overlay-bi
 
 fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
     backend == crate::zk::ZK_BACKEND_HALO2_IPA
-        && normalize_halo2_ipa_circuit_id(circuit_id)
+        && crate::zk::normalize_halo2_ipa_circuit_id(circuit_id)
             .as_deref()
             .is_some_and(|normalized| normalized == IVM_OVERLAY_BIND_CIRCUIT_CANONICAL)
 }
@@ -11239,8 +11234,9 @@ where
 
 /// Bounded Torii/operator variant of [`derive_ivm_proved_payload_from_ivm_execution`].
 ///
-/// Output count is clamped by the live transaction instruction limit and
-/// output bytes are rejected by the host before queue/durable-state growth.
+/// Retained items and bytes remain bounded by the live on-chain smart-contract
+/// parameters. `max_output_bytes` adds a stricter tooling transport cap and can
+/// never widen the consensus budget.
 pub fn derive_ivm_proved_payload_from_ivm_execution_bounded<R>(
     state_ro: &R,
     tx: &SignedTransaction,
@@ -11389,12 +11385,13 @@ where
     vm.set_gas_limit(gas_limit);
     vm.set_zk_trace_enabled(true);
     apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-    run_vm_with_host(&mut vm, &mut host)?;
+    let run_result = run_vm_with_host(&mut vm, &mut host);
     if let Some(violation) = host.output_budget_violation() {
         return Err(OverlayBuildError::ZkProof(format!(
             "IVM tooling output budget exceeded before retention: {violation:?}"
         )));
     }
+    run_result?;
 
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
     let trace_bundle = build_ivm_trace_bundle(&vm);

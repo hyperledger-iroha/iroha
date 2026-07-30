@@ -115,63 +115,15 @@ use norito::codec::Encode;
 use norito::json::Value as JsonValue;
 use sha2::Digest as _;
 
-const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-// Retained only so historical Taira genesis blocks can replay their legacy digest.
-const ARCHIVED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
-
-const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 4] = [
-    [
-        58, 93, 1, 255, 203, 247, 226, 108, 208, 94, 24, 239, 224, 183, 177, 199, 66, 237, 206, 11,
-        155, 190, 1, 59, 169, 3, 161, 188, 185, 184, 245, 105,
-    ],
-    [
-        40, 173, 221, 159, 39, 238, 176, 56, 202, 219, 191, 211, 103, 68, 251, 108, 152, 88, 38,
-        166, 13, 99, 153, 170, 152, 200, 97, 80, 160, 147, 6, 254,
-    ],
-    [
-        6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
-        194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
-    ],
-    [
-        127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95, 145,
-        75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
-    ],
-];
-
-fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
-    matches!(
-        chain_id.as_str(),
-        PUBLIC_TAIRA_CHAIN_ID | "iroha3-taira" | "taira"
-    )
-}
-
-fn is_archived_taira_chain_id(chain_id: &ChainId) -> bool {
-    chain_id.as_str() == ARCHIVED_TAIRA_CHAIN_ID
-}
-
-fn legacy_replay_confidential_digest_with_hashes(
+fn ensure_confidential_features_match(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
-    legacy_policy_hashes: &[[u8; 32]],
-) -> bool {
-    let (Some(expected), Some(actual)) = (expected, actual) else {
-        return false;
-    };
-
-    actual
-        .zk_policy_hash
-        .is_some_and(|hash| legacy_policy_hashes.contains(&hash))
-        && actual.vk_set_hash == expected.vk_set_hash
-        && actual.poseidon_params_id == expected.poseidon_params_id
-        && actual.pedersen_params_id == expected.pedersen_params_id
-        && actual.conf_rules_version == expected.conf_rules_version
-}
-
-fn taira_legacy_replay_confidential_digest(
-    expected: Option<ConfidentialFeatureDigest>,
-    actual: Option<ConfidentialFeatureDigest>,
-) -> bool {
-    legacy_replay_confidential_digest_with_hashes(expected, actual, &LEGACY_TAIRA_ZK_POLICY_HASHES)
+) -> Result<(), BlockValidationError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(BlockValidationError::ConfidentialFeaturesMismatch { expected, actual })
+    }
 }
 
 #[cfg(feature = "bls")]
@@ -7397,34 +7349,7 @@ pub(crate) mod valid {
                 Some(computed_digest)
             };
             let actual_digest = block.header().confidential_features();
-            if actual_digest != expected_digest {
-                let is_legacy_taira_digest =
-                    taira_legacy_replay_confidential_digest(expected_digest, actual_digest);
-                let is_public_taira_genesis = block.header().is_genesis()
-                    && (is_public_taira_chain_id(chain_id) || is_archived_taira_chain_id(chain_id));
-                if is_legacy_taira_digest
-                    && (validation_profile.replay_compatibility() || is_public_taira_genesis)
-                {
-                    if is_public_taira_genesis && !validation_profile.replay_compatibility() {
-                        iroha_logger::warn!(
-                            block_height,
-                            chain_id = chain_id.as_str(),
-                            "accepting public Taira genesis with legacy confidential feature digest"
-                        );
-                    } else {
-                        iroha_logger::debug!(
-                            block_height,
-                            chain_id = chain_id.as_str(),
-                            "accepting legacy confidential feature digest during replay"
-                        );
-                    }
-                } else {
-                    return Err(BlockValidationError::ConfidentialFeaturesMismatch {
-                        expected: expected_digest,
-                        actual: actual_digest,
-                    });
-                }
-            }
+            ensure_confidential_features_match(expected_digest, actual_digest)?;
 
             if block.header().is_genesis() {
                 if block.has_results() {
@@ -28621,7 +28546,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_replay_confidential_digest_allows_known_policy_hash_drift_only() {
+    fn legacy_taira_confidential_policy_hash_is_rejected() {
         let historical_policy_hash = [
             6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
             194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
@@ -28641,71 +28566,36 @@ mod tests {
             Some(historical_policy_hash),
         );
 
-        assert!(taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(actual)
+        assert!(matches!(
+            ensure_confidential_features_match(Some(expected), Some(actual)),
+            Err(BlockValidationError::ConfidentialFeaturesMismatch {
+                expected: Some(reported_expected),
+                actual: Some(reported_actual),
+            }) if reported_expected == expected && reported_actual == actual
         ));
-
-        let height_2584_policy_hash = [
-            127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95,
-            145, 75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
-        ];
-        let actual_height_2584 = ConfidentialFeatureDigest::new(
-            expected.vk_set_hash,
-            expected.poseidon_params_id,
-            expected.pedersen_params_id,
-            expected.conf_rules_version,
-            Some(height_2584_policy_hash),
-        );
-        assert!(taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(actual_height_2584)
-        ));
-
-        let mut mismatched_vk = actual;
-        mismatched_vk.vk_set_hash = Some([0x44; 32]);
-        assert!(!taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(mismatched_vk)
-        ));
-
-        let mut unknown_policy = actual;
-        unknown_policy.zk_policy_hash = Some([0x55; 32]);
-        assert!(!taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(unknown_policy)
-        ));
-
-        assert!(!taira_legacy_replay_confidential_digest(
-            Some(expected),
-            None
-        ));
+        assert!(ensure_confidential_features_match(Some(expected), Some(expected)).is_ok());
     }
 
     #[test]
-    fn public_taira_chain_id_guard_accepts_only_taira_ids() {
-        assert!(is_public_taira_chain_id(&ChainId::from(
-            "fc56984b-2be7-431d-840e-21514d1883f0"
-        )));
-        assert!(is_public_taira_chain_id(&ChainId::from("iroha3-taira")));
-        assert!(is_public_taira_chain_id(&ChainId::from("taira")));
-        assert!(!is_public_taira_chain_id(&ChainId::from(
-            ARCHIVED_TAIRA_CHAIN_ID
-        )));
-        assert!(!is_public_taira_chain_id(&ChainId::from(
-            "00000000-0000-0000-0000-000000000000"
-        )));
-    }
+    fn confidential_feature_presence_is_exact() {
+        let digest =
+            ConfidentialFeatureDigest::new(Some([0x01; 32]), None, None, Some(1), Some([0x02; 32]));
 
-    #[test]
-    fn archived_taira_chain_id_guard_accepts_only_archived_uuid() {
-        assert!(is_archived_taira_chain_id(&ChainId::from(
-            ARCHIVED_TAIRA_CHAIN_ID
-        )));
-        assert!(!is_archived_taira_chain_id(&ChainId::from(
-            PUBLIC_TAIRA_CHAIN_ID
-        )));
-        assert!(!is_archived_taira_chain_id(&ChainId::from("taira")));
+        assert!(ensure_confidential_features_match(None, None).is_ok());
+        assert!(matches!(
+            ensure_confidential_features_match(Some(digest), None),
+            Err(BlockValidationError::ConfidentialFeaturesMismatch {
+                expected: Some(reported),
+                actual: None,
+            }) if reported == digest
+        ));
+        assert!(matches!(
+            ensure_confidential_features_match(None, Some(digest)),
+            Err(BlockValidationError::ConfidentialFeaturesMismatch {
+                expected: None,
+                actual: Some(reported),
+            }) if reported == digest
+        ));
     }
 
     fn native_amx_test_catalog(

@@ -26945,17 +26945,7 @@ impl State {
             tiered_snapshot_worker,
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: iroha_config::parameters::actual::Zk {
-                halo2: iroha_config::parameters::actual::Halo2 {
-                    enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
-                    curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-                    backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-                    max_k: iroha_config::parameters::defaults::zk::halo2::MAX_K,
-                    verifier_budget_ms:
-                        iroha_config::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
-                    verifier_max_batch:
-                        iroha_config::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
-                    ..iroha_config::parameters::actual::Halo2::default()
-                },
+                halo2: iroha_config::parameters::actual::Halo2::default(),
                 fastpq: iroha_config::parameters::actual::Fastpq {
                     execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
                     poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -45230,15 +45220,7 @@ pub fn compute_vk_set_hash_at_height(world: &impl WorldReadOnly, height: u64) ->
 #[must_use]
 pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
     iroha_config::parameters::actual::Zk {
-        halo2: iroha_config::parameters::actual::Halo2 {
-            enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
-            curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-            backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-            max_k: iroha_config::parameters::defaults::zk::halo2::MAX_K,
-            verifier_budget_ms: iroha_config::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
-            verifier_max_batch: iroha_config::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
-            ..iroha_config::parameters::actual::Halo2::default()
-        },
+        halo2: iroha_config::parameters::actual::Halo2::default(),
         fastpq: iroha_config::parameters::actual::Fastpq {
             execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
             poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -65679,17 +65661,7 @@ pub(crate) mod deserialize {
 
     pub(super) fn default_zk() -> iroha_config::parameters::actual::Zk {
         iroha_config::parameters::actual::Zk {
-            halo2: iroha_config::parameters::actual::Halo2 {
-                enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
-                curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-                backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-                max_k: iroha_config::parameters::defaults::zk::halo2::MAX_K,
-                verifier_budget_ms:
-                    iroha_config::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
-                verifier_max_batch:
-                    iroha_config::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
-                ..iroha_config::parameters::actual::Halo2::default()
-            },
+            halo2: iroha_config::parameters::actual::Halo2::default(),
             fastpq: iroha_config::parameters::actual::Fastpq {
                 execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
                 poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,

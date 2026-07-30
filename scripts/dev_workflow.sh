@@ -1,35 +1,60 @@
 #!/usr/bin/env bash
+#
+# Run the default contributor checks for Rust packages affected by the current
+# branch and working tree. Requires Git, Cargo, and Python with scripts
+# dependencies installed. Use --full for the exhaustive workspace workflow.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 SWIFT_DIR="${REPO_ROOT}/IrohaSwift"
+ROUTER="${SCRIPT_DIR}/rust_ci.py"
 
 skip_tests=false
 skip_swift=false
+full=false
+base_ref=""
 target_dir=""
 
 usage() {
 	cat <<'USAGE'
-Usage: scripts/dev_workflow.sh [--skip-tests] [--skip-swift] [--target-dir DIR]
+Usage: scripts/dev_workflow.sh [options]
 
-Runs the default contributor workflow:
-  1) cargo fmt --all
-  2) cargo clippy --workspace --all-targets --locked -- -D warnings
-  3) cargo build --workspace --locked
-  4) cargo test --workspace --locked (can take several hours)
-  5) swift test (from IrohaSwift/)
+Runs the affected contributor workflow:
+  1) cargo fmt --all -- --check
+  2) classify changed packages with locked Cargo metadata
+  3) cargo clippy/build/test --locked for the reverse-dependency closure
+  4) swift test when Swift sources or shared fixtures changed
 
-Use --skip-tests to omit cargo test for quicker iterations and --skip-swift to
-skip the Swift SDK suite. Swift tests are skipped automatically if Swift is not
-available on PATH. Use --target-dir to set CARGO_TARGET_DIR and avoid build
-directory lock timeouts.
+Options:
+  --base REF       Compare committed changes with REF instead of origin/main.
+  --full           Validate every Rust lane and run Swift tests.
+  --skip-tests     Omit affected cargo tests.
+  --skip-swift     Omit Swift tests.
+  --target-dir DIR Set CARGO_TARGET_DIR to avoid build-directory contention.
+  -h, --help       Show this help.
+
+Unknown, ambiguous, root-build, fixture, configuration, script, and workflow
+changes fail closed to all Rust lanes. The full workspace release workflow
+remains the source of exhaustive release evidence.
 USAGE
 }
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
+	--base)
+		shift
+		if [[ $# -eq 0 ]]; then
+			echo "error: missing argument for --base" >&2
+			usage >&2
+			exit 1
+		fi
+		base_ref="$1"
+		;;
+	--full)
+		full=true
+		;;
 	--skip-tests)
 		skip_tests=true
 		;;
@@ -51,46 +76,98 @@ while [[ $# -gt 0 ]]; do
 		;;
 	*)
 		echo "error: unknown option '$1'" >&2
-		usage
+		usage >&2
 		exit 1
 		;;
 	esac
 	shift
 done
 
-echo "Running contributor workflow guardrails (fmt/clippy/build/test + swift)."
-echo "Note: cargo test --workspace may take several hours; use --skip-tests for a quicker pass."
-
+cd -- "${REPO_ROOT}"
 if [[ -n "${target_dir}" ]]; then
 	export CARGO_TARGET_DIR="${target_dir}"
 	echo "Using CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
 fi
 
-echo "[1/5] cargo fmt --all"
-cargo fmt --all
+classification_file="$(mktemp "${TMPDIR:-/tmp}/iroha-rust-lanes.XXXXXX")"
+trap 'rm -f -- "${classification_file}"' EXIT
 
-echo "[2/5] cargo clippy --workspace --all-targets --locked -- -D warnings"
-cargo clippy --workspace --all-targets --locked -- -D warnings
-
-echo "[3/5] cargo build --workspace --locked"
-cargo build --workspace --locked
-
-if [[ "${skip_tests}" == false ]]; then
-	echo "[4/5] cargo test --workspace --locked"
-	cargo test --workspace --locked
-else
-	echo "[4/5] cargo test --workspace --locked (skipped)"
+classifier_args=(classify --json-out "${classification_file}")
+if [[ "${full}" == true ]]; then
+	classifier_args+=(--all)
+elif [[ -n "${base_ref}" ]]; then
+	classifier_args+=(--base "${base_ref}")
 fi
 
+echo "[1/4] cargo fmt --all -- --check"
+cargo fmt --all -- --check
+
+echo "[2/4] classify affected Rust packages"
+python3 "${ROUTER}" "${classifier_args[@]}" >/dev/null
+python3 - "${classification_file}" <<'PY'
+import json
+import sys
+
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+if not document["has_rust"]:
+    print("No affected Rust packages.")
+else:
+    mode = "full (fail-closed)" if document["full"] else "affected"
+    lanes = ", ".join(
+        f'{lane["name"]}={len(lane["packages"])}' for lane in document["lanes"]
+    )
+    print(f'{mode}: {len(document["impacted_packages"])} packages ({lanes})')
+    for reason in document["reasons"]:
+        print(f"  reason: {reason}")
+PY
+
+package_csv="$(
+	python3 - "${classification_file}" <<'PY'
+import json
+import sys
+
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+print(",".join(document["impacted_packages"]))
+PY
+)"
+
+if [[ -n "${package_csv}" ]]; then
+	checks="clippy,build"
+	if [[ "${skip_tests}" == false ]]; then
+		checks="${checks},test"
+	fi
+	echo "[3/4] locked affected Cargo checks (${checks})"
+	python3 "${ROUTER}" run --packages "${package_csv}" --checks "${checks}"
+else
+	echo "[3/4] locked affected Cargo checks (not required)"
+fi
+
+swift_required="$(
+	python3 - "${classification_file}" "${full}" <<'PY'
+import json
+import sys
+
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+full = sys.argv[2] == "true"
+changed = document["changed_paths"]
+required = full or any(
+    path.startswith(("IrohaSwift/", "fixtures/")) for path in changed
+)
+print("true" if required else "false")
+PY
+)"
+
 if [[ "${skip_swift}" == true ]]; then
-	echo "[5/5] swift test (skipped)"
+	echo "[4/4] swift test (skipped)"
+elif [[ "${swift_required}" != true ]]; then
+	echo "[4/4] swift test (not affected)"
 elif command -v swift >/dev/null 2>&1; then
-	echo "[5/5] swift test (IrohaSwift)"
+	echo "[4/4] swift test (IrohaSwift)"
 	(
 		cd -- "${SWIFT_DIR}"
 		swift test
 	)
 else
-	echo "[5/5] swift test (swift not found; skipped)"
+	echo "[4/4] swift test (swift not found; skipped)"
 	echo "Install Swift and rerun from ${SWIFT_DIR} to exercise the Swift SDK suite."
 fi

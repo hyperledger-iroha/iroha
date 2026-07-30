@@ -61,10 +61,10 @@ tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-th
 eyre = { workspace = true }
 iroha_test_network = { workspace = true }
 reed-solomon-erasure = { version = "6", default-features = false, features = ["std"], optional = true }
-iroha_data_model = { workspace = true, features = ["http", "fast_dsl", "governance", "json"] }
-iroha_crypto = { workspace = true }
-iroha_torii = { workspace = true }
-norito = { workspace = true }
+iroha_data_model = { workspace = true, features = ["application-model", "http", "fast_dsl", "transparent_api"], default-features = false }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
+iroha_torii = { workspace = true, default-features = false, features = ["node-api", "ws_integration_tests"] }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }
@@ -82,7 +82,7 @@ iroha_config_base = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_executor_data_model = { workspace = true }
-ivm = { workspace = true }
+ivm = { workspace = true, default-features = false, features = ["runtime"] }
 base64 = { workspace = true }
 
 toml = { workspace = true }
@@ -90,10 +90,12 @@ futures-util = "0.3.31"
 nonzero_ext = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_genesis = { workspace = true }
-iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+iroha_core = { workspace = true, features = ["node", "iroha-core-tests"], default-features = false }
 iroha_p2p = { workspace = true }
 tracing = { workspace = true }
 sha2 = "0.10.9"
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
+rand_core_06 = { workspace = true }
 
 mint_rose_trigger_data_model = { path = "../data_model/samples/mint_rose_trigger_data_model" }
 executor_custom_data_model = { path = "../data_model/samples/executor_custom_data_model" }

@@ -6,7 +6,7 @@ direction: rtl
 source: docs/source/sorafs_orderbook_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 561d5853b80da119b00f50958a8cd63cf971cf3e01a50ffd2f8ed50c863966d4
+source_hash: e314138780eadf14baab720404cb7318fa221b8b2889fb2f607811b48fb6dd7a
 source_last_modified: "2026-07-28T07:07:32.304180+00:00"
 translation_last_reviewed: null
 ---

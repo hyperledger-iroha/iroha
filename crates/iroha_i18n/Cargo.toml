@@ -13,7 +13,7 @@ documentation.workspace = true
 workspace = true
 
 [dependencies]
-norito = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 [package.metadata.cargo-all-features]
 denylist = []

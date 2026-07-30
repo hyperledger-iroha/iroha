@@ -15,17 +15,17 @@ name = "iroha_python_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["bls", "gost", "sm"] }
-iroha_data_model = { path = "../../../crates/iroha_data_model", features = ["json"] }
+iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["node-crypto", "gost", "sm"], default-features = false }
+iroha_data_model = { path = "../../../crates/iroha_data_model", features = ["application-model"], default-features = false }
 iroha_primitives = { path = "../../../crates/iroha_primitives" }
 iroha_schema = { path = "../../../crates/iroha_schema" }
 iroha_version = { path = "../../../crates/iroha_version" }
 iroha_torii_shared = { path = "../../../crates/iroha_torii_shared" }
-norito = { path = "../../../crates/norito" }
-ivm = { path = "../../../crates/ivm" }
+norito = { path = "../../../crates/norito", default-features = false, features = ["node-codec"] }
+ivm = { path = "../../../crates/ivm", default-features = false, features = ["runtime"] }
 sorafs_manifest = { path = "../../../crates/sorafs_manifest" }
 iroha_config = { path = "../../../crates/iroha_config" }
-iroha_core = { path = "../../../crates/iroha_core", features = ["zk-halo2-ipa"] }
+iroha_core = { path = "../../../crates/iroha_core", features = ["node"], default-features = false }
 iroha_zkp_halo2 = { path = "../../../crates/iroha_zkp_halo2" }
 zk_ace_prover = { path = "../../../crates/zk_ace_prover" }
 sorafs_car = { path = "../../../crates/sorafs_car" }

@@ -13,7 +13,7 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "fs", "sync", "net", "io-util"] }
 futures = { workspace = true, features = ["std"] }
 blake3 = { workspace = true }
-norito = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 norito_derive = { workspace = true }
 hex = { workspace = true, features = ["alloc"] }
 url = { workspace = true }
@@ -28,8 +28,8 @@ tokio-rustls = { workspace = true }
 rustls = { version = "0.23.35", default-features = false, features = ["std"] }
 hickory-proto = { version = "0.26.1", default-features = false }
 iroha_primitives = { workspace = true }
-iroha_data_model = { workspace = true, default-features = false, features = ["json", "governance"] }
-iroha_crypto = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 
 [dev-dependencies]

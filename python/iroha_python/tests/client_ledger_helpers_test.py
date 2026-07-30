@@ -56,6 +56,10 @@ def test_data_model_version_matches_current_wire_contract() -> None:
     assert DATA_MODEL_VERSION == 4
 
 
+def test_confidential_gas_schedule_has_no_runtime_setter() -> None:
+    assert not hasattr(ToriiClient, "set_confidential_gas_schedule")
+
+
 class FakeSession:
     def __init__(self, responses: list[requests.Response]):
         self.responses = responses

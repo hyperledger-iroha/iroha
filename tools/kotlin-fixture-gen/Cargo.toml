@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["json", "transparent_api"] }
-iroha_crypto = { path = "../../crates/iroha_crypto" }
-norito = { path = "../../crates/norito" }
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["application-model", "transparent_api"] }
+iroha_crypto = { path = "../../crates/iroha_crypto", default-features = false, features = ["node-crypto"] }
+norito = { path = "../../crates/norito", default-features = false, features = ["node-codec"] }
 hex = { version = "0.4.3", default-features = false, features = ["std"] }

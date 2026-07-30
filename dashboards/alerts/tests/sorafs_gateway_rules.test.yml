@@ -4,9 +4,9 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
-      - series: 'sorafs_gateway_requests_total{endpoint="edge-a",result="success"}'
+      - series: 'sorafs_gateway_responses_total{endpoint="edge-a",result="success"}'
         values: '0+99x24'
-      - series: 'sorafs_gateway_requests_total{endpoint="edge-a",result="error"}'
+      - series: 'sorafs_gateway_responses_total{endpoint="edge-a",result="error"}'
         values: '0+1x24'
       - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-a",le="100"}'
         values: '0+0x24'
@@ -14,7 +14,7 @@ tests:
         values: '0+10x24'
       - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-a",le="+Inf"}'
         values: '0+10x24'
-      - series: 'sorafs_gateway_proof_events_total{kind="por",provider_id="provider-a",result="failure"}'
+      - series: 'sorafs_gateway_proof_verifications_total{profile_version="sf1",result="failure",error_code="sequence_invalid"}'
         values: '0+1x24'
     alert_rule_test:
       - alertname: SoraFSGatewayAvailabilityBreached
@@ -50,18 +50,18 @@ tests:
         eval_time: 17m
         exp_alerts:
           - exp_labels:
-              kind: por
-              provider_id: provider-a
+              profile_version: sf1
+              error_code: sequence_invalid
               severity: warning
             exp_annotations:
               summary: "SoraFS proof failure spike"
               description: |
-                Provider provider-a reported 10 por proof failures in the last 10 minutes.
+                Profile sf1 reported 10 proof failures (sequence_invalid) in the last 10 minutes.
   - interval: 1m
     input_series:
-      - series: 'sorafs_gateway_requests_total{endpoint="edge-b",result="success"}'
+      - series: 'sorafs_gateway_responses_total{endpoint="edge-b",result="success"}'
         values: '0+100x20'
-      - series: 'sorafs_gateway_requests_total{endpoint="edge-b",result="error"}'
+      - series: 'sorafs_gateway_responses_total{endpoint="edge-b",result="error"}'
         values: '0+0x20'
       - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-b",le="100"}'
         values: '0+10x20'
@@ -69,7 +69,7 @@ tests:
         values: '0+10x20'
       - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-b",le="+Inf"}'
         values: '0+10x20'
-      - series: 'sorafs_gateway_proof_events_total{kind="por",provider_id="provider-b",result="failure"}'
+      - series: 'sorafs_gateway_proof_verifications_total{profile_version="sf1",result="failure",error_code="sequence_invalid"}'
         values: '0+0x20'
     alert_rule_test:
       - alertname: SoraFSGatewayAvailabilityBreached

@@ -870,6 +870,7 @@ def validate_runner_preflight(
     args: argparse.Namespace,
     *,
     summary_filename: str,
+    bundled_verifier: Path | None = None,
 ) -> list[str]:
     """Validate verifier and output targets before building a command plan."""
 
@@ -953,6 +954,27 @@ def validate_runner_preflight(
                         f"--verifier `{path_diagnostic_label(verifier)}` "
                         "must exist and be a file"
                     )
+        if bundled_verifier is not None:
+            if not isinstance(bundled_verifier, Path):
+                raise ValueError("bundled verifier must be a path")
+            identity_errors: list[str] = []
+            verifier_identity = resolve_path_identity(
+                verifier,
+                identity_errors,
+                label="--verifier",
+            )
+            bundled_identity = resolve_path_identity(
+                bundled_verifier,
+                identity_errors,
+                label="bundled verifier",
+            )
+            errors.extend(identity_errors)
+            if (
+                verifier_identity is not None
+                and bundled_identity is not None
+                and verifier_identity != bundled_identity
+            ):
+                errors.append("--verifier must select this lane's bundled verifier")
 
     if not isinstance(out_dir, Path):
         errors.append(f"--out-dir `{path_diagnostic_label(out_dir)}` must be a path")

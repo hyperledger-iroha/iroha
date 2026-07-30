@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-norito = { workspace = true, optional = true }
+norito = { workspace = true, optional = true, default-features = false, features = ["base-codec"] }
 
 [features]
 default = ["norito-json"]

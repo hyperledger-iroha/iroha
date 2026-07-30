@@ -5,6 +5,68 @@ This directory hosts the developer-facing shell helpers that gate CI jobs
 `target/`, so keep that layout unchanged unless the entire toolchain is updated
 as part of a coordinated migration.
 
+## Affected Rust lanes
+
+`ci/rust_lanes.toml` assigns every Cargo workspace package to exactly one
+validation lane. `scripts/rust_ci.py` reads locked Cargo metadata, identifies
+the package that owns each changed path, and expands that seed through the
+workspace reverse-dependency graph. The PR workflow runs locked Clippy, build,
+test, and documentation commands for the resulting package sets, then exposes
+one required aggregate result.
+
+The router fails closed to all lanes for unknown paths, deleted packages,
+ambiguous mappings, and shared build inputs. Adding or removing a workspace
+member therefore requires an explicit lane-manifest update. The release
+workflow continues to run the complete workspace matrix on `main`, tags, and
+manual release gates. Apply the `ci/full` label to a pull request to force all
+seven routed Rust lanes before merge.
+
+Use the same routing locally:
+
+```sh
+scripts/dev_workflow.sh
+scripts/dev_workflow.sh --base origin/main
+scripts/dev_workflow.sh --full
+python3 scripts/rust_ci.py validate
+```
+
+## Compile-unit ratchet
+
+The affected execution lane and the full-workspace test gate both run
+`scripts/check_compile_unit_budget.py` before their ordinary tests. The guard
+compiles the `iroha_data_model` library test graph with the locked dependency
+set, writes JSON evidence under `target/ci/`, and enforces the checked-in
+`ci/compile_unit_baselines.json` entry with a 2% or three-unit growth allowance,
+whichever is larger.
+
+The enforced count deliberately includes only Cargo workspace-member artifacts.
+Registry dependencies can legitimately differ across host targets, so using the
+all-artifact count as one cross-platform baseline would be unstable. The
+workspace-only, library-target scope measures the internal crate graph that the
+structural simplification is intended to control. Run the exact CI command when
+intentionally refreshing the baseline, review the JSON evidence, and never
+raise the baseline merely to make an unexplained regression pass.
+
+## Repository structure ratchets
+
+Three fast, read-only checks keep structural debt from returning:
+
+- `python3 scripts/check_source_file_budget.py` caps new production and test
+  source files and applies an exact no-growth ratchet to legacy files that are
+  still above the limit. Intentional splits should lower
+  `ci/source_file_budget.json`; unexplained growth must not refresh it.
+- `python3 scripts/check_cargo_feature_hygiene.py` rejects workspace-wide
+  feature injection and implicit default-feature ownership across every
+  workspace member. Capability bundles belong to the crate or binary that
+  consumes them.
+- `python3 scripts/check_generated_artifacts.py` validates
+  `generated-files.toml`, requires reproducible ownership for checked-in
+  generated source, and rejects tracked build, cache, package, and `dist`
+  outputs.
+
+Their focused regression tests live under `scripts/tests/` and
+`pytests/scripts/`; the PR classifier runs them before selecting Rust lanes.
+
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
 - `check_nexus_cross_dataspace_localnet.sh` – runs the Nexus 12-peer cross-dataspace proof on ten fresh deterministic seeds (`nexus-cross-dataspace-v1-seed-00` through `-09`). Each seed is a separate network/test process with no retry, and the launcher rejects missing or zero-test transcripts before publishing exact 10/10 completion accounting. Production release also invokes the launcher's ignored `--cross-dataspace-fault-soak` path, whose validated duration is exactly 7,200 seconds.

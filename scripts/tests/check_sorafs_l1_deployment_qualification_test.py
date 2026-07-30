@@ -24,6 +24,11 @@ assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+EXAMPLES_DIR = MODULE_PATH.parent / "examples"
+ARGS_EXAMPLE = EXAMPLES_DIR / "sorafs_l1_deployment_qualification.args.example"
+MANIFEST_EXAMPLE = (
+    EXAMPLES_DIR / "sorafs_l1_deployment_qualification_manifest.json.example"
+)
 DEPLOYMENT_ID = "sorafs-mainnet-2026-07"
 ENVIRONMENT = "production"
 DIGEST = "ab" * 32
@@ -139,6 +144,27 @@ def test_complete_topology_is_configuration_qualified_only() -> None:
     assert summary["signed_model_artifact_count"] == 1
     assert summary["recognized_lane_slot_count"] == 17
     assert summary["required_lane_slots"] == list(MODULE.DEFAULT_REQUIRED_GATES)
+
+
+def test_schema_complete_production_topology_example_qualifies() -> None:
+    payload = json.loads(MANIFEST_EXAMPLE.read_text(encoding="utf-8"))
+    summary, errors = validate(payload)
+    args = MODULE.parse_args([f"@{ARGS_EXAMPLE}"])
+
+    assert errors == []
+    assert summary["status"] == "configuration-qualified"
+    assert summary["recognized_lane_slot_count"] == 17
+    assert args.evidence == [
+        Path(
+            "scripts/examples/"
+            "sorafs_l1_deployment_qualification_manifest.json.example"
+        )
+    ]
+    assert args.deployment_id == DEPLOYMENT_ID
+    assert args.environment == ENVIRONMENT
+    assert args.summary_out == Path(
+        "artifacts/sorafs/production-readiness/l1-topology-qualification.json"
+    )
 
 
 @pytest.mark.parametrize(

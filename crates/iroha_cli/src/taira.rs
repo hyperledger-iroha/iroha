@@ -18,7 +18,7 @@ use iroha::{
         level::Level as LogLevel,
         metadata::Metadata,
         name::Name,
-        prelude::{FindTransactions, HashOf, QueryBuilderExt, TransactionEntrypoint},
+        prelude::{FindTransactions, QueryBuilderExt, TransactionEntrypoint},
         transaction::{Executable, FeePaymentIntent},
     },
 };

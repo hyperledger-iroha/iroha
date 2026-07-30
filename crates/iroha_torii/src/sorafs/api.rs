@@ -170,8 +170,8 @@ use sorafs_manifest::{
     ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1,
     QosHints, RendezvousTopic, ReputationMerkleProofV1, ReputationSnapshotEventV1,
     ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
-    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
-    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SORAFS_GATEWAY_PROFILE_VERSION, SettlementChannelStatusV1, SettlementChannelV1,
+    SettlementReceiptV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
     StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     chunker_registry,
@@ -28991,6 +28991,22 @@ fn pin_manifest_query_error_response(error: QueryExecutionFail) -> Response {
     )
 }
 
+fn record_gateway_proof_verification(
+    state: &SharedAppState,
+    result: &str,
+    error_code: &str,
+    started_at: Instant,
+) {
+    state.telemetry.with_metrics(|metrics| {
+        metrics.record_sorafs_gateway_proof_verification(
+            SORAFS_GATEWAY_PROFILE_VERSION,
+            result,
+            error_code,
+            started_at.elapsed(),
+        );
+    });
+}
+
 #[cfg(feature = "app_api")]
 fn render_finalized_proof_stream_response(
     state: &SharedAppState,
@@ -29087,9 +29103,16 @@ fn render_finalized_proof_stream_response(
             );
         }
     };
+    let verification_started_at = Instant::now();
     let verified = match ProofStreamItem::from_json(&value, &context) {
         Ok(verified) => verified,
         Err(_) => {
+            record_gateway_proof_verification(
+                state,
+                "failure",
+                "item_invalid",
+                verification_started_at,
+            );
             return json_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "authoritative finalized SoraFS proof-outcome projection is invalid",
@@ -29097,12 +29120,31 @@ fn render_finalized_proof_stream_response(
         }
     };
     let mut sequence_verifier = ProofStreamSequenceVerifier::new(&context);
-    if sequence_verifier.verify_item(&verified).is_err() || sequence_verifier.finish().is_err() {
+    if sequence_verifier.verify_item(&verified).is_err() {
+        record_gateway_proof_verification(
+            state,
+            "failure",
+            "sequence_invalid",
+            verification_started_at,
+        );
         return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "authoritative finalized SoraFS proof-outcome sequence is invalid",
         );
     }
+    if sequence_verifier.finish().is_err() {
+        record_gateway_proof_verification(
+            state,
+            "failure",
+            "sequence_invalid",
+            verification_started_at,
+        );
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authoritative finalized SoraFS proof-outcome sequence is invalid",
+        );
+    }
+    record_gateway_proof_verification(state, "success", "none", verification_started_at);
     let mut rendered =
         json::to_vec(&verified.to_json()).expect("verified proof-outcome projection must encode");
     rendered.push(b'\n');
@@ -29569,6 +29611,7 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                     "unable to allocate the bounded PoR response",
                 );
             }
+            let verification_started_at = Instant::now();
             let mut sequence_verifier = ProofStreamSequenceVerifier::new(&verification_context);
             for (flat_index, proof) in samples {
                 let mut map = sample_to_map(flat_index, &proof);
@@ -29606,6 +29649,12 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                         Ok(verified) => verified,
                         Err(_) => {
                             warn!("generated PoR proof failed finalized-root verification");
+                            record_gateway_proof_verification(
+                                &state,
+                                "failure",
+                                "item_invalid",
+                                verification_started_at,
+                            );
                             return json_error(
                                 StatusCode::SERVICE_UNAVAILABLE,
                                 "generated PoR proof failed finalized-root verification",
@@ -29614,6 +29663,12 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                     };
                 if sequence_verifier.verify_item(&verified).is_err() {
                     warn!("generated PoR sequence failed request-bound verification");
+                    record_gateway_proof_verification(
+                        &state,
+                        "failure",
+                        "sequence_invalid",
+                        verification_started_at,
+                    );
                     return json_error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "generated PoR sequence failed request-bound verification",
@@ -29626,11 +29681,18 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
             }
             if sequence_verifier.finish().is_err() {
                 warn!("generated PoR sequence has invalid order or cardinality");
+                record_gateway_proof_verification(
+                    &state,
+                    "failure",
+                    "sequence_invalid",
+                    verification_started_at,
+                );
                 return json_error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "generated PoR sequence has invalid order or cardinality",
                 );
             }
+            record_gateway_proof_verification(&state, "success", "none", verification_started_at);
             let stream = stream::iter(verified_items.into_iter().map(Ok::<Bytes, Infallible>))
                 .inspect(move |_| {
                     let _keep_inflight_until_body_poll = &inflight_guard;
@@ -43715,6 +43777,14 @@ mod advert_tests {
                 .get(),
             0,
             "constructing an unpolled response must not record delivered proofs"
+        );
+        assert_eq!(
+            metrics
+                .sorafs_gateway_proof_verifications_total
+                .with_label_values(&[SORAFS_GATEWAY_PROFILE_VERSION, "success", "none"])
+                .get(),
+            1,
+            "proof verification is recorded independently of response-body delivery"
         );
         assert_eq!(
             metrics

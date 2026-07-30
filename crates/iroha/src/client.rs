@@ -42,7 +42,6 @@ use iroha_data_model::{
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest},
-        manifest::DaManifestV1,
         pin_intent::DaPinIntentWithLocation,
         types::{BlobDigest, ExtraMetadata},
     },
@@ -29887,7 +29886,6 @@ mod tests {
             },
             network_acl: None,
             network: None,
-            confidential_gas: None,
             soranet_handshake: None,
             transport: None,
             compute_pricing: None,

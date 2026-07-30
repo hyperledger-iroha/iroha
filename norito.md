@@ -216,6 +216,18 @@ before signing. Existing instruction-only transactions continue to use
 `Executable` tag `0`, so adding the mixed form does not rewrite their canonical
 bytes. The append-only variant is advertised by `DATA_MODEL_VERSION = 3`.
 
+Dynamic `InstructionBox` and erased `QueryBox` payloads carry a registry wire
+identifier plus the concrete Norito payload. First-release built-ins use
+explicit, frozen identifiers: instruction IDs are inventoried in
+`crates/iroha_data_model/src/isi/registry/wire_ids.rs`, and query IDs are pinned
+by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Encoders emit
+those identifiers rather than deriving new values from the current Rust module
+layout. Registries retain the concrete Rust type name as a decode lookup alias,
+so internal refactors can move an implementation without changing canonical
+bytes or breaking already encoded values. New built-ins must add a unique
+identifier and update the corresponding golden inventory; an existing V1
+identifier must not be renamed or reused for a different layout.
+
 The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
 Version 4 changes the canonical validation-fee governance layout:
 `ProposeValidationFeePolicy` and `ProposeValidationFeePayoutLifecycle` require

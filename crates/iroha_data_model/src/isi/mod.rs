@@ -3028,6 +3028,28 @@ impl InstructionRegistry {
         self.entries.get(type_name).map(|entry| entry.wire_id)
     }
 
+    fn remap_wire_id<T>(mut self, wire_id: &'static str) -> Self
+    where
+        T: 'static,
+    {
+        let type_name = std::any::type_name::<T>();
+        let previous = *self.entries.get(type_name).unwrap_or_else(|| {
+            panic!("cannot assign a wire id to unregistered type `{type_name}`")
+        });
+        let entry = RegistryEntry {
+            wire_id,
+            ..previous
+        };
+
+        self.entries.insert(type_name, entry);
+        if previous.wire_id != type_name {
+            self.lookup.remove(previous.wire_id);
+        }
+        self.lookup.insert(type_name, entry);
+        self.lookup.insert(wire_id, entry);
+        self
+    }
+
     fn entry_for_type_name(&self, type_name: &'static str) -> Option<RegistryEntry> {
         self.entries.get(type_name).copied()
     }

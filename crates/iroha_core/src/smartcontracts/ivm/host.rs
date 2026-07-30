@@ -16812,7 +16812,7 @@ mod tests {
     #[cfg(not(feature = "fast_dsl"))]
     use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
-        parameter::{CustomParameter, Parameter},
+        parameter::{CustomParameter, Parameter, SmartContractParameter},
         privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
@@ -30162,10 +30162,12 @@ seiyaku DurableOwner {
     fn from_state_hydrates_zk_snapshots() {
         crate::test_alias::ensure();
         let mut world = World::new();
-        world.parameters.get_mut().smart_contract.max_output_items =
+        let mut parameters = world.parameters.block();
+        parameters.get_mut().smart_contract.max_output_items =
             NonZeroU64::new(23).expect("non-zero item limit");
-        world.parameters.get_mut().smart_contract.max_output_bytes =
+        parameters.get_mut().smart_contract.max_output_bytes =
             NonZeroU64::new(65_536).expect("non-zero byte limit");
+        parameters.commit();
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("zkd", "universal").unwrap(),

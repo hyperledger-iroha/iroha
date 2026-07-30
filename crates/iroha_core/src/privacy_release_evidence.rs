@@ -6155,8 +6155,29 @@ mod tests {
             crate::privacy_engines::vega::VegaPrivacyActionEffectV1::
                 ActionVerificationAndFinalityOnly
         );
+        let prepared_debug = format!("{prepared:?}");
+        assert!(!prepared_debug.contains("TransactionPayload"));
+        assert!(!prepared_debug.contains("PrivacyProofBytes"));
+        assert!(!prepared_debug.contains("issuer_authentication_sig_structure"));
 
         let payload = prepared.release_evidence_payload_v1().clone();
+        match payload.instructions() {
+            iroha_data_model::transaction::Executable::Instructions(instructions) => {
+                assert_eq!(instructions.len(), 1, "exactly one direct Vega action");
+                assert!(
+                    instructions[0]
+                        .as_any()
+                        .downcast_ref::<SubmitPrivacyProofV1>()
+                        .is_some(),
+                    "the sole action must be the typed Vega submission"
+                );
+            }
+            other => panic!("unexpected Vega executable form: {other:?}"),
+        }
+        assert!(
+            payload.attachments.is_none(),
+            "canonical Vega actions cannot carry proof attachments"
+        );
         let (intent, submission) = payload
             .privacy_transaction_intent_binding_if_present_v1()
             .expect("canonical direct privacy scan")
@@ -6172,11 +6193,68 @@ mod tests {
         };
         assert_eq!(statement.context.action_index, VEGA_PRIVACY_ACTION_INDEX_V1);
         assert!(!proof.as_bytes().is_empty());
+        assert_eq!(
+            prepared.statement_bytes(),
+            u32::try_from(
+                norito::to_bytes(&submission.envelope.statement)
+                    .expect("typed Vega statement encodes")
+                    .len()
+            )
+            .expect("bounded Vega statement")
+        );
+        assert_eq!(
+            prepared.proof_bytes(),
+            u32::try_from(proof.as_bytes().len()).expect("bounded Vega proof")
+        );
+        let encoded_envelope =
+            norito::to_bytes(&submission.envelope).expect("typed Vega envelope encodes");
+        assert_eq!(
+            prepared.encoded_proof_envelope_bytes(),
+            u32::try_from(encoded_envelope.len()).expect("bounded Vega envelope")
+        );
+        assert_eq!(
+            prepared.proof_envelope_hash(),
+            *iroha_crypto::Hash::new(&encoded_envelope).as_ref()
+        );
         submission
             .envelope
             .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
             .expect("prepared envelope is intrinsically valid");
+        let mut proof_empty_escape = submission.envelope.clone();
+        proof_empty_escape.proof =
+            PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new()));
+        assert!(
+            proof_empty_escape
+                .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+                .is_err(),
+            "the internal proof-empty projection must never be submittable"
+        );
 
+        let mut changed_chain = payload.clone();
+        changed_chain.chain = ChainId::from("vega-signed-action-wrong-chain-v1");
+        assert!(
+            changed_chain
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "chain mutation must invalidate the signed intent"
+        );
+        let mut changed_authority = payload.clone();
+        changed_authority.authority =
+            privacy_release_account_v1(0x57).expect("fixed alternate authority");
+        assert!(
+            changed_authority
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "authority mutation must invalidate the signed intent"
+        );
+        let mut changed_creation_time = payload.clone();
+        changed_creation_time.creation_time_ms += 1;
+        assert!(
+            changed_creation_time
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "creation-time mutation must invalidate the signed intent"
+        );
         let mut changed_fee = payload.clone();
         changed_fee.fee_payment =
             FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(6_000_000));
@@ -6277,13 +6355,27 @@ mod tests {
             signed.transaction_hash(),
             *signed.signed_transaction().hash().as_ref()
         );
+        assert!(
+            signed.signed_transaction().attachments().is_none(),
+            "signed canonical Vega actions cannot carry attachments"
+        );
+        let signed_debug = format!("{signed:?}");
+        assert!(!signed_debug.contains("SignedTransaction {"));
+        assert!(!signed_debug.contains("PrivacyProofBytes"));
         let mut signed_intent_drift = signed.signed_transaction().payload().clone();
         signed_intent_drift.nonce = NonZeroU32::new(VEGA_RELEASE_NONCE_V1 + 2);
+        let independently_resigned_drift = TransactionBuilder::from_payload(signed_intent_drift)
+            .expect("otherwise canonical drifted payload")
+            .try_sign(transaction_key_pair.private_key())
+            .expect("transaction signature covers the drifted payload");
+        independently_resigned_drift
+            .verify_signature()
+            .expect("drifted payload has an independently valid transaction signature");
         assert!(
-            signed_intent_drift
-                .validate_privacy_transaction_intent_binding_v1()
+            independently_resigned_drift
+                .privacy_transaction_intent_binding_if_present_v1()
                 .is_err(),
-            "post-sign intent drift must fail closed"
+            "a valid transaction signature cannot redeem a stale Vega intent"
         );
 
         let wrong_key_fixture =

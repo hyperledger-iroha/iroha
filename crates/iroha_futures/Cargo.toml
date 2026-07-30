@@ -20,7 +20,7 @@ iroha_derive = { workspace = true, features = ["futures"] }
 
 iroha_config = { workspace = true }
 iroha_logger = { workspace = true }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 rand = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }

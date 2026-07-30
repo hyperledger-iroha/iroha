@@ -3776,7 +3776,7 @@ pub mod zk {
         /// Feature toggle for Halo2 verification in hosts.
         pub const ENABLED: bool = false;
         /// Default curve identifier used for Halo2 verification.
-        pub const CURVE: &str = "toy_p61_additive";
+        pub const CURVE: &str = "pallas";
         /// Backend implementation identifier (e.g., IPA).
         pub const BACKEND: &str = "ipa";
         /// Maximum circuit size expressed as `k` (2^k rows).

@@ -28,7 +28,7 @@ use iroha_data_model::{
         VegaExistingCredentialStatementV1,
     },
     transaction::{
-        FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
+        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
         signed::TransactionSignatureError,
     },
 };
@@ -118,7 +118,6 @@ pub struct VegaPrivacyActionPublicInputV1 {
 /// includes the transaction-intent digest. The action API derives the intent,
 /// constructs final `H_dev`, and signs it with the separately supplied device
 /// key before native witness validation and proving.
-#[derive(Clone)]
 pub struct VegaPrivacyActionWitnessMaterialV1 {
     issuer_authentication_sig_structure: Zeroizing<Vec<u8>>,
     mobile_security_object_payload: Zeroizing<Vec<u8>>,
@@ -1063,6 +1062,8 @@ fn derive_vega_transaction_intent_digest_v1(
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
     statement: VegaExistingCredentialStatementV1,
 ) -> Result<PrivacyTransactionIntentDigestV1, VegaPrivacyActionBuildErrorV1> {
+    // The proof-empty projection exists only on this stack frame. It cannot be
+    // returned, signed, or submitted through the sealed prepared-action API.
     let normalized_projection_envelope = PrivacyProofEnvelopeV1 {
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
@@ -1122,6 +1123,18 @@ fn validate_vega_payload_integrity_v1(
     payload: &TransactionPayload,
     expected: VegaPrivacyActionIntegrityV1,
 ) -> Result<(), ()> {
+    match payload.instructions() {
+        Executable::Instructions(instructions)
+            if instructions.len() == 1
+                && instructions[0]
+                    .as_any()
+                    .downcast_ref::<SubmitPrivacyProofV1>()
+                    .is_some() => {}
+        _ => return Err(()),
+    }
+    if payload.attachments.is_some() {
+        return Err(());
+    }
     let (intent, submission) = payload
         .privacy_transaction_intent_binding_if_present_v1()
         .map_err(|_| ())?
@@ -1685,4 +1698,298 @@ fn append_frame_field(frame: &mut Vec<u8>, label: &[u8], value: &[u8]) -> Result
     frame.extend_from_slice(&value_len.to_be_bytes());
     frame.extend_from_slice(value);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use core::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::{MultisigMember, MultisigPolicy},
+        privacy::{
+            PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1, PrivacyVegaIssuerRecordDigestV1,
+            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyVegaMdlSignatureAlgorithmV1,
+        },
+    };
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+
+    use super::*;
+
+    struct PanicRng;
+
+    impl RngCore for PanicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("invalid Vega action boundary reached proof randomness")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("invalid Vega action boundary reached proof randomness")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("invalid Vega action boundary reached proof randomness")
+        }
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+            panic!("invalid Vega action boundary reached proof randomness")
+        }
+    }
+
+    impl CryptoRng for PanicRng {}
+
+    fn transaction_key(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixed Vega transaction key")
+    }
+
+    fn action_context() -> VegaPrivacyActionTransactionContextV1 {
+        let key_pair = transaction_key(0x41);
+        VegaPrivacyActionTransactionContextV1 {
+            chain_id: ChainId::from("vega-signed-action-boundary-v1"),
+            authority: AccountId::new(key_pair.public_key().clone()),
+            creation_time: Duration::from_millis(1_785_023_999_999),
+            time_to_live: Some(Duration::from_secs(60)),
+            nonce: NonZeroU32::new(26),
+            fee_payment: FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000_000)),
+            metadata: Metadata::default(),
+        }
+    }
+
+    fn action_public_input(
+        lifecycle: PrivacyVegaIssuerRecordLifecycleV1,
+    ) -> VegaPrivacyActionPublicInputV1 {
+        let issuer_signing_key =
+            P256SigningKey::from_bytes((&[1_u8; 32]).into()).expect("fixed issuer key");
+        let encoded = issuer_signing_key.verifying_key().to_encoded_point(true);
+        let issuer_public_key = PrivacyP256PointV1::new(
+            encoded
+                .as_bytes()
+                .try_into()
+                .expect("compressed P-256 point has 33 bytes"),
+        );
+        let issuer_record = PrivacyVegaIssuerRecordV1::new(
+            PrivacyIssuerIdV1::new([0x40; 32]),
+            1,
+            issuer_public_key,
+            PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+            PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+            PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            None,
+            lifecycle,
+        )
+        .expect("fixed issuer record");
+        VegaPrivacyActionPublicInputV1 {
+            issuer_record,
+            presentation_date: PrivacyVegaMdlDateV1 {
+                year: 2026,
+                month: 7,
+                day: 26,
+            },
+            minimum_age_years: 18,
+            reader_challenge: PrivacyChallengeV1::new([0x31; 32]),
+            session_transcript_digest: PrivacySessionTranscriptDigestV1::new([0x32; 32]),
+        }
+    }
+
+    fn witness_material() -> VegaPrivacyActionWitnessMaterialV1 {
+        VegaPrivacyActionWitnessMaterialV1::new(
+            vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1],
+            vec![0; VEGA_MDL_MSO_PAYLOAD_BYTES_V1],
+            vec![0; VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1],
+            &[0; 64],
+        )
+        .expect("exact-shape boundary witness material")
+    }
+
+    fn device_signing_key() -> P256SigningKey {
+        P256SigningKey::from_bytes((&[2_u8; 32]).into()).expect("fixed device key")
+    }
+
+    #[test]
+    fn action_witness_material_rejects_every_noncanonical_length() {
+        let short_issuer_structure = VegaPrivacyActionWitnessMaterialV1::new(
+            vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1 - 1],
+            vec![0; VEGA_MDL_MSO_PAYLOAD_BYTES_V1],
+            vec![0; VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1],
+            &[0; 64],
+        );
+        assert!(matches!(
+            short_issuer_structure,
+            Err(VegaMdlError::InvalidInputLength {
+                field: "issuer_authentication_sig_structure",
+                ..
+            })
+        ));
+
+        let long_mso = VegaPrivacyActionWitnessMaterialV1::new(
+            vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1],
+            vec![0; VEGA_MDL_MSO_PAYLOAD_BYTES_V1 + 1],
+            vec![0; VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1],
+            &[0; 64],
+        );
+        assert!(matches!(
+            long_mso,
+            Err(VegaMdlError::InvalidInputLength {
+                field: "mobile_security_object_payload",
+                ..
+            })
+        ));
+
+        let short_birth_item = VegaPrivacyActionWitnessMaterialV1::new(
+            vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1],
+            vec![0; VEGA_MDL_MSO_PAYLOAD_BYTES_V1],
+            vec![0; VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1 - 1],
+            &[0; 64],
+        );
+        assert!(matches!(
+            short_birth_item,
+            Err(VegaMdlError::InvalidInputLength {
+                field: "birth_date_issuer_signed_item",
+                ..
+            })
+        ));
+
+        let short_signature = VegaPrivacyActionWitnessMaterialV1::new(
+            vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1],
+            vec![0; VEGA_MDL_MSO_PAYLOAD_BYTES_V1],
+            vec![0; VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1],
+            &[0; 63],
+        );
+        assert!(matches!(
+            short_signature,
+            Err(VegaMdlError::InvalidInputLength {
+                field: "issuer_signature",
+                ..
+            })
+        ));
+
+        let debug = format!("{:?}", witness_material());
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("issuer_signature:"));
+    }
+
+    #[test]
+    fn action_builder_rejects_public_boundaries_before_proof_randomness() {
+        let zero_genesis = prepare_vega_privacy_action_with_rng_v1(
+            action_context(),
+            action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
+            witness_material(),
+            &device_signing_key(),
+            [0; 32],
+            1_785_024_000_000,
+            &mut PanicRng,
+        );
+        assert!(matches!(
+            zero_genesis,
+            Err(VegaPrivacyActionBuildErrorV1::ZeroGenesisHash)
+        ));
+
+        let mut oversized_creation_time = action_context();
+        oversized_creation_time.creation_time = Duration::from_secs(u64::MAX);
+        let oversized_creation_time = prepare_vega_privacy_action_with_rng_v1(
+            oversized_creation_time,
+            action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
+            witness_material(),
+            &device_signing_key(),
+            [0xA7; 32],
+            1_785_024_000_000,
+            &mut PanicRng,
+        );
+        assert!(matches!(
+            oversized_creation_time,
+            Err(VegaPrivacyActionBuildErrorV1::CreationTimeOutOfRange)
+        ));
+
+        let mut oversized_ttl = action_context();
+        oversized_ttl.time_to_live = Some(Duration::from_secs(u64::MAX));
+        let oversized_ttl = prepare_vega_privacy_action_with_rng_v1(
+            oversized_ttl,
+            action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
+            witness_material(),
+            &device_signing_key(),
+            [0xA7; 32],
+            1_785_024_000_000,
+            &mut PanicRng,
+        );
+        assert!(matches!(
+            oversized_ttl,
+            Err(VegaPrivacyActionBuildErrorV1::TimeToLiveOutOfRange)
+        ));
+
+        let multisig_key = transaction_key(0x41);
+        let multisig_member = MultisigMember::new(multisig_key.public_key().clone(), 1)
+            .expect("fixed multisig member");
+        let mut multisig_context = action_context();
+        multisig_context.authority = AccountId::new_multisig(
+            MultisigPolicy::new(1, vec![multisig_member]).expect("fixed multisig policy"),
+        );
+        let multisig = prepare_vega_privacy_action_with_rng_v1(
+            multisig_context,
+            action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
+            witness_material(),
+            &device_signing_key(),
+            [0xA7; 32],
+            1_785_024_000_000,
+            &mut PanicRng,
+        );
+        assert!(matches!(
+            multisig,
+            Err(VegaPrivacyActionBuildErrorV1::UnsupportedAuthority)
+        ));
+
+        let revoked_issuer = prepare_vega_privacy_action_with_rng_v1(
+            action_context(),
+            action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Revoked),
+            witness_material(),
+            &device_signing_key(),
+            [0xA7; 32],
+            1_785_024_000_000,
+            &mut PanicRng,
+        );
+        assert!(matches!(
+            revoked_issuer,
+            Err(VegaPrivacyActionBuildErrorV1::InvalidIssuerRecord)
+        ));
+
+        let mut tampered_issuer_input =
+            action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active);
+        let mut tampered_record_digest =
+            *tampered_issuer_input.issuer_record.record_digest.as_bytes();
+        tampered_record_digest[0] ^= 1;
+        tampered_issuer_input.issuer_record.record_digest =
+            PrivacyVegaIssuerRecordDigestV1::new(tampered_record_digest);
+        let tampered_issuer = prepare_vega_privacy_action_with_rng_v1(
+            action_context(),
+            tampered_issuer_input,
+            witness_material(),
+            &device_signing_key(),
+            [0xA7; 32],
+            1_785_024_000_000,
+            &mut PanicRng,
+        );
+        assert!(matches!(
+            tampered_issuer,
+            Err(VegaPrivacyActionBuildErrorV1::InvalidIssuerRecord)
+        ));
+
+        let foreign_key = transaction_key(0x42);
+        let wrong_transaction_key = build_signed_vega_privacy_action_with_rng_v1(
+            action_context(),
+            action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
+            witness_material(),
+            &device_signing_key(),
+            [0xA7; 32],
+            1_785_024_000_000,
+            foreign_key.private_key(),
+            &mut PanicRng,
+        );
+        assert!(matches!(
+            wrong_transaction_key,
+            Err(VegaPrivacyActionBuildErrorV1::AuthorityKeyMismatch)
+        ));
+    }
 }

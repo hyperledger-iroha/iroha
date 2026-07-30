@@ -1885,6 +1885,9 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_latest_index_startup_truncates_unindexed_append_tail
   kura::tests::native_amx_latest_index_startup_leaves_missing_evidence_repair_pending
   kura::tests::native_amx_latest_index_startup_rejects_present_invalid_manifest_proof
+  kura::tests::native_amx_latest_index_startup_rejects_legacy_v1_filename
+  kura::tests::native_amx_latest_index_startup_rejects_fully_unbacked_pointer
+  kura::tests::native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt
   kura::tests::native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index
   kura::tests::native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation
   kura::tests::autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or_stage
@@ -2169,7 +2172,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=277
+readonly expected_multilane_focus_test_count=280
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2340,7 +2343,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 277-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 280-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2448,8 +2451,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 278 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 277 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 281 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 280 focused tests" >&2
     exit 1
   fi
 fi
@@ -3635,4 +3638,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 277/277 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 280/280 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

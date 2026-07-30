@@ -42,8 +42,7 @@ use iroha_data_model::{
 use iroha_zkp_halo2::vega::{
     MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, MaskedRelaxedRandomErrorV1,
     MaskedRelaxedRandomSourceV1, ZkAmsAdmissionPublicInputV1, ZkAmsAdmissionRelationWitnessV1,
-    ZkAmsMaskedProverConfigV1, ZkAmsProofContextV1, prove_zk_ams_admission_relation_v1,
-    verify_zk_ams_admission_relation_v1,
+    ZkAmsProofContextV1, prove_zk_ams_admission_relation_v1, verify_zk_ams_admission_relation_v1,
 };
 use p256::{
     AffinePoint as P256AffinePoint, FieldBytes as P256FieldBytes,
@@ -66,6 +65,9 @@ use super::{
     p256::{P256EngineError, TranscriptBindingV1},
     prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
 };
+
+/// Deterministic worker configuration for the canonical masked admission prover.
+pub use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
 
 /// Pinned source used for the Iroha ZK-AMS workflow and relation.
 pub const ZK_AMS_SOURCE_PROFILE_V1: &[u8] = b"arxiv:2602.16130v2:algorithms-1-4:appendices-a-c";

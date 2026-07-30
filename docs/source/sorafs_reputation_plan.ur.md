@@ -6,7 +6,7 @@ direction: rtl
 source: docs/source/sorafs_reputation_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: eb5e2c8729eace14903fe820e3bce7c63add936aaab85b6ac7770369b5e97fa3
+source_hash: 94c4e365ac78d93586194623f1b524e362a5043973f753a4fe5fb89e28b45f94
 source_last_modified: "2026-07-28T08:19:43.417162+00:00"
 translation_last_reviewed: null
 ---

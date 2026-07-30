@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_production_readiness.py"
 SPEC = importlib.util.spec_from_file_location("check_sorafs_production_readiness", MODULE_PATH)
@@ -18,6 +20,13 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
+from sorafs_resilience_test_support import (  # noqa: E402
+    DEFAULT_SIGNING_SEED as RESILIENCE_SIGNING_SEED,
+    public_key_from_seed as resilience_public_key_from_seed,
+    render_summary as render_resilience_summary,
+    resilience_binding as build_resilience_binding,
+    resilience_summary as build_resilience_summary,
+)
 
 NOW_UNIX = 1_800_800_000
 GENERATED_AT = NOW_UNIX - 120
@@ -72,6 +81,25 @@ TOPOLOGY_QUALIFICATION = {
     "deployment_id": DEPLOYMENT_ID,
     "environment": ENVIRONMENT,
 }
+RESILIENCE_SIGNER_PUBLIC_KEY = resilience_public_key_from_seed(
+    RESILIENCE_SIGNING_SEED
+)
+RESILIENCE_QUALIFICATION_SUMMARY = build_resilience_summary(
+    MODULE,
+    deployment_id=DEPLOYMENT_ID,
+    environment=ENVIRONMENT,
+    topology_qualification=TOPOLOGY_QUALIFICATION,
+    generated_at_unix=GENERATED_AT,
+    captured_at_unix=GENERATED_AT - 1,
+)
+RESILIENCE_QUALIFICATION_SUMMARY_BYTES = render_resilience_summary(
+    RESILIENCE_QUALIFICATION_SUMMARY
+)
+RESILIENCE_QUALIFICATION = build_resilience_binding(
+    MODULE,
+    RESILIENCE_QUALIFICATION_SUMMARY,
+    RESILIENCE_QUALIFICATION_SUMMARY_BYTES,
+)
 
 
 def ed25519_public_key_from_seed(seed: bytes) -> bytes:
@@ -169,6 +197,7 @@ def foundational_summary(
     deployment_id: str = DEPLOYMENT_ID,
     environment: str = ENVIRONMENT,
     lane_summary_sha256: dict[str, str] | None = None,
+    resilience_qualification: dict | None = None,
 ) -> dict:
     """Return a complete signed foundational prerequisite envelope."""
 
@@ -193,6 +222,11 @@ def foundational_summary(
             "deployment_id": deployment_id,
             "environment": environment,
         },
+        "resilience_qualification": (
+            copy.deepcopy(RESILIENCE_QUALIFICATION)
+            if resilience_qualification is None
+            else copy.deepcopy(resilience_qualification)
+        ),
         "prerequisites": [
             {
                 "id": prerequisite_id,
@@ -281,9 +315,33 @@ def topology_cli_args(
 ) -> list[str]:
     """Return the mandatory exact qualification input for CLI cases."""
 
+    topology_path = write_topology_qualification(root, deployment_id, environment)
+    topology_qualification, topology_errors = (
+        MODULE.load_topology_qualification_binding(
+            topology_path,
+            expected_deployment_id=deployment_id,
+            expected_environment=environment,
+        )
+    )
+    assert topology_errors == []
+    assert topology_qualification is not None
+    resilience_payload = build_resilience_summary(
+        MODULE,
+        deployment_id=deployment_id,
+        environment=environment,
+        topology_qualification=topology_qualification,
+        generated_at_unix=GENERATED_AT,
+        captured_at_unix=GENERATED_AT - 1,
+    )
+    resilience_path = root / "l1-resilience-qualification.summary"
+    resilience_path.write_bytes(render_resilience_summary(resilience_payload))
     return [
         "--topology-qualification-summary",
-        str(write_topology_qualification(root, deployment_id, environment)),
+        str(topology_path),
+        "--resilience-qualification-summary",
+        str(resilience_path),
+        "--resilience-qualification-signer-public-key-hex",
+        RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
     ]
 
 
@@ -303,6 +361,7 @@ def production_validation_options(**overrides: object):
             FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256
         ),
         "topology_qualification": TOPOLOGY_QUALIFICATION,
+        "resilience_qualification": RESILIENCE_QUALIFICATION,
     }
     values.update(overrides)
     return MODULE.ValidationOptions(**values)
@@ -1001,8 +1060,7 @@ def run_gate(root: Path, *extra: str) -> int:
     write_foundational_summary(root)
     return MODULE.main(
         [
-            "--topology-qualification-summary",
-            str(write_topology_qualification(root)),
+            *topology_cli_args(root),
             "--evidence-dir",
             str(root),
             "--now-unix",
@@ -1015,6 +1073,114 @@ def run_gate(root: Path, *extra: str) -> int:
             *extra,
         ]
     )
+
+
+def test_aggregate_accepts_trusted_resilience_attachment_without_new_lane(
+    tmp_path: Path,
+) -> None:
+    """A trusted receipt is accepted while aggregate lane counts remain unchanged."""
+
+    write_gate(tmp_path, "gateway_load")
+    summary_path = tmp_path / "aggregate.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary_path),
+        )
+        == 0
+    )
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["resilience_qualification"] == {
+        "schema": MODULE.AGGREGATE_RESILIENCE_QUALIFICATION_SCHEMA,
+        "present": True,
+        "valid": True,
+        "binding": RESILIENCE_QUALIFICATION,
+        "errors": [],
+    }
+    assert (
+        summary["foundational_prerequisites"]["resilience_qualification"]
+        == RESILIENCE_QUALIFICATION
+    )
+    assert summary["summary_file_count"] == 1
+    assert summary["recognized_summary_count"] == 1
+    assert len(MODULE.FOUNDATIONAL_PREREQUISITE_IDS) == 9
+    assert len(MODULE.DEFAULT_REQUIRED_GATES) == 17
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("missing", "--resilience-qualification-summary is required"),
+        ("stale", "exceeds max summary artifact age"),
+        ("tampered", "receipt signature verification failed"),
+        ("wrong_deployment", "deployment_id must match --deployment-id"),
+    ],
+)
+def test_aggregate_preflight_rejects_untrusted_resilience_attachment(
+    tmp_path: Path,
+    capsys,
+    case: str,
+    expected: str,
+) -> None:
+    """Missing, stale, tampered, or foreign resilience evidence blocks aggregate."""
+
+    gate_path = write_gate(tmp_path, "gateway_load")
+    args = [
+        *topology_cli_args(tmp_path),
+        "--evidence",
+        str(gate_path),
+        "--now-unix",
+        str(NOW_UNIX),
+        "--max-summary-artifact-age-secs",
+        str(MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS),
+        "--deployment-id",
+        DEPLOYMENT_ID,
+        "--environment",
+        ENVIRONMENT,
+        *foundational_cli_args(),
+    ]
+    resilience_path = tmp_path / "l1-resilience-qualification.summary"
+    if case == "missing":
+        flag_index = args.index("--resilience-qualification-summary")
+        del args[flag_index : flag_index + 2]
+    elif case == "stale":
+        stale_generated_at = (
+            NOW_UNIX - MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS - 1
+        )
+        stale = build_resilience_summary(
+            MODULE,
+            deployment_id=DEPLOYMENT_ID,
+            environment=ENVIRONMENT,
+            topology_qualification=TOPOLOGY_QUALIFICATION,
+            generated_at_unix=stale_generated_at,
+            captured_at_unix=stale_generated_at,
+        )
+        resilience_path.write_bytes(render_resilience_summary(stale))
+    elif case == "tampered":
+        tampered = json.loads(resilience_path.read_text(encoding="utf-8"))
+        signature = tampered["receipt_authentication"]["signature_hex"]
+        tampered["receipt_authentication"]["signature_hex"] = (
+            ("0" if signature[0] != "0" else "1") + signature[1:]
+        )
+        resilience_path.write_bytes(render_resilience_summary(tampered))
+    else:
+        foreign = build_resilience_summary(
+            MODULE,
+            deployment_id="sorafs-mainnet-foreign",
+            environment=ENVIRONMENT,
+            topology_qualification=TOPOLOGY_QUALIFICATION,
+            generated_at_unix=GENERATED_AT,
+            captured_at_unix=GENERATED_AT - 1,
+        )
+        resilience_path.write_bytes(render_resilience_summary(foreign))
+
+    assert MODULE.main(args) == (2 if case == "missing" else 1)
+    assert expected in capsys.readouterr().err
 
 
 def run_foundational_case(
@@ -1600,6 +1766,7 @@ def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
         "release_sequence",
         "previous_envelope_sha256",
         "topology_qualification",
+        "resilience_qualification",
         "prerequisites",
         "lane_summaries",
         "signature",
@@ -16491,6 +16658,21 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             MODULE.AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS
         ),
         "AGGREGATE_SUMMARY_FIELDS": MODULE.AGGREGATE_SUMMARY_FIELDS,
+        "RESILIENCE_QUALIFICATION_SUMMARY_FIELDS": (
+            MODULE.RESILIENCE_QUALIFICATION_SUMMARY_FIELDS
+        ),
+        "RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS": (
+            MODULE.RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS
+        ),
+        "RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS": (
+            MODULE.RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS
+        ),
+        "RESILIENCE_QUALIFICATION_BINDING_FIELDS": (
+            MODULE.RESILIENCE_QUALIFICATION_BINDING_FIELDS
+        ),
+        "AGGREGATE_RESILIENCE_QUALIFICATION_FIELDS": (
+            MODULE.AGGREGATE_RESILIENCE_QUALIFICATION_FIELDS
+        ),
     }
 
     assert MODULE.PAYLOAD_FREE_ARTIFACT_FIELDS == frozenset(
@@ -16543,6 +16725,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "recognized_summary_count",
             "deployment",
             "topology_qualification",
+            "resilience_qualification",
             "foundational_prerequisites",
             "required",
             "errors",
@@ -16570,10 +16753,58 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "evidence_anchor_sha256",
             "lane_summary_sha256",
             "topology_qualification",
+            "resilience_qualification",
             "path",
             "sha256",
             "errors",
         }
+    )
+    assert MODULE.RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS == frozenset(
+        {"requirement", "artifact_path", "artifact_sha256", "captured_at_unix"}
+    )
+    assert MODULE.RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS == frozenset(
+        {
+            "kind",
+            "algorithm",
+            "public_key_fingerprint_sha256",
+            "signature_hex",
+        }
+    )
+    assert MODULE.RESILIENCE_QUALIFICATION_BINDING_FIELDS == frozenset(
+        {
+            "schema",
+            "summary_sha256",
+            "receipt_sha256",
+            "canonical_receipt_sha256",
+            "receipt_generated_at_unix",
+            "signer_public_key_fingerprint_sha256",
+        }
+    )
+    assert MODULE.RESILIENCE_QUALIFICATION_SUMMARY_FIELDS == frozenset(
+        {
+            "schema",
+            "status",
+            "qualification_scope",
+            "live_evidence_recognized",
+            "externally_authenticated",
+            "promotion_eligible",
+            "readiness_lane_count_delta",
+            "receipt_sha256",
+            "canonical_receipt_sha256",
+            "receipt_generated_at_unix",
+            "receipt_authentication",
+            "deployment",
+            "topology_qualification",
+            "required_requirements",
+            "recognized_requirement_count",
+            "artifact_bindings",
+            "earliest_capture_unix",
+            "latest_capture_unix",
+            "errors",
+        }
+    )
+    assert MODULE.AGGREGATE_RESILIENCE_QUALIFICATION_FIELDS == frozenset(
+        {"schema", "present", "valid", "binding", "errors"}
     )
 
     assert (

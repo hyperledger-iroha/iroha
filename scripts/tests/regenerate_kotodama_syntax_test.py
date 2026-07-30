@@ -230,7 +230,7 @@ def test_repository_generated_outputs_are_current_and_complete() -> None:
     outputs = MODULE.render_outputs(MODULE.REPOSITORY_ROOT, policy)
 
     assert tuple(outputs) == MODULE.GENERATED_TARGETS
-    assert len(outputs) == 19
+    assert len(outputs) == 17
     assert MODULE.apply_outputs(MODULE.REPOSITORY_ROOT, outputs, check=True) == 0
 
 
@@ -241,14 +241,10 @@ def test_javascript_runtime_and_declaration_policy_are_generated_from_one_mappin
     source_body = _generated_body(
         (root / MODULE.JAVASCRIPT_PATHS[0]).read_text(encoding="utf-8")
     )
-    dist_body = _generated_body(
-        (root / MODULE.JAVASCRIPT_PATHS[1]).read_text(encoding="utf-8")
-    )
     declarations = _generated_body(
         (root / MODULE.TYPESCRIPT_PATH).read_text(encoding="utf-8")
     )
 
-    assert source_body == dist_body
     assert "pointerType: 0x0010" in source_body
     assert "readonly pointerType: 0x0010" in declarations
     assert "0x0013" not in source_body

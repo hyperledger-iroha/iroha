@@ -11570,9 +11570,9 @@ impl Default for Router {
 }
 
 /// Supported curves for Halo2 verification.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZkCurve {
-    /// Toy additive prime field backend (testing only).
+    /// Pallas curve from the Pasta cycle.
     Pallas,
     /// Pasta (Pallas/Vesta) — reserved for future backends.
     Pasta,

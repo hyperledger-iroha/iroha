@@ -1,0 +1,176 @@
+{
+  "schema": "sorafs.l1.deployment_qualification.v1",
+  "deployment": {
+    "deployment_id": "sorafs-mainnet-2026-07",
+    "environment": "production"
+  },
+  "validators": [
+    {
+      "validator_id": "validator-a",
+      "voting": true,
+      "da_enabled": true,
+      "rbc_enabled": true
+    },
+    {
+      "validator_id": "validator-b",
+      "voting": true,
+      "da_enabled": true,
+      "rbc_enabled": true
+    },
+    {
+      "validator_id": "validator-c",
+      "voting": true,
+      "da_enabled": true,
+      "rbc_enabled": true
+    },
+    {
+      "validator_id": "validator-d",
+      "voting": true,
+      "da_enabled": true,
+      "rbc_enabled": true
+    }
+  ],
+  "storage_providers": [
+    {
+      "provider_id": "provider-eu",
+      "operator_id": "storage-operator-a"
+    },
+    {
+      "provider_id": "provider-ap",
+      "operator_id": "storage-operator-b"
+    }
+  ],
+  "gateways": [
+    {
+      "gateway_id": "gateway-eu",
+      "region": "eu-west",
+      "administrator_id": "gateway-admin-a"
+    },
+    {
+      "gateway_id": "gateway-ap",
+      "region": "ap-south",
+      "administrator_id": "gateway-admin-b"
+    }
+  ],
+  "governance_dag_instances": [
+    {
+      "instance_id": "governance-dag-eu",
+      "kubo_handle": "kubo-prod-eu-primary",
+      "administrator_id": "dag-admin-a"
+    },
+    {
+      "instance_id": "governance-dag-ap",
+      "kubo_handle": "kubo-prod-ap-primary",
+      "administrator_id": "dag-admin-b"
+    }
+  ],
+  "runtime_handles": {
+    "monitoring": "monitoring-prod-fleet",
+    "hsm": "hsm-prod-release",
+    "kms": "kms-prod-envelope",
+    "webauthn": "webauthn-prod-operators"
+  },
+  "runtime_material_policy": {
+    "configuration_contains_credentials": false,
+    "configuration_contains_private_material": false,
+    "external_injection_required": true
+  },
+  "signed_model_artifacts": [
+    {
+      "artifact_id": "moderation-prescreen-primary",
+      "revision": 7,
+      "artifact_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+      "signature_algorithm": "ed25519",
+      "signature_sha256": "3434343434343434343434343434343434343434343434343434343434343434",
+      "signer_public_key_fingerprint_sha256": "5656565656565656565656565656565656565656565656565656565656565656",
+      "signature_verified": true
+    }
+  ],
+  "lane_slots": [
+    {
+      "gate": "ai_prescreen",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "appeal_finance",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "gateway_compliance",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "gateway_load",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "governance_dag",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "hedging_billing",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "moderation_panel",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "orderbook",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "pdp",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "pop_credentials",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "por",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "potr",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "reference_sdk_release",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "repair",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "reputation",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "reserve_rent",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    },
+    {
+      "gate": "transparency",
+      "deployment_id": "sorafs-mainnet-2026-07",
+      "environment": "production"
+    }
+  ]
+}

@@ -45,9 +45,12 @@ use super::{
     },
     credential_pre_aux::{
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPostBaseChallengesV1,
-        ZkX509CredentialMainPreAuxV1,
+        ZkX509CredentialMainPreAuxV1, ZkX509CredentialPreAuxBindingV1,
+        absorb_zk_x509_credential_pre_aux_binding_v1,
     },
-    credential_stark::ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1,
+    credential_stark::{
+        ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, ZkX509CredentialPublicBindingV1,
+    },
     der_air::ZkX509Rfc5280StatementV1,
     der_stark::{
         FIX_ACTIVE as DER_FIX_ACTIVE, FIX_COMPARATOR, FIX_FINAL_DOCUMENT, FIX_FIRST_ACTIVE,
@@ -59,10 +62,10 @@ use super::{
         ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1, ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1,
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1, ZK_X509_DER_STARK_FIXED_WIDTH_V1,
         ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1, ZK_X509_DER_STARK_TRACE_LOG2_V1,
-        ZK_X509_DER_STARK_TRACE_SIZE_V1, ZkX509DerStarkChallengesV1, ZkX509DerStarkErrorV1,
-        ZkX509DerStarkFixedScheduleV1, ZkX509DerStarkPublicTerminalsV1, ZkX509DerStarkShapeV1,
-        ZkX509DerStarkTerminalClaimsV1, build_zk_x509_der_stark_base_v1,
-        build_zk_x509_der_stark_native_aux_column_v1,
+        ZK_X509_DER_STARK_TRACE_SIZE_V1, ZkX509DerStarkBaseV1, ZkX509DerStarkChallengesV1,
+        ZkX509DerStarkErrorV1, ZkX509DerStarkFixedScheduleV1, ZkX509DerStarkPublicTerminalsV1,
+        ZkX509DerStarkShapeV1, ZkX509DerStarkTerminalClaimsV1, ZkX509DerStarkTraceV1,
+        build_zk_x509_der_stark_base_v1, build_zk_x509_der_stark_native_aux_column_v1,
         build_zk_x509_der_stark_native_base_column_v1,
         build_zk_x509_der_stark_native_fixed_column_v1, build_zk_x509_der_stark_trace_v1,
         compile_zk_x509_der_stark_fixed_schedule_v1, derive_zk_x509_der_stark_challenges_v1,
@@ -92,7 +95,7 @@ use super::{
         build_zk_x509_io_trace_v1, byte_memory_capacity_v1, derive_zk_x509_io_challenges_v1,
         validate_declarations_v1,
     },
-    main_assembly::ZkX509MainIoBaseMaterialV1,
+    main_assembly::{ZkX509MainIoBaseMaterialV1, ZkX509MainTraceAssemblyV1},
     main_io::compile_zk_x509_main_io_declarations_v1,
     p256_aggregate_adapter::{
         P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1, P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1,
@@ -188,8 +191,9 @@ use super::{
         ZK_X509_RFC5280_STARK_TRACE_LOG2_V1, ZK_X509_RFC5280_STARK_TRACE_SIZE_V1,
         ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1, ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1,
         ZkX509P256TerminalClaimsV1, ZkX509Rfc5280OutputRoleV1, ZkX509Rfc5280StarkAuxRowV1,
-        ZkX509Rfc5280StarkBaseRowV1, ZkX509Rfc5280StarkChallengesV1, ZkX509Rfc5280StarkFixedRowV1,
-        ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
+        ZkX509Rfc5280StarkBaseMaterialV1, ZkX509Rfc5280StarkBaseRowV1,
+        ZkX509Rfc5280StarkChallengesV1, ZkX509Rfc5280StarkColumnProviderV1,
+        ZkX509Rfc5280StarkFixedRowV1, ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
         ZkX509Rfc5280StarkTerminalClaimsV1, ZkX509ShaSegmentTerminalClaimsV1,
         compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
         evaluate_zk_x509_rfc5280_stark_residues_v1,
@@ -199,11 +203,14 @@ use super::{
         ZK_X509_SHA_BATCH_AUX_WIDTH_V1, ZK_X509_SHA_BATCH_BASE_CHUNKS_PER_SEGMENT_V1,
         ZK_X509_SHA_BATCH_BASE_WIDTH_V1, ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1,
         ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1, ZK_X509_SHA_BATCH_FIXED_WIDTH_V1,
-        ZK_X509_SHA_CA_LEAF_CALL_V1, ZK_X509_SHA_CA_NODE_CALL_START_V1,
-        ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1, ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1,
-        ZK_X509_SHA_SEGMENT_COUNT_V1, ZkX509ShaBatchFixedProviderV1, ZkX509ShaBatchRowV1,
-        ZkX509ShaCallActivationV1, ZkX509ShaCallBusChallengesV1, ZkX509ShaCallPublicShapeV1,
-        ZkX509ShaCallRoleV1, ZkX509ShaCallScheduleV1, evaluate_zk_x509_sha_batch_residues_v1,
+        ZK_X509_SHA_CA_CALL_COUNT_V1, ZK_X509_SHA_CA_LEAF_CALL_V1,
+        ZK_X509_SHA_CA_NODE_CALL_START_V1, ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1,
+        ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1, ZK_X509_SHA_SEGMENT_COUNT_V1,
+        ZkX509ShaBatchFixedProviderV1, ZkX509ShaBatchRowV1, ZkX509ShaBatchSegmentAuxSourceV1,
+        ZkX509ShaBatchSegmentBaseSourceV1, ZkX509ShaCallActivationV1,
+        ZkX509ShaCallBoundaryTerminalV1, ZkX509ShaCallBusChallengesV1, ZkX509ShaCallPublicShapeV1,
+        ZkX509ShaCallRoleV1, ZkX509ShaCallScheduleV1, ZkX509ShaCallWitnessV1,
+        ZkX509ShaSegmentTerminalV1, evaluate_zk_x509_sha_batch_residues_v1,
     },
 };
 #[cfg(test)]
@@ -422,6 +429,8 @@ const DER_PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:der-public
 const PROJECTION_PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:projection-public:v1";
 const ACCUMULATOR_LAYOUT_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:stark:accumulator-aggregate-layout:v1";
+const MAIN_LAYOUT_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-x509:stark:main-aggregate-layout:v1";
 const ACCUMULATOR_REGISTRATION_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:stark:accumulator-registration:v1";
 const ACCUMULATOR_SCHEDULE_DIGEST_DOMAIN_V1: &[u8] =
@@ -7283,6 +7292,10 @@ trait MainTraceGroupSourceV1 {
 struct ZeroizingMainTraceColumnV1(Vec<F>);
 
 impl ZeroizingMainTraceColumnV1 {
+    fn into_vec_v1(mut self) -> Vec<F> {
+        core::mem::take(&mut self.0)
+    }
+
     fn zeroize_private_v1(&mut self) {
         self.0.fill(F::ZERO);
         self.0.clear();
@@ -8691,6 +8704,679 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
         self.fixed_openings
             .get(registration_index)
             .map(BTreeMap::len)
+    }
+}
+
+fn map_main_sha_source_error_v1(
+    error: super::sha_call_bus_stark::ZkX509ShaCallBusStarkErrorV1,
+) -> ZkX509StarkErrorV1 {
+    use super::sha_call_bus_stark::ZkX509ShaCallBusStarkErrorV1 as Error;
+    match error {
+        Error::Resource => ZkX509StarkErrorV1::AllocationFailure,
+        Error::Phase => ZkX509StarkErrorV1::TranscriptMismatch,
+        Error::Challenge => ZkX509StarkErrorV1::TranscriptMismatch,
+        Error::Topology
+        | Error::LengthOrPadding
+        | Error::InactiveCall
+        | Error::Digest
+        | Error::Event
+        | Error::Terminal => ZkX509StarkErrorV1::AccumulatorWitness,
+    }
+}
+
+fn map_main_rfc_source_error_v1(
+    error: super::rfc5280_stark::ZkX509Rfc5280StarkErrorV1,
+) -> ZkX509StarkErrorV1 {
+    use super::rfc5280_stark::ZkX509Rfc5280StarkErrorV1 as Error;
+    match error {
+        Error::Resource => ZkX509StarkErrorV1::AllocationFailure,
+        Error::Challenge => ZkX509StarkErrorV1::TranscriptMismatch,
+        Error::Shape
+        | Error::Grammar
+        | Error::Semantic
+        | Error::Source
+        | Error::Output
+        | Error::TerminalClaim => ZkX509StarkErrorV1::DerWitness,
+    }
+}
+
+fn main_log19_sha_base_sources_v1<'a>(
+    schedule: &'a ZkX509ShaCallScheduleV1,
+    witnesses: &'a [ZkX509ShaCallWitnessV1; super::sha_call_bus_stark::ZK_X509_SHA_CALL_COUNT_V1],
+) -> Result<[ZkX509ShaBatchSegmentBaseSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1], ZkX509StarkErrorV1>
+{
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(ZK_X509_SHA_SEGMENT_COUNT_V1)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
+        sources.push(
+            ZkX509ShaBatchSegmentBaseSourceV1::new_v1(schedule, witnesses, segment)
+                .map_err(map_main_sha_source_error_v1)?,
+        );
+    }
+    sources
+        .try_into()
+        .map_err(|_: Vec<ZkX509ShaBatchSegmentBaseSourceV1<'a>>| {
+            ZkX509StarkErrorV1::InternalInvariant
+        })
+}
+
+/// Challenge-independent owner of the complete mixed native-log19 MAIN group.
+///
+/// Strict DER, RFC 5280, the four SHA registrations, and all fifteen P-256
+/// registrations are routed from the verifier-owned registration.  The type
+/// deliberately has no auxiliary-column implementation: a successful X5B1
+/// transition consumes it and returns [`MainLog19BoundTraceGroupSourceV1`].
+struct MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
+    registrations: Vec<RegisteredSegmentLayoutV1>,
+    p256_bindings: Vec<MainP256RegistrationBindingV1>,
+    der: &'assembly ZkX509DerStarkBaseV1,
+    rfc: &'assembly ZkX509Rfc5280StarkBaseMaterialV1,
+    sha: &'source
+        [ZkX509ShaBatchSegmentBaseSourceV1<'assembly>; ZK_X509_SHA_SEGMENT_COUNT_V1],
+    p256: &'source P256MainBaseSourceV1,
+}
+
+impl<'assembly, 'source> MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
+    fn for_main_v1(
+        layout: &AggregateProofLayoutV1,
+        assembly: &'assembly ZkX509MainTraceAssemblyV1,
+        sha: &'source
+            [ZkX509ShaBatchSegmentBaseSourceV1<'assembly>; ZK_X509_SHA_SEGMENT_COUNT_V1],
+        p256: &'source P256MainBaseSourceV1,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
+        validate_p256_main_registration_order_v1(&p256.canonical_registrations_v1()?)
+            .map_err(|_| ZkX509StarkErrorV1::P256Witness)?;
+        Ok(Self {
+            registrations: canonical_main_log19_registrations_v1(layout)?,
+            p256_bindings: canonical_p256_main_log19_bindings_v1(layout)?,
+            der: &assembly.der_base,
+            rfc: &assembly.rfc_base,
+            sha,
+            p256,
+        })
+    }
+
+    fn registration_index_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        let mut matches = self
+            .registrations
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| **candidate == registration)
+            .map(|(index, _)| index);
+        let index = matches.next().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if matches.next().is_some() {
+            return Err(ZkX509StarkErrorV1::InternalInvariant);
+        }
+        Ok(index)
+    }
+
+    fn p256_binding_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<MainP256RegistrationBindingV1, ZkX509StarkErrorV1> {
+        let mut matches = self
+            .p256_bindings
+            .iter()
+            .copied()
+            .filter(|binding| binding.main == registration);
+        let binding = matches
+            .next()
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if matches.next().is_some() {
+            return Err(ZkX509StarkErrorV1::InternalInvariant);
+        }
+        Ok(binding)
+    }
+
+}
+
+impl MainTraceGroupSourceV1 for MainLog19BaseTraceGroupSourceV1<'_, '_> {
+    fn native_base_column_v1(
+        &mut self,
+        registration: RegisteredSegmentLayoutV1,
+        local_column: usize,
+    ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
+        let registration_index = self.registration_index_v1(registration)?;
+        if local_column >= registration.segment.base_width {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let column = match registration_index {
+            0 => build_zk_x509_der_stark_native_base_column_v1(self.der, local_column)
+                .map_err(ZkX509StarkErrorV1::from)?,
+            1 => self
+                .rfc
+                .build_base_column(local_column)
+                .map_err(map_main_rfc_source_error_v1)?,
+            2..=5 => {
+                let segment = registration_index - 2;
+                let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
+                self.sha[segment]
+                    .fill_base_column_v1(segment, local_column, &mut column)
+                    .map_err(map_main_sha_source_error_v1)?;
+                return Ok(column);
+            }
+            _ => {
+                let binding = self.p256_binding_v1(registration)?;
+                let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
+                self.p256
+                    .fill_base_column_v1(binding.p256, local_column, &mut column)?;
+                return Ok(column);
+            }
+        };
+        Ok(ZeroizingMainTraceColumnV1(column))
+    }
+
+    fn native_aux_column_v1(
+        &mut self,
+        _registration: RegisteredSegmentLayoutV1,
+        _local_column: usize,
+    ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
+        Err(ZkX509StarkErrorV1::TranscriptMismatch)
+    }
+}
+
+/// Challenge-bound owner of the complete mixed native-log19 MAIN group.
+///
+/// Construction consumes the pre-X5B1 owner and requires both the outer
+/// credential binding and the P-256 capability bound by that same token.
+struct MainLog19BoundTraceGroupSourceV1<'a> {
+    registrations: Vec<RegisteredSegmentLayoutV1>,
+    p256_bindings: Vec<MainP256RegistrationBindingV1>,
+    der: ZkX509DerStarkTraceV1,
+    der_fixed: ZkX509DerStarkFixedScheduleV1,
+    rfc: ZkX509Rfc5280StarkColumnProviderV1<'a>,
+    sha_base: [ZkX509ShaBatchSegmentBaseSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
+    sha_aux: [ZkX509ShaBatchSegmentAuxSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
+    sha_fixed: ZkX509ShaBatchFixedProviderV1,
+    p256: P256MainBoundSourceV1,
+    post_base: ZkX509CredentialMainPostBaseChallengesV1,
+    claims: ZkX509MainTerminalClaimsV1,
+}
+
+impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
+    /// Consume every challenge-independent log19 child exactly once under the
+    /// credential-derived X5B1 binding.
+    ///
+    /// This is deliberately the only transition into the bound mixed group.
+    /// In particular, callers cannot provide a separately bound P-256 source:
+    /// P-256 and all four SHA segments are transitioned here from the same
+    /// opaque credential capability.
+    fn bind_from_phase_v1(
+        layout: &AggregateProofLayoutV1,
+        assembly: &'a ZkX509MainTraceAssemblyV1,
+        mut sha: [ZkX509ShaBatchSegmentBaseSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
+        mut p256: P256MainBaseSourceV1,
+        binding: ZkX509CredentialPreAuxBindingV1,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
+        let registrations = canonical_main_log19_registrations_v1(layout)?;
+        let p256_bindings = canonical_p256_main_log19_bindings_v1(layout)?;
+        let post_base = binding.main_post_base();
+        let p256 = p256.bind_v1(post_base)?;
+        if p256.post_base_v1()? != post_base {
+            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+        }
+
+        let mut sha_aux = Vec::new();
+        sha_aux
+            .try_reserve_exact(ZK_X509_SHA_SEGMENT_COUNT_V1)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        for source in &mut sha {
+            sha_aux.push(
+                source
+                    .bind_v1(binding)
+                    .map_err(map_main_sha_source_error_v1)?,
+            );
+        }
+        let sha_aux: [ZkX509ShaBatchSegmentAuxSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1] = sha_aux
+            .try_into()
+            .map_err(|_: Vec<ZkX509ShaBatchSegmentAuxSourceV1<'a>>| {
+                ZkX509StarkErrorV1::InternalInvariant
+            })?;
+
+        let der = build_zk_x509_der_stark_trace_v1(assembly.der_base.clone(), post_base.der())
+            .map_err(ZkX509StarkErrorV1::from)?;
+        let rfc = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+            &assembly.rfc_base,
+            post_base.der(),
+            post_base.rfc5280(),
+        )
+        .map_err(map_main_rfc_source_error_v1)?;
+        let mut sha_segments = Vec::new();
+        let mut ca_calls = Vec::new();
+        sha_segments
+            .try_reserve_exact(ZK_X509_SHA_SEGMENT_COUNT_V1)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        ca_calls
+            .try_reserve_exact(ZK_X509_SHA_CA_CALL_COUNT_V1)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        for (segment, source) in sha_aux.iter().enumerate() {
+            let mut column = zeroed_main_trace_column_v1(ZK_X509_DER_STARK_TRACE_SIZE_V1)?;
+            let terminals = source
+                .fill_aux_column_with_air_terminals_v1(segment, 0, &mut column)
+                .map_err(map_main_sha_source_error_v1)?;
+            sha_segments.push(terminals.segment);
+            ca_calls.extend(terminals.ca_call_boundaries);
+        }
+        let sha_segments: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1] = sha_segments
+            .try_into()
+            .map_err(|_: Vec<ZkX509ShaSegmentTerminalV1>| ZkX509StarkErrorV1::InternalInvariant)?;
+        let ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1] = ca_calls
+            .try_into()
+            .map_err(|_: Vec<ZkX509ShaCallBoundaryTerminalV1>| {
+                ZkX509StarkErrorV1::InternalInvariant
+            })?;
+        let claims = ZkX509MainTerminalClaimsV1 {
+            der: zk_x509_der_stark_terminal_claims_v1(&der).map_err(ZkX509StarkErrorV1::from)?,
+            rfc5280: rfc.terminal_claims_v1(),
+            sha: ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(
+                sha_segments,
+                ca_calls,
+            )
+            .map_err(map_main_rfc_source_error_v1)?,
+            p256: p256.terminal_claims_v1()?,
+        };
+        validate_zk_x509_der_rfc_terminal_equalities_v1(claims.der, claims.rfc5280)
+            .map_err(map_main_rfc_source_error_v1)?;
+        if !zk_x509_main_rfc_sha_terminal_products_match_v1(claims.rfc5280, claims.sha) {
+            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+        }
+
+        Ok(Self {
+            registrations,
+            p256_bindings,
+            der,
+            der_fixed: compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)
+                .map_err(ZkX509StarkErrorV1::from)?,
+            rfc,
+            sha_base: main_log19_sha_base_sources_v1(
+                &assembly.sha_schedule,
+                &assembly.sha_witnesses,
+            )?,
+            sha_aux,
+            sha_fixed: ZkX509ShaBatchFixedProviderV1::new_v1(assembly.sha_schedule.shape())
+                .map_err(map_main_sha_source_error_v1)?,
+            p256,
+            post_base,
+            claims,
+        })
+    }
+
+    fn registration_index_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        let mut matches = self
+            .registrations
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| **candidate == registration)
+            .map(|(index, _)| index);
+        let index = matches.next().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if matches.next().is_some() {
+            return Err(ZkX509StarkErrorV1::InternalInvariant);
+        }
+        Ok(index)
+    }
+
+    fn p256_binding_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<MainP256RegistrationBindingV1, ZkX509StarkErrorV1> {
+        let mut matches = self
+            .p256_bindings
+            .iter()
+            .copied()
+            .filter(|binding| binding.main == registration);
+        let binding = matches
+            .next()
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if matches.next().is_some() {
+            return Err(ZkX509StarkErrorV1::InternalInvariant);
+        }
+        Ok(binding)
+    }
+
+    const fn terminal_claims_v1(&self) -> ZkX509MainTerminalClaimsV1 {
+        self.claims
+    }
+
+    fn native_fixed_column_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        local_column: usize,
+    ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
+        let registration_index = self.registration_index_v1(registration)?;
+        if local_column >= registration.segment.fixed_width {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let column = match registration_index {
+            0 => build_zk_x509_der_stark_native_fixed_column_v1(&self.der_fixed, local_column)
+                .map_err(ZkX509StarkErrorV1::from)?,
+            1 => self
+                .rfc
+                .build_fixed_column_v1(local_column)
+                .map_err(map_main_rfc_source_error_v1)?,
+            2..=5 => {
+                let segment = registration_index - 2;
+                let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
+                for (row, value) in column.iter_mut().enumerate() {
+                    *value = self
+                        .sha_fixed
+                        .fixed_row_v1(segment, row)
+                        .map_err(map_main_sha_source_error_v1)?[local_column];
+                }
+                return Ok(column);
+            }
+            _ => {
+                let binding = self.p256_binding_v1(registration)?;
+                let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
+                self.p256
+                    .fill_fixed_column_v1(binding.p256, local_column, &mut column)?;
+                return Ok(column);
+            }
+        };
+        Ok(ZeroizingMainTraceColumnV1(column))
+    }
+}
+
+impl MainTraceGroupSourceV1 for MainLog19BoundTraceGroupSourceV1<'_> {
+    fn native_base_column_v1(
+        &mut self,
+        registration: RegisteredSegmentLayoutV1,
+        local_column: usize,
+    ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
+        let registration_index = self.registration_index_v1(registration)?;
+        if local_column >= registration.segment.base_width {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let column = match registration_index {
+            0 => build_zk_x509_der_stark_native_base_column_v1(&self.der.base, local_column)
+                .map_err(ZkX509StarkErrorV1::from)?,
+            1 => self
+                .rfc
+                .build_base_column_v1(local_column)
+                .map_err(map_main_rfc_source_error_v1)?,
+            2..=5 => {
+                let segment = registration_index - 2;
+                let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
+                self.sha_base[segment]
+                    .fill_base_column_v1(segment, local_column, &mut column)
+                    .map_err(map_main_sha_source_error_v1)?;
+                return Ok(column);
+            }
+            _ => {
+                let binding = self.p256_binding_v1(registration)?;
+                let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
+                self.p256
+                    .fill_base_column_v1(binding.p256, local_column, &mut column)?;
+                return Ok(column);
+            }
+        };
+        Ok(ZeroizingMainTraceColumnV1(column))
+    }
+
+    fn native_aux_column_v1(
+        &mut self,
+        registration: RegisteredSegmentLayoutV1,
+        local_column: usize,
+    ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
+        let registration_index = self.registration_index_v1(registration)?;
+        if local_column >= registration.segment.aux_width {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let column = match registration_index {
+            0 => build_zk_x509_der_stark_native_aux_column_v1(&self.der, local_column)
+                .map_err(ZkX509StarkErrorV1::from)?,
+            1 => self
+                .rfc
+                .build_aux_column_v1(local_column)
+                .map_err(map_main_rfc_source_error_v1)?,
+            2..=5 => {
+                let segment = registration_index - 2;
+                let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
+                self.sha_aux[segment]
+                    .fill_aux_column_v1(segment, local_column, &mut column)
+                    .map_err(map_main_sha_source_error_v1)?;
+                return Ok(column);
+            }
+            _ => {
+                let binding = self.p256_binding_v1(registration)?;
+                let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
+                self.p256
+                    .fill_aux_column_v1(binding.p256, local_column, &mut column)?;
+                return Ok(column);
+            }
+        };
+        Ok(ZeroizingMainTraceColumnV1(column))
+    }
+}
+
+/// Native fixed-polynomial and quotient owner for the complete mixed log19
+/// prover group.
+///
+/// The source borrows the already-bound trace owner, so it is impossible to
+/// evaluate a challenge-dependent residue against a pre-X5B1 trace.
+struct MainLog19ProverConstraintSourceV1<'a, 'source> {
+    source: &'source MainLog19BoundTraceGroupSourceV1<'a>,
+    der_public: ZkX509DerStarkPublicTerminalsV1,
+    p256_challenges: P256AggregateChallengesV1,
+    p256_terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
+}
+
+impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
+    fn for_main_v1(
+        layout: &AggregateProofLayoutV1,
+        source: &'source MainLog19BoundTraceGroupSourceV1<'a>,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        if canonical_main_log19_registrations_v1(layout)? != source.registrations
+            || source.p256.post_base_v1()? != source.post_base
+        {
+            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+        }
+        Ok(Self {
+            source,
+            der_public: derive_zk_x509_der_stark_public_terminals_v1(
+                &ZkX509DerStarkShapeV1,
+                source.post_base.der(),
+            )
+            .map_err(ZkX509StarkErrorV1::from)?,
+            p256_challenges: p256_aggregate_challenges_from_post_base_v1(source.post_base)?,
+            p256_terminals: main_p256_terminal_registrations_v1(&source.claims.p256)?,
+        })
+    }
+
+    fn stream_fixed_polynomials_v1(
+        &self,
+        mut consume: impl FnMut(
+            RegisteredSegmentLayoutV1,
+            usize,
+            &[F],
+        ) -> Result<(), ZkX509StarkErrorV1>,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        for registration in self.source.registrations.iter().copied() {
+            let trace_root = goldilocks_primitive_root_v1(registration.segment.trace_log2)
+                .map_err(map_transparent_error_v1)?;
+            for local_column in 0..registration.segment.fixed_width {
+                let mut coefficients = self
+                    .source
+                    .native_fixed_column_v1(registration, local_column)?;
+                goldilocks_ifft_v1(&mut coefficients, trace_root)
+                    .map_err(map_transparent_error_v1)?;
+                consume(registration, local_column, &coefficients)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn constraint_residues_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        opening: RegisteredOpenedRowsV1<'_>,
+        fixed_current: &[F],
+        fixed_next: &[F],
+    ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
+        let registration_index = self.source.registration_index_v1(registration)?;
+        if fixed_current.len() != registration.segment.fixed_width
+            || fixed_next.len() != registration.segment.fixed_width
+            || opening.base_current.len() != registration.segment.base_width
+            || opening.base_next.len() != registration.segment.base_width
+            || opening.aux_current.len() != registration.segment.aux_width
+            || opening.aux_next.len() != registration.segment.aux_width
+            || opening
+                .base_current
+                .iter()
+                .chain(opening.base_next)
+                .chain(opening.aux_current)
+                .chain(opening.aux_next)
+                .chain(fixed_current)
+                .chain(fixed_next)
+                .any(|value| F::canonical(value.0).is_none())
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let residues = match registration_index {
+            0 => evaluate_zk_x509_der_stark_residues_v1(
+                opening
+                    .base_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .base_next
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .aux_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .aux_next
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                fixed_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                fixed_next
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                self.source.post_base.der(),
+                self.der_public,
+                self.source.claims.der,
+            )
+            .map_err(ZkX509StarkErrorV1::from)?,
+            1 => evaluate_zk_x509_rfc5280_stark_residues_v1(
+                opening
+                    .base_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .base_next
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .aux_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                opening
+                    .aux_next
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                fixed_current
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                self.source.post_base.der(),
+                self.source.post_base.rfc5280(),
+                self.source.claims.rfc5280,
+            )
+            .map_err(map_main_rfc_source_error_v1)?,
+            2..=5 => {
+                let segment = registration_index - 2;
+                let current = ZkX509ShaBatchRowV1 {
+                    base: opening
+                        .base_current
+                        .try_into()
+                        .copied()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    aux: opening
+                        .aux_current
+                        .try_into()
+                        .copied()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed: fixed_current
+                        .try_into()
+                        .copied()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                };
+                let next = ZkX509ShaBatchRowV1 {
+                    base: opening
+                        .base_next
+                        .try_into()
+                        .copied()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    aux: opening
+                        .aux_next
+                        .try_into()
+                        .copied()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed: fixed_next
+                        .try_into()
+                        .copied()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                };
+                evaluate_zk_x509_sha_batch_residues_v1(
+                    &current,
+                    &next,
+                    self.source.post_base.sha_word(),
+                    self.source.post_base.sha(),
+                    self.source.post_base.rfc5280(),
+                    self.source.claims.sha.segments[segment],
+                    &self.source.claims.sha.ca_calls,
+                )
+                .map_err(map_main_sha_source_error_v1)?
+            }
+            _ => {
+                let binding = self.source.p256_binding_v1(registration)?;
+                p256_opened_residues_v1(
+                    registration,
+                    opening,
+                    fixed_current,
+                    self.p256_challenges,
+                    self.p256_terminals
+                        .get(binding.p256.signature_v1())
+                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
+                )?
+            }
+        };
+        if residues.len() != registration.segment.constraint_count {
+            return Err(ZkX509StarkErrorV1::InternalInvariant);
+        }
+        Ok(residues)
+    }
+
+    fn composition_value_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        x: F,
+        opening: RegisteredOpenedRowsV1<'_>,
+        fixed_current: &[F],
+        fixed_next: &[F],
+        alphas: &[E],
+    ) -> Result<E, ZkX509StarkErrorV1> {
+        if F::canonical(x.0).is_none() || alphas.len() != registration.segment.constraint_count {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        accumulator_quotient_value_v1(
+            registration.segment,
+            x,
+            &self.constraint_residues_v1(registration, opening, fixed_current, fixed_next)?,
+            alphas,
+        )
     }
 }
 
@@ -11794,6 +12480,126 @@ enum MainTraceColumnKindV1 {
     Aux,
 }
 
+fn registered_main_group_column_v1(
+    layout: &AggregateProofLayoutV1,
+    group_index: usize,
+    kind: MainTraceColumnKindV1,
+    column_index: usize,
+) -> Result<(RegisteredSegmentLayoutV1, usize), ZkX509StarkErrorV1> {
+    layout.validate_exact_full_profile_registration_v1()?;
+    let group = layout
+        .trace_groups
+        .get(group_index)
+        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    let width = match kind {
+        MainTraceColumnKindV1::Base => group.base_width,
+        MainTraceColumnKindV1::Aux => group.aux_width,
+    };
+    if column_index >= width {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let mut matched = None;
+    for registration in layout
+        .registered_segments
+        .iter()
+        .copied()
+        .filter(|registration| registration.trace_group == group_index)
+    {
+        let (start, end) = match kind {
+            MainTraceColumnKindV1::Base => (registration.base_start, registration.base_end()?),
+            MainTraceColumnKindV1::Aux => (registration.aux_start, registration.aux_end()?),
+        };
+        if (start..end).contains(&column_index)
+            && matched
+                .replace((registration, column_index - start))
+                .is_some()
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+    }
+    matched.ok_or(ZkX509StarkErrorV1::ProfileMismatch)
+}
+
+fn commit_main_trace_group_v1<R: TryRngCore>(
+    layout: &AggregateProofLayoutV1,
+    group_index: usize,
+    kind: MainTraceColumnKindV1,
+    source: &mut dyn MainTraceGroupSourceV1,
+    rng: &mut R,
+) -> Result<
+    (
+        aggregate::StreamingRowCommitmentResultV1,
+        aggregate::StreamingTraceMaskSetV1,
+    ),
+    ZkX509StarkErrorV1,
+> {
+    layout.validate_exact_full_profile_registration_v1()?;
+    let group = *layout
+        .trace_groups
+        .get(group_index)
+        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    if MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1.get(group_index).copied()
+        != Some(group.native_trace_log2)
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let (leaf_domain, node_domain, width) = match kind {
+        MainTraceColumnKindV1::Base => (BASE_LEAF_DOMAIN, BASE_NODE_DOMAIN, group.base_width),
+        MainTraceColumnKindV1::Aux => (AUX_LEAF_DOMAIN, AUX_NODE_DOMAIN, group.aux_width),
+    };
+    let mut source_error = None;
+    let result = aggregate::commit_masked_trace_columns_v1(
+        leaf_domain,
+        node_domain,
+        group_index,
+        group.native_trace_log2,
+        layout.common_lde_log2,
+        width,
+        MASK_DEGREE,
+        &[],
+        rng,
+        |column_index| {
+            let (registration, local_column) =
+                registered_main_group_column_v1(layout, group_index, kind, column_index)
+                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+            let column = match kind {
+                MainTraceColumnKindV1::Base => {
+                    source.native_base_column_v1(registration, local_column)
+                }
+                MainTraceColumnKindV1::Aux => {
+                    source.native_aux_column_v1(registration, local_column)
+                }
+            };
+            let column = match column {
+                Ok(column) => column,
+                Err(error) => {
+                    let aggregate_error = if error == ZkX509StarkErrorV1::AllocationFailure {
+                        AggregateStarkErrorV1::AllocationFailure
+                    } else {
+                        AggregateStarkErrorV1::InvalidLayout
+                    };
+                    source_error = Some(error);
+                    return Err(aggregate_error);
+                }
+            };
+            if column.len() != registration.segment.trace_size()
+                || column
+                    .iter()
+                    .any(|value| F::canonical(value.0).is_none())
+            {
+                return Err(AggregateStarkErrorV1::InvalidLayout);
+            }
+            Ok(column.into_vec_v1())
+        },
+    );
+    match (result, source_error) {
+        (Ok(committed), None) => Ok(committed),
+        (Err(_), Some(error)) => Err(error),
+        (Err(error), None) => Err(map_aggregate_error_v1(error)),
+        (Ok(_), Some(_)) => Err(ZkX509StarkErrorV1::InternalInvariant),
+    }
+}
+
 /// Exact six-provider registry for the verifier-owned full MAIN layout.
 ///
 /// The layout is cloned only after every dimension and closed provider
@@ -11846,40 +12652,7 @@ impl<'a> MainTraceProviderSetV1<'a> {
         column_index: usize,
     ) -> Result<(RegisteredSegmentLayoutV1, usize), ZkX509StarkErrorV1> {
         self.validate_v1()?;
-        let group = self
-            .layout
-            .trace_groups
-            .get(group_index)
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        let width = match kind {
-            MainTraceColumnKindV1::Base => group.base_width,
-            MainTraceColumnKindV1::Aux => group.aux_width,
-        };
-        if column_index >= width {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        let mut matched = None;
-        for registration in self
-            .layout
-            .registered_segments
-            .iter()
-            .copied()
-            .filter(|registration| registration.trace_group == group_index)
-        {
-            let (start, end) = match kind {
-                MainTraceColumnKindV1::Base => (registration.base_start, registration.base_end()?),
-                MainTraceColumnKindV1::Aux => (registration.aux_start, registration.aux_end()?),
-            };
-            if (start..end).contains(&column_index) {
-                if matched
-                    .replace((registration, column_index - start))
-                    .is_some()
-                {
-                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
-                }
-            }
-        }
-        matched.ok_or(ZkX509StarkErrorV1::ProfileMismatch)
+        registered_main_group_column_v1(&self.layout, group_index, kind, column_index)
     }
 
     fn native_group_column_v1(

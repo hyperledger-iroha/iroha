@@ -217,12 +217,14 @@ guard against drift.
 
 Gateways SHOULD emit the following Prometheus metrics and HTTP headers:
 
-| Metric / Header                | Description                                         |
-|--------------------------------|-----------------------------------------------------|
-| `sorafs_gateway_requests_total{result}` | Success/err buckets                            |
-| `sorafs_gateway_range_bytes_total`      | Bytes served per chunker handle                |
-| `sorafs_gateway_latency_ms_bucket`      | Request latency histogram                      |
-| `X-SoraFS-Telemetry-Nonce`              | 16-byte nonce correlated with telemetry events |
+| Metric / Header | Description |
+|-----------------|-------------|
+| `sorafs_gateway_responses_total{result,status,error_code}` | Completed response outcomes |
+| `sorafs_gateway_ttfb_ms_bucket` | Time-to-first-byte histogram |
+| `sorafs_gateway_proof_verifications_total{result,error_code}` | Request-bound proof verification outcomes |
+| `sorafs_gateway_proof_duration_ms_bucket` | Proof verification duration histogram |
+| `torii_sorafs_chunk_range_bytes_total` | Bytes served by the CAR and chunk routes |
+| `X-SoraFS-Telemetry-Nonce` | 16-byte nonce correlated with telemetry events |
 
 Telemetry MUST NOT leak user-identifying information. Aggregate per-client
 statistics using pseudonymous identifiers derived from the request nonce.

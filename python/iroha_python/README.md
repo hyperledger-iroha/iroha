@@ -2058,9 +2058,9 @@ no environment variables need to be exported.
 - Extend the Torii client with governance helpers (proposal deployment, ballot
   submission, referendum status) so clients can orchestrate governance flows
   without hand-crafted HTTP requests.
-- Include configuration helpers (`get_confidential_gas_schedule`,
-  `set_confidential_gas_schedule`) so operators can inspect or update the
-  confidential verification gas schedule without manually building DTO payloads.
+- Include `get_confidential_gas_schedule` so operators can inspect the
+  confidential verification gas schedule. The schedule is startup configuration
+  committed into the ZK policy hash and is not mutable through the runtime API.
 - Expose administrative helpers for configuration updates, peer discovery
   (typed `PeerInfo` via `list_peers_typed`), network time introspection
   (`NetworkTimeSnapshot`/`NetworkTimeStatus`), and runtime metadata

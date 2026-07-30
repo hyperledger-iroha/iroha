@@ -1712,6 +1712,111 @@ fn sorted_run_axis_v1(
     }
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct P256SortedAtomAccountingV1 {
+    fixed_atoms: usize,
+    relative_factor_atoms: usize,
+    per_value_atoms: usize,
+    selected_run_atoms: usize,
+    relative_factor_runs: usize,
+    per_value_runs: usize,
+    metadata_atoms: usize,
+    total_atoms: usize,
+}
+
+#[cfg(test)]
+fn sorted_atom_accounting_v1(
+    metadata: &[P256ValueMetadataV1],
+) -> Result<P256SortedAtomAccountingV1, ZkX509P256FixedAlgebraicErrorV1> {
+    if metadata.len() != P256_INITIAL_VALUES_V1 + P256_ARITHMETIC_OPERATIONS_V1 {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    let mut prefix = Vec::new();
+    prefix
+        .try_reserve_exact(metadata.len() + 1)
+        .map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Resource)?;
+    prefix.push(0_usize);
+    for value in metadata {
+        let per_limb = checked_add_v1(value.reads, 1)?;
+        let factors = checked_mul_v1(P256_VALUE_BUS_LIMBS_V1, per_limb)?;
+        prefix.push(checked_add_v1(
+            *prefix
+                .last()
+                .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?,
+            factors,
+        )?);
+    }
+    if prefix.last().copied() != Some(P256_VALUE_BUS_SORTED_ACTIVE_FACTORS_V1) {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+
+    let mut relative_factor_atoms = 0_usize;
+    let mut per_value_atoms = 0_usize;
+    let mut selected_run_atoms = 0_usize;
+    let mut relative_factor_runs = 0_usize;
+    let mut per_value_runs = 0_usize;
+    let mut run_start = 0_usize;
+    while run_start < metadata.len() {
+        let per_limb = checked_add_v1(metadata[run_start].reads, 1)?;
+        let mut run_end = run_start + 1;
+        while run_end < metadata.len() && checked_add_v1(metadata[run_end].reads, 1)? == per_limb {
+            run_end += 1;
+        }
+        let run_count = run_end - run_start;
+        let relative = sorted_relative_factor_axis_atom_count_v1(run_start, run_count, per_limb)?;
+        let per_value = sorted_per_value_axis_atom_count_v1(run_start, run_count, per_limb)?;
+        relative_factor_atoms = checked_add_v1(relative_factor_atoms, relative)?;
+        per_value_atoms = checked_add_v1(per_value_atoms, per_value)?;
+        selected_run_atoms =
+            checked_add_v1(selected_run_atoms, core::cmp::min(relative, per_value))?;
+        match sorted_run_axis_v1(run_start, run_count, per_limb)? {
+            P256SortedRunAxisV1::RelativeFactor => relative_factor_runs += 1,
+            P256SortedRunAxisV1::PerValue => per_value_runs += 1,
+        }
+        run_start = run_end;
+    }
+
+    let mut metadata_atoms = 0_usize;
+    let metadata_fields: [fn(P256ValueMetadataV1) -> F; 2] = [
+        |value: P256ValueMetadataV1| modulus_field_v1(value.modulus),
+        |value: P256ValueMetadataV1| value_kind_field_v1(value.kind),
+    ];
+    for value_v1 in metadata_fields {
+        let mut start = 0_usize;
+        while start < metadata.len() {
+            let value = value_v1(metadata[start]);
+            let mut end = start + 1;
+            while end < metadata.len() && value_v1(metadata[end]) == value {
+                end += 1;
+            }
+            metadata_atoms = checked_add_v1(
+                metadata_atoms,
+                logical_constant_range_atom_count_v1(prefix[start], prefix[end], value)?,
+            )?;
+            start = end;
+        }
+    }
+
+    // Two packed slots each carry active/access/equal-next/padding, followed
+    // by the global first/continuation boundary pair.
+    let fixed_atoms = 2 * 4 + 2;
+    let total_atoms = checked_add_v1(
+        checked_add_v1(fixed_atoms, selected_run_atoms)?,
+        metadata_atoms,
+    )?;
+    Ok(P256SortedAtomAccountingV1 {
+        fixed_atoms,
+        relative_factor_atoms,
+        per_value_atoms,
+        selected_run_atoms,
+        relative_factor_runs,
+        per_value_runs,
+        metadata_atoms,
+        total_atoms,
+    })
+}
+
 fn emit_sorted_relative_factor_axis_run_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2076,10 +2181,8 @@ fn push_logical_constant_range_v1(
     logical_end: usize,
     value: F,
 ) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
-    if logical_start >= logical_end {
-        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
-    }
-    if value == F::ZERO {
+    let expected_atoms = logical_constant_range_atom_count_v1(logical_start, logical_end, value)?;
+    if expected_atoms == 0 {
         return Ok(0);
     }
     let mut atoms = 0_usize;
@@ -2101,6 +2204,34 @@ fn push_logical_constant_range_v1(
             value,
             F::ZERO,
         )?;
+        atoms = checked_add_v1(atoms, 1)?;
+    }
+    if atoms != expected_atoms {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    Ok(atoms)
+}
+
+fn logical_constant_range_atom_count_v1(
+    logical_start: usize,
+    logical_end: usize,
+    value: F,
+) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
+    if logical_start >= logical_end {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    if value == F::ZERO {
+        return Ok(0);
+    }
+    let mut atoms = 0_usize;
+    for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+        let parity = logical_start % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+        let adjustment = (slot + P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 - parity)
+            % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+        let first = checked_add_v1(logical_start, adjustment)?;
+        if first >= logical_end {
+            continue;
+        }
         atoms = checked_add_v1(atoms, 1)?;
     }
     Ok(atoms)
@@ -2236,6 +2367,7 @@ mod tests {
     fn compile_diagnostic_stage_count_v1(
         domain: ZkX509FixedAlgebraicDomainV1,
         stage: &'static str,
+        expected_atoms: Option<usize>,
         compile: impl FnOnce(
             &mut ZkX509FixedAlgebraicScheduleBuilderV1,
         ) -> Result<(), ZkX509P256FixedAlgebraicErrorV1>,
@@ -2246,7 +2378,7 @@ mod tests {
                 P256DiagnosticFailureV1 {
                     stage,
                     combined_before: 0,
-                    stage_atoms: None,
+                    stage_atoms: expected_atoms,
                     error,
                 }
             })?,
@@ -2254,13 +2386,13 @@ mod tests {
         .map_err(|error| P256DiagnosticFailureV1 {
             stage,
             combined_before: 0,
-            stage_atoms: None,
+            stage_atoms: expected_atoms,
             error: error.into(),
         })?;
         compile(&mut builder).map_err(|error| P256DiagnosticFailureV1 {
             stage,
             combined_before: 0,
-            stage_atoms: None,
+            stage_atoms: expected_atoms,
             error,
         })?;
         let schedule = builder
@@ -2268,9 +2400,17 @@ mod tests {
             .map_err(|error| P256DiagnosticFailureV1 {
                 stage,
                 combined_before: 0,
-                stage_atoms: None,
+                stage_atoms: expected_atoms,
                 error: error.into(),
             })?;
+        if expected_atoms.is_some_and(|expected| schedule.atoms_v1().len() != expected) {
+            return Err(P256DiagnosticFailureV1 {
+                stage,
+                combined_before: 0,
+                stage_atoms: expected_atoms,
+                error: ZkX509P256FixedAlgebraicErrorV1::Topology,
+            });
+        }
         Ok(P256DiagnosticStageCountV1 {
             stage,
             atoms: schedule.atoms_v1().len(),
@@ -2337,15 +2477,35 @@ mod tests {
                 stage_atoms: None,
                 error,
             })?;
+        let certificate_sorted_accounting = sorted_atom_accounting_v1(&certificate_metadata)
+            .map_err(|error| P256DiagnosticFailureV1 {
+                stage: "certificate-sorted-accounting",
+                combined_before: 0,
+                stage_atoms: None,
+                error,
+            })?;
+        let wallet_sorted_accounting =
+            sorted_atom_accounting_v1(&wallet_metadata).map_err(|error| {
+                P256DiagnosticFailureV1 {
+                    stage: "wallet-sorted-accounting",
+                    combined_before: 0,
+                    stage_atoms: None,
+                    error,
+                }
+            })?;
+        println!(
+            "P256_SORTED_ACCOUNTING certificate={certificate_sorted_accounting:?} \
+             wallet={wallet_sorted_accounting:?}"
+        );
 
         let stages = [
-            compile_diagnostic_stage_count_v1(domain, "certificate-arithmetic", |builder| {
+            compile_diagnostic_stage_count_v1(domain, "certificate-arithmetic", None, |builder| {
                 compile_arithmetic_fixed_v1(builder, CERTIFICATE_ARITHMETIC_START_V1, &certificate)
             })?,
-            compile_diagnostic_stage_count_v1(domain, "wallet-arithmetic", |builder| {
+            compile_diagnostic_stage_count_v1(domain, "wallet-arithmetic", None, |builder| {
                 compile_arithmetic_fixed_v1(builder, WALLET_ARITHMETIC_START_V1, &wallet)
             })?,
-            compile_diagnostic_stage_count_v1(domain, "certificate-execution", |builder| {
+            compile_diagnostic_stage_count_v1(domain, "certificate-execution", None, |builder| {
                 compile_execution_fixed_v1(
                     builder,
                     CERTIFICATE_EXECUTION_START_V1,
@@ -2353,7 +2513,7 @@ mod tests {
                     &certificate_metadata,
                 )
             })?,
-            compile_diagnostic_stage_count_v1(domain, "wallet-execution", |builder| {
+            compile_diagnostic_stage_count_v1(domain, "wallet-execution", None, |builder| {
                 compile_execution_fixed_v1(
                     builder,
                     WALLET_EXECUTION_START_V1,
@@ -2361,12 +2521,26 @@ mod tests {
                     &wallet_metadata,
                 )
             })?,
-            compile_diagnostic_stage_count_v1(domain, "certificate-sorted", |builder| {
-                compile_sorted_fixed_v1(builder, CERTIFICATE_SORTED_START_V1, &certificate_metadata)
-            })?,
-            compile_diagnostic_stage_count_v1(domain, "wallet-sorted", |builder| {
-                compile_sorted_fixed_v1(builder, WALLET_SORTED_START_V1, &wallet_metadata)
-            })?,
+            compile_diagnostic_stage_count_v1(
+                domain,
+                "certificate-sorted",
+                Some(certificate_sorted_accounting.total_atoms),
+                |builder| {
+                    compile_sorted_fixed_v1(
+                        builder,
+                        CERTIFICATE_SORTED_START_V1,
+                        &certificate_metadata,
+                    )
+                },
+            )?,
+            compile_diagnostic_stage_count_v1(
+                domain,
+                "wallet-sorted",
+                Some(wallet_sorted_accounting.total_atoms),
+                |builder| {
+                    compile_sorted_fixed_v1(builder, WALLET_SORTED_START_V1, &wallet_metadata)
+                },
+            )?,
         ];
 
         let mut combined_before = 0_usize;

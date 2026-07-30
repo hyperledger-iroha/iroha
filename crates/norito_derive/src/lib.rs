@@ -399,24 +399,177 @@ fn validate_field_attrs(fields: &Fields) -> Result<(), syn::Error> {
     Ok(())
 }
 
-/// Extract a custom discriminant from `#[codec(index = ...)]`.
-fn variant_index(variant: &Variant, default: usize) -> u32 {
+/// Extract a custom wire index from `#[codec(index = ...)]`.
+fn codec_variant_index(variant: &Variant) -> SynResult<Option<u32>> {
+    let mut result = None;
     for attr in &variant.attrs {
         if attr.path().is_ident("codec") {
-            let mut result = None;
-            let _ = attr.parse_nested_meta(|meta| {
+            attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("index") {
+                    if result.is_some() {
+                        return Err(meta.error("duplicate `codec(index = ...)` attribute"));
+                    }
                     let lit: syn::LitInt = meta.value()?.parse()?;
                     result = Some(lit.base10_parse::<u32>()?);
+                } else {
+                    consume_unknown_meta(meta)?;
                 }
                 Ok(())
-            });
-            if let Some(v) = result {
-                return v;
-            }
+            })?;
         }
     }
-    default as u32
+    Ok(result)
+}
+
+fn explicit_variant_discriminant(variant: &Variant) -> SynResult<Option<u32>> {
+    let Some((_, expression)) = &variant.discriminant else {
+        return Ok(None);
+    };
+    let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Int(literal),
+        ..
+    }) = expression
+    else {
+        return Err(syn::Error::new_spanned(
+            expression,
+            "Norito enum discriminants must be integer literals in 0..=u32::MAX",
+        ));
+    };
+    literal.base10_parse::<u32>().map(Some).map_err(|_| {
+        syn::Error::new_spanned(
+            expression,
+            "Norito enum discriminants must be integer literals in 0..=u32::MAX",
+        )
+    })
+}
+
+/// Resolve the canonical `u32` wire index for every enum variant.
+///
+/// Rust discriminants participate in the usual implicit increment sequence.
+/// `#[codec(index = ...)]` may make an implicit Rust variant's wire index
+/// explicit, but it must agree when the Rust discriminant is also explicit.
+fn enum_variant_indices(data: &DataEnum) -> SynResult<Vec<u32>> {
+    let mut next_rust_discriminant = Some(0_u32);
+    let mut assigned = std::collections::BTreeMap::<u32, &syn::Ident>::new();
+    let mut indices = Vec::with_capacity(data.variants.len());
+
+    for variant in &data.variants {
+        let explicit = explicit_variant_discriminant(variant)?;
+        let rust_discriminant = match explicit {
+            Some(discriminant) => discriminant,
+            None => next_rust_discriminant.ok_or_else(|| {
+                syn::Error::new_spanned(
+                    &variant.ident,
+                    "implicit Norito enum discriminant exceeds u32::MAX",
+                )
+            })?,
+        };
+        next_rust_discriminant = rust_discriminant.checked_add(1);
+
+        let codec_index = codec_variant_index(variant)?;
+        if let (Some(explicit), Some(codec_index)) = (explicit, codec_index)
+            && explicit != codec_index
+        {
+            return Err(syn::Error::new_spanned(
+                variant,
+                format!(
+                    "`#[codec(index = {codec_index})]` must match explicit Rust discriminant {explicit}"
+                ),
+            ));
+        }
+        let index = codec_index.unwrap_or(rust_discriminant);
+        if let Some(first) = assigned.insert(index, &variant.ident) {
+            return Err(syn::Error::new_spanned(
+                variant,
+                format!("duplicate Norito enum index {index}; first assigned to variant `{first}`"),
+            ));
+        }
+        indices.push(index);
+    }
+
+    Ok(indices)
+}
+
+#[cfg(test)]
+mod enum_variant_index_tests {
+    use super::*;
+
+    fn indices(input: DeriveInput) -> SynResult<Vec<u32>> {
+        let Data::Enum(data) = input.data else {
+            panic!("test input must be an enum");
+        };
+        enum_variant_indices(&data)
+    }
+
+    #[test]
+    fn explicit_discriminants_drive_implicit_successors() {
+        let input = syn::parse_quote! {
+            enum Phase {
+                Prepare = 4,
+                Commit,
+                NewView = 9,
+                Recovery,
+            }
+        };
+        assert_eq!(indices(input).expect("valid indices"), [4, 5, 9, 10]);
+    }
+
+    #[test]
+    fn codec_index_can_override_an_implicit_rust_discriminant() {
+        let input = syn::parse_quote! {
+            enum Message {
+                #[codec(index = 42)]
+                First,
+                Second,
+            }
+        };
+        assert_eq!(indices(input).expect("valid indices"), [42, 1]);
+    }
+
+    #[test]
+    fn duplicate_effective_index_is_rejected() {
+        let input = syn::parse_quote! {
+            enum Message {
+                #[codec(index = 1)]
+                First,
+                Second,
+            }
+        };
+        let error = indices(input).expect_err("duplicate index must fail");
+        assert_eq!(
+            error.to_string(),
+            "duplicate Norito enum index 1; first assigned to variant `First`"
+        );
+    }
+
+    #[test]
+    fn codec_index_must_match_explicit_discriminant() {
+        let input = syn::parse_quote! {
+            enum Phase {
+                #[codec(index = 2)]
+                Prepare = 1,
+            }
+        };
+        let error = indices(input).expect_err("mismatched explicit indices must fail");
+        assert_eq!(
+            error.to_string(),
+            "`#[codec(index = 2)]` must match explicit Rust discriminant 1"
+        );
+    }
+
+    #[test]
+    fn non_literal_discriminant_is_rejected() {
+        let input = syn::parse_quote! {
+            enum Phase {
+                Prepare = 1 << 2,
+            }
+        };
+        let error = indices(input).expect_err("non-literal discriminant must fail");
+        assert_eq!(
+            error.to_string(),
+            "Norito enum discriminants must be integer literals in 0..=u32::MAX"
+        );
+    }
 }
 
 /// Parsed helper attributes for a field.
@@ -2827,10 +2980,13 @@ fn derive_enum_serialize(
     let mut arms = Vec::new();
     let mut hint_arms = Vec::new();
     let mut exact_arms = Vec::new();
+    let discriminants = match enum_variant_indices(data) {
+        Ok(discriminants) => discriminants,
+        Err(error) => return error.to_compile_error(),
+    };
 
-    for (idx, variant) in data.variants.iter().enumerate() {
+    for (variant, disc) in data.variants.iter().zip(discriminants) {
         let v_ident = &variant.ident;
-        let disc = variant_index(variant, idx);
         match &variant.fields {
             Fields::Unit => {
                 arms.push(quote! {
@@ -3153,6 +3309,10 @@ fn derive_enum_deserialize(
 ) -> TokenStream2 {
     let mut r#gen = generics.clone();
     let mut arms = Vec::new();
+    let discriminants = match enum_variant_indices(data) {
+        Ok(discriminants) => discriminants,
+        Err(error) => return error.to_compile_error(),
+    };
 
     // Helper to detect [u8; N] array length for specialized AoS path
     fn u8_array_len(ty: &syn::Type) -> Option<syn::Expr> {
@@ -3165,9 +3325,8 @@ fn derive_enum_deserialize(
         None
     }
 
-    for (idx, variant) in data.variants.iter().enumerate() {
+    for (variant, disc) in data.variants.iter().zip(discriminants) {
         let v_ident = &variant.ident;
-        let disc = variant_index(variant, idx);
         match &variant.fields {
             Fields::Unit => arms.push(quote! {
                 #disc => {

@@ -794,6 +794,7 @@ impl ProveAvailabilityArgs {
             guard_cache: None,
             guard_cache_key: None,
             guard_directory: None,
+            guard_directory_digest: None,
             guard_target: None,
             guard_retention_days: None,
             output: Some(payload_path.clone()),

@@ -5260,7 +5260,6 @@ pub struct FraudAttester {
 #[strum(serialize_all = "snake_case")]
 pub enum ZkCurve {
     /// Uses the Pallas curve (Pasta cycle) for Halo2 circuits.
-    #[strum(serialize = "toy_p61_additive")]
     Pallas,
     /// Uses the Pasta curve (Vesta/Pallas cycle) for Halo2 circuits.
     Pasta,
@@ -31695,6 +31694,12 @@ mod offline_cfg_tests {
         let curve = ZkCurve::from_str(defaults::zk::halo2::CURVE)
             .expect("default curve string should parse");
         assert_eq!(curve, ZkCurve::Pallas);
+        assert_eq!(curve.to_string(), defaults::zk::halo2::CURVE);
+        assert_eq!(curve.into_actual(), actual::Halo2::default().curve);
+        assert!(
+            ZkCurve::from_str("toy_p61_additive").is_err(),
+            "the retired toy-curve compatibility label must not be accepted"
+        );
     }
 
     #[test]
@@ -31948,6 +31953,32 @@ policy_digest_hex = "{policy_digest_hex}"
         assert!(
             format!("{error:?}").contains("sorafs"),
             "unexpected legacy-path error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn retired_settlement_repo_config_is_rejected() {
+        let mut table = base_table();
+        let settlement = table
+            .entry("settlement")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("settlement table");
+        settlement.insert(
+            "repo".into(),
+            Value::Table(Table::from_iter([(
+                "default_haircut_bps".into(),
+                Value::Integer(1_500),
+            )])),
+        );
+
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<super::Root>()
+            .expect_err("retired settlement.repo configuration must be unknown");
+        assert!(
+            format!("{error:?}").contains("repo"),
+            "unexpected retired-config error: {error:?}"
         );
     }
 

@@ -51,6 +51,19 @@ def load_checker():
     return module
 
 
+def test_checker_remains_python39_compatible() -> None:
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"), filename=str(SCRIPT))
+    strict_zip_calls = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "zip"
+        and any(keyword.arg == "strict" for keyword in node.keywords)
+    ]
+    assert strict_zip_calls == []
+
+
 def copy_transport_hardening_fixture(tmp_path: Path) -> None:
     """Copy only production sources bound by the sidecar transport checker."""
 
@@ -33525,16 +33538,16 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness source count must be sealed as 738",
         ),
         (
-            "readonly expected_multilane_focus_test_count=277",
-            "readonly expected_multilane_focus_test_count=276",
-            "multilane G-UNIT source count must be sealed as 277",
+            "readonly expected_multilane_focus_test_count=280",
+            "readonly expected_multilane_focus_test_count=279",
+            "multilane G-UNIT source count must be sealed as 280",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 278 ]]; then""",
+            """'[:space:]')" != 281 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 277 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 277 focus rows",
+            """'[:space:]')" != 280 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 280 focus rows",
         ),
         (
             "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n"
@@ -35993,14 +36006,16 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
         "native_amx_receipt_v1_",
         "native_amx_evidence_prune_intent_v1.norito",
         "native_amx_evidence_prune_intent_v1.norito.tmp",
-        "native_amx_participant_receipts.latest_v1.norito",
-        "native_amx_participant_receipts.latest_v1.norito.tmp",
+        "native_amx_participant_receipts.latest_v2.norito",
+        "native_amx_participant_receipts.latest_v2.norito.tmp",
     )
     for name in current_names:
         assert name in inventory_source
         assert name in kura_source
 
     obsolete_dense_names = (
+        "native_amx_participant_receipts.latest_v1.norito",
+        "native_amx_participant_receipts.latest_v1.norito.tmp",
         "native_amx_participant_receipts.norito",
         "native_amx_participant_receipts.index",
         "native_amx_application_manifests.norito",

@@ -16,11 +16,20 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+import check_sorafs_production_readiness as CHECKER  # noqa: E402
+from sorafs_resilience_test_support import (  # noqa: E402
+    DEFAULT_SIGNING_SEED as RESILIENCE_SIGNING_SEED,
+    public_key_from_seed as resilience_public_key_from_seed,
+    write_resilience_summary,
+)
 
 CHECKER_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_production_readiness.py"
 FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX = "12" * 32
 FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256 = "34" * 32
 FOUNDATIONAL_RELEASE_SEQUENCE = 7
+RESILIENCE_SIGNER_PUBLIC_KEY = resilience_public_key_from_seed(
+    RESILIENCE_SIGNING_SEED
+)
 
 
 def write_json(path: Path) -> Path:
@@ -61,17 +70,37 @@ def write_topology_qualification(path: Path) -> Path:
 
 
 def complete_args(tmp_path: Path) -> list[str]:
+    topology_path = write_topology_qualification(
+        tmp_path / "l1-topology-qualification.json"
+    )
+    topology_binding, topology_errors = MODULE.load_topology_qualification_binding(
+        topology_path,
+        expected_deployment_id="sorafs-mainnet-2026-06",
+        expected_environment="production",
+    )
+    assert topology_errors == []
+    assert topology_binding is not None
+    resilience_path, public_key, _binding = write_resilience_summary(
+        CHECKER,
+        tmp_path / "l1-resilience-qualification.summary",
+        deployment_id="sorafs-mainnet-2026-06",
+        environment="production",
+        topology_qualification=topology_binding,
+        generated_at_unix=1_800_799_970,
+        captured_at_unix=1_800_799_940,
+    )
+    assert public_key == RESILIENCE_SIGNER_PUBLIC_KEY
     args = [
         "--out-dir",
         str(tmp_path / "out"),
         "--verifier",
         str(CHECKER_PATH),
         "--topology-qualification-summary",
-        str(
-            write_topology_qualification(
-                tmp_path / "l1-topology-qualification.json"
-            )
-        ),
+        str(topology_path),
+        "--resilience-qualification-summary",
+        str(resilience_path),
+        "--resilience-qualification-signer-public-key-hex",
+        RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
         "--deployment-id",
         "sorafs-mainnet-2026-06",
         "--environment",
@@ -108,6 +137,9 @@ def test_dry_run_prints_complete_aggregate_plan(tmp_path: Path, capsys) -> None:
     assert payload["topology_qualification"][
         "qualification_summary_sha256"
     ] == hashlib.sha256(topology_path.read_bytes()).hexdigest()
+    assert payload["resilience_qualification"] == MODULE.resilience_qualification_plan(
+        MODULE.parse_args(complete_args(tmp_path))
+    )
     assert set(payload["summary_contract"]) == set(MODULE.DEFAULT_REQUIRED_GATES)
     assert payload["foundational_prerequisite"] == {
         "schema": MODULE.FOUNDATIONAL_PREREQUISITE_SCHEMA,
@@ -1851,10 +1883,11 @@ def test_summary_input_path_safety_accepts_digest_labels(tmp_path: Path) -> None
 
 
 def replay_input_snapshot() -> MODULE.InputDigestSnapshot:
-    """Return one exact digest-only topology/foundation/17-lane snapshot."""
+    """Return topology/resilience/foundation plus the 17-lane snapshot."""
 
     slots = (
         "topology_qualification",
+        "resilience_qualification",
         "foundational_prerequisite",
         *MODULE.DEFAULT_REQUIRED_GATES,
     )
@@ -1873,6 +1906,12 @@ def promotion_payload() -> dict:
         "required_gates": list(MODULE.DEFAULT_REQUIRED_GATES),
         "summary_file_count": 17,
         "recognized_summary_count": 17,
+        "resilience_qualification": {
+            "present": True,
+            "valid": True,
+            "binding": {"schema": "trusted-test-binding"},
+            "errors": [],
+        },
         "required": {
             gate: {
                 "present": True,
@@ -1902,6 +1941,14 @@ def test_promotion_aggregate_requires_exact_ready_ordered_inventory(
 
     assert MODULE.validate_promotion_aggregate(payload) == []
 
+    payload.pop("resilience_qualification")
+    assert (
+        "replayed aggregate resilience qualification must be present, valid, "
+        "bound, and error-free"
+        in MODULE.validate_promotion_aggregate(payload)
+    )
+
+    payload = promotion_payload()
     payload["required"] = dict(reversed(tuple(payload["required"].items())))
     assert (
         "replayed aggregate required rows must use the exact canonical ordered "
@@ -1932,7 +1979,7 @@ def test_replay_manifest_is_schema_closed_digest_only() -> None:
 
     assert MODULE.validate_replay_manifest(manifest, snapshot, replay) == []
     assert set(manifest) == MODULE.REPLAY_MANIFEST_FIELDS
-    assert len(manifest["input_sha256"]) == 19
+    assert len(manifest["input_sha256"]) == len(MODULE.REPLAY_INPUT_SLOTS) == 20
     assert all(
         set(row) == MODULE.REPLAY_INPUT_DIGEST_FIELDS
         for row in manifest["input_sha256"]

@@ -258,7 +258,7 @@ lockstep.
 - Deterministic gas schedule:
   - Halo2 (Plonkish): base `250_000` gas + `2_000` gas per public input.
   - `5` gas per proof byte, plus per-nullifier (`300`) and per-commitment (`500`) charges.
-  - Operators may override these constants via the node configuration (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`); changes propagate at startup or when the config layer hot-reloads and are applied deterministically across the cluster.
+  - Operators may set these constants in the node configuration (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`) before startup. The schedule is consensus-relevant and committed into the ZK policy hash, so it is read-only through `/v1/configuration`; changing it requires a coordinated configuration rollout and node restart.
 - Hard limits (configurable defaults):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
