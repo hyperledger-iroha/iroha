@@ -3004,10 +3004,11 @@ fn render_peer_config(
     let kagemusha_asset_definition =
         AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
             .expect("built-in Kagemusha asset definition id must parse");
-    let kagemusha_escrow_account = offline_escrow_account_id(
-        &ChainId::from(chain_id.to_owned()),
-        &kagemusha_asset_definition,
-    );
+    let chain_id = chain_id
+        .parse::<ChainId>()
+        .expect("generated localnet chain id must be canonical");
+    let kagemusha_escrow_account =
+        offline_escrow_account_id(&chain_id, &kagemusha_asset_definition);
     settlement_offline_escrow_accounts.insert(
         LOCALNET_KAGEMUSHA_ASSET_ID.into(),
         Value::String(account_id_runtime_literal(
@@ -3032,7 +3033,9 @@ fn generate_raw_genesis(
     consensus_mode: SumeragiConsensusMode,
     chain_id: &str,
 ) -> Result<RawGenesisTransaction> {
-    let chain_id = ChainId::from(chain_id.to_owned());
+    let chain_id = chain_id
+        .parse::<ChainId>()
+        .wrap_err("localnet chain id must be canonical")?;
     let npos_epoch_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         .then(|| localnet_npos_epoch_seed(&chain_id));
     let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."));
@@ -6358,7 +6361,9 @@ mod tests {
             AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
                 .expect("Kagemusha asset id");
         let expected_escrow_account = offline_escrow_account_id(
-            &ChainId::from(chain_id.to_owned()),
+            &chain_id
+                .parse::<ChainId>()
+                .expect("generated localnet chain id must be canonical"),
             &kagemusha_asset_definition,
         );
         let expected_escrow_literal =

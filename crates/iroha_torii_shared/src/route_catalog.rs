@@ -66,12 +66,15 @@ pub enum Listener {
 /// Authentication contract enforced by the route boundary.
 ///
 /// Most policies are middleware-backed. Protocol exchanges and explicitly
-/// reviewed canonical-account handlers may enforce their credential while
-/// entering the handler, before parsing or acting on protected request data.
+/// reviewed handlers may enforce their credential at the handler boundary,
+/// before invoking a protected capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthenticationPolicy {
     /// The listener's configured API-token policy applies.
     ToriiDefault,
+    /// The route requires exactly one configured Torii API token regardless
+    /// of the listener-wide API-token setting.
+    RequiredApiToken,
     /// The listener's configured API-token policy applies and the route also
     /// requires exactly one dedicated signer-backed onboarding token.
     OnboardingToken,
@@ -3373,7 +3376,8 @@ pub mod sorafs {
         documented_post("sorafs.storage.fetch", "/v1/sorafs/storage/fetch");
     /// Request a storage access token.
     pub const STORAGE_TOKEN: RouteDescriptor =
-        documented_post("sorafs.storage_token.issue", "/v1/sorafs/storage/token");
+        documented_post("sorafs.storage_token.issue", "/v1/sorafs/storage/token")
+            .with_authentication(AuthenticationPolicy::RequiredApiToken);
     /// Read CAR bytes for a stored manifest.
     pub const STORAGE_CAR: RouteDescriptor = documented_get(
         "sorafs.storage_car.read",
@@ -5264,6 +5268,25 @@ mod tests {
                 .count(),
             3,
             "no unrelated route may inherit the onboarding credential policy"
+        );
+    }
+
+    #[test]
+    fn stream_token_api_token_authentication_is_exactly_scoped() {
+        assert_eq!(
+            sorafs::STORAGE_TOKEN.authentication(),
+            AuthenticationPolicy::RequiredApiToken,
+            "stream-token issuance must advertise its unconditional API credential"
+        );
+        assert_eq!(
+            CATALOGED_ROUTES
+                .iter()
+                .filter(|route| {
+                    route.authentication() == AuthenticationPolicy::RequiredApiToken
+                })
+                .count(),
+            1,
+            "no unrelated route may inherit the stream-token credential policy"
         );
     }
 

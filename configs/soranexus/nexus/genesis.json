@@ -152,12 +152,12 @@
         "executor": {
           "execution_depth": 3,
           "fuel": 55000000,
-          "memory": 55000000
+          "memory": 1048576
         },
         "smart_contract": {
           "execution_depth": 3,
           "fuel": 55000000,
-          "memory": 55000000
+          "memory": 1048576
         },
         "sumeragi": {
           "block_cadence_ms": 100,
@@ -165,7 +165,8 @@
         "transaction": {
           "ivm_bytecode_size": 4194304,
           "max_instructions": 4096,
-          "max_signatures": 16
+          "max_signatures": 16,
+          "max_time_to_live_ms": 86400000
         }
       },
       "topology": []

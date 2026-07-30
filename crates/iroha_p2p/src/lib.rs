@@ -276,6 +276,8 @@ pub struct ConsensusConfigCaps {
     pub nexus_policy_digest: [u8; 32],
     /// Canonical fixed-width Sumeragi v2 shared-runtime configuration hash.
     pub v2_config_fingerprint: [u8; 32],
+    /// Canonical digest of the complete IVM gas schedule in this binary.
+    pub ivm_gas_schedule_hash: [u8; 32],
 }
 
 /// Optional consensus handshake capabilities exchanged during p2p handshake.

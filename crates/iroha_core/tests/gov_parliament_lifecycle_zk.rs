@@ -20,9 +20,8 @@ use iroha_data_model::{
     governance::types::ParliamentBody,
     isi::{
         governance::{
-            ApproveGovernanceProposal, AtWindow, CastZkBallot, CouncilDerivationKind,
-            EnactReferendum, FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
-            RegisterCitizen, VotingMode,
+            ApproveGovernanceProposal, AtWindow, CastZkBallot, EnactReferendum, FinalizeReferendum,
+            PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen, VotingMode,
         },
         verifying_keys,
         zk::CreateElection,
@@ -235,9 +234,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         epoch: 0,
         members: citizens[..10].to_vec(),
         alternates: citizens[10..].to_vec(),
-        verified: 0,
-        candidates_count: u32::try_from(CITIZEN_COUNT).expect("count fits in u32"),
-        derived_by: CouncilDerivationKind::Fallback,
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("persist council");

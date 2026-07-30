@@ -7980,23 +7980,26 @@ mod authoritative_runtime_gate_tests {
         let source_bytes = ordinary_bytes
             .checked_add(required)
             .expect("test source bound fits usize");
-        let oversized_chain_id = ChainId::from(
-            "x".repeat(
-                ordinary_bytes
-                    .checked_mul(2)
-                    .expect("test chain-id length fits usize"),
-            ),
+        let invalid_chain_id =
+            "x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES.saturating_add(1));
+        assert!(
+            ChainId::try_from(invalid_chain_id).is_err(),
+            "an overlong chain id must be rejected before ingress sizing"
         );
-        let oversized_request_bytes =
-            super::fair_v2_ingress_required_recovery_request_bytes(&oversized_chain_id, roster_len);
-        assert!(oversized_request_bytes > ordinary_bytes);
-        let oversized_chain_ingress =
+        let maximum_chain_id =
+            ChainId::try_from("x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES))
+                .expect("maximum-length canonical chain id");
+        let maximum_request_bytes =
+            super::fair_v2_ingress_required_recovery_request_bytes(&maximum_chain_id, roster_len);
+        assert!(
+            maximum_request_bytes <= ordinary_bytes,
+            "the reviewed ordinary region must cover every canonical chain id"
+        );
+        let maximum_chain_ingress =
             super::FairV2Ingress::new(6, 2 * source_bytes, source_bytes, 0, required);
-        let oversized_chain_error = oversized_chain_ingress
-            .configure_roster_for_context([validator.clone()], &oversized_chain_id, layout)
-            .expect_err("an authenticated recovery request must fit its ordinary byte owner");
-        assert_eq!(oversized_chain_error.configured(), ordinary_bytes);
-        assert_eq!(oversized_chain_error.required(), oversized_request_bytes);
+        maximum_chain_ingress
+            .configure_roster_for_context([validator.clone()], &maximum_chain_id, layout)
+            .expect("the maximum canonical chain id fits its ordinary byte owner");
 
         let ingress_with_caps = |consensus, control, block_sync, outbound_high| {
             super::FairV2Ingress::new_with_transport_frame_caps(

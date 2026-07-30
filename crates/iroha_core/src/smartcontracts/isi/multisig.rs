@@ -7366,7 +7366,8 @@ seiyaku TriggerDispatch {
             multisig_id = multisig_id,
         );
         let instructions = vec![InstructionBox::from(
-            ExecuteTrigger::new(trigger_id).with_args(Json::from_string_unchecked(args_json)),
+            ExecuteTrigger::new(trigger_id)
+                .with_args(Json::from_raw_json(args_json).expect("valid event arguments JSON")),
         )];
         let instructions_hash = HashOf::new(&instructions);
         execute_propose(

@@ -79,13 +79,36 @@ public final class TransactionPayloadTests {
 
   @Test
   public void nativeInstructionsDoNotRequireGas() {
-    assertNotNull(
+    final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(TAIRA_CHAIN_ID)
             .setAuthority(AUTHORITY)
             .setInstructions(
                 Collections.singletonList(
                     InstructionBox.fromWirePayload("iroha.test", new byte[] {1})))
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
+            .build();
+    assertNotNull(payload);
+    assertEquals(Long.valueOf(100_000L), payload.timeToLiveMs().orElse(null));
+  }
+
+  @Test
+  public void chainIdUsesCanonicalBoundedAsciiGrammar() {
+    for (final String invalid :
+        Arrays.asList(
+            "-leading",
+            "trailing_",
+            "contains space",
+            "unicode-\u00e9",
+            repeatText("x", 129))) {
+      assertIllegalArgument(
+          () -> TransactionPayload.builder().setChainId(invalid), "chainId");
+    }
+    assertNotNull(
+        TransactionPayload.builder()
+            .setChainId("iroha.mainnet:v1-alpha_2")
+            .setAuthority(AUTHORITY)
+            .setInstructions(Collections.emptyList())
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
             .build());
   }
@@ -106,14 +129,23 @@ public final class TransactionPayloadTests {
         adapter.decodeTransaction(adapter.encodeTransaction(payload));
 
     assertEquals(Long.valueOf(0xffff_ffffL), decoded.nonce().orElse(null));
-    assertIllegalArgument(() -> TransactionPayload.builder().setNonce(0L));
-    assertIllegalArgument(() -> TransactionPayload.builder().setNonce(0x1_0000_0000L));
+    assertIllegalArgument(() -> TransactionPayload.builder().setNonce(0L), "nonzero u32");
+    assertIllegalArgument(
+        () -> TransactionPayload.builder().setNonce(0x1_0000_0000L), "nonzero u32");
   }
 
   private static byte[] repeatedByte(final int value, final int length) {
     final byte[] bytes = new byte[length];
     Arrays.fill(bytes, (byte) value);
     return bytes;
+  }
+
+  private static String repeatText(final String value, final int count) {
+    final StringBuilder result = new StringBuilder(value.length() * count);
+    for (int i = 0; i < count; i++) {
+      result.append(value);
+    }
+    return result.toString();
   }
 
   private static String sampleAuthority() {
@@ -134,12 +166,12 @@ public final class TransactionPayloadTests {
     }
   }
 
-  private static void assertIllegalArgument(final Runnable action) {
+  private static void assertIllegalArgument(final Runnable action, final String messageFragment) {
     try {
       action.run();
       fail("Expected IllegalArgumentException");
     } catch (final IllegalArgumentException expected) {
-      assertTrue(expected.getMessage().contains("nonzero u32"));
+      assertTrue(expected.getMessage().contains(messageFragment));
     }
   }
 }

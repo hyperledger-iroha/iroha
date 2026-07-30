@@ -209,7 +209,10 @@ impl GenVrfArgs {
         let beacon: [u8; 32] = beacon
             .try_into()
             .map_err(|_| eyre!("--beacon-hex must be 32 bytes"))?;
-        let chain = ChainId::from(self.chain_id.clone());
+        let chain = self
+            .chain_id
+            .parse::<ChainId>()
+            .wrap_err("--chain-id must be canonical")?;
         Ok(parliament::compute_seed(&chain, epoch, &beacon))
     }
 

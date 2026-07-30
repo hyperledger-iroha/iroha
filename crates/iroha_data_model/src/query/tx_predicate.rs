@@ -2516,7 +2516,8 @@ mod tests {
             CommittedTxPredicate::TsIn((0..=MAX_COMMITTED_TX_MEMBERSHIP_VALUES as u64).collect()),
             CommittedTxPredicate::MetadataEq {
                 key: "topic".parse().expect("metadata key"),
-                value: Json::from_string_unchecked("{ \"value\": true }".into()),
+                value: Json::from_raw_json("{ \"value\": true }".into())
+                    .expect("valid noncanonical JSON fixture"),
             },
             too_deep,
         ];

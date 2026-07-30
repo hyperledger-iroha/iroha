@@ -23,7 +23,7 @@ class TransactionPayloadTest {
         assertEquals("00000000", payload.chainId)
         assertEquals(sampleAuthority(0x00), payload.authority)
         assertEquals(1000L, payload.creationTimeMs)
-        assertEquals(null, payload.timeToLiveMs)
+        assertEquals(100_000L, payload.timeToLiveMs)
         assertEquals(null, payload.nonce)
         assertEquals(emptyMap(), payload.metadata)
     }
@@ -93,7 +93,32 @@ class TransactionPayloadTest {
         val error = assertFailsWith<IllegalArgumentException> {
             testPayload(chainId = " chain", creationTimeMs = 1000L)
         }
-        assertEquals("chainId must not contain surrounding whitespace", error.message)
+        assertEquals(
+            "chainId must begin and end with an ASCII alphanumeric character",
+            error.message,
+        )
+    }
+
+    @Test
+    fun `chainId uses the canonical bounded ASCII grammar`() {
+        for (invalid in listOf(
+            "-leading",
+            "trailing_",
+            "contains space",
+            "unicode-\u00E9",
+            "x".repeat(129),
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                testPayload(chainId = invalid, creationTimeMs = 1000L)
+            }
+        }
+        assertEquals(
+            "iroha.mainnet:v1-alpha_2",
+            testPayload(
+                chainId = "iroha.mainnet:v1-alpha_2",
+                creationTimeMs = 1000L,
+            ).chainId,
+        )
     }
 
     @Test
@@ -302,7 +327,7 @@ class TransactionPayloadTest {
         authority: String = sampleAuthority(0x00),
         creationTimeMs: Long = System.currentTimeMillis(),
         executable: Executable = Executable.instructions(emptyList()),
-        timeToLiveMs: Long? = null,
+        timeToLiveMs: Long? = 100_000L,
         nonce: Long? = null,
         feePayment: FeePaymentIntent = FeePaymentIntent.authority(emptyList()),
         metadata: Map<String, JsonValue> = emptyMap(),

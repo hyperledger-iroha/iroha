@@ -2963,20 +2963,12 @@ mod tests {
             Err(ReserveTransactionForwarderError::GovernedAuthorityMismatch)
         ));
 
-        for invalid_chain_id in [
-            ChainId::from(""),
-            ChainId::from("x".repeat(RESERVE_TRANSACTION_MAX_CHAIN_ID_BYTES_V1 + 1)),
-        ] {
-            let mut invalid_context = context.clone();
-            invalid_context.chain_id = invalid_chain_id;
-            let invalid_forwarder =
-                ReserveTransactionForwarder::in_memory(forwarder_policy()).unwrap();
-            assert!(matches!(
-                invalid_forwarder.enqueue_unsigned_operation(operation.clone(), &invalid_context),
-                Err(ReserveTransactionForwarderError::InvalidGovernanceContext)
-            ));
-            assert!(invalid_forwarder.pending(8).unwrap().is_empty());
-        }
+        assert!("".parse::<ChainId>().is_err());
+        assert!(
+            "x".repeat(RESERVE_TRANSACTION_MAX_CHAIN_ID_BYTES_V1 + 1)
+                .parse::<ChainId>()
+                .is_err()
+        );
 
         let mut stale_context = context.clone();
         let ReserveTransactionProjectionV1::Provider {

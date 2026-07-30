@@ -157,6 +157,14 @@ impl fmt::Display for InstructionPermission {
 /// Errors that can occur while preparing transaction previews.
 #[derive(Debug, thiserror::Error)]
 pub enum ComposeError {
+    /// The provided chain identifier was not canonical.
+    #[error("failed to parse chain id `{chain}`: {reason}")]
+    InvalidChainId {
+        /// String representation of the chain identifier that failed to parse.
+        chain: String,
+        /// Human readable failure reason.
+        reason: String,
+    },
     /// The provided asset identifier could not be parsed.
     #[error("failed to parse asset id `{asset}`: {reason}")]
     InvalidAssetId {
@@ -607,7 +615,12 @@ pub fn compose_preview_with_options(
         return Err(ComposeError::EmptyInstructions);
     }
     authority.validate_drafts(drafts)?;
-    let chain = ChainId::from(chain_id.to_owned());
+    let chain = chain_id
+        .parse::<ChainId>()
+        .map_err(|error| ComposeError::InvalidChainId {
+            chain: chain_id.to_owned(),
+            reason: error.to_string(),
+        })?;
     let instructions = drafts
         .iter()
         .map(InstructionDraft::instruction)

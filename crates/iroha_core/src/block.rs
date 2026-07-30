@@ -15535,10 +15535,17 @@ pub(crate) mod valid {
 
         /// Commit using the exact cryptographically verified Sumeragi-v2 finality artifact.
         ///
-        /// This is the sole block-signature quorum bypass. It reauthenticates the artifact and
-        /// binds its header, canonical resultless proposal digest, exact
-        /// result-bearing execution digest, and execution commitment to this
-        /// validated block before changing the lifecycle type.
+        /// This is the production Sumeragi-v2 finality path that replaces a
+        /// block-signature quorum with a verified finality artifact. It
+        /// reauthenticates the artifact and binds its header, canonical
+        /// resultless proposal digest, exact result-bearing execution digest,
+        /// and execution commitment to this validated block before changing
+        /// the lifecycle type.
+        ///
+        /// Other explicitly named APIs can also omit the ordinary quorum:
+        /// [`Self::commit_with_signers`] accepts a caller-authorized bypass,
+        /// while [`Self::commit_unchecked`] intentionally performs no block
+        /// signature checks.
         pub fn commit_with_verified_v2_artifact(
             self,
             artifact: &consensus_v2::finality::V2FinalityArtifact,
@@ -32911,7 +32918,8 @@ seiyaku MeteredFailure {
     #[test]
     fn successful_live_batches_accumulate_parent_block_gas() {
         for parallel_apply in [false, true] {
-            let chain_id = ChainId::from(format!("live-batch-parent-gas-{parallel_apply}"));
+            let chain_id = ChainId::try_from(format!("live-batch-parent-gas-{parallel_apply}"))
+                .expect("canonical live-batch test chain id");
             let (authority, keypair) = gen_account_in("wonderland");
             let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
             let world = World::with(
@@ -34912,9 +34920,10 @@ seiyaku MeteredFailure {
     #[allow(clippy::too_many_lines)]
     fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay() {
         for parallel_apply in [false, true] {
-            let chain_id = ChainId::from(format!(
+            let chain_id = ChainId::try_from(format!(
                 "contract-deployment-bootstrap-block-{parallel_apply}"
-            ));
+            ))
+            .expect("canonical contract-deployment test chain id");
             let leader = crate::block::checked_keypair();
             let (authority, authority_keypair) = gen_account_in("bootstrap");
             let (adversary, adversary_keypair) = gen_account_in("adversary");

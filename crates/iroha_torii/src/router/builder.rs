@@ -366,14 +366,17 @@ impl private::Layerable for UnauthenticatedRoute {}
 impl LayerableAuthentication for ToriiDefaultAuthentication {}
 impl LayerableAuthentication for UnauthenticatedRoute {}
 
-/// Authentication performed by the route handler or protocol handshake.
+/// Authentication witnessed at a reviewed route-handler or protocol boundary.
 ///
-/// These are the only catalog policies which cannot be implemented as an
-/// ordinary HTTP middleware. This is an explicit review witness, not a proof
-/// of the handler's internal behavior; every such handler still requires
-/// policy-specific adversarial tests.
+/// This is an explicit review witness, not a proof of the handler's internal
+/// behavior; every such handler still requires policy-specific adversarial
+/// tests. A handler must authenticate before using protected request data or
+/// invoking a protected capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HandlerAuthentication {
+    /// Exactly one configured Torii API token is required independently of the
+    /// listener-wide API-token setting.
+    RequiredApiToken,
     /// Canonical account request authentication performed by the handler.
     ///
     /// These handlers bind the request body and route to an on-ledger account,
@@ -389,6 +392,7 @@ pub(crate) enum HandlerAuthentication {
 impl HandlerAuthentication {
     const fn catalog_policy(self) -> AuthenticationPolicy {
         match self {
+            Self::RequiredApiToken => AuthenticationPolicy::RequiredApiToken,
             Self::CanonicalAccountSignature => AuthenticationPolicy::CanonicalAccountSignature,
             Self::OperatorCredentialExchange => AuthenticationPolicy::OperatorCredentialExchange,
             Self::ProtocolHandshake => AuthenticationPolicy::ProtocolHandshake,
@@ -822,6 +826,14 @@ mod tests {
         Listener::Torii,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+    const API_TOKEN_REQUIRED: RouteDescriptor = RouteDescriptor::new(
+        "test.api_token_required",
+        HttpMethod::Post,
+        "/v1/tests/api-token-required",
+        ApiSurface::Public,
+        Listener::Torii,
+    )
+    .with_authentication(AuthenticationPolicy::RequiredApiToken);
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
 
     #[cfg(feature = "app_api")]
@@ -1073,6 +1085,26 @@ mod tests {
             .finish()
             .expect("canonical account witness must mount");
         assert_eq!(manifest.explicit_routes(), &[ACCOUNT_AUTHENTICATED]);
+    }
+
+    #[test]
+    fn required_api_token_handler_witness_matches_only_required_token_authentication() {
+        let mut builder = RouterBuilder::new(
+            (),
+            RouteCatalog::new(&[API_TOKEN_REQUIRED]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid catalog");
+        builder.route(
+            &API_TOKEN_REQUIRED,
+            catalog_post(|| async {})
+                .authenticated_in_handler(HandlerAuthentication::RequiredApiToken),
+        );
+
+        let (_, manifest) = builder
+            .finish()
+            .expect("required API-token witness must mount");
+        assert_eq!(manifest.explicit_routes(), &[API_TOKEN_REQUIRED]);
     }
 
     #[test]

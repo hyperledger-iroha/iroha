@@ -7026,7 +7026,7 @@ impl Default for DataspaceGossip {
 pub struct TransactionGossiper {
     /// Transaction gossip interval.
     pub gossip_period: Duration,
-    /// Maximum number of transactions sent or accepted per gossip message.
+    /// Maximum number of transactions sent or accepted per gossip message (canonical ceiling: 512).
     pub gossip_size: NonZeroU32,
     /// Number of gossip periods to wait before re-sending the same transactions.
     pub gossip_resend_ticks: NonZeroU32,

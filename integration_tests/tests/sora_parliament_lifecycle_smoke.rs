@@ -20,8 +20,8 @@ use iroha::data_model::{
     governance::types::ParliamentBody,
     isi::governance::{
         ApproveGovernanceProposal, AtWindow, CastParliamentBallot, CastPlainBallot,
-        CouncilDerivationKind, EnactReferendum, FinalizeReferendum, ParliamentDecision,
-        PersistCouncilForEpoch, ProposeDeployContract, ProposeRuntimeUpgradeProposal,
+        EnactReferendum, FinalizeReferendum, ParliamentDecision, PersistCouncilForEpoch,
+        ProposeDeployContract, ProposeRuntimeUpgradeProposal,
         RegisterCitizen, VotingMode,
     },
     permission::Permission,
@@ -1784,9 +1784,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
                 epoch: 0,
                 members: council_members.clone(),
                 alternates: council_alternates,
-                verified: 0,
-                candidates_count: u32::try_from(CITIZEN_COUNT).expect("count"),
-                derived_by: CouncilDerivationKind::Fallback,
             },
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2343,12 +2340,6 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
                 epoch: 0,
                 members: honest_members.clone(),
                 alternates: honest_alternates,
-                verified: 0,
-                candidates_count: u32::try_from(
-                    fixture.attackers.len().saturating_add(fixture.honest.len()),
-                )
-                .expect("count should fit u32"),
-                derived_by: CouncilDerivationKind::Fallback,
             },
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2515,12 +2506,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
                 epoch: 0,
                 members: council_members.clone(),
                 alternates: council_alternates,
-                verified: 0,
-                candidates_count: u32::try_from(
-                    fixture.attackers.len().saturating_add(fixture.honest.len()),
-                )
-                .expect("count should fit u32"),
-                derived_by: CouncilDerivationKind::Fallback,
             },
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

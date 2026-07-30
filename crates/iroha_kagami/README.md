@@ -148,8 +148,12 @@ the profile-specific defaults.
 Generate BLS validator keys and PoPs:
 
 ```bash
-target/debug/kagami genesis pop --algorithm bls_normal --seed seedA --json > popA.json
-target/debug/kagami genesis pop --algorithm bls_normal --seed seedB --json > popB.json
+target/debug/kagami genesis pop --algorithm bls_normal \
+  --seed-hex 5151515151515151515151515151515151515151515151515151515151515151 \
+  --json > popA.json
+target/debug/kagami genesis pop --algorithm bls_normal \
+  --seed-hex 5252525252525252525252525252525252525252525252525252525252525252 \
+  --json > popB.json
 ```
 
 Generate a genesis JSON:

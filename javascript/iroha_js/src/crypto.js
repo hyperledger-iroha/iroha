@@ -9,7 +9,6 @@ import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 import {
   createPrivateKey,
   createPublicKey,
-  createHash,
   randomBytes,
   sign as signRaw,
 } from "node:crypto";
@@ -210,6 +209,10 @@ function normalizeNativeKeyPair(result, algorithm) {
 
 /**
  * Generate a key pair. Ed25519 remains available in all Node builds; other algorithms require the native binding.
+ *
+ * If supplied, `seed` must be a 32-byte secret generated with at least 256
+ * bits of entropy. It is a deterministic key-generation seed, not a password.
+ * Omit it for operating-system-random production keys.
  * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: string}} [options]
  * @returns {{algorithm: string, publicKey: Buffer, privateKey: Buffer, distid?: string | null}}
  */
@@ -217,7 +220,7 @@ export function generateKeyPair(options = {}) {
   const algorithm = normalizeCryptoAlgorithm(options.algorithm);
   if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
     const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoKeypair");
-    const seed = options.seed ? toBuffer(options.seed, "seed") : undefined;
+    const seed = options.seed ? normalizeSeed(options.seed) : undefined;
     return normalizeNativeKeyPair(native.cryptoKeypair(algorithm, seed), algorithm);
   }
   const seed = options.seed ? normalizeSeed(options.seed) : undefined;
@@ -983,10 +986,10 @@ function exportPublicKey(privateKeyObject) {
 
 function normalizeSeed(seed) {
   const buffer = toBuffer(seed, "seed");
-  if (buffer.length === ED25519_SEED_LENGTH) {
-    return Buffer.from(buffer);
+  if (buffer.length !== ED25519_SEED_LENGTH) {
+    throw new Error("key-generation seed must be exactly 32 bytes");
   }
-  return createHash("sha256").update(buffer).digest();
+  return Buffer.from(buffer);
 }
 
 function normalizePublicKey(publicKey) {

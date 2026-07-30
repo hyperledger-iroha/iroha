@@ -230,7 +230,9 @@ enum DetachedTransactionBridgeJSONCodec {
         let dto = try decoder.decode(ScaffoldDTO.self, from: data)
         guard dto.schema == DetachedTransactionScaffoldInspection.schema,
               !dto.authority.isEmpty,
-              !dto.chain.isEmpty else {
+              !dto.chain.isEmpty,
+              let timeToLiveMs = dto.timeToLiveMs,
+              timeToLiveMs > 0 else {
             throw NativeBridgeError.invalidDetachedTransactionOutput
         }
         let executable: DetachedTransactionExecutableInspection
@@ -292,7 +294,7 @@ enum DetachedTransactionBridgeJSONCodec {
             authority: dto.authority,
             chain: dto.chain,
             creationTimeMs: dto.creationTimeMs,
-            timeToLiveMs: dto.timeToLiveMs,
+            timeToLiveMs: timeToLiveMs,
             metadata: dto.metadata,
             entrypointHash: try decodeHash(dto.entrypointHashHex),
             executable: executable

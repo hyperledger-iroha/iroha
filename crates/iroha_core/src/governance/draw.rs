@@ -1,4 +1,4 @@
-//! Governance VRF draw utilities (members + alternates) for on-chain bodies.
+//! Deterministic governance sortition utilities for on-chain bodies.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,67 +12,15 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 
-use crate::governance::{
-    parliament::{CandidateRef, CandidateVariant, build_input, compute_seed, derive_committee},
-    sortition,
-};
+use crate::governance::sortition;
 
-/// VRF draw result with winners and alternates.
+/// Sortition result with winners and alternates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Draw {
-    /// Selected members in ranked order (front = highest VRF output).
+    /// Selected members in deterministic rank order.
     pub members: Vec<AccountId>,
     /// Alternates to replace members that decline or are ineligible.
     pub alternates: Vec<AccountId>,
-    /// Count of candidates with verified VRF proofs.
-    pub verified: usize,
-}
-
-/// Run a VRF draw for `committee_size + alternate_size` and split the top `committee_size` as members.
-pub fn run_draw<'a, I>(
-    chain_id: &ChainId,
-    epoch: u64,
-    beacon: &[u8; 32],
-    candidates: I,
-    committee_size: usize,
-    alternate_size: usize,
-) -> Draw
-where
-    I: IntoIterator<Item = CandidateRef<'a>>,
-{
-    let seed = compute_seed(chain_id, epoch, beacon);
-    let total = committee_size.saturating_add(alternate_size);
-    let derivation = derive_committee(chain_id, &seed, candidates, total);
-    let mut members = Vec::new();
-    let mut alternates = Vec::new();
-    for (idx, member) in derivation.members.into_iter().enumerate() {
-        if idx < committee_size {
-            members.push(member.account_id);
-        } else {
-            alternates.push(member.account_id);
-        }
-    }
-    Draw {
-        members,
-        alternates,
-        verified: derivation.verified,
-    }
-}
-
-/// Helper to build a `CandidateRef` from raw parts.
-pub fn candidate_ref<'a>(
-    account_id: &'a AccountId,
-    variant: CandidateVariant,
-    public_key: &'a [u8],
-    proof: &'a [u8],
-) -> CandidateRef<'a> {
-    let _ = build_input(&[0u8; 64], account_id); // ensure codec is linked; caller supplies real seed in derive_committee
-    CandidateRef {
-        account_id,
-        variant,
-        public_key,
-        proof,
-    }
 }
 
 /// Replace a missing member with the next alternate. Returns `true` if replaced.
@@ -93,7 +41,7 @@ pub fn replace_with_alternate(
 
 /// Domain separator for citizen draws.
 pub const CITIZEN_SEED_DOMAIN: &[u8] = b"gov:citizen:seed:v1";
-/// Domain separator for citizen VRF inputs.
+/// Domain separator for citizen sortition inputs.
 pub const CITIZEN_INPUT_DOMAIN: &[u8] = b"iroha:vrf:v1:citizen|";
 
 fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -> [u8; 32] {
@@ -104,7 +52,7 @@ fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -
     output
 }
 
-/// Deterministic draw over bonded citizens (no proofs; hash-ordered by VRF input).
+/// Deterministic draw over bonded citizens.
 pub fn run_citizen_draw<'a, I>(
     chain_id: &ChainId,
     epoch: u64,
@@ -153,7 +101,6 @@ where
     Draw {
         members,
         alternates,
-        verified: 0,
     }
 }
 
@@ -219,7 +166,6 @@ where
                 epoch,
                 members,
                 alternates,
-                verified: 0,
                 candidate_count,
                 derived_by,
             },
@@ -277,7 +223,6 @@ pub fn derive_parliament_bodies(
             epoch,
             members,
             alternates,
-            verified: council.verified,
             candidate_count: council.candidate_count,
             derived_by: council.derived_by,
         };
@@ -562,7 +507,7 @@ mod tests {
             epoch,
             &beacon,
             baseline,
-            CouncilDerivationKind::Fallback,
+            CouncilDerivationKind::Manual,
         );
         let inflated_bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
@@ -570,7 +515,7 @@ mod tests {
             epoch,
             &beacon,
             inflated,
-            CouncilDerivationKind::Fallback,
+            CouncilDerivationKind::Manual,
         );
 
         for body in [
@@ -629,7 +574,7 @@ mod tests {
             epoch,
             &beacon,
             [(&citizen, 10_000_u128)],
-            CouncilDerivationKind::Vrf,
+            CouncilDerivationKind::Sortition,
         );
 
         for body in [
@@ -689,7 +634,7 @@ mod tests {
             epoch,
             &beacon,
             accounts.iter().map(|account| (account, 100u128)),
-            CouncilDerivationKind::Fallback,
+            CouncilDerivationKind::Manual,
         );
 
         let distinct_member_lists: BTreeSet<_> = [
@@ -731,7 +676,7 @@ mod tests {
             epoch,
             &beacon,
             accounts.iter().map(|account| (account, 100u128)),
-            CouncilDerivationKind::Fallback,
+            CouncilDerivationKind::Manual,
         );
 
         for (body, expected) in [
@@ -804,7 +749,7 @@ mod tests {
             epoch,
             &beacon,
             forward,
-            CouncilDerivationKind::Fallback,
+            CouncilDerivationKind::Manual,
         );
         let reverse_bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
@@ -812,7 +757,7 @@ mod tests {
             epoch,
             &beacon,
             reverse,
-            CouncilDerivationKind::Fallback,
+            CouncilDerivationKind::Manual,
         );
         assert_eq!(
             forward_bodies, reverse_bodies,
@@ -857,9 +802,8 @@ mod tests {
                 accounts[4].clone(),
                 accounts[4].clone(),
             ],
-            verified: 5,
             candidate_count: 8,
-            derived_by: CouncilDerivationKind::Fallback,
+            derived_by: CouncilDerivationKind::Manual,
         };
 
         let bodies = derive_parliament_bodies(&cfg, &chain_id, epoch, &beacon, &council);

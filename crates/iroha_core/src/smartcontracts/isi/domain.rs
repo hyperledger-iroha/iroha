@@ -1187,13 +1187,6 @@ pub mod isi {
             )?;
             let (account_id, account_value) = account.clone().into_key_value();
             if state_transaction.world.account(&account_id).is_ok() {
-                let plain_domainless_self_registration = self.object().metadata().is_empty()
-                    && self.object().label().is_none()
-                    && self.object().uaid.is_none()
-                    && self.object().opaque_ids.is_empty();
-                if plain_domainless_self_registration {
-                    return Ok(());
-                }
                 return Err(RepetitionError {
                     instruction: InstructionType::Register,
                     id: IdBox::AccountId(account_id),
@@ -3874,6 +3867,7 @@ mod tests {
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
             error::{
                 AssetTransferAdmissionError, InstructionExecutionError, InvalidParameterError,
+                RepetitionError,
             },
             governance::{CouncilDerivationKind, VotingMode},
         },
@@ -4200,7 +4194,7 @@ mod tests {
                         alternates: Vec::new(),
                         verified: 1,
                         candidate_count: 1,
-                        derived_by: CouncilDerivationKind::Fallback,
+                        derived_by: CouncilDerivationKind::Manual,
                     },
                 )
             })
@@ -5380,6 +5374,32 @@ mod tests {
             .expect("account created event");
 
         assert_eq!(created.domain, expected_domain);
+    }
+
+    #[test]
+    fn register_existing_plain_account_returns_repetition_error() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+
+        let error = Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect_err("explicit duplicate registration must fail");
+
+        assert_eq!(
+            error,
+            InstructionExecutionError::Repetition(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::AccountId(account_id),
+            })
+        );
     }
 
     #[test]

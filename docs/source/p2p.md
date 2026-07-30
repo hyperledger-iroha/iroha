@@ -329,7 +329,7 @@ block_gossip_period_ms = 10000
 block_gossip_max_period_ms = 30000
 peer_gossip_period_ms = 1000
 peer_gossip_max_period_ms = 30000
-transaction_gossip_size = 500
+transaction_gossip_size = 500 # configurable batch limit; canonical wire ceiling is 512
 transaction_gossip_period_ms = 1000
 transaction_gossip_resend_ticks = 3
 idle_timeout_ms = 60000
@@ -344,6 +344,10 @@ trust_min_score = -20              # drop trust gossip at or below this score
 
 - Gossip, idle, and exact reply-writer timeout intervals are clamped to >=100ms
   to prevent zero-duration spin loops.
+- `transaction_gossip_size` may be lowered to reduce per-message admission work,
+  but cannot exceed 512. The canonical decoder rejects transaction, route, or
+  routing-plan sequences above that ceiling before allocating or decoding their
+  elements.
 - `reply_writer_flush_timeout_ms` is the base timeout for one actor-owned exact
   reply. Its immutable deadline starts on first actor dispatch, before writer
   admission. An observed timeout doubles only that semantic item's next

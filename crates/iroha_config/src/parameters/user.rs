@@ -667,13 +667,34 @@ impl json::JsonDeserialize for ChainIdInConfig {
 }
 
 impl FromEnvStr for ChainIdInConfig {
-    type Error = Infallible;
+    type Error = iroha_data_model::error::ParseError;
 
     fn from_env_str(value: Cow<'_, str>) -> std::result::Result<Self, Self::Error>
     where
         Self: Sized,
     {
-        Ok(Self(ChainId::from(value)))
+        value.parse().map(Self)
+    }
+}
+
+#[cfg(test)]
+mod chain_id_config_tests {
+    use super::*;
+
+    #[test]
+    fn environment_chain_id_uses_the_canonical_data_model_parser() {
+        let valid = ChainIdInConfig::from_env_str(Cow::Borrowed("iroha.mainnet:v1-alpha_2"))
+            .expect("canonical chain id");
+        assert_eq!(valid.0.as_str(), "iroha.mainnet:v1-alpha_2");
+
+        for invalid in [
+            Cow::Borrowed(""),
+            Cow::Borrowed("-leading"),
+            Cow::Borrowed("contains space"),
+            Cow::Owned("x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES + 1)),
+        ] {
+            assert!(ChainIdInConfig::from_env_str(invalid).is_err());
+        }
     }
 }
 
@@ -7108,7 +7129,7 @@ pub struct Network {
     /// Debug-only outbound P2P application-frame loss percentage used by fault harnesses.
     #[config(default)]
     pub debug_packet_loss_outbound_percent: u8,
-    /// Maximum number of transactions sent or accepted per gossip batch.
+    /// Maximum number of transactions sent or accepted per gossip batch (canonical ceiling: 512).
     #[config(default = "defaults::network::TRANSACTION_GOSSIP_SIZE")]
     pub transaction_gossip_size: NonZeroU32,
     /// Interval between transaction gossip batches in milliseconds (clamped to >= 100ms).
@@ -7587,6 +7608,13 @@ impl Network {
         {
             panic!(
                 "network.relay_hub_addresses must be set when network.relay_mode is spoke or assist"
+            );
+        }
+        if transaction_gossip_size > defaults::network::TRANSACTION_GOSSIP_MAX_SIZE {
+            panic!(
+                "network.transaction_gossip_size must not exceed the canonical per-message maximum of {}, got {}",
+                defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
+                transaction_gossip_size,
             );
         }
 
@@ -34035,6 +34063,48 @@ publish_delay_seconds = 17
             actual.transaction_gossiper.gossip_resend_ticks,
             defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS
         );
+    }
+
+    #[test]
+    fn network_accepts_canonical_transaction_gossip_size_boundary() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert(
+            "transaction_gossip_size".into(),
+            Value::Integer(i64::from(
+                defaults::network::TRANSACTION_GOSSIP_MAX_SIZE.get(),
+            )),
+        );
+
+        let actual = load_root(table);
+
+        assert_eq!(
+            actual.transaction_gossiper.gossip_size,
+            defaults::network::TRANSACTION_GOSSIP_MAX_SIZE
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "network.transaction_gossip_size must not exceed the canonical per-message maximum"
+    )]
+    fn network_rejects_transaction_gossip_size_above_canonical_limit() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert(
+            "transaction_gossip_size".into(),
+            Value::Integer(i64::from(
+                defaults::network::TRANSACTION_GOSSIP_MAX_SIZE.get() + 1,
+            )),
+        );
+
+        let _ = load_root(table);
     }
 
     #[test]

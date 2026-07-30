@@ -296,9 +296,6 @@ struct GcEvictionTransactionOutcome {
     publish_error: Option<String>,
 }
 
-const GOVERNANCE_PUBLISH_INDEX_FILE: &str = "publish-index.json";
-const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publish_index.v1";
-const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
 const MODERATION_MODEL_REGISTRY_DIR: &str = "moderation-model-registry";
 const MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE: &str = "registry-snapshot.to";
 const MODERATION_SCREENING_DIR: &str = "moderation-screening";
@@ -1504,101 +1501,18 @@ fn empty_appeal_finance_reconciliation_summary()
 }
 
 fn appeal_finance_rollup_reconciliation_entry(
-    governance_dir: &Path,
-    index_entry: &JsonValue,
-) -> Result<reconciliation::AppealFinanceRollupReconciliationEntry, ReconciliationError> {
-    let json_path = required_json_string(index_entry, "json_path")?;
-    let sidecar_path = governance_index_relative_path(governance_dir, &json_path)?;
-    let sidecar_bytes = fs::read(&sidecar_path).map_err(|err| {
-        ReconciliationError::AppealFinance(format!(
-            "failed to read appeal finance rollup sidecar `{}`: {err}",
-            sidecar_path.display()
-        ))
-    })?;
-    let sidecar = norito::json::from_slice::<JsonValue>(&sidecar_bytes).map_err(|err| {
-        ReconciliationError::AppealFinance(format!(
-            "failed to decode appeal finance rollup sidecar `{}`: {err}",
-            sidecar_path.display()
-        ))
-    })?;
-    let metadata = sidecar.get("metadata").ok_or_else(|| {
-        ReconciliationError::AppealFinance(format!(
-            "appeal finance rollup sidecar `{}` is missing metadata",
-            sidecar_path.display()
-        ))
-    })?;
-    let total_rewards_forfeited_treasury_xor = metadata
-        .get("total_rewards_forfeited_treasury_xor")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("0")
-        .parse::<XorQuantity>()
-        .map_err(|error| {
-            ReconciliationError::AppealFinance(format!(
-                "invalid `total_rewards_forfeited_treasury_xor`: {error}"
-            ))
-        })?;
-
-    Ok(reconciliation::AppealFinanceRollupReconciliationEntry {
-        cycle: required_json_string(metadata, "cycle")?,
-        encoded_blake3: required_json_string(index_entry, "encoded_blake3")?,
-        report_count: required_json_u64(metadata, "report_count")?,
-        case_count: required_json_u64(metadata, "case_count")?,
-        total_treasury_xor: required_json_xor_quantity(metadata, "total_treasury_xor")?,
-        total_rewards_forfeited_treasury_xor,
-        published_at_unix: required_json_u64(index_entry, "published_at_unix")?,
-    })
-}
-
-fn governance_index_relative_path(
-    governance_dir: &Path,
-    raw_path: &str,
-) -> Result<std::path::PathBuf, ReconciliationError> {
-    let relative = Path::new(raw_path);
-    if relative.is_absolute()
-        || relative.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(ReconciliationError::AppealFinance(format!(
-            "governance publish index path `{raw_path}` must be relative to the governance root"
-        )));
+    source: &governance::AuthoritativeAppealFinanceWeeklyRollup,
+) -> reconciliation::AppealFinanceRollupReconciliationEntry {
+    let rollup = &source.rollup;
+    reconciliation::AppealFinanceRollupReconciliationEntry {
+        cycle: rollup.cycle.to_string(),
+        encoded_blake3: source.encoded_blake3.clone(),
+        report_count: rollup.report_count,
+        case_count: rollup.case_count,
+        total_treasury_xor: rollup.total_treasury_xor.clone(),
+        total_rewards_forfeited_treasury_xor: rollup.total_rewards_forfeited_treasury_xor.clone(),
+        generated_at_unix_ms: rollup.generated_at_unix_ms,
     }
-    Ok(governance_dir.join(relative))
-}
-
-fn required_json_string(
-    value: &JsonValue,
-    field: &'static str,
-) -> Result<String, ReconciliationError> {
-    value
-        .get(field)
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| {
-            ReconciliationError::AppealFinance(format!("appeal finance rollup missing `{field}`"))
-        })
-}
-
-fn required_json_u64(value: &JsonValue, field: &'static str) -> Result<u64, ReconciliationError> {
-    value.get(field).and_then(JsonValue::as_u64).ok_or_else(|| {
-        ReconciliationError::AppealFinance(format!("appeal finance rollup missing `{field}`"))
-    })
-}
-
-fn required_json_xor_quantity(
-    value: &JsonValue,
-    field: &'static str,
-) -> Result<XorQuantity, ReconciliationError> {
-    required_json_string(value, field)?
-        .parse()
-        .map_err(|error| {
-            ReconciliationError::AppealFinance(format!(
-                "appeal finance rollup has invalid `{field}`: {error}"
-            ))
-        })
 }
 
 /// Anchor-backed authorization for one privacy transparency publication.
@@ -14274,51 +14188,86 @@ impl NodeHandle {
     fn appeal_finance_reconciliation_summary(
         &self,
     ) -> Result<Option<AppealFinanceReconciliationSummaryV1>, ReconciliationError> {
-        let Some(governance_dir) = self.config.governance_dir() else {
+        if self.config.governance_dir().is_none() {
             return Ok(None);
-        };
-        let index_path = governance_dir.join(GOVERNANCE_PUBLISH_INDEX_FILE);
-        let index = match fs::read(&index_path) {
-            Ok(bytes) => norito::json::from_slice::<JsonValue>(&bytes).map_err(|err| {
-                ReconciliationError::AppealFinance(format!(
-                    "failed to decode governance publish index `{}`: {err}",
-                    index_path.display()
-                ))
-            })?,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return empty_appeal_finance_reconciliation_summary().map(Some);
-            }
-            Err(err) => {
-                return Err(ReconciliationError::AppealFinance(format!(
-                    "failed to read governance publish index `{}`: {err}",
-                    index_path.display()
-                )));
-            }
-        };
-        if index.get("schema").and_then(JsonValue::as_str) != Some(GOVERNANCE_PUBLISH_INDEX_SCHEMA)
-        {
-            return Err(ReconciliationError::AppealFinance(
-                "governance publish index uses an unsupported schema".to_string(),
-            ));
         }
-
-        let mut entries = Vec::new();
-        let Some(index_entries) = index.get("entries").and_then(JsonValue::as_array) else {
-            return Err(ReconciliationError::AppealFinance(
-                "governance publish index is missing `entries` array".to_string(),
-            ));
-        };
-        for entry in index_entries {
-            if entry.get("payload_kind").and_then(JsonValue::as_str)
-                != Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
-            {
-                continue;
-            }
-            entries.push(appeal_finance_rollup_reconciliation_entry(
-                governance_dir,
-                entry,
-            )?);
+        let governance_root = self.governance_runtime_root.as_deref().ok_or_else(|| {
+            ReconciliationError::AppealFinance(
+                "configured governance directory has no pinned runtime root".to_string(),
+            )
+        })?;
+        let root_guard = self.governance_runtime_root_guard.as_ref().ok_or_else(|| {
+            ReconciliationError::AppealFinance(
+                "configured governance directory has no filesystem identity fence".to_string(),
+            )
+        })?;
+        let signer = self.governance_dag_runtime_signer.as_ref().ok_or_else(|| {
+            ReconciliationError::AppealFinance(
+                "configured governance directory has no qualified runtime signer".to_string(),
+            )
+        })?;
+        let checkpoint_store = self
+            .governance_dag_runtime_checkpoint_store
+            .as_ref()
+            .ok_or_else(|| {
+                ReconciliationError::AppealFinance(
+                    "configured governance directory has no qualified sealed checkpoint store"
+                        .to_string(),
+                )
+            })?;
+        let publication_lock = self.governance_publication_lock.as_ref().ok_or_else(|| {
+            ReconciliationError::AppealFinance(
+                "configured governance directory has no publication fence".to_string(),
+            )
+        })?;
+        let _publication_guard = publication_lock.lock().map_err(|_| {
+            ReconciliationError::AppealFinance(
+                "governance publication fence is poisoned".to_string(),
+            )
+        })?;
+        governance::revalidate_runtime_dag_producer_state(
+            governance_root,
+            root_guard,
+            signer,
+            checkpoint_store,
+        )
+        .map_err(|error| {
+            ReconciliationError::AppealFinance(format!(
+                "failed to authenticate the sealed governance producer state: {error}"
+            ))
+        })?;
+        let authoritative_rollups = governance::authoritative_appeal_finance_weekly_rollups(
+            governance_root,
+            signer,
+            checkpoint_store,
+        )
+        .map_err(|error| {
+            ReconciliationError::AppealFinance(format!(
+                "failed to authenticate appeal finance rollups from the signed governance DAG: {error}"
+            ))
+        })?;
+        root_guard.revalidate().map_err(|error| {
+            ReconciliationError::AppealFinance(format!(
+                "governance filesystem identity changed during reconciliation: {error}"
+            ))
+        })?;
+        signer.assert_qualification().map_err(|error| {
+            ReconciliationError::AppealFinance(format!(
+                "governance runtime signer changed during reconciliation: {error}"
+            ))
+        })?;
+        checkpoint_store.assert_qualification().map_err(|error| {
+            ReconciliationError::AppealFinance(format!(
+                "governance checkpoint store changed during reconciliation: {error}"
+            ))
+        })?;
+        if authoritative_rollups.is_empty() {
+            return empty_appeal_finance_reconciliation_summary().map(Some);
         }
+        let mut entries = authoritative_rollups
+            .iter()
+            .map(appeal_finance_rollup_reconciliation_entry)
+            .collect::<Vec<_>>();
         entries.sort_by(|left, right| {
             left.cycle
                 .cmp(&right.cycle)
@@ -26290,10 +26239,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn node_handle_reconciliation_includes_appeal_finance_rollups() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+    fn reconciliation_handle_with_governance(root: &Path) -> NodeHandle {
         let signer = Arc::new(TestGovernanceDagSigner::new());
         let cfg = StorageConfig::builder()
             .enabled(true)
@@ -26328,6 +26274,57 @@ mod tests {
         .expect("runtime-signed governance publisher");
         ensure_test_capacity_provider(&handle);
         assert!(handle.has_governance_publisher());
+        handle
+    }
+
+    fn weekly_rollup_publish_index_entry(root: &Path) -> JsonValue {
+        let index_path = root.join("governance").join("publish-index.json");
+        let index = norito::json::from_slice::<JsonValue>(
+            &fs::read(&index_path).expect("read governance publish index"),
+        )
+        .expect("decode governance publish index");
+        index
+            .get("entries")
+            .and_then(JsonValue::as_array)
+            .expect("governance publish-index entries")
+            .iter()
+            .find(|entry| {
+                entry.get("payload_kind").and_then(JsonValue::as_str)
+                    == Some("appeal_finance_weekly_rollup")
+            })
+            .cloned()
+            .expect("weekly rollup publish-index entry")
+    }
+
+    fn indexed_governance_artifact(root: &Path, entry: &JsonValue, field: &str) -> PathBuf {
+        let relative = entry
+            .get(field)
+            .and_then(JsonValue::as_str)
+            .expect("governance artifact path");
+        root.join("governance").join(relative)
+    }
+
+    fn rewrite_test_digest_sidecar(path: &Path) {
+        let bytes = fs::read(path).expect("read governance artifact");
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map_or_else(
+                || "blake3".to_string(),
+                |extension| format!("{extension}.blake3"),
+            );
+        fs::write(
+            path.with_extension(extension),
+            format!("{}\n", blake3::hash(&bytes).to_hex()),
+        )
+        .expect("rewrite governance artifact digest");
+    }
+
+    #[test]
+    fn node_handle_reconciliation_includes_appeal_finance_rollups() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let handle = reconciliation_handle_with_governance(&root);
 
         let rollup = appeal_finance_weekly_rollup_fixture();
         handle
@@ -26349,6 +26346,71 @@ mod tests {
         assert_eq!(
             appeal_finance.total_rewards_forfeited_treasury_xor,
             rollup.total_rewards_forfeited_treasury_xor
+        );
+    }
+
+    #[test]
+    fn node_handle_reconciliation_ignores_tampered_rollup_json_mirror() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let handle = reconciliation_handle_with_governance(&root);
+        let rollup = appeal_finance_weekly_rollup_fixture();
+        handle
+            .publish_appeal_finance_weekly_rollup(rollup.clone())
+            .expect("publish appeal finance weekly rollup");
+
+        let index_entry = weekly_rollup_publish_index_entry(&root);
+        let json_path = indexed_governance_artifact(&root, &index_entry, "json_path");
+        fs::write(
+            &json_path,
+            br#"{"metadata":{"cycle":"2099-W52","report_count":999999,"case_count":999999,"total_treasury_xor":"999999999","total_rewards_forfeited_treasury_xor":"999999999"}}"#,
+        )
+        .expect("replace display-only rollup JSON");
+        rewrite_test_digest_sidecar(&json_path);
+
+        let reconciliation = handle
+            .run_reconciliation_once(1_700_000_301, &empty_finalized_repair_projection())
+            .expect("reconciliation authenticates the signed canonical rollup");
+        let summary = reconciliation
+            .appeal_finance
+            .expect("appeal finance reconciliation summary");
+        assert_eq!(summary.rollup_count, 1);
+        assert_eq!(summary.source_report_count, rollup.report_count);
+        assert_eq!(summary.case_count, rollup.case_count);
+        assert_eq!(summary.total_treasury_xor, rollup.total_treasury_xor);
+        assert_eq!(
+            summary.total_rewards_forfeited_treasury_xor,
+            rollup.total_rewards_forfeited_treasury_xor
+        );
+    }
+
+    #[test]
+    fn node_handle_reconciliation_rejects_rollup_source_substitution() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let handle = reconciliation_handle_with_governance(&root);
+        handle
+            .publish_appeal_finance_weekly_rollup(appeal_finance_weekly_rollup_fixture())
+            .expect("publish appeal finance weekly rollup");
+
+        let index_entry = weekly_rollup_publish_index_entry(&root);
+        let encoded_path = indexed_governance_artifact(&root, &index_entry, "encoded_path");
+        let mut encoded = fs::read(&encoded_path).expect("read canonical weekly rollup");
+        let last = encoded.last_mut().expect("weekly rollup is not empty");
+        *last ^= 1;
+        fs::write(&encoded_path, encoded).expect("substitute canonical weekly rollup");
+        rewrite_test_digest_sidecar(&encoded_path);
+
+        let error = handle
+            .run_reconciliation_once(1_700_000_302, &empty_finalized_repair_projection())
+            .expect_err("signed source substitution must fail closed");
+        let message = match error {
+            ReconciliationError::AppealFinance(message) => message,
+            other => panic!("unexpected reconciliation error: {other}"),
+        };
+        assert!(
+            message.contains("source payload"),
+            "unexpected source-substitution error: {message}"
         );
     }
 

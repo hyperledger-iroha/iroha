@@ -79,8 +79,15 @@ where
 
 impl<R> CryptoRngOld for CompatRng<R> where R: TryRngCoreNew + TryCryptoRng {}
 
-/// Deterministic RNG derived from an arbitrary seed via SHA-256, implementing both
+/// Deterministic RNG derived from seed material via SHA-256, implementing both
 /// modern and 0.6 `rand_core` traits.
+///
+/// # Security
+///
+/// SHA-256 normalizes the seed length; it does not add entropy. Use a secret
+/// seed with at least 256 bits of entropy for production key derivation. Prefer
+/// operating-system-backed random key generation unless reproducibility is an
+/// explicit protocol requirement.
 pub fn rng_from_seed(mut seed: Vec<u8>) -> CompatRng<ChaChaRng> {
     let rng = rng_from_seed_slice(&seed);
     seed.zeroize();
@@ -89,6 +96,12 @@ pub fn rng_from_seed(mut seed: Vec<u8>) -> CompatRng<ChaChaRng> {
 
 /// Deterministic RNG derived from borrowed seed bytes via SHA-256, implementing
 /// both modern and 0.6 `rand_core` traits.
+///
+/// # Security
+///
+/// This function is an entropy-preserving deterministic transform, not a
+/// password-based key derivation function. Public identifiers, labels, and
+/// human-chosen strings are not suitable production seeds.
 pub fn rng_from_seed_slice(seed: &[u8]) -> CompatRng<ChaChaRng> {
     let mut key: [u8; 32] = Sha256::digest(seed).into();
     let rng = CompatRng::new(ChaChaRng::from_seed(key));

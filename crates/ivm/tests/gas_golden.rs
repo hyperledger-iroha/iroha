@@ -946,10 +946,7 @@ fn ed25519_batchverify_charges_per_entry() {
             }
         })
         .collect();
-    let request = ivm::signature::Ed25519BatchRequest {
-        seed: [0u8; 32],
-        entries,
-    };
+    let request = ivm::signature::Ed25519BatchRequest { entries };
     let payload = norito::to_bytes(&request).expect("encode request");
     let tlv = make_tlv(ivm::PointerType::NoritoBytes as u16, &payload);
 
@@ -966,7 +963,8 @@ fn ed25519_batchverify_charges_per_entry() {
     vm.load_program(&program).unwrap();
     vm.run().unwrap();
 
-    let expected = cost_of(word) + 2 * 500;
+    let expected = cost_of(word)
+        + ivm::gas::ed25519_batch_extra_gas(payload.len() as u64, request.entries.len() as u64);
     assert_eq!(10_000 - vm.gas_remaining, expected);
     assert_eq!(vm.register(5), 1);
     assert_eq!(vm.register(2), 0);

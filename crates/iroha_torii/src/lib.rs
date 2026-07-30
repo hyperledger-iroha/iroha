@@ -1985,6 +1985,8 @@ struct AppState {
     query_heavy_inflight: Arc<tokio::sync::Semaphore>,
     query_queue_timeout: Duration,
     rate_limiter: limits::RateLimiter,
+    query_preauth_rate_limiter: limits::RateLimiter,
+    query_authority_rate_limiter: limits::RateLimiter,
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
@@ -3036,7 +3038,10 @@ impl AppState {
         &self.norito_rpc
     }
 
-    /// Returns true when API tokens are required and at least one token is configured.
+    /// Returns whether a validated API token may identify the caller for rate limiting.
+    ///
+    /// Callers must validate the request with [`validate_api_token`] before
+    /// allowing the header value to contribute to a rate-limit key.
     fn api_token_enforced(&self) -> bool {
         self.require_api_token && !self.api_tokens_set.is_empty()
     }
@@ -4563,53 +4568,93 @@ mod preauth_connection_lifetime_tests {
     }
 }
 
-fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
-    if !app.require_api_token {
-        return None;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApiTokenEvaluation<'headers> {
+    Disabled,
+    Unavailable,
+    Invalid,
+    Authenticated(&'headers str),
+}
+
+impl<'headers> ApiTokenEvaluation<'headers> {
+    fn authenticated_token(self) -> Option<&'headers str> {
+        match self {
+            Self::Authenticated(token) => Some(token),
+            Self::Disabled | Self::Unavailable | Self::Invalid => None,
+        }
     }
-    let format = early_rejection_response_format(headers);
-    if app.api_tokens_set.is_empty() {
-        let payload = ErrorEnvelope::new(
-            "api_token_unavailable",
-            "Torii requires an API token, but no tokens are configured.",
-        )
-        .with_details(ErrorDetails {
-            retry_after_seconds: Some(1),
-            ..Default::default()
-        });
-        let mut response =
-            utils::respond_with_status_and_format(StatusCode::SERVICE_UNAVAILABLE, payload, format);
-        response.headers_mut().insert(
-            axum::http::header::RETRY_AFTER,
-            HeaderValue::from_static("1"),
-        );
-        append_vary_accept(response.headers_mut());
-        return Some(response);
+}
+
+fn evaluate_api_token<'headers>(
+    require_api_token: bool,
+    configured_tokens: &HashSet<String>,
+    headers: &'headers HeaderMap,
+) -> ApiTokenEvaluation<'headers> {
+    if !require_api_token {
+        return ApiTokenEvaluation::Disabled;
     }
-    let mut token_values = headers.get_all(HEADER_API_TOKEN).iter();
-    let valid = token_values
-        .next()
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|token| app.api_tokens_set.contains(token))
-        && token_values.next().is_none();
-    if valid {
-        return None;
+    if configured_tokens.is_empty() {
+        return ApiTokenEvaluation::Unavailable;
     }
 
-    let mut response = utils::respond_with_status_and_format(
-        StatusCode::UNAUTHORIZED,
-        ErrorEnvelope::new(
-            "api_token_required",
-            "A valid Torii API token is required for this request.",
-        ),
-        format,
-    );
-    response.headers_mut().insert(
-        axum::http::header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
-    );
-    append_vary_accept(response.headers_mut());
-    Some(response)
+    let mut values = headers.get_all(HEADER_API_TOKEN).iter();
+    let Some(value) = values.next() else {
+        return ApiTokenEvaluation::Invalid;
+    };
+    if values.next().is_some() {
+        return ApiTokenEvaluation::Invalid;
+    }
+    match value.to_str() {
+        Ok(token) if configured_tokens.contains(token) => {
+            ApiTokenEvaluation::Authenticated(token)
+        }
+        _ => ApiTokenEvaluation::Invalid,
+    }
+}
+
+fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
+    match evaluate_api_token(app.require_api_token, app.api_tokens_set.as_ref(), headers) {
+        ApiTokenEvaluation::Disabled | ApiTokenEvaluation::Authenticated(_) => None,
+        ApiTokenEvaluation::Unavailable => {
+            let format = early_rejection_response_format(headers);
+            let payload = ErrorEnvelope::new(
+                "api_token_unavailable",
+                "Torii requires an API token, but no tokens are configured.",
+            )
+            .with_details(ErrorDetails {
+                retry_after_seconds: Some(1),
+                ..Default::default()
+            });
+            let mut response = utils::respond_with_status_and_format(
+                StatusCode::SERVICE_UNAVAILABLE,
+                payload,
+                format,
+            );
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                HeaderValue::from_static("1"),
+            );
+            append_vary_accept(response.headers_mut());
+            Some(response)
+        }
+        ApiTokenEvaluation::Invalid => {
+            let format = early_rejection_response_format(headers);
+            let mut response = utils::respond_with_status_and_format(
+                StatusCode::UNAUTHORIZED,
+                ErrorEnvelope::new(
+                    "api_token_required",
+                    "A valid Torii API token is required for this request.",
+                ),
+                format,
+            );
+            response.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
+            );
+            append_vary_accept(response.headers_mut());
+            Some(response)
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -5171,6 +5216,17 @@ async fn enforce_soracloud_signed_mutation_request(
     }
 
     let (mut parts, body) = req.into_parts();
+    // These headers are an internal middleware-to-handler channel. Strip all
+    // client values before authentication so a future serialization failure
+    // can only leave the header absent, never preserve attacker-supplied
+    // identity material.
+    for header in [
+        soracloud::VERIFIED_ACCOUNT_HEADER,
+        soracloud::VERIFIED_SIGNER_HEADER,
+        soracloud::VERIFIED_SIGNERS_HEADER,
+    ] {
+        parts.headers.remove(header);
+    }
     let body_limit = soracloud_signed_mutation_body_limit(&app, &path);
     let body = match axum::body::to_bytes(body, body_limit).await {
         Ok(body) => body,
@@ -8847,30 +8903,25 @@ async fn check_access_with_rate_limiter(
     Ok(())
 }
 
-fn validate_api_token(app: &AppState, headers: &axum::http::HeaderMap) -> Result<(), Error> {
-    if app.require_api_token {
-        if app.api_tokens_set.is_empty() {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::NotPermitted(
-                    "Torii requires an API token but none are configured".to_string(),
-                ),
-            ));
-        }
-        let mut values = headers.get_all(HEADER_API_TOKEN).iter();
-        let ok = values
-            .next()
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|token| app.api_tokens_set.contains(token))
-            && values.next().is_none();
-        if !ok {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::NotPermitted(
-                    "missing or invalid API token".to_string(),
-                ),
-            ));
-        }
+fn validate_api_token<'headers>(
+    app: &AppState,
+    headers: &'headers axum::http::HeaderMap,
+) -> Result<ApiTokenEvaluation<'headers>, Error> {
+    let evaluation =
+        evaluate_api_token(app.require_api_token, app.api_tokens_set.as_ref(), headers);
+    match evaluation {
+        ApiTokenEvaluation::Disabled | ApiTokenEvaluation::Authenticated(_) => Ok(evaluation),
+        ApiTokenEvaluation::Unavailable => Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "Torii requires an API token but none are configured".to_string(),
+            ),
+        )),
+        ApiTokenEvaluation::Invalid => Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "missing or invalid API token".to_string(),
+            ),
+        )),
     }
-    Ok(())
 }
 
 async fn check_access_enforced(
@@ -8980,6 +9031,87 @@ fn rate_limit_key(
     use_api_token: bool,
 ) -> String {
     limits::key_from_headers(headers, remote, Some(hint), use_api_token)
+}
+
+fn signed_query_preauth_rate_limit_key(
+    headers: &axum::http::HeaderMap,
+    remote: Option<IpAddr>,
+    use_authenticated_api_token: bool,
+) -> String {
+    // API-token text is attacker-controlled unless token authentication is
+    // enabled and validated. Otherwise ingress middleware has already replaced
+    // the internal remote-address header with the accepted socket address or a
+    // value from a configured trusted proxy.
+    let caller = limits::key_from_headers(
+        headers,
+        remote,
+        Some("unknown"),
+        use_authenticated_api_token,
+    );
+    format!("v1/query:preauth:{caller}")
+}
+
+fn signed_query_authority_rate_limit_key(authority: &AccountId) -> String {
+    format!("v1/query:authority:{authority}")
+}
+
+async fn consume_signed_query_rate(
+    rate_limiter: &limits::RateLimiter,
+    key: &str,
+) -> Result<(), Error> {
+    if rate_limiter.allow(key).await {
+        return Ok(());
+    }
+    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+    )))
+}
+
+async fn admit_signed_query_preauth(
+    app: &AppState,
+    headers: &axum::http::HeaderMap,
+    remote: Option<IpAddr>,
+) -> Result<(), Error> {
+    validate_api_token(app, headers)?;
+    let key = signed_query_preauth_rate_limit_key(headers, remote, app.api_token_enforced());
+    consume_signed_query_rate(&app.query_preauth_rate_limiter, &key).await
+}
+
+async fn admit_signed_query_authority(app: &AppState, authority: &AccountId) -> Result<(), Error> {
+    let key = signed_query_authority_rate_limit_key(authority);
+    consume_signed_query_rate(&app.query_authority_rate_limiter, &key).await
+}
+
+async fn acquire_signed_query_physical_admission(
+    app: &AppState,
+    request: &iroha_data_model::query::QueryRequestWithAuthority,
+) -> Result<QueryAdmissionPermit, Error> {
+    acquire_query_admission(
+        app,
+        matches!(
+            &request.request,
+            iroha_data_model::query::QueryRequest::Start(_)
+        ),
+    )
+    .await
+}
+
+async fn execute_admitted_signed_query_with_opts(
+    app: &SharedAppState,
+    request: iroha_data_model::query::QueryRequestWithAuthority,
+    opts: QueryOptions,
+) -> Result<iroha_data_model::query::QueryResponse, Error> {
+    admit_signed_query_authority(app.as_ref(), &request.authority).await?;
+    let admission = acquire_signed_query_physical_admission(app.as_ref(), &request).await?;
+    routing::execute_admitted_verified_query_with_opts(
+        app.query_service.clone(),
+        app.state.clone(),
+        request,
+        app.telemetry.clone(),
+        opts,
+        admission,
+    )
+    .await
 }
 
 #[cfg(feature = "app_api")]
@@ -11301,7 +11433,6 @@ async fn handler_proofs_query(
     NoritoJson(dto): NoritoJson<crate::routing::ProofFindByIdQueryDto>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let tel = app.telemetry.clone();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -11309,15 +11440,11 @@ async fn handler_proofs_query(
 
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-        return routing::handle_queries_with_opts(
-            app.query_service.clone(),
-            app.state.clone(),
-            signed,
-            tel,
-            crate::NoritoQuery(QueryOptions::default()),
-            format,
-        )
-        .await;
+        let verified = routing::verify_signed_query_request(signed)?;
+        let query_response =
+            execute_admitted_signed_query_with_opts(&app, verified, QueryOptions::default())
+                .await?;
+        return Ok(crate::utils::respond_with_format(query_response, format));
     }
 
     let enforce =
@@ -11325,15 +11452,10 @@ async fn handler_proofs_query(
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-    routing::handle_queries_with_opts(
-        app.query_service.clone(),
-        app.state.clone(),
-        signed,
-        tel,
-        crate::NoritoQuery(QueryOptions::default()),
-        format,
-    )
-    .await
+    let verified = routing::verify_signed_query_request(signed)?;
+    let query_response =
+        execute_admitted_signed_query_with_opts(&app, verified, QueryOptions::default()).await?;
+    Ok(crate::utils::respond_with_format(query_response, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "zk-proof-tags"))]
@@ -16394,15 +16516,8 @@ async fn handler_confidential_relay_submit(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<crate::routing::ConfidentialRelaySubmitRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
-    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr =
+        validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     let key = token_hdr
         .map(str::to_owned)
         .unwrap_or_else(|| remote.ip().to_string());
@@ -25275,15 +25390,9 @@ async fn execute_torii_verified_query_locally(
     app: &SharedAppState,
     request: iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<iroha_data_model::query::QueryResponse, Response> {
-    routing::execute_verified_query_with_opts(
-        app.query_service.clone(),
-        app.state.clone(),
-        request,
-        app.telemetry.clone(),
-        QueryOptions::default(),
-    )
-    .await
-    .map_err(IntoResponse::into_response)
+    execute_admitted_signed_query_with_opts(app, request, QueryOptions::default())
+        .await
+        .map_err(IntoResponse::into_response)
 }
 
 #[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
@@ -25305,11 +25414,27 @@ async fn execute_torii_verified_query_exhaustive_locally(
     request: iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<iroha_data_model::query::QueryResponse, Response> {
     let authority = request.authority.clone();
+    admit_signed_query_authority(app.as_ref(), &authority)
+        .await
+        .map_err(IntoResponse::into_response)?;
     let mut current_request = request;
     let mut accumulated_batch: Option<iroha_data_model::query::QueryOutputBatchBox> = None;
 
     loop {
-        match execute_torii_verified_query_locally(app, current_request).await? {
+        let admission = acquire_signed_query_physical_admission(app.as_ref(), &current_request)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        match routing::execute_admitted_verified_query_with_opts(
+            app.query_service.clone(),
+            app.state.clone(),
+            current_request,
+            app.telemetry.clone(),
+            QueryOptions::default(),
+            admission,
+        )
+        .await
+        .map_err(IntoResponse::into_response)?
+        {
             iroha_data_model::query::QueryResponse::Singular(output) => {
                 if accumulated_batch.is_some() {
                     return Err(unsupported_routed_query_response(
@@ -35946,15 +36071,7 @@ async fn execute_incoming_torii_proxy_request(
                             .await
                         } else {
                             let format = response_format_from_torii_proxy(response_format);
-                            match routing::execute_verified_query_with_opts(
-                                app.query_service.clone(),
-                                app.state.clone(),
-                                verified_query,
-                                app.telemetry.clone(),
-                                QueryOptions::default(),
-                            )
-                            .await
-                            {
+                            match execute_torii_verified_query_locally(app, verified_query).await {
                                 Ok(query_response) => {
                                     let mut response =
                                         crate::utils::respond_with_format(query_response, format);
@@ -47398,33 +47515,13 @@ async fn handler_signed_query(
         iroha_data_model::query::SignedQuery,
     >,
 ) -> Result<Response, Error> {
-    let tel = app.telemetry.clone();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
 
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
-        let token_hdr = headers
-            .get("x-api-token")
-            .and_then(|v| v.to_str().ok())
-            .map(ToString::to_string);
-        if app.require_api_token && !app.api_tokens_set.is_empty() {
-            let ok = token_hdr
-                .as_ref()
-                .is_some_and(|t| app.api_tokens_set.contains(t));
-            if !ok {
-                return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-                )));
-            }
-        }
-        let key = token_hdr.unwrap_or_else(|| "query".to_string());
-        if !limits::allow_conditionally(&app.rate_limiter, &key, true).await {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+        admit_signed_query_preauth(app.as_ref(), &headers, Some(remote.ip())).await?;
     }
 
     let query_bytes = iroha_version::codec::EncodeVersioned::encode_versioned(&query_request);
@@ -47463,23 +47560,8 @@ async fn handler_signed_query(
         );
     }
 
-    let _query_permit = acquire_query_admission(
-        app.as_ref(),
-        matches!(
-            &verified_query.request,
-            iroha_data_model::query::QueryRequest::Start(_)
-        ),
-    )
-    .await?;
-
-    let query_response = routing::execute_verified_query_with_opts(
-        app.query_service.clone(),
-        app.state.clone(),
-        verified_query,
-        tel,
-        query_options,
-    )
-    .await?;
+    let query_response =
+        execute_admitted_signed_query_with_opts(&app, verified_query, query_options).await?;
     let mut response = crate::utils::respond_with_format(query_response, format);
     if let Some(routing_decision) = routing_decision {
         insert_routing_headers(&mut response, routing_decision, "local");
@@ -53369,6 +53451,8 @@ pub struct Torii {
     soracloud_mutation_max_body_bytes: usize,
     soracloud_upload_max_body_bytes: usize,
     rate_limiter: limits::RateLimiter,
+    query_preauth_rate_limiter: limits::RateLimiter,
+    query_authority_rate_limiter: limits::RateLimiter,
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
@@ -57691,7 +57775,12 @@ impl Torii {
         );
         capacity_get!(STORAGE_PLAN, sorafs::api::handle_get_sorafs_storage_plan);
         capacity_post!(STORAGE_FETCH, sorafs::api::handle_post_sorafs_storage_fetch);
-        capacity_post!(STORAGE_TOKEN, sorafs::api::handle_post_sorafs_storage_token);
+        builder.route(
+            &route_catalog::sorafs::STORAGE_TOKEN,
+            catalog_post(sorafs::api::handle_post_sorafs_storage_token)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_in_handler(HandlerAuthentication::RequiredApiToken),
+        );
         capacity_get!(
             STORAGE_CAR,
             sorafs::api::handle_get_sorafs_storage_car_range
@@ -58347,14 +58436,19 @@ impl Torii {
             );
             crate::zk_prover::start_worker();
         }
-        let rl = limits::RateLimiter::new(
-            config
-                .query_rate_per_authority_per_sec
-                .map(std::num::NonZeroU32::get),
-            config
-                .query_burst_per_authority
-                .map(std::num::NonZeroU32::get),
-        );
+        let query_rate = config
+            .query_rate_per_authority_per_sec
+            .map(std::num::NonZeroU32::get);
+        let query_burst = config
+            .query_burst_per_authority
+            .map(std::num::NonZeroU32::get);
+        let rl = limits::RateLimiter::new(query_rate, query_burst);
+        // Keep the two signed-query security dimensions in independent maps.
+        // Authority churn must not evict and refill a pre-auth caller bucket,
+        // while unrelated REST reads must not evict a verified-authority
+        // bucket.
+        let query_preauth_rl = limits::RateLimiter::new(query_rate, query_burst);
+        let query_authority_rl = limits::RateLimiter::new(query_rate, query_burst);
         // Pipeline-status reads retain one burst slot even when the generic
         // query limiter is disabled. This is a Torii ingress invariant, not a
         // mutable consensus-resilience parameter.
@@ -59119,6 +59213,7 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let stream_token_issuer = match sorafs::StreamTokenIssuer::from_config(
             &config.sorafs_storage.stream_tokens,
+            &config.api_tokens,
             shared_sorafs_stream_token_signer,
         ) {
             Ok(Some(issuer)) => Some(Arc::new(issuer)),
@@ -59329,6 +59424,8 @@ impl Torii {
             )
             .unwrap_or(usize::MAX),
             rate_limiter: rl,
+            query_preauth_rate_limiter: query_preauth_rl,
+            query_authority_rate_limiter: query_authority_rl,
             pipeline_status_rate_limiter: pipeline_status_rl,
             tx_rate_limiter: tx_rl,
             deploy_rate_limiter: deploy_rl,
@@ -59759,6 +59856,8 @@ impl Torii {
             query_heavy_inflight,
             query_queue_timeout: self.query_queue_timeout,
             rate_limiter: self.rate_limiter.clone(),
+            query_preauth_rate_limiter: self.query_preauth_rate_limiter.clone(),
+            query_authority_rate_limiter: self.query_authority_rate_limiter.clone(),
             pipeline_status_rate_limiter: self.pipeline_status_rate_limiter.clone(),
             tx_rate_limiter: self.tx_rate_limiter.clone(),
             deploy_rate_limiter: self.deploy_rate_limiter.clone(),
@@ -64186,6 +64285,8 @@ pub(crate) mod tests_runtime_handlers {
             )),
             query_queue_timeout: Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS),
             rate_limiter: limits::RateLimiter::new(None, None),
+            query_preauth_rate_limiter: limits::RateLimiter::new(None, None),
+            query_authority_rate_limiter: limits::RateLimiter::new(None, None),
             pipeline_status_rate_limiter: limits::RateLimiter::new(None, None),
             tx_rate_limiter: limits::RateLimiter::new(None, None),
             deploy_rate_limiter,
@@ -76726,6 +76827,150 @@ pub(crate) mod tests_runtime_handlers {
                 .await,
             "unsupported representations must reject before rate accounting"
         );
+    }
+
+    #[test]
+    fn signed_query_preauth_key_ignores_unauthenticated_api_token_text() {
+        let remote = Some(
+            "203.0.113.17"
+                .parse::<std::net::IpAddr>()
+                .expect("valid test client address"),
+        );
+        let mut first = HeaderMap::new();
+        first.insert(
+            HEADER_API_TOKEN,
+            HeaderValue::from_static("attacker-token-1"),
+        );
+        let mut second = HeaderMap::new();
+        second.insert(
+            HEADER_API_TOKEN,
+            HeaderValue::from_static("attacker-token-2"),
+        );
+
+        assert_eq!(
+            signed_query_preauth_rate_limit_key(&first, remote, false),
+            signed_query_preauth_rate_limit_key(&second, remote, false),
+            "raw API-token text must not choose a pre-verification rate bucket"
+        );
+        assert_ne!(
+            signed_query_preauth_rate_limit_key(&first, remote, true),
+            signed_query_preauth_rate_limit_key(&second, remote, true),
+            "an already-validated API credential may identify its own caller budget"
+        );
+    }
+
+    #[test]
+    fn signed_query_authority_keys_are_canonical_and_namespaced() {
+        let first = checked_torii_test_account_id(0x71, "derive first query-admission authority");
+        let second = checked_torii_test_account_id(0x72, "derive second query-admission authority");
+        let first_key = signed_query_authority_rate_limit_key(&first);
+        let second_key = signed_query_authority_rate_limit_key(&second);
+
+        assert_eq!(first_key, signed_query_authority_rate_limit_key(&first));
+        assert_ne!(first_key, second_key);
+        assert!(first_key.starts_with("v1/query:authority:"));
+    }
+
+    #[tokio::test]
+    async fn signed_query_authority_admission_isolated_by_verified_identity() {
+        let first =
+            checked_torii_test_account_id(0x74, "derive first enforced query-admission authority");
+        let second =
+            checked_torii_test_account_id(0x75, "derive second enforced query-admission authority");
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique query-authority admission fixture")
+            .query_authority_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
+
+        admit_signed_query_authority(app.as_ref(), &first)
+            .await
+            .expect("first authority consumes its own budget");
+        admit_signed_query_authority(app.as_ref(), &second)
+            .await
+            .expect("second authority has an independent budget");
+        let error = admit_signed_query_authority(app.as_ref(), &first)
+            .await
+            .expect_err("first authority cannot exceed its budget");
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets() {
+        use iroha_data_model::query::{
+            QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion,
+        };
+
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x73,
+            "derive signed-query admission fixture authority",
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let app_mut = Arc::get_mut(&mut app).expect("unique signed-query admission fixture");
+        app_mut.query_preauth_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(2));
+        app_mut.query_authority_rate_limiter =
+            limits::RateLimiter::new_per_minute(Some(1), Some(2));
+        let signed_query = || {
+            QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+                .with_authority(authority.clone())
+                .sign(&key_pair)
+        };
+
+        for token in ["attacker-token-1", "attacker-token-2"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                HEADER_API_TOKEN,
+                HeaderValue::from_str(token).expect("valid test header"),
+            );
+            let response = handler_signed_query(
+                State(Arc::clone(&app)),
+                headers,
+                crate::loopback_connect_info(),
+                None,
+                crate::NoritoQuery(QueryOptions::default()),
+                versioned_query_for_test(signed_query()),
+            )
+            .await
+            .expect("requests within both signed-query budgets must execute");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(
+            app.query_preauth_rate_limiter.bucket_count().await,
+            1,
+            "rotated raw tokens must share one effective-origin bucket"
+        );
+        assert_eq!(
+            app.query_authority_rate_limiter.bucket_count().await,
+            1,
+            "replayed requests from one signer must share one authority bucket"
+        );
+
+        let mut rotated = HeaderMap::new();
+        rotated.insert(
+            HEADER_API_TOKEN,
+            HeaderValue::from_static("attacker-token-3"),
+        );
+        let error = handler_signed_query(
+            State(app),
+            rotated,
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(QueryOptions::default()),
+            versioned_query_for_test(signed_query()),
+        )
+        .await
+        .expect_err("rotating raw token text must not create a fresh query budget");
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
     }
 
     #[tokio::test]
@@ -99685,7 +99930,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn soracloud_signed_mutation_middleware_requires_headers_and_rejects_replay() {
+    async fn soracloud_signed_mutation_middleware_strips_internal_identity_and_rejects_replay() {
         use axum::{Router, body::Bytes, routing::post};
         use http_body_util::BodyExt as _;
         use tower::ServiceExt as _;
@@ -99701,12 +99946,27 @@ mod tests {
                     soracloud::VERIFIED_SIGNER_HEADER,
                 ))
                 .and_then(|value| value.to_str().ok());
+            let verified_signers = headers
+                .get(axum::http::HeaderName::from_static(
+                    soracloud::VERIFIED_SIGNERS_HEADER,
+                ))
+                .and_then(|value| value.to_str().ok());
+            let client_identity_was_removed = [verified_account, verified_signer, verified_signers]
+                .into_iter()
+                .flatten()
+                .all(|value| value != "attacker");
             axum::response::Response::builder()
-                .status(if verified_account.is_some() && verified_signer.is_some() {
-                    StatusCode::OK
-                } else {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })
+                .status(
+                    if verified_account.is_some()
+                        && verified_signer.is_some()
+                        && verified_signers.is_some()
+                        && client_identity_was_removed
+                    {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    },
+                )
                 .body(Body::from(body))
                 .expect("response")
         }
@@ -99759,7 +100019,10 @@ mod tests {
         );
         let mut signed_builder = axum::http::Request::builder()
             .method(method.clone())
-            .uri(uri.to_string());
+            .uri(uri.to_string())
+            .header(soracloud::VERIFIED_ACCOUNT_HEADER, "attacker")
+            .header(soracloud::VERIFIED_SIGNER_HEADER, "attacker")
+            .header(soracloud::VERIFIED_SIGNERS_HEADER, "attacker");
         for (name, value) in &headers {
             signed_builder = signed_builder.header(name, value);
         }

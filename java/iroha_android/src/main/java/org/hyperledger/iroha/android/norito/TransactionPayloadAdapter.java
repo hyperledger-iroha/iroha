@@ -191,6 +191,10 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           final long creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER);
           final Executable executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER);
           final Optional<Long> ttl = decodeSizedField(decoder, TTL_ADAPTER);
+          if (!ttl.isPresent()) {
+            throw new IllegalArgumentException(
+                "TransactionPayload.time_to_live_ms must be signature-bound");
+          }
           final Optional<Long> nonceRaw = decodeSizedField(decoder, NONCE_ADAPTER);
           final FeePaymentIntent feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER);
           final Map<String, JsonValue> metadata =
@@ -207,7 +211,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
                   .setFeePayment(feePayment)
                   .setMetadata(metadata)
                   .setAttachments(attachments.orElse(null));
-          ttl.ifPresent(builder::setTimeToLiveMs);
+          builder.setTimeToLiveMs(ttl.get());
           nonceRaw.ifPresent(builder::setNonce);
           return builder.buildDecodedForCodec();
         });

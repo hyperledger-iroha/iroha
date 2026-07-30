@@ -1110,6 +1110,20 @@ fn quorum_requires_both_validator_count_and_voting_power() {
 }
 
 #[test]
+fn quorum_rejects_duplicate_and_unordered_signers() {
+    let context = context();
+
+    assert_eq!(
+        Quorum::calculate(&context, &[id(1), id(1), id(2)]),
+        Err(QuorumError::SignersNotStrictlyOrdered)
+    );
+    assert_eq!(
+        Quorum::calculate(&context, &[id(2), id(1), id(3)]),
+        Err(QuorumError::SignersNotStrictlyOrdered)
+    );
+}
+
+#[test]
 fn timeout_is_durable_before_signing_and_view_change() {
     let context = context();
     let mut reducer = Reducer::new(context.clone(), Some(id(1)), Generation::new(1)).unwrap();

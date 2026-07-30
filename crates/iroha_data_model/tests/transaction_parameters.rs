@@ -29,6 +29,10 @@ fn transaction_parameters_json_serializes_max_signatures() {
         out.contains("\"max_metadata_depth\""),
         "serialized parameters must include max_metadata_depth; got {out}"
     );
+    assert!(
+        out.contains("\"max_time_to_live_ms\":86400000"),
+        "serialized parameters must include the deterministic TTL ceiling; got {out}"
+    );
 }
 
 #[test]
@@ -54,4 +58,21 @@ fn transaction_parameters_json_defaults_missing_max_signatures() {
         parsed.max_metadata_depth(),
         TransactionParameters::default().max_metadata_depth()
     );
+    assert_eq!(
+        parsed.max_time_to_live_ms(),
+        TransactionParameters::default().max_time_to_live_ms()
+    );
+}
+
+#[test]
+fn transaction_parameters_json_roundtrips_explicit_maximum_ttl() {
+    let json = r#"{"max_time_to_live_ms":5000}"#;
+    let mut parser = Parser::new(json);
+    let parsed =
+        TransactionParameters::json_deserialize(&mut parser).expect("json parameters decode");
+
+    assert_eq!(parsed.max_time_to_live_ms(), nonzero!(5_000_u64));
+    let mut encoded = String::new();
+    JsonSerialize::json_serialize(&parsed, &mut encoded);
+    assert!(encoded.contains("\"max_time_to_live_ms\":5000"));
 }

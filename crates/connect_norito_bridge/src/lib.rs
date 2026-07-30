@@ -10953,7 +10953,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_lineage_query_create
         }?)
         .map_err(|_| BridgeError::KagemushaProve)?;
         let query = kagemusha_recipient_lineage_query_create_v2(
-            ChainId::from(chain_id),
+            chain_id
+                .parse::<ChainId>()
+                .map_err(|_| BridgeError::KagemushaProve)?,
             parse_account_id_for_chain(recipient, chain_discriminant)?,
             receiver_device_id,
             parse_asset_definition(asset)?,
@@ -14821,7 +14823,8 @@ mod detached_transaction_scaffold_tests {
             let mut metadata = Metadata::default();
             metadata.insert(
                 "nested".parse().expect("metadata key"),
-                Json::from("{\"z\":2,\"a\":[true,null]}"),
+                Json::from_raw_json("{\"z\":2,\"a\":[true,null]}".to_owned())
+                    .expect("valid nested JSON fixture"),
             );
             metadata
         });
@@ -27372,8 +27375,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let members = parse_account_list(members_slice)?;
         let derived_by = match derived_by {
-            0 => CouncilDerivationKind::Vrf,
-            1 => CouncilDerivationKind::Fallback,
+            0 => CouncilDerivationKind::Sortition,
+            1 => CouncilDerivationKind::Manual,
             _ => return Err(BridgeError::Governance),
         };
 
@@ -27452,8 +27455,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let members = parse_account_list(members_slice)?;
         let derived_by = match derived_by {
-            0 => CouncilDerivationKind::Vrf,
-            1 => CouncilDerivationKind::Fallback,
+            0 => CouncilDerivationKind::Sortition,
+            1 => CouncilDerivationKind::Manual,
             _ => return Err(BridgeError::Governance),
         };
 
@@ -35019,7 +35022,9 @@ fn java_native_kagemusha_prepare_recipient_request_v2(
     java_kagemusha_archive_array_result(env, "recipient request preparation", |env| {
         let chain_discriminant = u16::try_from(chain_discriminant)
             .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
-        let chain_id = ChainId::from(java_kagemusha_text(env, &chain_id, "chainId")?);
+        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")?
+            .parse::<ChainId>()
+            .map_err(|error| format!("chainId must be canonical: {error}"))?;
         let asset = parse_asset_definition(java_kagemusha_text(env, &asset, "asset")?)
             .map_err(|_| "asset must be a canonical asset-definition address".to_owned())?;
         let amount = java_kagemusha_amount(env, &atomic_units, scale)?;
@@ -35364,7 +35369,9 @@ fn java_native_kagemusha_create_recipient_lineage_query_v2(
     java_kagemusha_archive_array_result(env, "recipient lineage query creation", |env| {
         let chain_discriminant = u16::try_from(chain_discriminant)
             .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
-        let chain_id = ChainId::from(java_kagemusha_text(env, &chain_id, "chainId")?);
+        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")?
+            .parse::<ChainId>()
+            .map_err(|error| format!("chainId must be canonical: {error}"))?;
         let recipient = parse_account_id_for_chain(
             java_kagemusha_text(env, &recipient, "recipient")?,
             chain_discriminant,
@@ -38730,8 +38737,10 @@ fn java_native_kagemusha_prepare_top_up_v4(
         let _permit = try_preacquire_kagemusha_heavy_proof_permit_v4()
             .map_err(|error| java_kagemusha_bridge_failure("top-up", error))?;
         let invalid = |message: String| JavaKagemushaLifecycleFailure::Invalid(message);
-        let chain_id =
-            ChainId::from(java_kagemusha_text(env, &chain_id, "chainId").map_err(invalid)?);
+        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")
+            .map_err(invalid)?
+            .parse::<ChainId>()
+            .map_err(|error| invalid(format!("chainId must be canonical: {error}")))?;
         let (asset_definition, balance_scope) = parse_asset_definition_with_balance_scope(
             java_kagemusha_text(env, &asset_definition, "assetDefinitionId").map_err(invalid)?,
         )

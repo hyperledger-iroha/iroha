@@ -14,8 +14,8 @@ use iroha::data_model::{
     domain::{Domain, DomainId},
     governance::types::ParliamentBody,
     isi::governance::{
-        AtWindow, CastParliamentBallot, CastPlainBallot, CouncilDerivationKind, EnactReferendum,
-        FinalizeReferendum, ParliamentDecision, PersistCouncilForEpoch,
+        AtWindow, CastParliamentBallot, CastPlainBallot, EnactReferendum, FinalizeReferendum,
+        ParliamentDecision, PersistCouncilForEpoch,
         ProposeRuntimeUpgradeProposal, RegisterCitizen, VotingMode,
     },
     permission::Permission,
@@ -1164,9 +1164,6 @@ pub async fn setup_runtime_governance_fixture(
                 epoch: 0,
                 members: council_members.clone(),
                 alternates: council_alternates,
-                verified: 0,
-                candidates_count: u32::try_from(CITIZEN_COUNT).expect("count"),
-                derived_by: CouncilDerivationKind::Fallback,
             },
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

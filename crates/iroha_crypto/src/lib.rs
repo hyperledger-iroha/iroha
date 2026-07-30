@@ -198,7 +198,11 @@ pub enum KeyGenOption<K> {
     /// Use random number generator
     #[cfg(feature = "rand")]
     Random,
-    /// Use seed
+    /// Deterministically derive from secret seed material.
+    ///
+    /// This option does not estimate or add entropy. Production callers must
+    /// supply a secret seed with at least 256 bits of entropy; public values,
+    /// labels, and passwords are unsafe inputs.
     UseSeed(Vec<u8>),
     /// Derive from a private key
     FromPrivateKey(K),
@@ -313,6 +317,11 @@ impl KeyPair {
     /// ML-DSA-65 derives its FIPS 204 key-generation seed through a
     /// domain-separated HKDF-SHA-512 expansion.
     ///
+    /// Deterministic derivation does not add entropy. Production callers must
+    /// supply secret seed material with at least 256 bits of entropy. Prefer
+    /// [`KeyPair::try_random_with_algorithm`] when reproducibility is not
+    /// required.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::KeyGen`] when the selected algorithm cannot derive an
@@ -387,6 +396,9 @@ impl KeyPair {
     /// hashed with SHA-256 to obtain a canonical 32-byte seed.
     /// ML-DSA-65 derives its FIPS 204 key-generation seed through a
     /// domain-separated HKDF-SHA-512 expansion.
+    ///
+    /// Deterministic derivation does not add entropy. Production callers must
+    /// supply secret seed material with at least 256 bits of entropy.
     pub fn from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Self {
         Self::try_from_seed(seed, algorithm)
             .expect("seeded key generation should succeed for supported algorithms")
@@ -1420,187 +1432,42 @@ pub fn bls_normal_verify_aggregate_same_message_fast(
     signature::bls::verify_aggregate_same_message_normal(message, signatures, &pk_bytes)
 }
 
-/// Aggregate verification across distinct messages (multi-message) for BLS (normal).
-/// Requires pairwise-distinct messages; same-message inputs must use the same-message aggregate
-/// helpers. Attempts the shared aggregate verifier and falls back to per-signature checks only for
-/// distinct-message inputs when the aggregate path rejects.
+/// Exact verification across distinct messages for BLS (normal).
+///
+/// Every signature is verified independently against the public key and
+/// message at the same index. Same-message inputs must use the PoP-enforcing
+/// same-message aggregate helpers.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
 /// if input slice lengths are inconsistent, or if messages are duplicated.
-#[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
+#[cfg(feature = "bls")]
 pub fn bls_normal_verify_aggregate_multi_message(
     messages: &[&[u8]],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
-    {
-        use std::collections::BTreeSet;
-        if messages.len() != signatures.len()
-            || signatures.len() != public_keys.len()
-            || messages.is_empty()
-        {
-            return Err(Error::BadSignature);
-        }
-        let mut seen = BTreeSet::new();
-        for &msg in messages {
-            if !seen.insert(msg) {
-                return Err(Error::BadSignature);
-            }
-        }
-    }
-    if let Ok(()) =
-        signature::bls::verify_aggregate_multi_message_normal(messages, signatures, public_keys)
-    {
-        return Ok(());
-    }
-
-    for ((m, s), pk) in messages
-        .iter()
-        .zip(signatures.iter())
-        .zip(public_keys.iter())
-    {
-        let vk = signature::bls::BlsNormal::parse_public_key(pk)?;
-        signature::bls::BlsNormal::verify(m, s, &vk)?;
-    }
-    Ok(())
+    signature::bls::verify_aggregate_multi_message_normal(messages, signatures, public_keys)
 }
 
-/// Aggregate verification across distinct messages (multi-message) for BLS (normal).
-/// Uses a single pairing-product when `bls-multi-pairing` is enabled; falls back
-/// to per-signature verification on any parsing/hashing failure to preserve correctness.
-/// Requires pairwise-distinct messages; same-message inputs must use the same-message aggregate
-/// helpers.
+/// Exact verification across distinct messages for BLS (small).
+///
+/// Every signature is verified independently against the public key and
+/// message at the same index. Same-message inputs must use the PoP-enforcing
+/// same-message aggregate helpers.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
 /// if input slice lengths are inconsistent, or if messages are duplicated.
-#[cfg(all(feature = "bls", feature = "bls-multi-pairing"))]
-pub fn bls_normal_verify_aggregate_multi_message(
-    messages: &[&[u8]],
-    signatures: &[&[u8]],
-    public_keys: &[&[u8]],
-) -> Result<(), Error> {
-    {
-        use std::collections::BTreeSet;
-        if messages.len() != signatures.len()
-            || signatures.len() != public_keys.len()
-            || messages.is_empty()
-        {
-            return Err(Error::BadSignature);
-        }
-        let mut seen = BTreeSet::new();
-        for &msg in messages {
-            if !seen.insert(msg) {
-                return Err(Error::BadSignature);
-            }
-        }
-    }
-    // Prefer pairing-product helper; on failure, fall back to per-signature verify
-    if let Ok(()) =
-        signature::bls::verify_aggregate_multi_message_normal(messages, signatures, public_keys)
-    {
-        Ok(())
-    } else {
-        for ((m, s), pk) in messages
-            .iter()
-            .zip(signatures.iter())
-            .zip(public_keys.iter())
-        {
-            let vk = signature::bls::BlsNormal::parse_public_key(pk)?;
-            signature::bls::BlsNormal::verify(m, s, &vk)?;
-        }
-        Ok(())
-    }
-}
-
-/// Aggregate verification across distinct messages (multi-message) for BLS (small).
-/// With the basic `bls` feature (without `bls-multi-pairing`) this helper verifies each
-/// signature independently; a multi-pairing batch path is tracked for the `bls-small`
-/// backend and will land alongside the multi-pairing feature. Requires pairwise-distinct
-/// messages; same-message inputs must use the same-message aggregate helpers.
-///
-/// # Errors
-/// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// if input slice lengths are inconsistent, or if messages are duplicated.
-#[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
+#[cfg(feature = "bls")]
 pub fn bls_small_verify_aggregate_multi_message(
     messages: &[&[u8]],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
-    {
-        use std::collections::BTreeSet;
-        if messages.len() != signatures.len()
-            || signatures.len() != public_keys.len()
-            || messages.is_empty()
-        {
-            return Err(Error::BadSignature);
-        }
-        let mut seen = BTreeSet::new();
-        for &msg in messages {
-            if !seen.insert(msg) {
-                return Err(Error::BadSignature);
-            }
-        }
-    }
-    for ((m, s), pk) in messages
-        .iter()
-        .zip(signatures.iter())
-        .zip(public_keys.iter())
-    {
-        let vk = signature::bls::BlsSmall::parse_public_key(pk)?;
-        signature::bls::BlsSmall::verify(m, s, &vk)?;
-    }
-    Ok(())
+    signature::bls::verify_aggregate_multi_message_small(messages, signatures, public_keys)
 }
 
-/// Aggregate verification across distinct messages (multi-message) for BLS (small).
-/// Uses a single pairing-product when `bls-multi-pairing` is enabled; falls back
-/// to per-signature verification on any parsing/hashing failure to preserve correctness.
-/// Requires pairwise-distinct messages; same-message inputs must use the same-message aggregate
-/// helpers.
-///
-/// # Errors
-/// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// if input slice lengths are inconsistent, or if messages are duplicated.
-#[cfg(all(feature = "bls", feature = "bls-multi-pairing"))]
-pub fn bls_small_verify_aggregate_multi_message(
-    messages: &[&[u8]],
-    signatures: &[&[u8]],
-    public_keys: &[&[u8]],
-) -> Result<(), Error> {
-    {
-        use std::collections::BTreeSet;
-        if messages.len() != signatures.len()
-            || signatures.len() != public_keys.len()
-            || messages.is_empty()
-        {
-            return Err(Error::BadSignature);
-        }
-        let mut seen = BTreeSet::new();
-        for &msg in messages {
-            if !seen.insert(msg) {
-                return Err(Error::BadSignature);
-            }
-        }
-    }
-    if let Ok(()) =
-        signature::bls::verify_aggregate_multi_message_small(messages, signatures, public_keys)
-    {
-        Ok(())
-    } else {
-        for ((m, s), pk) in messages
-            .iter()
-            .zip(signatures.iter())
-            .zip(public_keys.iter())
-        {
-            let vk = signature::bls::BlsSmall::parse_public_key(pk)?;
-            signature::bls::BlsSmall::verify(m, s, &vk)?;
-        }
-        Ok(())
-    }
-}
 /// Attempt aggregate verification for BLS (small) when all messages are identical.
 /// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
 /// Aggregate-only check, no per-signature fallback.

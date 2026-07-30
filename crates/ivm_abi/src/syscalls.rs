@@ -440,7 +440,10 @@ pub const SYSCALL_SUBSCRIPTION_BILL: u32 = 0xA5;
 pub const SYSCALL_SUBSCRIPTION_RECORD_USAGE: u32 = 0xA6;
 /// Resolve a canonical alias literal (for example `merchant@centralbank`) to the current AccountId.
 pub const SYSCALL_RESOLVE_ACCOUNT_ALIAS: u32 = 0xA7;
-/// Get the current trusted host time in unix milliseconds.
+/// Get the deterministic logical execution time in Unix milliseconds.
+///
+/// Production hosts bind this to signed transaction creation time for
+/// transaction contract calls and to block-header time for trigger calls.
 pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
 /// Call a deployed ABI v1 contract synchronously by contract-address literal.
 pub const SYSCALL_CALL_CONTRACT: u32 = 0xA9;

@@ -13194,7 +13194,7 @@ mod tests {
                 alternates_count: 1,
                 verified: 2,
                 candidates_count: 5,
-                derived_by: CouncilDerivationKind::Vrf,
+                derived_by: CouncilDerivationKind::Sortition,
             },
         ));
 

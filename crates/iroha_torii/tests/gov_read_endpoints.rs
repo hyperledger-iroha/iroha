@@ -225,7 +225,7 @@ async fn gov_council_current_uses_configured_fallback() {
     assert_eq!(member, &eligible_account.to_string());
     assert_eq!(
         resp.derived_by,
-        iroha_data_model::isi::governance::CouncilDerivationKind::Fallback
+        iroha_data_model::isi::governance::CouncilDerivationKind::Manual
     );
 }
 

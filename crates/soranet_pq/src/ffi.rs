@@ -36,7 +36,7 @@ fn map_mldsa_error(err: &MlDsaError) -> c_int {
         | MlDsaError::InertKeyMaterial { .. } => ERR_ENCODING,
         MlDsaError::ContextTooLong { .. } => ERR_LENGTH_MISMATCH,
         MlDsaError::VerificationFailed(_) => ERR_VERIFICATION_FAILED,
-        MlDsaError::KeyGenerationFailed { .. } | MlDsaError::Rng(_) => ERR_KEYGEN,
+        MlDsaError::Rng(_) => ERR_KEYGEN,
     }
 }
 
@@ -1597,12 +1597,6 @@ mod tests {
             kind: "test",
         };
         assert_eq!(map_mldsa_error(&inert), ERR_ENCODING);
-
-        let keygen = MlDsaError::KeyGenerationFailed {
-            suite: MlDsaSuite::MlDsa44,
-            status: -1,
-        };
-        assert_eq!(map_mldsa_error(&keygen), ERR_KEYGEN);
 
         let rng = MlDsaError::Rng(crate::RngError);
         assert_eq!(map_mldsa_error(&rng), ERR_KEYGEN);

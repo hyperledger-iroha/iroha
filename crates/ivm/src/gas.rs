@@ -51,6 +51,32 @@ pub const LEDGER_QUERY_GAS_PER_ITEM: u64 = 250;
 pub const LEDGER_QUERY_GAS_SORT_MULTIPLIER: u64 = 4;
 /// Gas charged for each canonically measured query or projection byte.
 pub const LEDGER_QUERY_GAS_PER_BYTE: u64 = 2;
+/// Version of the bounded Ed25519 batch-verification gas formula.
+pub const ED25519_BATCH_GAS_FORMULA_VERSION_V1: u64 = 1;
+/// Gas charged for each encoded request byte before TLV hashing or Norito decoding.
+pub const ED25519_BATCH_GAS_PER_PAYLOAD_BYTE: u64 = 1;
+/// Gas charged before strictly verifying one Ed25519 batch entry.
+pub const ED25519_BATCH_GAS_PER_ENTRY: u64 = 1_000;
+/// Maximum entries accepted by one Ed25519 batch-verification instruction.
+pub const ED25519_BATCH_MAX_ENTRIES: usize = 512;
+/// Maximum encoded Norito request bytes accepted by batch verification.
+pub const ED25519_BATCH_MAX_PAYLOAD_BYTES: usize = 512 * 1024;
+/// Maximum elements in one nested sequence, including an entry message.
+pub const ED25519_BATCH_MAX_SEQUENCE_ELEMENTS: usize = 64 * 1024;
+/// Maximum total decoded elements across one batch request.
+pub const ED25519_BATCH_MAX_TOTAL_ELEMENTS: usize = ED25519_BATCH_MAX_PAYLOAD_BYTES;
+/// Maximum cumulative allocation permitted while decoding a batch request.
+pub const ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES: usize = 2 * ED25519_BATCH_MAX_PAYLOAD_BYTES;
+/// Maximum structural nesting depth accepted by a batch request.
+pub const ED25519_BATCH_MAX_DECODE_DEPTH: usize = 8;
+/// Decode budget for one attacker-authored Ed25519 batch request.
+pub const ED25519_BATCH_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
+    ED25519_BATCH_MAX_SEQUENCE_ELEMENTS,
+    ED25519_BATCH_MAX_PAYLOAD_BYTES,
+    ED25519_BATCH_MAX_TOTAL_ELEMENTS,
+    ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES,
+    ED25519_BATCH_MAX_DECODE_DEPTH,
+);
 
 /// Compute the V1 ledger-query charge from canonical schedule parameters.
 ///
@@ -68,6 +94,17 @@ pub const fn ledger_query_gas_v1(
     base.saturating_add(per_item.saturating_mul(processed_items))
         .saturating_add(per_item.saturating_mul(offset_items))
         .saturating_add(LEDGER_QUERY_GAS_PER_BYTE.saturating_mul(processed_bytes))
+}
+
+/// Compute gas that must be reserved before Ed25519 batch request work.
+///
+/// The fixed opcode base is charged by [`cost_of`]. This function covers the
+/// complete request bytes and every strict per-entry verification.
+#[must_use]
+pub const fn ed25519_batch_extra_gas(payload_bytes: u64, entries: u64) -> u64 {
+    ED25519_BATCH_GAS_PER_PAYLOAD_BYTE
+        .saturating_mul(payload_bytes)
+        .saturating_add(ED25519_BATCH_GAS_PER_ENTRY.saturating_mul(entries))
 }
 /// Fixed durable-state syscall charge before path, value, scan, or response bytes.
 pub const STATE_QUERY_GAS_BASE: u64 = 16;
@@ -635,6 +672,43 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
         ),
         ("ledger_query_per_byte", LEDGER_QUERY_GAS_PER_BYTE),
         (
+            "ed25519_batch_formula_version",
+            ED25519_BATCH_GAS_FORMULA_VERSION_V1,
+        ),
+        (
+            "ed25519_batch_per_payload_byte",
+            ED25519_BATCH_GAS_PER_PAYLOAD_BYTE,
+        ),
+        ("ed25519_batch_per_entry", ED25519_BATCH_GAS_PER_ENTRY),
+        (
+            "ed25519_batch_max_entries",
+            ED25519_BATCH_MAX_ENTRIES as u64,
+        ),
+        (
+            "ed25519_batch_max_payload_bytes",
+            ED25519_BATCH_MAX_PAYLOAD_BYTES as u64,
+        ),
+        (
+            "ed25519_batch_decode_max_sequence_elements",
+            ED25519_BATCH_MAX_SEQUENCE_ELEMENTS as u64,
+        ),
+        (
+            "ed25519_batch_decode_max_field_bytes",
+            ED25519_BATCH_MAX_PAYLOAD_BYTES as u64,
+        ),
+        (
+            "ed25519_batch_decode_max_total_elements",
+            ED25519_BATCH_MAX_TOTAL_ELEMENTS as u64,
+        ),
+        (
+            "ed25519_batch_decode_max_total_allocated_bytes",
+            ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES as u64,
+        ),
+        (
+            "ed25519_batch_decode_max_nesting_depth",
+            ED25519_BATCH_MAX_DECODE_DEPTH as u64,
+        ),
+        (
             "numeric_formula_version",
             crate::numeric_gas::NUMERIC_GAS_FORMULA_VERSION_V1,
         ),
@@ -1074,6 +1148,68 @@ mod tests {
                 100,
             ),
             3_950,
+        );
+    }
+
+    #[test]
+    fn schedule_hash_binds_the_complete_live_ed25519_batch_formula() {
+        let expected = [
+            (
+                "ed25519_batch_formula_version",
+                ED25519_BATCH_GAS_FORMULA_VERSION_V1,
+            ),
+            (
+                "ed25519_batch_per_payload_byte",
+                ED25519_BATCH_GAS_PER_PAYLOAD_BYTE,
+            ),
+            ("ed25519_batch_per_entry", ED25519_BATCH_GAS_PER_ENTRY),
+            (
+                "ed25519_batch_max_entries",
+                ED25519_BATCH_MAX_ENTRIES as u64,
+            ),
+            (
+                "ed25519_batch_max_payload_bytes",
+                ED25519_BATCH_MAX_PAYLOAD_BYTES as u64,
+            ),
+            (
+                "ed25519_batch_decode_max_sequence_elements",
+                ED25519_BATCH_DECODE_LIMITS.max_sequence_elements() as u64,
+            ),
+            (
+                "ed25519_batch_decode_max_field_bytes",
+                ED25519_BATCH_DECODE_LIMITS.max_field_bytes() as u64,
+            ),
+            (
+                "ed25519_batch_decode_max_total_elements",
+                ED25519_BATCH_DECODE_LIMITS.max_total_elements() as u64,
+            ),
+            (
+                "ed25519_batch_decode_max_total_allocated_bytes",
+                ED25519_BATCH_DECODE_LIMITS.max_total_allocated_bytes() as u64,
+            ),
+            (
+                "ed25519_batch_decode_max_nesting_depth",
+                ED25519_BATCH_DECODE_LIMITS.max_nesting_depth() as u64,
+            ),
+        ];
+        let canonical = canonical_gas_schedule_descriptor();
+        for (name, value) in expected {
+            let matches = canonical
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| parameter.name == name)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1, "descriptor coverage for {name}");
+            let (index, parameter) = matches[0];
+            assert_eq!(parameter.value, value, "descriptor value for {name}");
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.parameters[index].value = changed.parameters[index].value.wrapping_add(1);
+            });
+        }
+        assert_eq!(
+            ed25519_batch_extra_gas(123, 2),
+            123 * ED25519_BATCH_GAS_PER_PAYLOAD_BYTE + 2 * ED25519_BATCH_GAS_PER_ENTRY,
         );
     }
 

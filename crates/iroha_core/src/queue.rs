@@ -1896,6 +1896,20 @@ struct PreparedQueueAdmission {
     pending_teu: u64,
 }
 
+/// Failure to derive a deterministic proposal gas upper bound from an accepted transaction.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub(crate) enum ProposalGasCostError {
+    /// An executable with runtime-dependent work omitted its signature-bound gas limit.
+    #[error("runtime-dependent executable is missing its signed gas limit")]
+    MissingSignedGasLimit,
+    /// A private Kaigi entrypoint could not be decoded into its metered instruction.
+    #[error("private Kaigi proposal gas derivation failed: {reason}")]
+    InvalidPrivateKaigi {
+        /// Exact deterministic decode failure.
+        reason: String,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QueuePlanDurableClaimIndexEntry {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -3416,10 +3430,22 @@ impl Queue {
                 || Self::compute_tx_encoded_len(tx.as_accepted()),
                 |entry| *entry,
             );
-            let gas_cost = self.tx_gas_cost.get(&hash).map_or_else(
-                || Self::compute_proposal_gas_cost(tx.as_accepted()),
-                |entry| *entry,
-            );
+            let gas_cost = if let Some(entry) = self.tx_gas_cost.get(&hash) {
+                *entry
+            } else {
+                match Self::compute_proposal_gas_cost(tx.as_accepted()) {
+                    Ok(gas_cost) => gas_cost,
+                    Err(error) => {
+                        self.mark_accepted_work_validation_fault(
+                            hash,
+                            "lane_reservation_proposal_gas",
+                            &error,
+                            None,
+                        );
+                        return Err(LaneQueueReservationError::DurabilityFault);
+                    }
+                }
+            };
             let Ok(encoded_len_u64) = u64::try_from(encoded_len) else {
                 break;
             };
@@ -5592,108 +5618,66 @@ impl Queue {
         }
     }
 
-    pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
+    fn signed_executable_proposal_gas_cost(
+        signed: &iroha_data_model::transaction::SignedTransaction,
+    ) -> Result<u64, ProposalGasCostError> {
+        let executable = signed.instructions();
+        if executable.requires_transaction_gas_limit() {
+            return iroha_data_model::transaction::require_transaction_gas_limit(
+                signed.fee_payment_intent(),
+            )
+            .map_err(|_| ProposalGasCostError::MissingSignedGasLimit);
+        }
+
+        match executable {
+            Executable::Instructions(batch) => Ok(gas::meter_instructions(batch.as_ref())),
+            Executable::Batch(items) => {
+                let instructions = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                        ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                Ok(gas::meter_instructions(&instructions))
+            }
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+                Err(ProposalGasCostError::MissingSignedGasLimit)
+            }
+        }
+    }
+
+    /// Derive the deterministic upper bound charged to proposal gas selection.
+    ///
+    /// Runtime-dependent executables are charged their signature-bound gas limit. Native
+    /// instruction executables are charged the deterministic instruction meter, while system
+    /// entrypoints use their dedicated fixed accounting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an accepted runtime-dependent executable has no signed gas limit or
+    /// when a private entrypoint cannot be decoded into its metered instruction.
+    pub(crate) fn compute_proposal_gas_cost(
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<u64, ProposalGasCostError> {
         match tx.entrypoint() {
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
-                match signed.instructions() {
-                    Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
-                    Executable::ContractCall(_) | Executable::Ivm(_) => {
-                        crate::executor::transaction_gas_limit(signed).unwrap_or_else(|| {
-                            warn!(
-                                tx = %tx.hash(),
-                                "missing gas limit in fee payment intent while deriving proposal gas cost"
-                            );
-                            0
-                        })
-                    }
-                    Executable::IvmProved(proved) => {
-                        gas::meter_instructions(proved.overlay.as_ref())
-                    }
-                    Executable::Batch(items) => {
-                        if items.iter().any(|item| {
-                            matches!(item, ExecutableBatchItem::ContractCall(_))
-                        }) {
-                            crate::executor::transaction_gas_limit(signed).unwrap_or_else(|| {
-                                warn!(
-                                    tx = %tx.hash(),
-                                    "missing gas limit in fee payment intent while deriving mixed-batch proposal gas cost"
-                                );
-                                0
-                            })
-                        } else {
-                            let instructions: Vec<_> = items
-                                .iter()
-                                .filter_map(|item| match item {
-                                    ExecutableBatchItem::Instruction(instruction) => {
-                                        Some(instruction.clone())
-                                    }
-                                    ExecutableBatchItem::ContractCall(_) => None,
-                                })
-                                .collect();
-                            gas::meter_instructions(&instructions)
-                        }
-                    }
-                }
+                Self::signed_executable_proposal_gas_cost(signed)
             }
             iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => {
-                gas::meter_sealed_transaction_commitment(tx.encoded_len())
+                Ok(gas::meter_sealed_transaction_commitment(tx.encoded_len()))
             }
             iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
-                match reveal.signed_transaction().instructions() {
-                    Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
-                    Executable::ContractCall(_) | Executable::Ivm(_) => {
-                        crate::executor::transaction_gas_limit(reveal.signed_transaction())
-                            .unwrap_or_else(|| {
-                                warn!(
-                                    tx = %tx.hash(),
-                                    "missing gas limit in fee payment intent while deriving proposal gas cost for sealed reveal"
-                                );
-                                0
-                            })
-                    }
-                    Executable::IvmProved(proved) => {
-                        gas::meter_instructions(proved.overlay.as_ref())
-                    }
-                    Executable::Batch(items) => {
-                        if items.iter().any(|item| {
-                            matches!(item, ExecutableBatchItem::ContractCall(_))
-                        }) {
-                            crate::executor::transaction_gas_limit(reveal.signed_transaction())
-                                .unwrap_or_else(|| {
-                                    warn!(
-                                        tx = %tx.hash(),
-                                        "missing gas limit in fee payment intent while deriving mixed-batch proposal gas cost for sealed reveal"
-                                    );
-                                    0
-                                })
-                        } else {
-                            let instructions: Vec<_> = items
-                                .iter()
-                                .filter_map(|item| match item {
-                                    ExecutableBatchItem::Instruction(instruction) => {
-                                        Some(instruction.clone())
-                                    }
-                                    ExecutableBatchItem::ContractCall(_) => None,
-                                })
-                                .collect();
-                            gas::meter_instructions(&instructions)
-                        }
-                    }
-                }
+                Self::signed_executable_proposal_gas_cost(reveal.signed_transaction())
             }
             iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
                 crate::smartcontracts::isi::kaigi::private_instruction_box(private)
                     .map(|instruction| gas::meter_instruction(&instruction))
-                    .unwrap_or_else(|err| {
-                        warn!(
-                            ?err,
-                            tx = %tx.hash(),
-                            "failed to derive proposal gas cost for private Kaigi transaction"
-                        );
-                        0
+                    .map_err(|error| ProposalGasCostError::InvalidPrivateKaigi {
+                        reason: error.to_string(),
                     })
             }
-            iroha_data_model::transaction::TransactionEntrypoint::Time(_) => 0,
+            iroha_data_model::transaction::TransactionEntrypoint::Time(_) => Ok(0),
         }
     }
 
@@ -9100,7 +9084,14 @@ impl Queue {
             telemetry_handle.record_manifest_admission("allowed");
         }
 
-        let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
+        let proposal_gas_cost =
+            Self::compute_proposal_gas_cost(checked.as_accepted()).map_err(|error| Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err: Error::NexusFeeAdmissionRejected {
+                    code: FeeRejectionCode::InvalidGasLimit,
+                    reason: error.to_string(),
+                },
+            })?;
         let enqueued_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
         #[cfg(feature = "telemetry")]
         let pending_teu = Self::compute_teu_weight(checked.as_accepted());
@@ -9957,7 +9948,14 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = None;
 
         let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
-        let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
+        let proposal_gas_cost =
+            Self::compute_proposal_gas_cost(checked.as_accepted()).map_err(|error| Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err: Error::NexusFeeAdmissionRejected {
+                    code: FeeRejectionCode::InvalidGasLimit,
+                    reason: error.to_string(),
+                },
+            })?;
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
@@ -10385,11 +10383,22 @@ impl Queue {
                 .get(&hash)
                 .map(|entry| *entry.value())
                 .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_arc.as_accepted()));
-            let gas_cost = self
-                .tx_gas_cost
-                .get(&hash)
-                .map(|entry| *entry.value())
-                .unwrap_or_else(|| Self::compute_proposal_gas_cost(tx_arc.as_accepted()));
+            let gas_cost = if let Some(entry) = self.tx_gas_cost.get(&hash) {
+                *entry
+            } else {
+                match Self::compute_proposal_gas_cost(tx_arc.as_accepted()) {
+                    Ok(gas_cost) => gas_cost,
+                    Err(error) => {
+                        self.retain_popped_hash_after_validation_failure(
+                            hash,
+                            "proposal_gas",
+                            &error,
+                            backpressure_telemetry,
+                        );
+                        return None;
+                    }
+                }
+            };
             #[cfg(feature = "telemetry")]
             let telemetry_clone = state_view.telemetry.clone();
             self.record_inflight_guard();
@@ -18211,6 +18220,22 @@ pub mod tests {
                 !queue.txs.contains_key(&hash),
                 "failed admission retained process ownership for {label}"
             );
+            assert!(
+                !queue.routing_decisions.contains_key(&hash)
+                    && !queue.routing_plans.contains_key(&hash)
+                    && !queue.durable_plan_claims.contains_key(&hash),
+                "failed admission retained partial routing or durable-claim indexes for {label}"
+            );
+            assert!(
+                !queue.fifo_order_by_hash.contains_key(&hash)
+                    && !queue.queued_tx_enqueued_at_ms.contains_key(&hash)
+                    && !queue.durability_transition_active(&hash),
+                "failed admission retained FIFO identity, visibility, or a transition fence for {label}"
+            );
+            assert!(
+                !queue.accepted_work_validation_faulted(),
+                "a journal outcome must not be misclassified as immutable-content corruption for {label}"
+            );
             assert_eq!(
                 queue.plan_journal_durability_faulted(),
                 expect_faulted,
@@ -20563,6 +20588,81 @@ pub mod tests {
         assert!(
             queue.tx_gas_cost.is_empty(),
             "gas cost cache should clear after guard drop"
+        );
+    }
+
+    #[test]
+    fn proposal_gas_cost_fails_closed_and_charges_signed_runtime_limit() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let chain_id = ChainId::from("proposal-gas-accounting");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let build_unchecked = |executable: Executable,
+                               gas_limit: Option<NonZeroU64>|
+         -> AcceptedTransaction<'static> {
+            let signed = TransactionBuilder::new_with_time_source(
+                chain_id.clone(),
+                authority.clone(),
+                &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit),
+            )
+            .with_executable(executable)
+            .sign(keypair.private_key());
+            AcceptedTransaction::new_unchecked(Cow::Owned(signed))
+        };
+
+        let missing_limit =
+            build_unchecked(Executable::Ivm(IvmBytecode::from_compiled(vec![0])), None);
+        assert_eq!(
+            Queue::compute_proposal_gas_cost(&missing_limit),
+            Err(ProposalGasCostError::MissingSignedGasLimit),
+            "an invariant violation must not become zero-cost proposal work"
+        );
+
+        let invocation = iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: Hash::new(b"proposal-gas-contract-code"),
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+        let signed_limit = NonZeroU64::new(77).expect("non-zero gas fixture");
+        let runtime_executables = [
+            Executable::ContractCall(invocation.clone()),
+            Executable::Ivm(IvmBytecode::from_compiled(vec![0])),
+            Executable::IvmProved(iroha_data_model::transaction::IvmProved {
+                bytecode: IvmBytecode::from_compiled(vec![0]),
+                overlay: vec![sample_unregister_instruction()].into(),
+                events_commitment: Hash::new(b"proposal-gas-events"),
+                gas_policy_commitment: Hash::new(b"proposal-gas-policy"),
+            }),
+            Executable::Batch(
+                vec![
+                    ExecutableBatchItem::Instruction(sample_unregister_instruction()),
+                    ExecutableBatchItem::ContractCall(invocation),
+                ]
+                .into(),
+            ),
+        ];
+        for executable in runtime_executables {
+            let accepted = build_unchecked(executable, Some(signed_limit));
+            assert_eq!(
+                Queue::compute_proposal_gas_cost(&accepted),
+                Ok(signed_limit.get()),
+                "every runtime-dependent executable must consume its signed upper bound"
+            );
+        }
+
+        let native_instruction = sample_unregister_instruction();
+        let native_expected = gas::meter_instruction(&native_instruction);
+        let native = build_unchecked(
+            Executable::Instructions(vec![native_instruction].into()),
+            Some(NonZeroU64::new(999).expect("non-zero ignored native limit")),
+        );
+        assert_eq!(
+            Queue::compute_proposal_gas_cost(&native),
+            Ok(native_expected),
+            "deterministic native work remains charged by the instruction meter"
         );
     }
 
@@ -27472,16 +27572,49 @@ pub mod tests {
             reached.wait();
             assert!(queue.durability_transition_active(&hash));
             assert!(
+                queue.txs.contains_key(&hash) && queue.routing_plans.contains_key(&hash),
+                "the fenced admission stages its transaction and immutable plan before storage"
+            );
+            assert!(
+                !queue.durable_plan_claims.contains_key(&hash),
+                "the durable claim must not publish before the exact Put completes"
+            );
+            assert_eq!(
+                queue.queued_len(),
+                0,
+                "a staged plan without its durable claim must have no selectable FIFO membership"
+            );
+            assert!(
                 queue.push_remove_lock.try_lock().is_some(),
                 "plan-journal fsync must not own the queue mutation lock"
             );
             let state_view = state.view();
+            let staged = queue
+                .txs
+                .get(&hash)
+                .map(|entry| Arc::clone(entry.value()))
+                .expect("staged transaction");
+            assert_eq!(
+                queue.immutable_queued_routing_plan_if_available_in_view(
+                    hash,
+                    staged.as_ref(),
+                    &state_view,
+                    state_view.nexus(),
+                    state_view_height_for_routing(&state_view),
+                ),
+                Ok(None),
+                "the transition fence must make the partial plan temporarily unavailable, not invalid"
+            );
             let (pending, _lease) = queue
                 .bounded_pending_snapshot(&state_view, nonzero!(8_usize))
                 .expect("selection remains healthy during an admission append");
             assert!(
                 pending.is_empty(),
                 "an admission is not visible before its durable Put completes"
+            );
+            assert!(
+                !queue.accepted_work_validation_faulted(),
+                "a content-valid partial admission must not trip the sticky validation latch"
             );
 
             resume.wait();
@@ -27493,6 +27626,18 @@ pub mod tests {
         assert!(!queue.durability_transition_active(&hash));
         assert!(queue.contains_transaction_hash(hash));
         assert_eq!(queue.queued_len(), 1);
+        let claim = queue
+            .durable_plan_claims
+            .get(&hash)
+            .expect("durable claim must publish before FIFO visibility");
+        assert_eq!(
+            queue
+                .routing_plans
+                .get(&hash)
+                .map(|plan| plan.value().clone()),
+            Some(claim.routing_plan.clone())
+        );
+        assert!(!queue.accepted_work_validation_faulted());
     }
 
     #[test]
@@ -28466,6 +28611,36 @@ pub mod tests {
             .expect("bounded gas reservation");
         assert_eq!(gas_reserved.len(), 1);
         assert_eq!(gas_reserved[0].as_accepted().hash(), hashes[0]);
+    }
+
+    #[test]
+    fn committing_reservation_owned_transaction_does_not_create_fifo_tombstone() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let dir = tempdir().expect("tempdir");
+        install_globally_certified_test_reservation_journals(&queue, &dir);
+        let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
+        let hash = transaction.hash();
+        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+        let reserved = queue
+            .reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(&state, b"tombstone-owner", b"tombstone-proposal"),
+                nonzero!(1_usize),
+            )
+            .expect("reserve transaction");
+        assert_eq!(reserved.len(), 1);
+        assert!(
+            !queue.queued_tx_enqueued_at_ms.contains_key(&hash),
+            "lane reservation removes ordinary FIFO ownership"
+        );
+
+        assert_eq!(queue.remove_committed_hashes([hash], None), 1);
+        assert!(
+            queue.removed_hashes.is_empty(),
+            "a reservation-owned hash has no stale FIFO cell and must not leave a tombstone"
+        );
     }
 
     #[test]

@@ -11387,6 +11387,7 @@ mod handle_update_tests {
             config: crate::ConsensusConfigCaps {
                 nexus_policy_digest: [marker; 32],
                 v2_config_fingerprint: [marker; 32],
+                ivm_gas_schedule_hash: [marker; 32],
             },
         }
     }
@@ -23734,6 +23735,7 @@ mod tests {
             config: crate::ConsensusConfigCaps {
                 nexus_policy_digest: [0; 32],
                 v2_config_fingerprint: [0; 32],
+                ivm_gas_schedule_hash: [0; 32],
             },
         });
         let peer = Peer::new(
@@ -23959,6 +23961,7 @@ mod tests {
             config: crate::ConsensusConfigCaps {
                 nexus_policy_digest: [0; 32],
                 v2_config_fingerprint: [0; 32],
+                ivm_gas_schedule_hash: [0; 32],
             },
         });
 

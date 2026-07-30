@@ -246,6 +246,14 @@ pub mod isi {
     ) -> Result<(), Error> {
         let mut new_trigger = trigger;
 
+        if new_trigger.action().repeats().is_depleted() {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "trigger repeat count must be greater than zero".into(),
+                ),
+            ));
+        }
+
         enforce_ivm_trigger_program_policy(
             new_trigger.action().executable(),
             new_trigger.metadata(),
@@ -443,12 +451,6 @@ pub mod isi {
                     return Err(MathError::Overflow.into());
                 }
             }
-        }
-
-        // If the trigger is already depleted (Exactly(0)) do not register it.
-        // This enforces the lifecycle policy that zero-repeat triggers are removed immediately.
-        if new_trigger.action().repeats().is_depleted() {
-            return Ok(());
         }
 
         let triggers = &mut state_transaction.world.triggers;

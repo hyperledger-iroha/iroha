@@ -7685,10 +7685,26 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Request storage token.",
-            "Request a storage access token.",
+            "Request a storage access token. Exactly one configured Torii API token is required even when listener-wide API-token enforcement is disabled; the client label is diagnostic and does not define the issuance quota.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![
+                string_header_param(
+                    "X-API-Token",
+                    "Required Torii API credential used as the stream-token issuance quota subject.",
+                    true,
+                ),
+                string_header_param(
+                    "X-SoraFS-Client",
+                    "Required visible-ASCII diagnostic client label; not an authentication or quota identity.",
+                    true,
+                ),
+                string_header_param(
+                    "X-SoraFS-Nonce",
+                    "Required visible-ASCII correlation nonce echoed in the response.",
+                    true,
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -30407,6 +30423,37 @@ mod tests {
         );
         assert!(!schemas.contains_key("SorafsPinAliasV1"));
         assert!(!schemas.contains_key("SorafsPinSuccessorDigestV1"));
+    }
+
+    #[test]
+    fn sorafs_storage_token_openapi_requires_the_credential_and_diagnostic_headers() {
+        use iroha_torii_shared::route_catalog::AuthenticationPolicy;
+
+        assert_eq!(
+            iroha_torii_shared::route_catalog::sorafs::STORAGE_TOKEN.authentication(),
+            AuthenticationPolicy::RequiredApiToken
+        );
+        let document = generate_spec();
+        let operation = openapi_operation(&document, "/v1/sorafs/storage/token", "post");
+        assert_eq!(
+            operation_header_requirements(operation)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ("X-API-Token".to_owned(), true),
+                ("X-SoraFS-Client".to_owned(), true),
+                ("X-SoraFS-Nonce".to_owned(), true),
+            ])
+        );
+        assert!(
+            operation
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| {
+                    description.contains("listener-wide API-token enforcement is disabled")
+                        && description.contains("client label is diagnostic")
+                })
+        );
     }
 
     #[test]

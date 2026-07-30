@@ -5255,6 +5255,7 @@ mod signed_query_verification_tests {
 }
 
 /// Execute a previously verified query request with the provided options.
+#[cfg(test)]
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub(crate) async fn execute_verified_query_with_opts(
     live_query_store: LiveQueryStoreHandle,
@@ -5262,6 +5263,39 @@ pub(crate) async fn execute_verified_query_with_opts(
     query: iroha_data_model::query::QueryRequestWithAuthority,
     tel: MaybeTelemetry,
     opts: QueryOptions,
+) -> Result<iroha_data_model::query::QueryResponse> {
+    execute_verified_query_with_opts_inner(live_query_store, state, query, tel, opts, None).await
+}
+
+/// Execute a previously verified query while retaining its physical-work admission permit.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub(crate) async fn execute_admitted_verified_query_with_opts(
+    live_query_store: LiveQueryStoreHandle,
+    state: Arc<CoreState>,
+    query: iroha_data_model::query::QueryRequestWithAuthority,
+    tel: MaybeTelemetry,
+    opts: QueryOptions,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<iroha_data_model::query::QueryResponse> {
+    execute_verified_query_with_opts_inner(
+        live_query_store,
+        state,
+        query,
+        tel,
+        opts,
+        Some(admission),
+    )
+    .await
+}
+
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+async fn execute_verified_query_with_opts_inner(
+    live_query_store: LiveQueryStoreHandle,
+    state: Arc<CoreState>,
+    query: iroha_data_model::query::QueryRequestWithAuthority,
+    tel: MaybeTelemetry,
+    opts: QueryOptions,
+    admission: Option<crate::QueryAdmissionPermit>,
 ) -> Result<iroha_data_model::query::QueryResponse> {
     use iroha_core::{
         query::snapshot::{
@@ -5357,6 +5391,10 @@ pub(crate) async fn execute_verified_query_with_opts(
     };
     let limits = QueryLimits::new(app_query_limits().max_fetch_size).with_count_mode(count_mode);
     let resp = tokio::task::spawn_blocking(move || {
+        // A cancelled HTTP future detaches `spawn_blocking`. Keep the owned
+        // admission permit in the physical worker until validation and query
+        // execution have actually stopped.
+        let _admission = admission;
         run_on_snapshot_with_mode_arc_and_start_budget(
             &state_cloned,
             &store_cloned,
@@ -13271,8 +13309,7 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
         queue,
         state,
         accepted_tx,
-        routing_plan,
-        false,
+        routing_plan.map_or(IngressRouting::Derived, IngressRouting::Planned),
     )
 }
 
@@ -13286,8 +13323,7 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
         queue,
         state,
         accepted_tx,
-        Some(routing_plan),
-        true,
+        IngressRouting::StrictDurable(routing_plan),
     )
 }
 
@@ -13352,12 +13388,33 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
         })
 }
 
+enum IngressRouting {
+    Derived,
+    Planned(RoutingPlan),
+    StrictDurable(RoutingPlan),
+}
+
+impl IngressRouting {
+    fn dispatch<A, R>(
+        self,
+        value: A,
+        derived: impl FnOnce(A) -> R,
+        planned: impl FnOnce(A, RoutingPlan) -> R,
+        strict_durable: impl FnOnce(A, RoutingPlan) -> R,
+    ) -> R {
+        match self {
+            Self::Derived => derived(value),
+            Self::Planned(plan) => planned(value, plan),
+            Self::StrictDurable(plan) => strict_durable(value, plan),
+        }
+    }
+}
+
 fn push_accepted_transaction_for_ingress_with_durability(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
-    routing_plan: Option<RoutingPlan>,
-    strict_durable: bool,
+    routing: IngressRouting,
 ) -> Result<RoutingDecision> {
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
@@ -13374,18 +13431,18 @@ fn push_accepted_transaction_for_ingress_with_durability(
         );
     }
 
-    let result = match (routing_plan, strict_durable) {
-        (Some(plan), true) => queue.push_with_lane_with_state_and_routing_plan_strict_durable(
-            accepted_tx,
-            state.as_ref(),
-            plan,
-        ),
-        (Some(plan), false) => {
-            queue.push_with_lane_with_state_and_routing_plan(accepted_tx, state.as_ref(), plan)
-        }
-        (None, false) => queue.push_with_lane_with_state(accepted_tx, state.as_ref()),
-        (None, true) => unreachable!("strict durable ingress requires a precomputed routing plan"),
-    };
+    let result = routing.dispatch(
+        accepted_tx,
+        |tx| queue.push_with_lane_with_state(tx, state.as_ref()),
+        |tx, plan| queue.push_with_lane_with_state_and_routing_plan(tx, state.as_ref(), plan),
+        |tx, plan| {
+            queue.push_with_lane_with_state_and_routing_plan_strict_durable(
+                tx,
+                state.as_ref(),
+                plan,
+            )
+        },
+    );
 
     result
         .map_err(|queue::Failure { tx, err }| {
@@ -13415,6 +13472,26 @@ fn push_accepted_transaction_for_ingress_with_durability(
                 "transaction enqueued successfully"
             );
         })
+}
+
+#[cfg(test)]
+mod ingress_routing_tests {
+    use iroha_core::queue::{RoutingDecision, RoutingPlan};
+
+    use super::IngressRouting;
+
+    #[test]
+    fn strict_durable_routing_always_carries_its_plan() {
+        let expected = RoutingDecision::default();
+        let selected = IngressRouting::StrictDurable(RoutingPlan::single(expected)).dispatch(
+            7_u8,
+            |_| panic!("strict durable routing must not use state-derived routing"),
+            |_, _| panic!("strict durable routing must not use an ordinary routing plan"),
+            |value, plan| (value, plan.coordinator_route()),
+        );
+
+        assert_eq!(selected, (7, expected));
+    }
 }
 
 pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
@@ -13691,6 +13768,7 @@ mod lane_admission_latency_tests {
 }
 
 /// Execute a signed query while honoring pagination/cursor overrides and telemetry policies.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub async fn handle_queries_with_opts(
@@ -15290,7 +15368,8 @@ fn decode_contract_state_atoms_json(
         // successful response remains consumable by the same V1 JSON parser.
         norito::json::validate_json_at_depth(&json, 4)
             .map_err(|error| format!("projected contract state JSON is invalid: {error}"))?;
-        Ok(IrohaJson::from_string_unchecked(json))
+        IrohaJson::from_raw_json(json)
+            .map_err(|error| format!("projected contract state JSON is invalid: {error}"))
     })();
     *atom_index = cursors[0].index;
     result
@@ -16093,7 +16172,8 @@ mod contract_state_tests {
             .spawn(|| {
                 let levels = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 4;
                 let raw = format!("{}true{}", "[".repeat(levels), "]".repeat(levels));
-                let embedded = IrohaJson::from_string_unchecked(raw.clone());
+                let embedded =
+                    IrohaJson::from_raw_json(raw.clone()).expect("valid boundary JSON fixture");
                 let payload = norito::to_bytes(&embedded).expect("encode boundary Json leaf");
                 let ty = ivm::EmbeddedStateType::Json;
                 let record = make_state_record(
@@ -16126,7 +16206,8 @@ mod contract_state_tests {
                 };
                 let project = |levels: usize| {
                     let raw = format!("{}true{}", "[".repeat(levels), "]".repeat(levels));
-                    let embedded = IrohaJson::from_string_unchecked(raw.clone());
+                    let embedded = IrohaJson::from_raw_json(raw.clone())
+                        .expect("valid standalone nested JSON fixture");
                     let payload =
                         norito::to_bytes(&embedded).expect("encode nested native Json leaf");
                     let record = make_state_record(
@@ -16360,7 +16441,7 @@ mod contract_state_tests {
             make_state_record(&ty, vec![ivm::state_value::StateValueAtomV1::Bool(true)]);
         assert_eq!(
             decode_contract_state_scalar_json(&persisted, &ty).expect("decode persisted record"),
-            IrohaJson::from_string_unchecked("true".to_owned())
+            IrohaJson::from_raw_json("true".to_owned()).expect("valid boolean JSON")
         );
 
         let transport = make_tlv(PointerType::NoritoBytes, &persisted);
@@ -21303,8 +21384,14 @@ fn execute_contract_view(
     })?;
     let prepared_arguments = arguments.clone();
     host.set_entrypoint_argument_record(arguments);
+    let heap_limit = query_view
+        .world
+        .parameters()
+        .smart_contract()
+        .memory()
+        .get();
     let mut vm = program
-        .checkout_runtime(gas_limit)
+        .checkout_runtime(gas_limit, heap_limit)
         .map_err(|err| ContractViewExecutionError {
             message: format!("failed to prepare contract view runtime: {err}"),
             vm_diagnostic: None,
@@ -21498,16 +21585,21 @@ fn execute_contract_call_simulation(
     })?;
     let prepared_arguments = arguments.clone();
     host.set_entrypoint_argument_record(arguments);
-    let mut vm =
-        program
-            .checkout_runtime(gas_limit)
-            .map_err(|err| ContractCallSimulationError {
-                message: format!("failed to prepare contract call runtime: {err}"),
-                vm_diagnostic: None,
-                normalized_payload: normalized_payload.clone(),
-                gas_used: 0,
-                queued_instructions: Vec::new(),
-            })?;
+    let heap_limit = query_view
+        .world
+        .parameters()
+        .smart_contract()
+        .memory()
+        .get();
+    let mut vm = program
+        .checkout_runtime(gas_limit, heap_limit)
+        .map_err(|err| ContractCallSimulationError {
+            message: format!("failed to prepare contract call runtime: {err}"),
+            vm_diagnostic: None,
+            normalized_payload: normalized_payload.clone(),
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })?;
     let max_items = usize::try_from(
         query_view
             .world
@@ -24813,12 +24905,13 @@ mod contract_payload_normalization_tests {
     #[test]
     fn normalize_contract_payload_is_permutation_invariant_and_compact() {
         let descriptor = json_descriptor();
-        let first = IrohaJson::from_string_unchecked(
+        let first = IrohaJson::from_raw_json(
             r#" { "ev" : { "z" : "last", "a" : 1, "b" : [true, false] } } "#.to_owned(),
-        );
-        let permuted = IrohaJson::from_string_unchecked(
-            r#"{"ev":{"b":[true,false],"a":1,"z":"last"}}"#.to_owned(),
-        );
+        )
+        .expect("valid permuted JSON fixture");
+        let permuted =
+            IrohaJson::from_raw_json(r#"{"ev":{"b":[true,false],"a":1,"z":"last"}}"#.to_owned())
+                .expect("valid compact JSON fixture");
 
         let first = normalize_contract_payload(&descriptor, Some(&first))
             .expect("first payload must normalize")
@@ -24846,23 +24939,16 @@ mod contract_payload_normalization_tests {
     }
 
     #[test]
-    fn normalize_contract_payload_rejects_duplicate_keys_and_trailing_tokens() {
-        let descriptor = json_descriptor();
+    fn json_payload_constructor_rejects_duplicate_keys_and_trailing_tokens() {
         for (label, raw) in [
             ("duplicate root", r#"{"ev":{},"ev":{"a":1}}"#),
             ("duplicate nested", r#"{"ev":{"a":1,"a":2}}"#),
             ("trailing object", r#"{"ev":{"a":1}} {}"#),
             ("trailing scalar", r#"{"ev":{"a":1}} true"#),
         ] {
-            let payload = IrohaJson::from_string_unchecked(raw.to_owned());
-            let error = match normalize_contract_payload(&descriptor, Some(&payload)) {
-                Ok(_) => panic!("{label} must be rejected"),
-                Err(error) => error,
-            };
-            let message = expect_conversion(error);
             assert!(
-                message.contains("one strict JSON value without duplicate object keys"),
-                "unexpected {label} error: {message}"
+                IrohaJson::from_raw_json(raw.to_owned()).is_err(),
+                "{label} must be rejected before payload normalization"
             );
         }
     }
@@ -24871,10 +24957,11 @@ mod contract_payload_normalization_tests {
     fn normalize_contract_payload_canonicalizes_exact_numeric_endpoints_and_rejects_malformed_numbers()
      {
         let descriptor = json_descriptor();
-        let payload = IrohaJson::from_string_unchecked(
+        let payload = IrohaJson::from_raw_json(
             r#"{"ev":{"negative_zero":-0,"max_u64":18446744073709551615,"min_i64":-9223372036854775808,"one_exp":1e0}}"#
                 .to_owned(),
-        );
+        )
+        .expect("valid numeric endpoint JSON fixture");
         let normalized = normalize_contract_payload(&descriptor, Some(&payload))
             .expect("finite endpoint numbers must normalize")
             .expect("payload");
@@ -24892,9 +24979,10 @@ mod contract_payload_normalization_tests {
             r#"{"ev":{"n":NaN}}"#,
             r#"{"ev":{"n":Infinity}}"#,
         ] {
-            let payload = IrohaJson::from_string_unchecked(raw.to_owned());
-            normalize_contract_payload(&descriptor, Some(&payload))
-                .expect_err("malformed or non-finite JSON number must be rejected");
+            assert!(
+                IrohaJson::from_raw_json(raw.to_owned()).is_err(),
+                "malformed or non-finite JSON number must be rejected before normalization"
+            );
         }
     }
 
@@ -52134,7 +52222,7 @@ mod governance_stream_tests {
             alternates_count: 2,
             verified: 5,
             candidates_count: 9,
-            derived_by: CouncilDerivationKind::Fallback,
+            derived_by: CouncilDerivationKind::Manual,
         });
         let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
             iroha_data_model::events::data::DataEvent::Governance(event),

@@ -20,6 +20,12 @@ pub use self::model::*;
 use super::custom::json_helpers;
 use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
 
+/// Maximum governed IVM heap size in bytes for ABI V1.
+///
+/// The ABI V1 address map reserves the half-open range
+/// `0x0010_0000..0x0020_0000` for the heap.
+pub const IVM_HEAP_MAX_BYTES: u64 = 0x0010_0000;
+
 /// Raw 32-byte consensus fingerprint with one canonical JSON representation.
 #[derive(
     Debug,
@@ -595,7 +601,7 @@ mod model {
         IntoSchema,
     )]
     #[display(
-        "{max_signatures},{max_instructions},{ivm_bytecode_size},{max_tx_bytes},{max_decompressed_bytes},{max_metadata_depth}_TL"
+        "{max_signatures},{max_instructions},{ivm_bytecode_size},{max_tx_bytes},{max_decompressed_bytes},{max_metadata_depth},{max_time_to_live_ms}_TL"
     )]
     #[getset(get_copy = "pub")]
     pub struct TransactionParameters {
@@ -611,6 +617,8 @@ mod model {
         pub max_decompressed_bytes: NonZeroU64,
         /// Maximum allowed JSON nesting depth across transaction metadata values.
         pub max_metadata_depth: NonZeroU16,
+        /// Maximum signature-bound wall-clock lifetime accepted for a transaction, in milliseconds.
+        pub max_time_to_live_ms: NonZeroU64,
         /// Enforce height-based TTL metadata (`expires_at_height`) at admission.
         #[norito(default)]
         pub require_height_ttl: bool,
@@ -632,6 +640,7 @@ mod model {
         MaxTxBytes(NonZeroU64),
         MaxDecompressedBytes(NonZeroU64),
         MaxMetadataDepth(NonZeroU16),
+        MaxTimeToLiveMs(NonZeroU64),
         RequireHeightTtl(bool),
         RequireSequence(bool),
     }
@@ -656,7 +665,7 @@ mod model {
     pub struct SmartContractParameters {
         /// Maximum amount of fuel that a smart contract can consume
         pub fuel: NonZeroU64,
-        /// Maximum amount of memory that a smart contract can use
+        /// Maximum IVM heap size in bytes
         pub memory: NonZeroU64,
         /// Maximum depth of synchronous and chained trigger executions
         pub execution_depth: u8,
@@ -1234,6 +1243,10 @@ mod defaults {
             // Default metadata nesting limit: 1 (metadata map) + up to 7 nested structures.
             nonzero!(8_u16)
         }
+        pub const fn max_time_to_live_ms() -> NonZeroU64 {
+            // Bound signed replay validity to one day unless genesis/governance chooses less.
+            nonzero!(86_400_000_u64)
+        }
     }
 
     pub mod smart_contract {
@@ -1245,7 +1258,7 @@ mod defaults {
             nonzero!(55_000_000_u64)
         }
         pub const fn memory() -> NonZeroU64 {
-            nonzero!(55_000_000_u64)
+            nonzero!(1_048_576_u64)
         }
         pub const fn execution_depth() -> u8 {
             3
@@ -1378,6 +1391,7 @@ impl Parameters {
             Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,
             Transaction(transaction.max_decompressed_bytes) => TransactionParameter::MaxDecompressedBytes,
             Transaction(transaction.max_metadata_depth) => TransactionParameter::MaxMetadataDepth,
+            Transaction(transaction.max_time_to_live_ms) => TransactionParameter::MaxTimeToLiveMs,
             Transaction(transaction.require_height_ttl) => TransactionParameter::RequireHeightTtl,
             Transaction(transaction.require_sequence) => TransactionParameter::RequireSequence,
 
@@ -1632,9 +1646,17 @@ impl TransactionParameters {
             max_tx_bytes,
             max_decompressed_bytes,
             max_metadata_depth,
+            max_time_to_live_ms: defaults::transaction::max_time_to_live_ms(),
             require_height_ttl: false,
             require_sequence: false,
         }
+    }
+
+    /// Configure the deterministic maximum signature-bound wall-clock lifetime.
+    #[must_use]
+    pub const fn with_max_time_to_live_ms(mut self, max_time_to_live_ms: NonZeroU64) -> Self {
+        self.max_time_to_live_ms = max_time_to_live_ms;
+        self
     }
 
     /// Configure ingress metadata enforcement (height-based TTL and per-sender sequence checks).
@@ -1676,6 +1698,7 @@ impl TransactionParameters {
             TransactionParameter::MaxTxBytes(self.max_tx_bytes),
             TransactionParameter::MaxDecompressedBytes(self.max_decompressed_bytes),
             TransactionParameter::MaxMetadataDepth(self.max_metadata_depth),
+            TransactionParameter::MaxTimeToLiveMs(self.max_time_to_live_ms),
             TransactionParameter::RequireHeightTtl(self.require_height_ttl),
             TransactionParameter::RequireSequence(self.require_sequence),
         ]
@@ -1708,6 +1731,12 @@ impl JsonSerialize for TransactionParameters {
             &mut first,
             "max_metadata_depth",
             &self.max_metadata_depth,
+        );
+        json_support::write_field(
+            out,
+            &mut first,
+            "max_time_to_live_ms",
+            &self.max_time_to_live_ms,
         );
         json_support::write_field(
             out,
@@ -1755,6 +1784,11 @@ impl JsonDeserialize for TransactionParameters {
             .map(|value| json_support::expect_bool(&value, "require_height_ttl"))
             .transpose()?
             .unwrap_or(false);
+        let max_time_to_live_ms = map
+            .remove("max_time_to_live_ms")
+            .map(|value| json_support::expect_nonzero_u64(&value, "max_time_to_live_ms"))
+            .transpose()?
+            .unwrap_or_else(defaults::transaction::max_time_to_live_ms);
         let require_sequence = map
             .remove("require_sequence")
             .map(|value| json_support::expect_bool(&value, "require_sequence"))
@@ -1785,6 +1819,7 @@ impl JsonDeserialize for TransactionParameters {
             max_decompressed_bytes,
             max_metadata_depth,
         )
+        .with_max_time_to_live_ms(max_time_to_live_ms)
         .with_ingress_enforcement(require_height_ttl, require_sequence))
     }
 }
@@ -1821,6 +1856,11 @@ impl JsonSerialize for TransactionParameter {
             }
             TransactionParameter::MaxMetadataDepth(value) => {
                 json::write_json_string("MaxMetadataDepth", out);
+                out.push(':');
+                value.json_serialize(out);
+            }
+            TransactionParameter::MaxTimeToLiveMs(value) => {
+                json::write_json_string("MaxTimeToLiveMs", out);
                 out.push(':');
                 value.json_serialize(out);
             }
@@ -1883,6 +1923,10 @@ impl JsonDeserialize for TransactionParameter {
                     message: String::from("value must be non-zero"),
                 })?
             })),
+            "MaxTimeToLiveMs" => Ok(Self::MaxTimeToLiveMs(json_support::expect_nonzero_u64(
+                &payload,
+                "MaxTimeToLiveMs",
+            )?)),
             "RequireHeightTtl" => Ok(Self::RequireHeightTtl(json_support::expect_bool(
                 &payload,
                 "RequireHeightTtl",
@@ -2339,15 +2383,21 @@ mod tests {
     }
 
     #[test]
+    fn default_ivm_heap_limits_fill_the_abi_v1_window() {
+        let parameters = Parameters::default();
+        assert_eq!(
+            parameters.smart_contract().memory().get(),
+            IVM_HEAP_MAX_BYTES
+        );
+        assert_eq!(parameters.executor().memory().get(), IVM_HEAP_MAX_BYTES);
+    }
+
+    #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
         let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
-        let custom = CustomParameter::new(
-            SumeragiNposParameters::parameter_id(),
-            Json::from_string_unchecked(payload.to_owned()),
-        );
         assert!(
-            SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
-            "trailing-comma compatibility payload must be rejected"
+            Json::from_raw_json(payload.to_owned()).is_err(),
+            "invalid JSON must be rejected before it can enter a custom parameter"
         );
     }
 }

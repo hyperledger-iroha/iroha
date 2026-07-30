@@ -14253,6 +14253,13 @@ mod state {
                 hex_bytes(&got.v2_config_fingerprint),
             ));
         }
+        if expected.ivm_gas_schedule_hash != got.ivm_gas_schedule_hash {
+            return Some(format!(
+                "ivm_gas_schedule_hash mismatch (expected 0x{}, got 0x{})",
+                hex_bytes(&expected.ivm_gas_schedule_hash),
+                hex_bytes(&got.ivm_gas_schedule_hash),
+            ));
+        }
         None
     }
 
@@ -15791,6 +15798,7 @@ mod state {
             ConsensusConfigCaps {
                 nexus_policy_digest: [0xC1; 32],
                 v2_config_fingerprint: fingerprint,
+                ivm_gas_schedule_hash: [0xD2; 32],
             }
         }
 
@@ -15893,6 +15901,7 @@ mod tests {
         ConsensusConfigCaps {
             nexus_policy_digest: [0xA5; 32],
             v2_config_fingerprint: [0xC3; 32],
+            ivm_gas_schedule_hash: [0xE7; 32],
         }
     }
 
@@ -15905,6 +15914,19 @@ mod tests {
         let reason = consensus_config_mismatch(&expected, &got)
             .expect("one-bit Nexus policy drift must fail the handshake");
         assert!(reason.starts_with("nexus_policy_digest mismatch"));
+    }
+
+    #[test]
+    fn consensus_config_mismatch_rejects_ivm_gas_schedule_drift() {
+        let expected = sample_consensus_config_caps();
+        let mut got = expected;
+        got.ivm_gas_schedule_hash[0] ^= 1;
+
+        let reason = consensus_config_mismatch(&expected, &got)
+            .expect("one-bit IVM gas-schedule drift must fail the handshake");
+        assert!(reason.starts_with("ivm_gas_schedule_hash mismatch"));
+        assert!(reason.contains(&hex_bytes(&expected.ivm_gas_schedule_hash)));
+        assert!(reason.contains(&hex_bytes(&got.ivm_gas_schedule_hash)));
     }
 
     struct TrackingWrite {

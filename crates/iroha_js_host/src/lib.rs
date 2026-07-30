@@ -1183,11 +1183,24 @@ pub fn build_kaigi_roster_join_proof(
     build_kaigi_roster_join_proof_bytes(seed.as_ref(), &roster_root)
 }
 
+fn checked_keygen_seed(seed: Uint8Array) -> napi::Result<Vec<u8>> {
+    if seed.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "key-generation seed must be exactly 32 bytes",
+        ));
+    }
+    Ok(seed.to_vec())
+}
+
 /// Generate an Ed25519 key pair using `iroha_crypto`.
+///
+/// When supplied, `seed` must be a secret 32-byte value with at least 256 bits
+/// of entropy. Omit it for operating-system-random production keys.
 #[napi]
 pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
     let keypair = match seed {
-        Some(seed) => KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519),
+        Some(seed) => KeyPair::try_from_seed(checked_keygen_seed(seed)?, Algorithm::Ed25519),
         None => KeyPair::try_random_with_algorithm(Algorithm::Ed25519),
     }
     .map_err(norito_to_napi)?;
@@ -1274,6 +1287,9 @@ pub fn normalize_crypto_algorithm_js(algorithm: Option<String>) -> napi::Result<
 }
 
 /// Generate or deterministically derive a key pair for any supported Iroha signing algorithm.
+///
+/// When supplied, `seed` must be a secret 32-byte value with at least 256 bits
+/// of entropy. Omit it for operating-system-random production keys.
 #[napi(js_name = "cryptoKeypair")]
 #[allow(clippy::needless_pass_by_value)]
 pub fn crypto_keypair(
@@ -1282,7 +1298,7 @@ pub fn crypto_keypair(
 ) -> napi::Result<JsKeyPair> {
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let keypair = match seed {
-        Some(seed) => KeyPair::try_from_seed(seed.to_vec(), algorithm),
+        Some(seed) => KeyPair::try_from_seed(checked_keygen_seed(seed)?, algorithm),
         None => KeyPair::try_random_with_algorithm(algorithm),
     }
     .map_err(norito_to_napi)?;
@@ -7853,8 +7869,8 @@ fn parse_council_derivation_kind(
 ) -> napi::Result<CouncilDerivationKind> {
     let label = parse_string_value(value, context)?;
     match label.as_str() {
-        "Vrf" | "vrf" | "VRF" => Ok(CouncilDerivationKind::Vrf),
-        "Fallback" | "fallback" | "FALLBACK" => Ok(CouncilDerivationKind::Fallback),
+        "Vrf" | "vrf" | "VRF" => Ok(CouncilDerivationKind::Sortition),
+        "Fallback" | "fallback" | "FALLBACK" => Ok(CouncilDerivationKind::Manual),
         other => Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!("{context} must be either \"Vrf\" or \"Fallback\" (found {other})"),
@@ -7864,8 +7880,8 @@ fn parse_council_derivation_kind(
 
 fn council_derivation_to_json(kind: CouncilDerivationKind) -> json::Value {
     let label = match kind {
-        CouncilDerivationKind::Vrf => "Vrf",
-        CouncilDerivationKind::Fallback => "Fallback",
+        CouncilDerivationKind::Sortition => "Vrf",
+        CouncilDerivationKind::Manual => "Fallback",
     };
     json::Value::String(label.to_owned())
 }
@@ -11886,6 +11902,12 @@ fn configure_transaction_builder(
 
     if let Some(ms) = ttl_ms {
         let millis = js_number_to_u64(ms, "ttl_ms")?;
+        if millis == 0 {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "ttl_ms must be positive",
+            ));
+        }
         builder.set_ttl(Duration::from_millis(millis));
     }
 
@@ -12858,9 +12880,14 @@ pub fn build_transfer_asset_payload(
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     let instruction: InstructionBox =
         Transfer::asset_quantity(source, quantity, destination).into();
+    let chain_id = chain_id.parse::<ChainId>().map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid canonical chain id: {error}"),
+        )
+    })?;
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(ChainId::from(chain_id), authority, fee_payment)
-            .with_instructions([instruction]),
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_instructions([instruction]),
         metadata,
         None,
         creation_time_ms,
@@ -15025,6 +15052,18 @@ seiyaku Privacy {
 
         assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
         assert_eq!(keypair.public_key.as_ref(), expected_public_key);
+    }
+
+    #[test]
+    fn keypair_bindings_reject_non_cryptographic_seed_lengths() {
+        let short = Uint8Array::from(b"human password".to_vec());
+        let err = ed25519_keypair(Some(short)).expect_err("short Ed25519 seed must fail");
+        assert!(err.reason.contains("exactly 32 bytes"));
+
+        let short = Uint8Array::from(b"human password".to_vec());
+        let err = crypto_keypair(Some("secp256k1".to_owned()), Some(short))
+            .expect_err("short generic seed must fail");
+        assert!(err.reason.contains("exactly 32 bytes"));
     }
 
     #[test]
@@ -18599,7 +18638,7 @@ seiyaku Privacy {
             alternates: vec![member.clone()],
             verified: 2,
             candidates_count: 5,
-            derived_by: CouncilDerivationKind::Fallback,
+            derived_by: CouncilDerivationKind::Manual,
         })
         .into_instruction_box();
 

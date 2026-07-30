@@ -677,7 +677,7 @@ fn permissions_differ_not_only_by_names() {
     let set_hat_color = SetKeyValue::nft(
         hat_nft_id,
         "color".parse().expect("Valid"),
-        "red".parse::<Json>().expect("Valid"),
+        Json::from("red"),
     );
     submit_with_authority(set_hat_color.into(), &bob_id, &bob_keypair)
         .expect("Failed to modify Mouse's hats");
@@ -686,7 +686,7 @@ fn permissions_differ_not_only_by_names() {
     let set_shoes_color = SetKeyValue::nft(
         shoes_nft_id.clone(),
         "color".parse().expect("Valid"),
-        "yellow".parse::<Json>().expect("Valid"),
+        Json::from("yellow"),
     );
     let _err = submit_with_authority(set_shoes_color.clone().into(), &bob_id, &bob_keypair)
         .expect_err("Expected Bob to fail to modify Mouse's shoes");
@@ -743,11 +743,12 @@ fn stored_vs_granted_permission_payload() {
 
     // The exact mint permission is rooted in the asset-definition authority, not in the
     // destination account that happens to hold the asset instance.
-    let value_json = Json::from_string_unchecked(format!(
+    let value_json = Json::from_raw_json(format!(
         // NOTE: Permissions is created explicitly as a json string to introduce additional whitespace
         // This way, if the executor compares permissions just as JSON strings, the test will fail
         r#"{{ "asset"   :   "{mouse_asset}" }}"#
-    ));
+    ))
+    .expect("valid permission JSON fixture");
 
     let allow_alice_to_mint_mouse_asset = Grant::account_permission(
         Permission::new("CanMintAsset".parse().unwrap(), value_json.clone()),

@@ -240,8 +240,8 @@ use crate::{
         AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision,
         MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
         MAX_TOKEN_FUTURE_SKEW_SECS, SorafsAction, StreamTokenConcurrencyPermit,
-        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaError, TokenOverrides,
-        decode_token_base64,
+        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaError,
+        StreamTokenQuotaSubject, TokenOverrides, decode_token_base64,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             capability_name,
@@ -290,7 +290,7 @@ const HEADER_SORA_CACHE_TTL: &str = "x-sorafs-cache-ttl";
 const HEADER_SORA_PROOF_STATUS: &str = "sora-proof-status";
 const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
 const HEADER_SORA_TOKEN_ID: &str = "x-sorafs-token-id";
-const HEADER_SORA_CLIENT_QUOTA_REMAINING: &str = "x-sorafs-client-quota-remaining";
+const HEADER_SORA_ISSUANCE_QUOTA_REMAINING: &str = "x-sorafs-issuance-quota-remaining";
 const HEADER_SORA_REQUEST_ID: &str = "x-sorafs-request-id";
 const HEADER_SORA_POTR_REQUEST: &str = "sora-potr-request";
 const HEADER_SORA_POTR_RECEIPT: &str = "sora-potr-receipt";
@@ -25428,6 +25428,50 @@ fn is_canonical_lower_hex(value: &str, maximum_bytes: usize) -> bool {
 }
 
 #[cfg(feature = "app_api")]
+fn stream_token_api_token_required_response() -> Response {
+    let mut response = json_error(
+        StatusCode::UNAUTHORIZED,
+        "a valid Torii API token is required to issue a SoraFS stream token",
+    );
+    response.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_static("IrohaApiToken realm=\"sorafs-stream-token\""),
+    );
+    response
+}
+
+#[cfg(feature = "app_api")]
+fn authenticated_stream_token_quota_subject(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+) -> Result<StreamTokenQuotaSubject, Response> {
+    if state.api_tokens_set.is_empty() {
+        let mut response = json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "stream token issuance requires at least one configured Torii API token",
+        );
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+        return Err(response);
+    }
+
+    let mut values = headers.get_all(crate::HEADER_API_TOKEN).iter();
+    let Some(token) = values
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .filter(|token| state.api_tokens_set.contains(*token))
+    else {
+        return Err(stream_token_api_token_required_response());
+    };
+    if values.next().is_some() {
+        return Err(stream_token_api_token_required_response());
+    }
+
+    Ok(StreamTokenQuotaSubject::from_validated_api_token(token))
+}
+
+#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_token(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -25441,6 +25485,10 @@ pub(crate) async fn handle_post_sorafs_storage_token(
         return feature_disabled("stream token issuance is not enabled on this node");
     };
 
+    let quota_subject = match authenticated_stream_token_quota_subject(&state, &headers) {
+        Ok(subject) => subject,
+        Err(response) => return response,
+    };
     let client_id = match required_canonical_stream_header(
         &headers,
         HEADER_SORA_CLIENT,
@@ -25517,7 +25565,7 @@ pub(crate) async fn handle_post_sorafs_storage_token(
     };
 
     let token_issue = match issuer.issue_token(
-        &client_id,
+        quota_subject,
         manifest.manifest_cid().to_vec(),
         provider_id,
         manifest.chunk_profile_handle().to_string(),
@@ -25526,7 +25574,7 @@ pub(crate) async fn handle_post_sorafs_storage_token(
         Ok(token) => token,
         Err(err) => {
             return match &err {
-                StreamTokenIssuerError::ClientQuotaExceeded {
+                StreamTokenIssuerError::IssuanceQuotaExceeded {
                     limit,
                     retry_after_secs,
                     ..
@@ -25550,18 +25598,17 @@ pub(crate) async fn handle_post_sorafs_storage_token(
                         header_value(&nonce, "X-SoraFS-Nonce"),
                     );
                     headers.insert(
-                        header::HeaderName::from_static(HEADER_SORA_CLIENT_QUOTA_REMAINING),
-                        header_value("0", "X-SoraFS-Client-Quota-Remaining"),
+                        header::HeaderName::from_static(HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
+                        header_value("0", "X-SoraFS-Issuance-Quota-Remaining"),
                     );
                     response
                 }
                 StreamTokenIssuerError::InvalidPolicy { .. }
-                | StreamTokenIssuerError::InvalidClientId
                 | StreamTokenIssuerError::InvalidBody(_) => {
                     json_error(StatusCode::BAD_REQUEST, err.to_string())
                 }
-                StreamTokenIssuerError::ClientQuotaCapacityExceeded { .. }
-                | StreamTokenIssuerError::ClientQuotaStateUnavailable
+                StreamTokenIssuerError::IssuanceQuotaCapacityExceeded { .. }
+                | StreamTokenIssuerError::IssuanceQuotaStateUnavailable
                 | StreamTokenIssuerError::ClockRollback { .. } => {
                     error!(?err, "stream token issuance quota state unavailable");
                     let mut response = json_error(
@@ -25637,8 +25684,8 @@ pub(crate) async fn handle_post_sorafs_storage_token(
     );
     let quota_header = token_issue.remaining_quota.to_string();
     response_headers.insert(
-        header::HeaderName::from_static(HEADER_SORA_CLIENT_QUOTA_REMAINING),
-        header_value(&quota_header, "X-SoraFS-Client-Quota-Remaining"),
+        header::HeaderName::from_static(HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
+        header_value(&quota_header, "X-SoraFS-Issuance-Quota-Remaining"),
     );
     response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
 
@@ -45037,13 +45084,26 @@ mod advert_tests {
             ..iroha_config::parameters::actual::SorafsTokenConfig::default()
         };
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer;
-        StreamTokenIssuer::from_config(&cfg, Some(runtime_signer))
-            .expect("valid config")
-            .expect("issuer enabled")
+        StreamTokenIssuer::from_config(
+            &cfg,
+            &[String::from(TEST_STREAM_TOKEN_API_TOKEN)],
+            Some(runtime_signer),
+        )
+        .expect("valid config")
+        .expect("issuer enabled")
     }
 
     fn stream_token_issuer_for_tests() -> StreamTokenIssuer {
         stream_token_issuer_for_tests_with_mode(ApiTestStreamTokenSignerMode::Sign)
+    }
+
+    const TEST_STREAM_TOKEN_API_TOKEN: &str = "stream-token-api-credential";
+
+    fn insert_stream_token_api_credential(headers: &mut HeaderMap) {
+        headers.insert(
+            crate::HEADER_API_TOKEN,
+            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
+        );
     }
 
     fn token_enabled_state() -> (SharedAppState, TempDir, String) {
@@ -45070,6 +45130,9 @@ mod advert_tests {
         let issuer = stream_token_issuer_for_tests();
         inner.sorafs_node = node;
         inner.stream_token_issuer = Some(Arc::new(issuer));
+        inner.api_tokens_set = Arc::new(std::collections::HashSet::from([String::from(
+            TEST_STREAM_TOKEN_API_TOKEN,
+        )]));
 
         (Arc::new(inner), temp_dir, manifest_id)
     }
@@ -45373,12 +45436,19 @@ mod advert_tests {
         };
 
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer;
-        let issuer = StreamTokenIssuer::from_config(&token_config, Some(runtime_signer))
-            .expect("token config valid")
-            .expect("stream token issuer enabled");
+        let issuer = StreamTokenIssuer::from_config(
+            &token_config,
+            &[String::from(TEST_STREAM_TOKEN_API_TOKEN)],
+            Some(runtime_signer),
+        )
+        .expect("token config valid")
+        .expect("stream token issuer enabled");
         let issuer = Arc::new(issuer);
         let verifying_key_hex = hex::encode(issuer.verifying_key_bytes());
         app.stream_token_issuer = Some(issuer);
+        app.api_tokens_set = Arc::new(std::collections::HashSet::from([String::from(
+            TEST_STREAM_TOKEN_API_TOKEN,
+        )]));
 
         let chunker_handle = format!(
             "{}.{}@{}",
@@ -45411,6 +45481,7 @@ mod advert_tests {
 
     async fn issue_token_base64(context: &TokenTestContext, overrides: TokenOverrides) -> String {
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_CLIENT),
             header_value(&context.client_id, "X-SoraFS-Client"),
@@ -48192,6 +48263,7 @@ mod advert_tests {
     async fn storage_token_issues_signed_response() {
         let context = token_test_context();
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-token-1"),
@@ -48243,7 +48315,7 @@ mod advert_tests {
         assert!(!token_id.is_empty());
         assert_eq!(
             headers
-                .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
+                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
                 .and_then(|value| value.to_str().ok()),
             Some("2")
         );
@@ -48309,6 +48381,7 @@ mod advert_tests {
                 mode,
             );
             let mut headers = HeaderMap::new();
+            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_NONCE),
                 HeaderValue::from_static("runtime-signer-failure"),
@@ -48386,6 +48459,7 @@ mod advert_tests {
             State(context.app.clone()),
             {
                 let mut headers = HeaderMap::new();
+                insert_stream_token_api_credential(&mut headers);
                 headers.insert(
                     header::HeaderName::from_static(HEADER_SORA_CLIENT),
                     header_value(&context.client_id, "X-SoraFS-Client"),
@@ -48429,6 +48503,7 @@ mod advert_tests {
             (HEADER_SORA_NONCE, "nonce with spaces".to_string()),
         ] {
             let mut headers = HeaderMap::new();
+            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_CLIENT),
                 HeaderValue::from_static("client-a"),
@@ -48455,6 +48530,7 @@ mod advert_tests {
         }
 
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_CLIENT),
             HeaderValue::from_static("client-a"),
@@ -48489,6 +48565,7 @@ mod advert_tests {
         let context = token_test_context();
         let headers = || {
             let mut headers = HeaderMap::new();
+            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_CLIENT),
                 HeaderValue::from_static("client-a"),
@@ -48642,7 +48719,102 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_token_enforces_client_quota() {
+    async fn storage_token_requires_a_configured_valid_api_credential() {
+        let context = token_test_context();
+        let request = || StreamTokenRequestDto {
+            manifest_id_hex: context.manifest_id_hex.clone(),
+            provider_id_hex: context.provider_id_hex.clone(),
+            ttl_secs: None,
+            max_streams: None,
+            rate_limit_bytes: None,
+            requests_per_minute: None,
+        };
+        let headers = || {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_CLIENT),
+                HeaderValue::from_static("credential-auth-test"),
+            );
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_NONCE),
+                HeaderValue::from_static("credential-auth-nonce"),
+            );
+            headers
+        };
+
+        let missing = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            headers(),
+            JsonOnly(request()),
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
+
+        let mut invalid_headers = headers();
+        invalid_headers.insert(
+            crate::HEADER_API_TOKEN,
+            HeaderValue::from_static("invalid-credential"),
+        );
+        let invalid = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            invalid_headers,
+            JsonOnly(request()),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
+
+        let mut duplicate_headers = headers();
+        duplicate_headers.append(
+            crate::HEADER_API_TOKEN,
+            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
+        );
+        duplicate_headers.append(
+            crate::HEADER_API_TOKEN,
+            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
+        );
+        let duplicate = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            duplicate_headers,
+            JsonOnly(request()),
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
+
+        let mut valid_headers = headers();
+        insert_stream_token_api_credential(&mut valid_headers);
+        let valid = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            valid_headers.clone(),
+            JsonOnly(request()),
+        )
+        .await;
+        assert_eq!(valid.status(), StatusCode::OK);
+        assert_eq!(
+            valid
+                .headers()
+                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
+                .and_then(|value| value.to_str().ok()),
+            Some("2"),
+            "rejected credentials must not consume the authenticated quota"
+        );
+
+        let app_without_credentials = mk_app_state_for_tests();
+        let unavailable =
+            authenticated_stream_token_quota_subject(&app_without_credentials, &valid_headers)
+                .expect_err("missing server-side credential configuration must fail closed");
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            unavailable
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_token_client_label_rotation_cannot_escape_credential_quota() {
         let context = token_test_context();
 
         let request_builder = || StreamTokenRequestDto {
@@ -48657,13 +48829,14 @@ mod advert_tests {
         let expected = ["2", "1", "0"];
         for (idx, quota_remaining) in expected.into_iter().enumerate() {
             let mut headers = HeaderMap::new();
+            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_NONCE),
                 header_value(format!("nonce-quota-{idx}"), "X-SoraFS-Nonce"),
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                HeaderValue::from_static("gateway-alpha"),
+                header_value(format!("rotating-label-{idx}"), "X-SoraFS-Client"),
             );
 
             let response = handle_post_sorafs_storage_token(
@@ -48675,20 +48848,21 @@ mod advert_tests {
             assert_eq!(response.status(), StatusCode::OK);
             let remaining = response
                 .headers()
-                .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
+                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
                 .and_then(|value| value.to_str().ok())
                 .expect("quota header");
             assert_eq!(remaining, quota_remaining);
         }
 
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             header_value("nonce-quota-3", "X-SoraFS-Nonce"),
         );
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("gateway-alpha"),
+            HeaderValue::from_static("fresh-label-after-quota"),
         );
 
         let response = handle_post_sorafs_storage_token(
@@ -48706,7 +48880,7 @@ mod advert_tests {
         assert!(retry_after.parse::<u64>().unwrap_or(0) > 0);
         let quota_header = response
             .headers()
-            .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
+            .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
             .and_then(|value| value.to_str().ok())
             .expect("quota header on 429");
         assert_eq!(quota_header, "0");
@@ -48767,6 +48941,7 @@ mod advert_tests {
     async fn storage_token_requires_client_header() {
         let (app, _dir, manifest_id) = token_enabled_state();
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-test"),
@@ -48796,6 +48971,7 @@ mod advert_tests {
             hex::encode(issuer.verifying_key_bytes())
         };
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-123"),
@@ -48846,7 +49022,7 @@ mod advert_tests {
         );
         assert_eq!(
             headers
-                .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
+                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
                 .and_then(|value| value.to_str().ok()),
             Some("2")
         );

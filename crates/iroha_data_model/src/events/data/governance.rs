@@ -322,13 +322,10 @@ mod model {
         /// Number of alternates stored alongside members.
         #[norito(default)]
         pub alternates_count: u32,
-        /// Number of candidates whose VRF proofs verified.
-        #[norito(default)]
-        pub verified: u32,
-        /// Total number of candidates considered (verified + rejected).
+        /// Total eligible candidates considered, or roster entries for a manual roster.
         #[norito(default)]
         pub candidates_count: u32,
-        /// Derivation method (VRF or Fallback)
+        /// Derivation method.
         pub derived_by: crate::isi::governance::CouncilDerivationKind,
     }
 

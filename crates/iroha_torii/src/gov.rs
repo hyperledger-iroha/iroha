@@ -1429,9 +1429,9 @@ pub async fn handle_gov_council_derive_vrf(
         })
         .collect();
     let derived_by = if draw.verified > 0 {
-        CouncilDerivationKind::Vrf
+        CouncilDerivationKind::Sortition
     } else {
-        CouncilDerivationKind::Fallback
+        CouncilDerivationKind::Manual
     };
 
     Ok(JsonBody(CouncilDeriveVrfResponse {
@@ -3186,7 +3186,7 @@ pub async fn handle_gov_council_current(
         alternates,
         candidate_count: total_candidates,
         verified: 0,
-        derived_by: CouncilDerivationKind::Fallback,
+        derived_by: CouncilDerivationKind::Manual,
     }))
 }
 
@@ -3309,9 +3309,9 @@ pub async fn handle_gov_council_persist(
     let members: Vec<iroha_data_model::account::AccountId> = draw.members.clone();
     let alternates: Vec<iroha_data_model::account::AccountId> = draw.alternates.clone();
     let derived_by = if draw.verified > 0 {
-        CouncilDerivationKind::Vrf
+        CouncilDerivationKind::Sortition
     } else {
-        CouncilDerivationKind::Fallback
+        CouncilDerivationKind::Manual
     };
 
     let instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
@@ -3536,7 +3536,7 @@ pub async fn handle_gov_council_audit(
                 c.derived_by,
             )
         })
-        .unwrap_or((0, 0, 0, 0, CouncilDerivationKind::Fallback));
+        .unwrap_or((0, 0, 0, 0, CouncilDerivationKind::Manual));
     Ok(JsonBody(CouncilAuditResponse {
         epoch,
         seed_hex,
@@ -3723,7 +3723,7 @@ mod tests {
         let body = result.expect("persist draft succeeds").0;
         assert_eq!(body.epoch, 0);
         assert_eq!(body.tx_instructions.len(), 1);
-        assert_eq!(body.derived_by, CouncilDerivationKind::Fallback);
+        assert_eq!(body.derived_by, CouncilDerivationKind::Manual);
     }
 
     #[cfg(feature = "gov_vrf")]
@@ -3748,7 +3748,7 @@ mod tests {
                     alternates: vec![alternate],
                     verified: 1,
                     candidate_count: 2,
-                    derived_by: CouncilDerivationKind::Vrf,
+                    derived_by: CouncilDerivationKind::Sortition,
                 },
             );
             tx.apply();
@@ -5887,7 +5887,7 @@ seiyaku GovernanceFlowFixture {
         assert_eq!(body.members_count, 0usize);
         assert_eq!(body.alternates_count, 0usize);
         assert_eq!(body.verified, 0usize);
-        assert_eq!(body.derived_by, CouncilDerivationKind::Fallback);
+        assert_eq!(body.derived_by, CouncilDerivationKind::Manual);
         assert_eq!(body.seed_hex.len(), 128); // blake2b-512 hex
         assert_eq!(body.beacon_hex.len(), 64); // 32-byte hex
         assert!(!body.chain_id.is_empty());

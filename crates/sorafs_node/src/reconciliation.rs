@@ -55,7 +55,7 @@ pub(crate) struct AppealFinanceRollupReconciliationEntry {
     pub(crate) case_count: u64,
     pub(crate) total_treasury_xor: XorQuantity,
     pub(crate) total_rewards_forfeited_treasury_xor: XorQuantity,
-    pub(crate) published_at_unix: u64,
+    pub(crate) generated_at_unix_ms: u64,
 }
 
 pub(crate) fn hash_snapshot<T: norito::core::NoritoSerialize>(

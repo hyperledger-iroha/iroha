@@ -66,6 +66,33 @@ indistinguishable as `Expired`; an ordinary permission revocation is reported
 through the executor's normal authorization error without revealing query
 items.
 
+## Resource admission
+
+Signed-query admission has two independent identities. Before signature
+verification, Torii charges the exact validated API credential when token
+authentication is required; otherwise it charges the effective client origin
+supplied by the socket-ingress/trusted-proxy boundary. Arbitrary `x-api-token`
+text therefore never selects a bucket when token authentication is disabled,
+and invalid or ambiguously repeated configured credentials fail before rate
+accounting. After signature verification, each physical query execution is
+charged to the canonical signed `AccountId`.
+
+The two dimensions use `torii.query_rate_per_authority_per_sec` and
+`torii.query_burst_per_authority`, but keep separate bounded bucket maps so
+authority churn cannot evict and refill a pre-auth caller bucket. That first
+dimension prevents a caller from creating fresh budgets by generating keys or
+rotating unauthenticated header values, while the authority dimension restores
+the documented per-authority ceiling across direct, proxied, and
+multi-dataspace execution. A trusted CIDR may bypass the public pre-auth gate,
+but it does not bypass authenticated authority or physical-work admission.
+
+`torii.query_max_inflight` bounds all physical query workers, and iterable
+starts also consume `torii.query_heavy_max_inflight`. The owned permits live in
+the blocking worker rather than the HTTP future, so disconnecting or cancelling
+a request cannot release capacity while executor validation or snapshot work is
+still running. Saturated workers wait only for
+`torii.query_queue_timeout_ms`; after that Torii returns `CapacityLimit`.
+
 ## Lifetime and reuse
 
 `torii.query_idle_time_ms` controls the idle eviction threshold. The first-release
