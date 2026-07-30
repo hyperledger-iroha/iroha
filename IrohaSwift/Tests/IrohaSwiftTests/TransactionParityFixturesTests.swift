@@ -352,15 +352,17 @@ final class TransactionParityFixturesTests: XCTestCase {
     }
 
     private func ensureBridgeAvailable() throws {
-        guard NoritoNativeBridge.shared.supportsTransactions(using: .ed25519) else {
-            throw XCTSkip("NoritoBridge ed25519 transaction encoder unavailable")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "NoritoBridge ed25519 transaction encoder unavailable"
+        )
         guard let seed = Data(hexString: FixtureConstants.signingSeedHex) else {
             throw FixtureError.invalidSigningSeed
         }
-        guard NoritoNativeBridge.shared.keypairFromSeed(algorithm: .ed25519, seed: seed) != nil else {
-            throw XCTSkip("NoritoBridge ed25519 seed derivation unavailable")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.keypairFromSeed(algorithm: .ed25519, seed: seed) != nil,
+            "NoritoBridge ed25519 seed derivation unavailable"
+        )
     }
 
     private static func fixtures() throws -> TransactionFixtureLoader {

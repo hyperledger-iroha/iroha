@@ -33,7 +33,7 @@ proceso de creación, descripción de RFC Architects SoraFS y actualización
 | Аттестация эндпоинта | Cada dispositivo disponible debe conectar un dispositivo de certificación mTLS o QUIC. | Abra la carga útil Norito `EndpointAttestationV1` y limpie su dispositivo en una banda dual. |
 
 ## Процесс допуска1. **Создание предложения**
-   - CLI: добавить `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`,
+   - CLI: добавить `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`,
      formulario `ProviderAdmissionProposalV1` + бандл аттестации.
    - Validez: убедиться в наличии обязательных полей, estaca > 0, mango de fragmentador canónico en `profile_id`.
 2. **Gobernanza de Одобрение**
@@ -60,7 +60,7 @@ Asegúrese de conectar `--council-signature-public-key` con `--council-signature
 
 ### Справочник CLI
 
-Introduzca el comando `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+Introduzca el comando `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Banderas disponibles: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, y cada minuto de `--endpoint=<kind:host>`.
@@ -102,7 +102,7 @@ Introduzca el comando `cargo run -p sorafs_manifest --bin sorafs_manifest_builde
    увеличив `--retention-epoch` и обновив stake/эндпоинты по необходимости.
 2. Выполните
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -121,7 +121,7 @@ Introduzca el comando `cargo run -p sorafs_manifest --bin sorafs_manifest_builde
    CI (`ci/check_sorafs_fixtures.sh`) proporciona estabilidad Norito.#### Аварийный отзыв
 1. Utilice sobres compactos y cierres de etiquetas:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

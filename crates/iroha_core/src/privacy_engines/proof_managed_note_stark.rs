@@ -22,11 +22,11 @@ use thiserror::Error;
 use super::{
     aggregate_stark::{self as aggregate, AggregateOpenedRowEvaluatorV1},
     transparent_stark::{
+        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
+        ReplayableTraceMaskV1, TransparentStarkErrorV1, TransparentTranscriptV1,
         goldilocks_evaluate_coset_v1, goldilocks_ifft_v1, goldilocks_primitive_root_v1,
         grind_nonce_v1, masked_trace_lde_column_with_mask_v1, sample_trace_mask_v1,
-        transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1, GoldilocksFieldV1 as F,
-        GoldilocksFp4V1 as E, ReplayableTraceMaskV1, TransparentStarkErrorV1,
-        TransparentTranscriptV1, GOLDILOCKS_GENERATOR_V1,
+        transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
     },
 };
 
@@ -2129,7 +2129,7 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
 pub(crate) mod degree_audit {
     use core::fmt::Debug;
 
-    use rand::{rngs::StdRng, RngCore as _, SeedableRng as _};
+    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
 
     use super::F;
 
@@ -2139,11 +2139,7 @@ pub(crate) mod degree_audit {
 
     fn random_nonzero_field_v1(rng: &mut StdRng) -> F {
         let value = random_field_v1(rng);
-        if value == F::ZERO {
-            F::ONE
-        } else {
-            value
-        }
+        if value == F::ZERO { F::ONE } else { value }
     }
 
     fn affine_vector_v1(origin: &[F], direction: &[F], point: F) -> Vec<F> {
@@ -2254,7 +2250,7 @@ mod tests {
     use std::sync::OnceLock;
 
     use super::*;
-    use rand::{rngs::StdRng, RngCore, SeedableRng as _};
+    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
 
     const MOCK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-mock-relation-v1:wire=PMN1-v1:trace=2^12:base=8:profile-aux=0:profile-fixed=0:profile-constraints=1:constraint-degree=2:max-proof=4194304";
     const MOCK_TRACE_LOG2_V1: u8 = 12;
@@ -2410,9 +2406,11 @@ mod tests {
             _copy_challenges: NoteCopyChallengesV1,
             _profile_challenges: &Self::ProfileChallenges,
         ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
-            Ok(vec![*current_base
-                .first()
-                .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)?])
+            Ok(vec![
+                *current_base
+                    .first()
+                    .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)?,
+            ])
         }
     }
 
@@ -2556,19 +2554,23 @@ mod tests {
                 .map(|index| F(u64::try_from(index * 7 + 11).expect("small affine evaluation")))
                 .collect::<Vec<_>>(),
         ];
-        let aux_lde = vec![(0..rows)
-            .map(|index| F(u64::try_from(index * 13 + 17).expect("small affine evaluation")))
-            .collect::<Vec<_>>()];
-        let compositions = vec![(0..parameters.composition_degree_chunks)
-            .map(|chunk| {
-                (0..rows)
-                    .map(|index| {
-                        E::from_base(F(u64::try_from(index * (chunk + 3) + chunk + 19)
-                            .expect("small composition evaluation")))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>()];
+        let aux_lde = vec![
+            (0..rows)
+                .map(|index| F(u64::try_from(index * 13 + 17).expect("small affine evaluation")))
+                .collect::<Vec<_>>(),
+        ];
+        let compositions = vec![
+            (0..parameters.composition_degree_chunks)
+                .map(|chunk| {
+                    (0..rows)
+                        .map(|index| {
+                            E::from_base(F(u64::try_from(index * (chunk + 3) + chunk + 19)
+                                .expect("small composition evaluation")))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+        ];
         let base_tree = aggregate::row_tree_v1(
             MOCK_DOMAINS_V1.base_leaf,
             MOCK_DOMAINS_V1.base_node,

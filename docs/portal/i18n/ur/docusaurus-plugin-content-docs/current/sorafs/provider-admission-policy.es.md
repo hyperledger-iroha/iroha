@@ -41,7 +41,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
 ## انٹیک فلو
 
 1. ** تجویز کی تخلیق **
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
      `ProviderAdmissionProposalV1` + تصدیقی بنڈل تیار کرنا۔
    - توثیق: `profile_id` میں مطلوبہ فیلڈز ، اسٹیک> 0 ، کیننیکل چنکر ہینڈل کو یقینی بنائیں۔
 2. ** گورننس کی توثیق **
@@ -65,7 +65,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
 
 ### سی ایل آئی حوالہ
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ پر عمل کریں۔- `proposal`
+`cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ پر عمل کریں۔- `proposal`
   - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
     `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
     `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -110,7 +110,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
 1. `provider-admission proposal` اور `provider-admission sign` کے ساتھ جانشین کی تجویز/اشتہار کی جوڑی بنائیں ، `--retention-epoch` میں اضافہ کریں اور ضرورت کے مطابق اسٹیکس/اختتامی مقامات کو اپ ڈیٹ کریں۔
 2. چلائیں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -128,7 +128,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
 #### ہنگامی منسوخی
 1. سمجھوتہ کرنے والے لفافے کی شناخت کریں اور منسوخیاں جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

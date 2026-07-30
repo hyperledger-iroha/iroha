@@ -11,6 +11,8 @@
 use std::collections::BTreeSet;
 
 use ed25519_dalek::SigningKey;
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
@@ -45,8 +47,8 @@ use crate::{
     SignedReplicationOrderValidationError, TradeEventV1, XorQuantity, decode_billing_line_item_v1,
     decode_billing_statement_v1, decode_hedging_price_feed_v1,
     decode_hedging_reference_price_decision_v1, decode_order_cancel_v1, decode_order_request_v1,
-    decode_settlement_channel_v1, decode_settlement_receipt_v1, decode_trade_event_v1,
-    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    decode_provider_advert_v1, decode_settlement_channel_v1, decode_settlement_receipt_v1,
+    decode_trade_event_v1, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
     sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
     verify_envelope_untrusted_signers, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_pdp_bundle_v1, verify_pdp_witnesses_v1,
@@ -71,6 +73,14 @@ const POP_REFERENCE_PAYLOAD_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 const PDP_STRUCTURAL_OK_CODE: &str = "SFS-PDP-DIAG-000";
 const PDP_TRUST_REQUIRED_CODE: &str = "SFS-PDP-004";
 const PDP_REFERENCE_DECODE_MAX_DEPTH_V1: usize = 64;
+const CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1: usize = 4 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[norito(schema_name = "iroha_data_model::isi::escrow::CancelAssetLock")]
+struct CancelAssetLockWireV1 {
+    escrow_id: Hash,
+    expected_remaining_amount: Quantity,
+}
 
 /// Structured key/value context attached to validation outcomes.
 #[derive(
@@ -888,7 +898,15 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::PorChallenge => {
-            let challenge = decode_bundle_payload::<PorChallengeV1>(payload, generated_at)?;
+            let challenge =
+                crate::por::decode_por_challenge_v1(payload.bytes).map_err(|error| {
+                    bundle_decode_error(
+                        payload.kind,
+                        &payload.label,
+                        error.to_string(),
+                        generated_at,
+                    )
+                })?;
             let mut context = vec![
                 ValidationContextFieldV1::new(
                     "challenge_id_hex",
@@ -940,7 +958,14 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::PorProof => {
-            let proof = decode_bundle_payload::<PorProofV1>(payload, generated_at)?;
+            let proof = crate::por::decode_por_proof_v1(payload.bytes).map_err(|error| {
+                bundle_decode_error(
+                    payload.kind,
+                    &payload.label,
+                    error.to_string(),
+                    generated_at,
+                )
+            })?;
             let mut context = vec![
                 ValidationContextFieldV1::new("challenge_id_hex", hex::encode(proof.challenge_id)),
                 ValidationContextFieldV1::new(
@@ -2395,7 +2420,9 @@ fn governance_signature_algorithm_label(algorithm: GovernanceSignatureAlgorithm)
 fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'static str {
     match error {
         GovernanceLogValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
-        GovernanceLogValidationError::InvalidSignature => "SFS-SIG-005",
+        GovernanceLogValidationError::InvalidSignature
+        | GovernanceLogValidationError::InvalidSignaturePublicKeyLength { .. }
+        | GovernanceLogValidationError::InvalidSignatureLength { .. } => "SFS-SIG-005",
         GovernanceLogValidationError::CidEncoding { .. } => "SFS-INT-001",
         GovernanceLogValidationError::InvalidNodeCid => "SFS-GOV-003",
         GovernanceLogValidationError::Advert(error) => advert_validation_code(error),
@@ -2416,6 +2443,10 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         | GovernanceLogValidationError::ExternalPayload(_)
         | GovernanceLogValidationError::PorChallengePublication(_)
         | GovernanceLogValidationError::PorWeeklyReport(_)
+        | GovernanceLogValidationError::CanonicalPayloadLengthUnavailable
+        | GovernanceLogValidationError::PayloadTooLarge { .. }
+        | GovernanceLogValidationError::CanonicalNodeLengthUnavailable
+        | GovernanceLogValidationError::NodeTooLarge { .. }
         | GovernanceLogValidationError::InvalidNodeCidLength { .. }
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
@@ -2426,7 +2457,9 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
 fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &'static str {
     match error {
         GovernanceLogValidationError::UnsupportedVersion { .. } => CATEGORY_VALIDATION,
-        GovernanceLogValidationError::InvalidSignature => CATEGORY_SIGNATURE,
+        GovernanceLogValidationError::InvalidSignature
+        | GovernanceLogValidationError::InvalidSignaturePublicKeyLength { .. }
+        | GovernanceLogValidationError::InvalidSignatureLength { .. } => CATEGORY_SIGNATURE,
         GovernanceLogValidationError::CidEncoding { .. } => CATEGORY_INTERNAL,
         GovernanceLogValidationError::Advert(error) => advert_validation_category(error),
         GovernanceLogValidationError::ReplicationOrder(error) => {
@@ -2446,6 +2479,10 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         | GovernanceLogValidationError::ExternalPayload(_)
         | GovernanceLogValidationError::PorChallengePublication(_)
         | GovernanceLogValidationError::PorWeeklyReport(_)
+        | GovernanceLogValidationError::CanonicalPayloadLengthUnavailable
+        | GovernanceLogValidationError::PayloadTooLarge { .. }
+        | GovernanceLogValidationError::CanonicalNodeLengthUnavailable
+        | GovernanceLogValidationError::NodeTooLarge { .. }
         | GovernanceLogValidationError::InvalidNodeCidLength { .. }
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
@@ -2478,7 +2515,9 @@ fn governance_signature_verification_category(
 
 fn governance_dag_block_validation_code(error: &GovernanceDagBlockValidationError) -> &'static str {
     match error {
-        GovernanceDagBlockValidationError::UnsupportedVersion { .. }
+        GovernanceDagBlockValidationError::CanonicalLengthUnavailable
+        | GovernanceDagBlockValidationError::BlockTooLarge { .. }
+        | GovernanceDagBlockValidationError::UnsupportedVersion { .. }
         | GovernanceDagBlockValidationError::InvalidBlockCidLength { .. }
         | GovernanceDagBlockValidationError::InvalidPrevBlockCidLength { .. }
         | GovernanceDagBlockValidationError::RootHasParent
@@ -3619,7 +3658,7 @@ pub fn validate_provider_advert_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new("provider_advert", input_label);
     let inputs = vec![input];
-    let advert = match norito::decode_from_bytes::<ProviderAdvertV1>(bytes) {
+    let advert = match decode_provider_advert_v1(bytes) {
         Ok(advert) => advert,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -3830,6 +3869,97 @@ where
             <T as norito::codec::Decode>::decode(&mut input).map_err(|_| primary_error)
         }
     }
+}
+
+/// Validates a canonical appeal-finance `CancelAssetLock` V1 Norito payload.
+#[must_use]
+pub fn validate_appeal_finance_cancel_asset_lock_bytes(
+    bytes: &[u8],
+    input_label: impl Into<String>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    let inputs = vec![ValidationInputV1::new("cancel_asset_lock", input_label)];
+    let instruction = match decode_cancel_asset_lock_reference(bytes) {
+        Ok(instruction) => instruction,
+        Err(error) => {
+            return ValidationOutcomeV1::error(
+                "SFS-NORITO-001",
+                CATEGORY_NORITO,
+                format!("failed to decode CancelAssetLock Norito payload: {error}"),
+                "Re-encode the cancellation with the canonical appeal-finance CancelAssetLock V1 schema.",
+                vec![
+                    "sorafs.reference.appeal_finance".to_owned(),
+                    "sorafs.reference.code.SFS-NORITO-001".to_owned(),
+                ],
+                vec![ValidationContextFieldV1::new("schema", "CancelAssetLock")],
+                inputs,
+                generated_at,
+            );
+        }
+    };
+
+    let context = vec![
+        ValidationContextFieldV1::new("schema", "CancelAssetLock"),
+        ValidationContextFieldV1::new("escrow_id_hex", hex::encode(instruction.escrow_id.as_ref())),
+        ValidationContextFieldV1::new(
+            "expected_remaining_amount",
+            instruction.expected_remaining_amount.to_string(),
+        ),
+        ValidationContextFieldV1::new("canonical_bytes", bytes.len().to_string()),
+    ];
+    if instruction.expected_remaining_amount.is_zero() {
+        return ValidationOutcomeV1::error(
+            "SFS-VAL-001",
+            CATEGORY_VALIDATION,
+            "CancelAssetLock expected_remaining_amount must be greater than zero",
+            "Submit the exact positive remaining quantity from fresh committed escrow state.",
+            vec![
+                "sorafs.reference.appeal_finance".to_owned(),
+                "sorafs.reference.code.SFS-VAL-001".to_owned(),
+            ],
+            context,
+            inputs,
+            generated_at,
+        );
+    }
+
+    ValidationOutcomeV1::ok(
+        "SFS-OK-000",
+        "appeal-finance CancelAssetLock payload accepted",
+        vec![
+            "sorafs.reference.appeal_finance".to_owned(),
+            "sorafs.reference.code.SFS-OK-000".to_owned(),
+        ],
+        context,
+        inputs,
+        generated_at,
+    )
+}
+
+fn decode_cancel_asset_lock_reference(bytes: &[u8]) -> Result<CancelAssetLockWireV1, String> {
+    if bytes.len() > CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1 {
+        return Err(format!(
+            "CancelAssetLock payload is {} bytes; maximum canonical size is {}",
+            bytes.len(),
+            CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1
+        ));
+    }
+    let limits = norito::DecodeLimits::new(
+        16,
+        CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1,
+        CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1,
+        CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1.saturating_mul(2),
+        8,
+    );
+    let instruction: CancelAssetLockWireV1 =
+        norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| error.to_string())?;
+    let canonical = norito::to_bytes(&instruction).map_err(|error| error.to_string())?;
+    if canonical != bytes {
+        return Err(
+            "CancelAssetLock payload is not the exact canonical Norito encoding".to_owned(),
+        );
+    }
+    Ok(instruction)
 }
 
 /// Validates a Norito-encoded [`ReplicationOrderV1`] and emits a reference outcome.
@@ -5020,7 +5150,7 @@ pub fn validate_por_challenge_proof_bytes(
         ValidationInputV1::new("por_challenge", challenge_label),
         ValidationInputV1::new("por_proof", proof_label),
     ];
-    let challenge = match norito::decode_from_bytes::<PorChallengeV1>(challenge_bytes) {
+    let challenge = match crate::por::decode_por_challenge_v1(challenge_bytes) {
         Ok(challenge) => challenge,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -5035,7 +5165,7 @@ pub fn validate_por_challenge_proof_bytes(
             );
         }
     };
-    let proof = match norito::decode_from_bytes::<PorProofV1>(proof_bytes) {
+    let proof = match crate::por::decode_por_proof_v1(proof_bytes) {
         Ok(proof) => proof,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -9507,6 +9637,55 @@ mod tests {
             decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
+    }
+
+    #[test]
+    fn validate_appeal_finance_cancel_asset_lock_bytes_accepts_canonical_fixture() {
+        let bytes = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
+        ))
+        .expect("read canonical CancelAssetLock fixture");
+        let outcome =
+            validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "cancel_asset_lock_v1.to", 41);
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-OK-000");
+        assert_eq!(
+            outcome
+                .context
+                .iter()
+                .find(|field| field.key == "canonical_bytes")
+                .map(|field| field.value.as_str()),
+            Some("85")
+        );
+    }
+
+    #[test]
+    fn validate_appeal_finance_cancel_asset_lock_bytes_rejects_trailing_bytes() {
+        let mut bytes = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
+        ))
+        .expect("read canonical CancelAssetLock fixture");
+        bytes.push(0);
+        let outcome = validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "trailing.to", 42);
+
+        assert!(!outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, CATEGORY_NORITO);
+    }
+
+    #[test]
+    fn validate_appeal_finance_cancel_asset_lock_bytes_rejects_zero_quantity() {
+        let bytes = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+        ))
+        .expect("read zero-quantity CancelAssetLock fixture");
+        let outcome =
+            validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "zero-quantity.to", 43);
+
+        assert!(!outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-VAL-001");
+        assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
 
     #[test]

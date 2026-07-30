@@ -34,6 +34,48 @@ private const val STREAM_TOKEN_BASE64 = "c3RyZWFtLXRva2Vu"
 
 class SorafsGatewayCanonicalInputTest {
     @Test
+    fun policyLabelParsersAcceptOnlyExactV1Labels() {
+        assertEquals(TransportPolicy.SORANET_FIRST, TransportPolicy.fromLabel("soranet-first"))
+        assertEquals(TransportPolicy.SORANET_STRICT, TransportPolicy.fromLabel("soranet-strict"))
+        assertEquals(TransportPolicy.DIRECT_ONLY, TransportPolicy.fromLabel("direct-only"))
+        assertEquals(AnonymityPolicy.ANON_GUARD_PQ, AnonymityPolicy.fromLabel("anon-guard-pq"))
+        assertEquals(
+            AnonymityPolicy.ANON_MAJORITY_PQ,
+            AnonymityPolicy.fromLabel("anon-majority-pq"),
+        )
+        assertEquals(AnonymityPolicy.ANON_STRICT_PQ, AnonymityPolicy.fromLabel("anon-strict-pq"))
+        assertEquals(WriteModeHint.READ_ONLY, WriteModeHint.fromLabel("read-only"))
+        assertEquals(WriteModeHint.UPLOAD_PQ_ONLY, WriteModeHint.fromLabel("upload-pq-only"))
+
+        listOf(
+            "soranet_first",
+            "soranet-only",
+            "SORANET-FIRST",
+            " soranet-first",
+            "soranet-first ",
+        ).forEach { assertNull(TransportPolicy.fromLabel(it), "accepted transport alias '$it'") }
+        listOf(
+            "anon_guard_pq",
+            "stage-a",
+            "stage_b",
+            "stagec",
+            "ANON-GUARD-PQ",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+        ).forEach { assertNull(AnonymityPolicy.fromLabel(it), "accepted anonymity alias '$it'") }
+        listOf(
+            "read_only",
+            "upload_pq_only",
+            "READ-ONLY",
+            " read-only",
+            "read-only ",
+        ).forEach { assertNull(WriteModeHint.fromLabel(it), "accepted write-mode alias '$it'") }
+        assertNull(TransportPolicy.fromLabel(null))
+        assertNull(AnonymityPolicy.fromLabel(null))
+        assertNull(WriteModeHint.fromLabel(null))
+    }
+
+    @Test
     fun canonicalProviderValuesAreStoredAndSerializedUnchanged() {
         val provider = sampleProvider()
 
@@ -186,7 +228,7 @@ class SorafsGatewayCanonicalInputTest {
             maxPeers = 3,
             retryBudget = 5,
             transportPolicy = TransportPolicy.DIRECT_ONLY,
-            anonymityPolicy = AnonymityPolicy.ANON_MAJORIY_PQ,
+            anonymityPolicy = AnonymityPolicy.ANON_MAJORITY_PQ,
             writeModeHint = WriteModeHint.UPLOAD_PQ_ONLY,
         )
 
@@ -206,7 +248,7 @@ class SorafsGatewayCanonicalInputTest {
                 "retry_budget" to 5,
                 "transport_policy" to "direct-only",
                 "anonymity_policy" to "anon-majority-pq",
-                "write_mode_hint" to "upload_pq_only",
+                "write_mode_hint" to "upload-pq-only",
             ),
             options.toJson(),
         )

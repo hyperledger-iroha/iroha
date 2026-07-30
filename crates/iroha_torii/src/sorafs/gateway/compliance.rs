@@ -4,6 +4,9 @@
 //! or HTTP access. Feed transport and catalog signatures cross explicit runtime
 //! boundaries so production embeddings can keep authentication material in
 //! their KMS/HSM and pin the exact addresses used for each connection.
+//! Enabled feed transports attest a stable V1 handle, revision, and canonical
+//! hostname/SPKI policy digest before checkpoint state is opened and again
+//! before and after every feed operation.
 
 use std::{
     cmp::Ordering,
@@ -27,6 +30,8 @@ use flate2::read::GzDecoder;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 use url::{Host, Url};
+
+use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
 
 /// V1 schema version for compliance catalog payloads.
 pub const GATEWAY_COMPLIANCE_CATALOG_VERSION_V1: u8 = 1;
@@ -61,8 +66,16 @@ const ROLLBACK_SIGNING_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-rollback-v
 const TRUST_POLICY_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-trust-policy-v1";
 const CATALOG_DIGEST_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-catalog-digest-v1";
 const FEED_DIGEST_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-feed-v1";
+const FEED_TRANSPORT_POLICY_DOMAIN_V1: &[u8] =
+    b"sorafs-gateway-compliance-feed-transport-policy-v1";
 const CHECKPOINT_STORE_GENERATION_DOMAIN_V1: &[u8] =
     b"sorafs-gateway-compliance-checkpoint-store-generation-v1";
+
+/// Stable runtime handle required from the V1 authenticated feed transport.
+pub const GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1: &str =
+    "sorafs.gateway.compliance.feed-https.v1";
+/// Exact V1 runtime adapter revision.
+pub const GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1: u64 = 1;
 
 /// One strong Ed25519 identity authorized by policy.
 #[derive(
@@ -850,7 +863,7 @@ pub struct GatewayComplianceFetchRequest {
 }
 
 /// Address- and trust-bound response returned by a runtime transport.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GatewayComplianceFetchResponse {
     /// HTTP status.
     pub status: u16,
@@ -868,8 +881,36 @@ pub struct GatewayComplianceFetchResponse {
     pub elapsed: Duration,
 }
 
+impl Debug for GatewayComplianceFetchResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GatewayComplianceFetchResponse")
+            .field("status", &self.status)
+            .field(
+                "redirect_location_bytes",
+                &self.redirect_location.as_ref().map(String::len),
+            )
+            .field("connected_address", &self.connected_address)
+            .field("peer_spki_sha256", &self.peer_spki_sha256)
+            .field("content_encoding", &self.content_encoding)
+            .field("body_bytes", &self.body.len())
+            .field("elapsed", &self.elapsed)
+            .finish()
+    }
+}
+
 /// Runtime-owned authenticated DNS and HTTPS transport.
-pub trait GatewayComplianceFeedTransport: Debug + Send + Sync {
+pub trait GatewayComplianceFeedTransport: Send + Sync {
+    /// Return the provider identity currently serving this runtime boundary.
+    ///
+    /// Implementations must obtain this identity from the same provider
+    /// instance that performs [`Self::resolve`] and [`Self::fetch`]. Provider
+    /// diagnostics must remain behind this boundary; callers intentionally see
+    /// only the payload-free [`GatewayComplianceFeedTransportProbeError`].
+    fn qualification(
+        &self,
+    ) -> Result<GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError>;
+
     /// Resolve a DNS hostname using the runtime's pinned resolver.
     fn resolve(
         &self,
@@ -885,6 +926,36 @@ pub trait GatewayComplianceFeedTransport: Debug + Send + Sync {
     ) -> Result<GatewayComplianceFetchResponse, GatewayComplianceError>;
 }
 
+/// Payload-free identity reported by one authenticated feed transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayComplianceFeedTransportIdentityV1 {
+    /// Stable adapter contract handle. This is never a credential or URL.
+    pub provider_handle: String,
+    /// Monotonic deployed adapter revision.
+    pub revision: u64,
+    /// Domain-separated digest of the exact hostname/SPKI trust inventory.
+    pub policy_digest: [u8; 32],
+    /// Explicit marker set by test, mock, development, or placeholder adapters.
+    pub test_marked: bool,
+}
+
+/// Redacted failure returned when a runtime provider cannot attest its identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("gateway compliance feed transport qualification failed")]
+pub struct GatewayComplianceFeedTransportProbeError;
+
+#[derive(Debug, NoritoSerialize)]
+struct GatewayComplianceFeedTransportPolicyDigestV1 {
+    version: u8,
+    hosts: Vec<GatewayComplianceFeedTransportHostDigestV1>,
+}
+
+#[derive(Debug, NoritoSerialize)]
+struct GatewayComplianceFeedTransportHostDigestV1 {
+    hostname: String,
+    accepted_spki_sha256: Vec<[u8; 32]>,
+}
+
 /// Controller configuration assembled exclusively from resolved `iroha_config`.
 #[derive(Debug, Clone)]
 pub struct GatewayComplianceControllerConfig {
@@ -896,6 +967,11 @@ pub struct GatewayComplianceControllerConfig {
     pub gateway_scope: String,
     /// Configured external feeds in strict feed-id order.
     pub feeds: Vec<GatewayComplianceFeedPolicy>,
+    /// Exact independently configured runtime feed-transport provider.
+    ///
+    /// Production launchers must provide this binding. `None` is reserved for
+    /// the test-only controller core, which cannot perform external feed I/O.
+    pub feed_transport_provider: Option<GatewayProviderBindingV1>,
     /// Fetch and decompression limits.
     pub fetch_limits: GatewayComplianceFetchLimits,
     /// Maximum accepted future timestamp skew.
@@ -1019,6 +1095,14 @@ impl GatewayComplianceControllerConfig {
             validate_feed_url(feed, &feed.url)?;
             previous = Some(&feed.feed_id);
         }
+        if let Some(binding) = self.feed_transport_provider.as_ref()
+            && binding.policy_digest() != self.feed_transport_policy_digest()?
+        {
+            return Err(GatewayComplianceError::InvalidPolicy(
+                "feed transport provider policy digest does not bind the exact configured hostname/SPKI inventory"
+                    .into(),
+            ));
+        }
         Ok(())
     }
 
@@ -1028,6 +1112,84 @@ impl GatewayComplianceControllerConfig {
             .ok()
             .map(|index| &self.feeds[index])
     }
+
+    fn expected_feed_transport_identity(
+        &self,
+    ) -> Result<GatewayComplianceFeedTransportIdentityV1, GatewayComplianceError> {
+        let binding = self.feed_transport_provider.as_ref().ok_or_else(|| {
+            GatewayComplianceError::InvalidPolicy(
+                "feed transport provider binding is required for external feed access".into(),
+            )
+        })?;
+        if binding.policy_digest() != self.feed_transport_policy_digest()? {
+            return Err(GatewayComplianceError::InvalidPolicy(
+                "feed transport provider policy digest does not bind the exact configured hostname/SPKI inventory"
+                    .into(),
+            ));
+        }
+        Ok(GatewayComplianceFeedTransportIdentityV1 {
+            provider_handle: binding.provider_handle().to_owned(),
+            revision: binding.revision(),
+            policy_digest: binding.policy_digest(),
+            test_marked: false,
+        })
+    }
+
+    fn feed_transport_policy_digest(&self) -> Result<[u8; 32], GatewayComplianceError> {
+        let mut pins_by_hostname = std::collections::BTreeMap::new();
+        for feed in &self.feeds {
+            for host in &feed.hosts {
+                if let Some(existing) = pins_by_hostname
+                    .insert(host.hostname.clone(), host.accepted_spki_sha256.clone())
+                    && existing != host.accepted_spki_sha256
+                {
+                    return Err(GatewayComplianceError::InvalidPolicy(
+                        "one compliance hostname has conflicting trust inventories".into(),
+                    ));
+                }
+            }
+        }
+        gateway_compliance_feed_transport_policy_digest(&pins_by_hostname)
+    }
+}
+
+/// Compute the V1 domain-separated digest of a canonical hostname/SPKI policy.
+///
+/// Runtime adapter implementations use this helper to attest the exact
+/// non-secret trust inventory they enforce. Hostnames and pin sets are
+/// traversed in `BTreeMap`/`BTreeSet` order, so every platform produces the
+/// same digest.
+///
+/// # Errors
+///
+/// Returns an error when the inventory is empty, noncanonical, or contains an
+/// empty or all-zero pin set.
+pub fn gateway_compliance_feed_transport_policy_digest(
+    pins_by_hostname: &std::collections::BTreeMap<String, BTreeSet<[u8; 32]>>,
+) -> Result<[u8; 32], GatewayComplianceError> {
+    if pins_by_hostname.is_empty() {
+        return Err(GatewayComplianceError::InvalidPolicy(
+            "compliance feed transport trust inventory must not be empty".into(),
+        ));
+    }
+    let mut hosts = Vec::with_capacity(pins_by_hostname.len());
+    for (hostname, pins) in pins_by_hostname {
+        validate_dns_hostname(hostname)?;
+        if pins.is_empty() || pins.iter().any(|pin| pin.iter().all(|byte| *byte == 0)) {
+            return Err(GatewayComplianceError::InvalidPolicy(
+                "invalid compliance feed transport trust inventory".into(),
+            ));
+        }
+        hosts.push(GatewayComplianceFeedTransportHostDigestV1 {
+            hostname: hostname.clone(),
+            accepted_spki_sha256: pins.iter().copied().collect(),
+        });
+    }
+    hash_canonical(
+        FEED_TRANSPORT_POLICY_DOMAIN_V1,
+        &GatewayComplianceFeedTransportPolicyDigestV1 { version: 1, hosts },
+        MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+    )
 }
 
 /// Effective request disposition.
@@ -1576,16 +1738,50 @@ impl std::ops::DerefMut for GatewayComplianceControllerState {
 #[derive(Debug)]
 pub struct GatewayComplianceController {
     config: GatewayComplianceControllerConfig,
+    expected_feed_transport_identity: Option<GatewayComplianceFeedTransportIdentityV1>,
     lease: Box<dyn GatewayComplianceStoreLease>,
     state: RwLock<GatewayComplianceControllerState>,
     fenced: AtomicBool,
 }
 
 impl GatewayComplianceController {
-    /// Load or initialize a controller from a durable store.
-    pub fn new(
+    /// Load or initialize a controller without enabling external feed access.
+    ///
+    /// Production launchers must use [`Self::new_with_feed_transport`]. This
+    /// private constructor exists for controller-core tests and for the
+    /// test-only allow-all policy; [`Self::fetch_feed`] fails closed when no
+    /// transport identity was bound at construction.
+    #[cfg(test)]
+    fn new(
         config: GatewayComplianceControllerConfig,
         store: Arc<dyn GatewayComplianceStore>,
+    ) -> Result<Self, GatewayComplianceError> {
+        Self::new_inner(config, store, None)
+    }
+
+    /// Qualify an authenticated feed transport before opening durable state,
+    /// then load or initialize the controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when controller policy is invalid, provider identity
+    /// does not exactly match it, the provider is unavailable or test-marked,
+    /// or the durable checkpoint cannot be acquired and validated.
+    pub fn new_with_feed_transport(
+        config: GatewayComplianceControllerConfig,
+        store: Arc<dyn GatewayComplianceStore>,
+        transport: &dyn GatewayComplianceFeedTransport,
+    ) -> Result<Self, GatewayComplianceError> {
+        config.validate()?;
+        let expected_feed_transport_identity = config.expected_feed_transport_identity()?;
+        qualify_feed_transport(&expected_feed_transport_identity, transport)?;
+        Self::new_inner(config, store, Some(expected_feed_transport_identity))
+    }
+
+    fn new_inner(
+        config: GatewayComplianceControllerConfig,
+        store: Arc<dyn GatewayComplianceStore>,
+        expected_feed_transport_identity: Option<GatewayComplianceFeedTransportIdentityV1>,
     ) -> Result<Self, GatewayComplianceError> {
         config.validate()?;
         let policy_digest = config.trust_policy.canonical_digest()?;
@@ -1598,6 +1794,7 @@ impl GatewayComplianceController {
         validate_checkpoint(&checkpoint, &config, 1)?;
         Ok(Self {
             config,
+            expected_feed_transport_identity,
             lease,
             state: RwLock::new(GatewayComplianceControllerState {
                 checkpoint,
@@ -1613,11 +1810,19 @@ impl GatewayComplianceController {
         feed_id: &str,
         transport: &dyn GatewayComplianceFeedTransport,
     ) -> Result<GatewayComplianceFeedDocumentV1, GatewayComplianceError> {
+        let expected = self
+            .expected_feed_transport_identity
+            .as_ref()
+            .ok_or(GatewayComplianceError::FeedTransportNotQualified)?;
+        qualify_feed_transport(expected, transport)?;
         let feed = self
             .config
             .feed(feed_id)
             .ok_or_else(|| GatewayComplianceError::UnknownFeed(feed_id.to_owned()))?;
-        let bytes = fetch_feed_bytes(feed, self.config.fetch_limits, transport)?;
+        let bytes = fetch_feed_bytes(feed, self.config.fetch_limits, expected, transport)?;
+        // Discard even fully bounded/authenticated response bytes if the
+        // runtime provider rotated or was substituted during network I/O.
+        qualify_feed_transport(expected, transport)?;
         let document: GatewayComplianceFeedDocumentV1 =
             norito::json::from_slice(&bytes).map_err(|error| {
                 GatewayComplianceError::InvalidFeed(format!("invalid canonical feed JSON: {error}"))
@@ -2282,6 +2487,7 @@ pub(crate) fn allow_all_gateway_compliance_controller_for_tests() -> Arc<Gateway
         region_scope: "region:test".into(),
         gateway_scope: "gateway:gateway-test".into(),
         feeds: Vec::new(),
+        feed_transport_provider: None,
         fetch_limits: GatewayComplianceFetchLimits::default(),
         max_clock_skew_secs: 300,
         max_feed_age_secs: 3_600,
@@ -3235,6 +3441,7 @@ fn decode_checkpoint(
 fn fetch_feed_bytes(
     feed: &GatewayComplianceFeedPolicy,
     limits: GatewayComplianceFetchLimits,
+    expected_transport: &GatewayComplianceFeedTransportIdentityV1,
     transport: &dyn GatewayComplianceFeedTransport,
 ) -> Result<Vec<u8>, GatewayComplianceError> {
     let started = Instant::now();
@@ -3244,16 +3451,25 @@ fn fetch_feed_bytes(
             .host_str()
             .ok_or_else(|| GatewayComplianceError::UnsafeUrl("missing host".into()))?;
         let remaining = remaining_fetch_time(started, limits.total_timeout)?;
-        let mut addresses = transport.resolve(host, limits.connect_timeout.min(remaining))?;
+        let mut addresses = qualified_feed_transport_resolve(
+            expected_transport,
+            transport,
+            host,
+            limits.connect_timeout.min(remaining),
+        )?;
         let remaining = remaining_fetch_time(started, limits.total_timeout)?;
         normalize_resolved_addresses(&mut addresses, limits.max_dns_addresses)?;
-        let response = transport.fetch(&GatewayComplianceFetchRequest {
-            url: current.clone(),
-            pinned_addresses: addresses.clone(),
-            connect_timeout: limits.connect_timeout.min(remaining),
-            total_timeout: remaining,
-            max_encoded_bytes: limits.max_encoded_bytes,
-        })?;
+        let response = qualified_feed_transport_fetch(
+            expected_transport,
+            transport,
+            &GatewayComplianceFetchRequest {
+                url: current.clone(),
+                pinned_addresses: addresses.clone(),
+                connect_timeout: limits.connect_timeout.min(remaining),
+                total_timeout: remaining,
+                max_encoded_bytes: limits.max_encoded_bytes,
+            },
+        )?;
         if response.elapsed > remaining {
             return Err(GatewayComplianceError::FetchTimeout);
         }
@@ -3276,7 +3492,12 @@ fn fetch_feed_bytes(
             });
         }
         let remaining = remaining_fetch_time(started, limits.total_timeout)?;
-        let mut revalidated = transport.resolve(host, limits.connect_timeout.min(remaining))?;
+        let mut revalidated = qualified_feed_transport_resolve(
+            expected_transport,
+            transport,
+            host,
+            limits.connect_timeout.min(remaining),
+        )?;
         remaining_fetch_time(started, limits.total_timeout)?;
         normalize_resolved_addresses(&mut revalidated, limits.max_dns_addresses)?;
         if revalidated != addresses {
@@ -3313,6 +3534,51 @@ fn fetch_feed_bytes(
     Err(GatewayComplianceError::TooManyRedirects)
 }
 
+fn qualified_feed_transport_resolve(
+    expected: &GatewayComplianceFeedTransportIdentityV1,
+    transport: &dyn GatewayComplianceFeedTransport,
+    hostname: &str,
+    timeout: Duration,
+) -> Result<Vec<IpAddr>, GatewayComplianceError> {
+    qualify_feed_transport(expected, transport)?;
+    let result = transport.resolve(hostname, timeout);
+    qualify_feed_transport(expected, transport)?;
+    result.map_err(redact_feed_transport_operation_error)
+}
+
+fn qualified_feed_transport_fetch(
+    expected: &GatewayComplianceFeedTransportIdentityV1,
+    transport: &dyn GatewayComplianceFeedTransport,
+    request: &GatewayComplianceFetchRequest,
+) -> Result<GatewayComplianceFetchResponse, GatewayComplianceError> {
+    qualify_feed_transport(expected, transport)?;
+    let result = transport.fetch(request);
+    qualify_feed_transport(expected, transport)?;
+    result.map_err(redact_feed_transport_operation_error)
+}
+
+fn redact_feed_transport_operation_error(error: GatewayComplianceError) -> GatewayComplianceError {
+    match error {
+        GatewayComplianceError::FetchTimeout => GatewayComplianceError::FetchTimeout,
+        GatewayComplianceError::DnsRebinding => GatewayComplianceError::DnsRebinding,
+        GatewayComplianceError::NonPublicAddress => GatewayComplianceError::NonPublicAddress,
+        GatewayComplianceError::UnsafeAddressSet { found, maximum } => {
+            GatewayComplianceError::UnsafeAddressSet { found, maximum }
+        }
+        GatewayComplianceError::TrustPinMismatch => GatewayComplianceError::TrustPinMismatch,
+        GatewayComplianceError::ResourceLimit {
+            resource,
+            found,
+            maximum,
+        } => GatewayComplianceError::ResourceLimit {
+            resource,
+            found,
+            maximum,
+        },
+        _ => GatewayComplianceError::FeedTransportOperationFailed,
+    }
+}
+
 fn remaining_fetch_time(
     started: Instant,
     total_timeout: Duration,
@@ -3321,6 +3587,43 @@ fn remaining_fetch_time(
         .checked_sub(started.elapsed())
         .filter(|remaining| !remaining.is_zero())
         .ok_or(GatewayComplianceError::FetchTimeout)
+}
+
+fn qualify_feed_transport(
+    expected: &GatewayComplianceFeedTransportIdentityV1,
+    transport: &dyn GatewayComplianceFeedTransport,
+) -> Result<(), GatewayComplianceError> {
+    let observed = transport
+        .qualification()
+        .map_err(|_| GatewayComplianceError::FeedTransportUnavailable)?;
+    if observed.test_marked {
+        return Err(GatewayComplianceError::FeedTransportTestMarked);
+    }
+    let observed_binding = GatewayProviderBindingV1::try_new(
+        observed.provider_handle,
+        observed.revision,
+        observed.policy_digest,
+    )
+    .map_err(|error| match error {
+        GatewayProviderBindingErrorV1::TestMarkedHandle => {
+            GatewayComplianceError::FeedTransportTestMarked
+        }
+        GatewayProviderBindingErrorV1::ZeroRevision => GatewayComplianceError::FeedTransportStale,
+        GatewayProviderBindingErrorV1::InvalidHandle
+        | GatewayProviderBindingErrorV1::ZeroPolicyDigest => {
+            GatewayComplianceError::FeedTransportUnqualified
+        }
+    })?;
+    if observed_binding.provider_handle() != expected.provider_handle {
+        return Err(GatewayComplianceError::FeedTransportSubstituted);
+    }
+    if observed_binding.revision() != expected.revision {
+        return Err(GatewayComplianceError::FeedTransportStale);
+    }
+    if observed_binding.policy_digest() != expected.policy_digest {
+        return Err(GatewayComplianceError::FeedTransportSubstituted);
+    }
+    Ok(())
 }
 
 fn validate_feed_url(
@@ -3877,6 +4180,27 @@ pub enum GatewayComplianceError {
     /// Catalog policy digest differs from resolved config.
     #[error("gateway compliance policy digest mismatch")]
     PolicyDigestMismatch,
+    /// Feed access was attempted on a controller without a startup-qualified transport.
+    #[error("gateway compliance feed transport was not qualified at startup")]
+    FeedTransportNotQualified,
+    /// The runtime feed transport could not attest its identity.
+    #[error("gateway compliance feed transport is unavailable")]
+    FeedTransportUnavailable,
+    /// The runtime feed transport returned an invalid public qualification.
+    #[error("gateway compliance feed transport is unqualified")]
+    FeedTransportUnqualified,
+    /// The runtime feed transport failed without exposing provider diagnostics.
+    #[error("gateway compliance feed transport operation failed")]
+    FeedTransportOperationFailed,
+    /// The runtime feed transport does not match the configured trust inventory.
+    #[error("gateway compliance feed transport was substituted")]
+    FeedTransportSubstituted,
+    /// The runtime feed transport revision differs from the V1 contract.
+    #[error("gateway compliance feed transport revision is stale")]
+    FeedTransportStale,
+    /// Test, mock, development, and placeholder providers are forbidden.
+    #[error("gateway compliance feed transport is test-marked")]
+    FeedTransportTestMarked,
     /// Catalog timestamp is stale or too far in the future.
     #[error("gateway compliance catalog is stale or future-dated")]
     CatalogNotFresh,
@@ -4016,11 +4340,11 @@ pub enum GatewayComplianceError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, VecDeque},
+        collections::{BTreeMap, BTreeSet, VecDeque},
         io::Write as _,
         sync::{
             Mutex,
-            atomic::{AtomicBool, Ordering as TestAtomicOrdering},
+            atomic::{AtomicBool, AtomicUsize, Ordering as TestAtomicOrdering},
         },
     };
 
@@ -4190,17 +4514,452 @@ mod tests {
     }
 
     fn config() -> GatewayComplianceControllerConfig {
+        let feed = feed_policy();
+        let policy_digest = gateway_compliance_feed_transport_policy_digest(&BTreeMap::from([(
+            feed.hosts[0].hostname.clone(),
+            feed.hosts[0].accepted_spki_sha256.clone(),
+        )]))
+        .expect("test feed transport policy digest");
         GatewayComplianceControllerConfig {
             trust_policy: trust_policy(),
             region_scope: "region:eu".into(),
             gateway_scope: "gateway:gateway-eu".into(),
-            feeds: vec![feed_policy()],
+            feeds: vec![feed],
+            feed_transport_provider: Some(
+                GatewayProviderBindingV1::try_new(
+                    GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.to_owned(),
+                    GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+                    policy_digest,
+                )
+                .expect("valid test feed transport provider binding"),
+            ),
             fetch_limits: GatewayComplianceFetchLimits::default(),
             max_clock_skew_secs: 300,
             max_feed_age_secs: 3_600,
             max_catalog_validity_secs: 7_200,
             max_history_entries: 16,
         }
+    }
+
+    #[derive(Debug)]
+    struct QualifiableTransport {
+        identity: Mutex<GatewayComplianceFeedTransportIdentityV1>,
+        probe_available: AtomicBool,
+        drift_revision_on_resolve: AtomicBool,
+        drift_revision_on_fetch: AtomicBool,
+        drift_policy_on_fetch: AtomicBool,
+        qualification_calls: AtomicUsize,
+        resolve_calls: AtomicUsize,
+    }
+
+    impl QualifiableTransport {
+        fn new(identity: GatewayComplianceFeedTransportIdentityV1) -> Self {
+            Self {
+                identity: Mutex::new(identity),
+                probe_available: AtomicBool::new(true),
+                drift_revision_on_resolve: AtomicBool::new(false),
+                drift_revision_on_fetch: AtomicBool::new(false),
+                drift_policy_on_fetch: AtomicBool::new(false),
+                qualification_calls: AtomicUsize::new(0),
+                resolve_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn expected() -> Self {
+            Self::new(
+                config()
+                    .expected_feed_transport_identity()
+                    .expect("expected feed transport identity"),
+            )
+        }
+    }
+
+    impl GatewayComplianceFeedTransport for QualifiableTransport {
+        fn qualification(
+            &self,
+        ) -> Result<
+            GatewayComplianceFeedTransportIdentityV1,
+            GatewayComplianceFeedTransportProbeError,
+        > {
+            self.qualification_calls
+                .fetch_add(1, TestAtomicOrdering::SeqCst);
+            if !self.probe_available.load(TestAtomicOrdering::SeqCst) {
+                return Err(GatewayComplianceFeedTransportProbeError);
+            }
+            Ok(self
+                .identity
+                .lock()
+                .expect("transport identity lock")
+                .clone())
+        }
+
+        fn resolve(
+            &self,
+            _hostname: &str,
+            _timeout: Duration,
+        ) -> Result<Vec<IpAddr>, GatewayComplianceError> {
+            self.resolve_calls.fetch_add(1, TestAtomicOrdering::SeqCst);
+            if self
+                .drift_revision_on_resolve
+                .swap(false, TestAtomicOrdering::SeqCst)
+            {
+                self.identity
+                    .lock()
+                    .expect("transport identity lock")
+                    .revision += 1;
+            }
+            Ok(vec!["93.184.216.34".parse().expect("public IP")])
+        }
+
+        fn fetch(
+            &self,
+            _request: &GatewayComplianceFetchRequest,
+        ) -> Result<GatewayComplianceFetchResponse, GatewayComplianceError> {
+            if self
+                .drift_revision_on_fetch
+                .swap(false, TestAtomicOrdering::SeqCst)
+            {
+                self.identity
+                    .lock()
+                    .expect("transport identity lock")
+                    .revision += 1;
+            }
+            if self
+                .drift_policy_on_fetch
+                .swap(false, TestAtomicOrdering::SeqCst)
+            {
+                self.identity
+                    .lock()
+                    .expect("transport identity lock")
+                    .policy_digest[0] ^= 0xFF;
+            }
+            Ok(fetch_response(Vec::new()))
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct UnexpectedStore {
+        acquire_calls: AtomicUsize,
+    }
+
+    impl GatewayComplianceStore for UnexpectedStore {
+        fn try_acquire(
+            &self,
+        ) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
+            self.acquire_calls.fetch_add(1, TestAtomicOrdering::SeqCst);
+            Err(GatewayComplianceError::Persistence(
+                "checkpoint store must not be accessed".into(),
+            ))
+        }
+    }
+
+    #[test]
+    fn feed_transport_qualification_rejects_bad_providers_before_store_access() {
+        let cases = [
+            (
+                {
+                    let mut identity = config()
+                        .expected_feed_transport_identity()
+                        .expect("expected identity");
+                    identity.provider_handle = "sorafs.gateway.compliance.other.v1".into();
+                    identity
+                },
+                GatewayComplianceError::FeedTransportSubstituted,
+            ),
+            (
+                {
+                    let mut identity = config()
+                        .expected_feed_transport_identity()
+                        .expect("expected identity");
+                    identity.revision += 1;
+                    identity
+                },
+                GatewayComplianceError::FeedTransportStale,
+            ),
+            (
+                {
+                    let mut identity = config()
+                        .expected_feed_transport_identity()
+                        .expect("expected identity");
+                    identity.policy_digest[0] ^= 0xFF;
+                    identity
+                },
+                GatewayComplianceError::FeedTransportSubstituted,
+            ),
+            (
+                {
+                    let mut identity = config()
+                        .expected_feed_transport_identity()
+                        .expect("expected identity");
+                    identity.test_marked = true;
+                    identity
+                },
+                GatewayComplianceError::FeedTransportTestMarked,
+            ),
+            (
+                {
+                    let mut identity = config()
+                        .expected_feed_transport_identity()
+                        .expect("expected identity");
+                    identity.provider_handle = "sorafs.gateway.compliance.feed-dummy.v1".into();
+                    identity
+                },
+                GatewayComplianceError::FeedTransportTestMarked,
+            ),
+            (
+                {
+                    let mut identity = config()
+                        .expected_feed_transport_identity()
+                        .expect("expected identity");
+                    identity.provider_handle = "sorafs gateway compliance feed".into();
+                    identity
+                },
+                GatewayComplianceError::FeedTransportUnqualified,
+            ),
+            (
+                {
+                    let mut identity = config()
+                        .expected_feed_transport_identity()
+                        .expect("expected identity");
+                    identity.revision = 0;
+                    identity
+                },
+                GatewayComplianceError::FeedTransportStale,
+            ),
+            (
+                {
+                    let mut identity = config()
+                        .expected_feed_transport_identity()
+                        .expect("expected identity");
+                    identity.policy_digest = [0; 32];
+                    identity
+                },
+                GatewayComplianceError::FeedTransportUnqualified,
+            ),
+        ];
+
+        for (identity, expected_error) in cases {
+            let transport = QualifiableTransport::new(identity);
+            let store = Arc::new(UnexpectedStore::default());
+            let error = GatewayComplianceController::new_with_feed_transport(
+                config(),
+                store.clone(),
+                &transport,
+            )
+            .expect_err("bad provider must fail startup");
+            assert_eq!(
+                std::mem::discriminant(&error),
+                std::mem::discriminant(&expected_error)
+            );
+            assert_eq!(
+                store.acquire_calls.load(TestAtomicOrdering::SeqCst),
+                0,
+                "provider qualification must precede checkpoint access"
+            );
+            assert_eq!(
+                transport.resolve_calls.load(TestAtomicOrdering::SeqCst),
+                0,
+                "provider qualification must not perform network access"
+            );
+        }
+    }
+
+    #[test]
+    fn feed_transport_probe_failure_is_redacted_before_store_access() {
+        let transport = QualifiableTransport::expected();
+        transport
+            .probe_available
+            .store(false, TestAtomicOrdering::SeqCst);
+        let store = Arc::new(UnexpectedStore::default());
+        let error = GatewayComplianceController::new_with_feed_transport(
+            config(),
+            store.clone(),
+            &transport,
+        )
+        .expect_err("unavailable provider must fail startup");
+        assert!(matches!(
+            &error,
+            GatewayComplianceError::FeedTransportUnavailable
+        ));
+        assert_eq!(
+            error.to_string(),
+            "gateway compliance feed transport is unavailable"
+        );
+        assert_eq!(store.acquire_calls.load(TestAtomicOrdering::SeqCst), 0);
+    }
+
+    #[test]
+    fn feed_transport_operation_diagnostics_are_redacted() {
+        let error = redact_feed_transport_operation_error(GatewayComplianceError::InvalidFeed(
+            "PRIVATE provider credential diagnostic".into(),
+        ));
+        assert!(matches!(
+            &error,
+            GatewayComplianceError::FeedTransportOperationFailed
+        ));
+        assert_eq!(
+            error.to_string(),
+            "gateway compliance feed transport operation failed"
+        );
+        assert!(!error.to_string().contains("PRIVATE"));
+        assert!(matches!(
+            redact_feed_transport_operation_error(GatewayComplianceError::FetchTimeout),
+            GatewayComplianceError::FetchTimeout
+        ));
+    }
+
+    #[test]
+    fn external_feed_startup_rejects_missing_config_binding_before_store_access() {
+        let transport = QualifiableTransport::expected();
+        let store = Arc::new(UnexpectedStore::default());
+        let mut unbound = config();
+        unbound.feed_transport_provider = None;
+
+        let error = GatewayComplianceController::new_with_feed_transport(
+            unbound,
+            store.clone(),
+            &transport,
+        )
+        .expect_err("external feed startup requires one exact config binding");
+        assert!(matches!(error, GatewayComplianceError::InvalidPolicy(_)));
+        assert_eq!(store.acquire_calls.load(TestAtomicOrdering::SeqCst), 0);
+        assert_eq!(
+            transport
+                .qualification_calls
+                .load(TestAtomicOrdering::SeqCst),
+            0,
+            "configuration must fail before runtime-provider access"
+        );
+        assert_eq!(transport.resolve_calls.load(TestAtomicOrdering::SeqCst), 0);
+    }
+
+    #[test]
+    fn feed_transport_identity_is_revalidated_before_each_network_use() {
+        let transport = QualifiableTransport::expected();
+        let controller = GatewayComplianceController::new_with_feed_transport(
+            config(),
+            Arc::new(MemoryStore::default()),
+            &transport,
+        )
+        .expect("qualified controller");
+        assert_eq!(
+            transport
+                .qualification_calls
+                .load(TestAtomicOrdering::SeqCst),
+            1
+        );
+        transport
+            .identity
+            .lock()
+            .expect("transport identity lock")
+            .revision += 1;
+
+        assert!(matches!(
+            controller.fetch_feed("baseline", &transport),
+            Err(GatewayComplianceError::FeedTransportStale)
+        ));
+        assert_eq!(
+            transport
+                .qualification_calls
+                .load(TestAtomicOrdering::SeqCst),
+            2
+        );
+        assert_eq!(
+            transport.resolve_calls.load(TestAtomicOrdering::SeqCst),
+            0,
+            "stale providers must be rejected before DNS or HTTP"
+        );
+    }
+
+    #[test]
+    fn feed_transport_drift_during_network_io_discards_response_bytes() {
+        for (drift_policy, expected_error) in [
+            (false, GatewayComplianceError::FeedTransportStale),
+            (true, GatewayComplianceError::FeedTransportSubstituted),
+        ] {
+            let transport = QualifiableTransport::expected();
+            let controller = GatewayComplianceController::new_with_feed_transport(
+                config(),
+                Arc::new(MemoryStore::default()),
+                &transport,
+            )
+            .expect("qualified controller");
+            if drift_policy {
+                transport
+                    .drift_policy_on_fetch
+                    .store(true, TestAtomicOrdering::SeqCst);
+            } else {
+                transport
+                    .drift_revision_on_fetch
+                    .store(true, TestAtomicOrdering::SeqCst);
+            }
+
+            let error = controller
+                .fetch_feed("baseline", &transport)
+                .expect_err("provider drift must discard fetched bytes");
+            assert_eq!(
+                std::mem::discriminant(&error),
+                std::mem::discriminant(&expected_error)
+            );
+            assert_eq!(
+                transport
+                    .qualification_calls
+                    .load(TestAtomicOrdering::SeqCst),
+                6,
+                "startup plus outer, DNS, and fetch operation fences must be checked"
+            );
+            assert_eq!(
+                transport.resolve_calls.load(TestAtomicOrdering::SeqCst),
+                1,
+                "fetch drift must be rejected before DNS revalidation"
+            );
+        }
+    }
+
+    #[test]
+    fn feed_transport_drift_during_dns_discards_addresses_before_http() {
+        let transport = QualifiableTransport::expected();
+        let controller = GatewayComplianceController::new_with_feed_transport(
+            config(),
+            Arc::new(MemoryStore::default()),
+            &transport,
+        )
+        .expect("qualified controller");
+        transport
+            .drift_revision_on_resolve
+            .store(true, TestAtomicOrdering::SeqCst);
+
+        assert!(matches!(
+            controller.fetch_feed("baseline", &transport),
+            Err(GatewayComplianceError::FeedTransportStale)
+        ));
+        assert_eq!(
+            transport
+                .qualification_calls
+                .load(TestAtomicOrdering::SeqCst),
+            4,
+            "startup, outer preflight, and DNS pre/post identities must be checked"
+        );
+        assert_eq!(transport.resolve_calls.load(TestAtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
+    fn unbound_controller_cannot_reach_a_feed_transport() {
+        let transport = QualifiableTransport::expected();
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller core");
+        assert!(matches!(
+            controller.fetch_feed("baseline", &transport),
+            Err(GatewayComplianceError::FeedTransportNotQualified)
+        ));
+        assert_eq!(
+            transport
+                .qualification_calls
+                .load(TestAtomicOrdering::SeqCst),
+            0
+        );
+        assert_eq!(transport.resolve_calls.load(TestAtomicOrdering::SeqCst), 0);
     }
 
     fn mutation_binding(nonce: u8) -> GatewayComplianceMutationBindingV1 {
@@ -5467,6 +6226,15 @@ mod tests {
     }
 
     impl GatewayComplianceFeedTransport for ScriptedTransport {
+        fn qualification(
+            &self,
+        ) -> Result<
+            GatewayComplianceFeedTransportIdentityV1,
+            GatewayComplianceFeedTransportProbeError,
+        > {
+            Ok(test_feed_transport_identity())
+        }
+
         fn resolve(
             &self,
             _hostname: &str,
@@ -5484,6 +6252,22 @@ mod tests {
             _request: &GatewayComplianceFetchRequest,
         ) -> Result<GatewayComplianceFetchResponse, GatewayComplianceError> {
             Ok(self.response.clone())
+        }
+    }
+
+    fn test_feed_transport_identity() -> GatewayComplianceFeedTransportIdentityV1 {
+        let policy = feed_policy();
+        let pins_by_hostname = policy
+            .hosts
+            .into_iter()
+            .map(|host| (host.hostname, host.accepted_spki_sha256))
+            .collect();
+        GatewayComplianceFeedTransportIdentityV1 {
+            provider_handle: GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.to_owned(),
+            revision: GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+            policy_digest: gateway_compliance_feed_transport_policy_digest(&pins_by_hostname)
+                .expect("test transport policy"),
+            test_marked: false,
         }
     }
 
@@ -5512,6 +6296,18 @@ mod tests {
     }
 
     #[test]
+    fn feed_transport_response_debug_is_payload_free() {
+        let mut response = fetch_response(b"PRIVATE-FEED-BODY".to_vec());
+        response.redirect_location = Some("https://feed.example/PRIVATE-REDIRECT".into());
+        let debug = format!("{response:?}");
+
+        assert!(debug.contains("body_bytes"));
+        assert!(debug.contains("redirect_location_bytes"));
+        assert!(!debug.contains("PRIVATE-FEED-BODY"));
+        assert!(!debug.contains("PRIVATE-REDIRECT"));
+    }
+
+    #[test]
     fn feed_fetch_rejects_private_dns_and_rebinding() {
         let policy = feed_policy();
         let private = ScriptedTransport {
@@ -5521,7 +6317,12 @@ mod tests {
             response: fetch_response(Vec::new()),
         };
         assert!(matches!(
-            fetch_feed_bytes(&policy, GatewayComplianceFetchLimits::default(), &private),
+            fetch_feed_bytes(
+                &policy,
+                GatewayComplianceFetchLimits::default(),
+                &test_feed_transport_identity(),
+                &private,
+            ),
             Err(GatewayComplianceError::NonPublicAddress)
         ));
 
@@ -5533,7 +6334,12 @@ mod tests {
             response: fetch_response(Vec::new()),
         };
         assert!(matches!(
-            fetch_feed_bytes(&policy, GatewayComplianceFetchLimits::default(), &rebinding),
+            fetch_feed_bytes(
+                &policy,
+                GatewayComplianceFetchLimits::default(),
+                &test_feed_transport_identity(),
+                &rebinding,
+            ),
             Err(GatewayComplianceError::DnsRebinding)
         ));
     }
@@ -5550,7 +6356,12 @@ mod tests {
             response: wrong_pin_response,
         };
         assert!(matches!(
-            fetch_feed_bytes(&policy, GatewayComplianceFetchLimits::default(), &wrong_pin),
+            fetch_feed_bytes(
+                &policy,
+                GatewayComplianceFetchLimits::default(),
+                &test_feed_transport_identity(),
+                &wrong_pin,
+            ),
             Err(GatewayComplianceError::TrustPinMismatch)
         ));
 
@@ -5577,7 +6388,12 @@ mod tests {
             response,
         };
         assert!(matches!(
-            fetch_feed_bytes(&policy, GatewayComplianceFetchLimits::default(), &redirect),
+            fetch_feed_bytes(
+                &policy,
+                GatewayComplianceFetchLimits::default(),
+                &test_feed_transport_identity(),
+                &redirect,
+            ),
             Err(GatewayComplianceError::UnsafeUrl(_))
         ));
     }
@@ -5588,6 +6404,15 @@ mod tests {
     }
 
     impl GatewayComplianceFeedTransport for DeadlineTransport {
+        fn qualification(
+            &self,
+        ) -> Result<
+            GatewayComplianceFeedTransportIdentityV1,
+            GatewayComplianceFeedTransportProbeError,
+        > {
+            Ok(test_feed_transport_identity())
+        }
+
         fn resolve(
             &self,
             _hostname: &str,
@@ -5614,7 +6439,12 @@ mod tests {
         response.elapsed = Duration::from_millis(8);
         let transport = DeadlineTransport { response };
         assert!(matches!(
-            fetch_feed_bytes(&feed_policy(), limits, &transport),
+            fetch_feed_bytes(
+                &feed_policy(),
+                limits,
+                &test_feed_transport_identity(),
+                &transport,
+            ),
             Err(GatewayComplianceError::FetchTimeout)
         ));
     }

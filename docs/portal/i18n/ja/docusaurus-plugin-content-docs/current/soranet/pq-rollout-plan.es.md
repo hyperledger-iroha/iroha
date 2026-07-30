@@ -99,11 +99,11 @@ Dos ヘルパー `cargo xtask` は、スケジュールと成果物のキャプ�
 
 ## SDK と CLI のフラグのマトリクス|表面 |カナリア (ステージ A) |ランプ(ステージB) |デフォルト (ステージ C) |
 |-------|-------|----------------|---------------------|
-| `sorafs_cli` フェッチ | `--anonymity-policy stage-a` 事前に確認します | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` フェッチ | `--anonymity-policy anon-guard-pq` 事前に確認します | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 |オーケストレーター構成 JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust クライアント設定 (`iroha.toml`) | `rollout_phase = "canary"` (デフォルト) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` 署名付きコマンド | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`、オプションの `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`、オプションの `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`、オプションの `.ANON_STRICT_PQ` |
+| `iroha_cli` 署名付きコマンド | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`、オプションの `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`、オプションの `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`、オプションの `.ANON_STRICT_PQ` |
 | JavaScript オーケストレーター ヘルパー | `rolloutPhase: "canary"` または `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 |スイフト `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ Dos ヘルパー `cargo xtask` は、スケジュールと成果物のキャプ�
 
 3. **クライアント/SDK カナリア (T プラス 1 週間)**
 
-   - Cambiar は、クライアントの設定で `rollout_phase = "ramp"` を設定し、SDK 設計のコホートで `stage-b` をオーバーライドします。
+   - Cambiar は、クライアントの設定で `rollout_phase = "ramp"` を設定し、SDK 設計のコホートで `anon-majority-pq` をオーバーライドします。
    - テレメトリの差分をキャプチャ (`sorafs_orchestrator_policy_events_total` と `client_id` および `region`)、ロールアウトに関する付属のログ。
 
 4. **デフォルトのプロモーション (T プラス 3 週間)**
@@ -160,7 +160,7 @@ Dos ヘルパー `cargo xtask` は、スケジュールと成果物のキャプ�
 ### ランプ -> カナリア (ステージ B -> ステージ A)
 
 1. 保護ディレクトリのスナップショットをインポートし、`sorafs_cli guard-directory import --guard-directory guards.json` およびハッシュを含むデモのパケットを取り出します。
-2. Ajusta `rollout_phase = "canary"` (`anonymity_policy stage-a` をオーバーライド) オーケストレーターのクライアント構成、ダウングレードのパイプラインのテストで PQ ラチェット ドリルの詳細を繰り返します。
+2. Ajusta `rollout_phase = "canary"` (`anonymity_policy anon-guard-pq` をオーバーライド) オーケストレーターのクライアント構成、ダウングレードのパイプラインのテストで PQ ラチェット ドリルの詳細を繰り返します。
 3. PQ ラチェットとテレメトリ SN16 の実際のスクリーンショットは、ガバナンスに通知する前に発生したインシデントのログとしてアラートとして表示されます。
 
 ### ガードレールの記録

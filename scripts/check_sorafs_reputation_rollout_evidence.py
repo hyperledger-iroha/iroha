@@ -53,6 +53,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_int_range,
     require_minimum_int,
     require_maximum_int,
+    require_non_negative_int,
     require_object,
     require_object_array,
     require_passed_status,
@@ -83,6 +84,11 @@ from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
 from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_evidence_sensitivity import visit_sensitive_fields  # noqa: E402
 
+
+from sorafs_topology_qualification import (  # noqa: E402
+    add_topology_qualification_argument,
+    bind_lane_summary_to_topology,
+)
 
 SUMMARY_SCHEMA = "sorafs.reputation.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
@@ -533,13 +539,14 @@ def validate_provider_inventory(payload: dict[str, Any], errors: list[str]) -> N
 def validate_common_rollout_context(
     payload: dict[str, Any],
     errors: list[str],
-) -> None:
+) -> tuple[str, str]:
     """Require deployment-bound rollout metadata on every reputation artifact."""
 
     require_minimum_int(payload, "generated_at_unix", 1, errors)
-    require_rollout_deployment_id(payload, errors)
-    require_rollout_environment(payload, errors)
+    deployment_id = require_rollout_deployment_id(payload, errors)
+    environment = require_rollout_environment(payload, errors)
     require_rollout_deployment_context_review(payload, errors)
+    return deployment_id, environment
 
 
 def finalize_reputation_required_rows(required: dict[str, dict[str, Any]]) -> None:
@@ -663,7 +670,7 @@ def validate_provider(evidence: LoadedEvidence, errors: list[str]) -> tuple[str,
         max_value=10_000,
         path="provider.score_bps",
     )
-    require_positive_int(proof, "leaf_index", errors)
+    require_non_negative_int(proof, "leaf_index", errors)
     require_hex_string_array(
         proof,
         "siblings_hex",
@@ -905,6 +912,7 @@ def validate_evidence_set(
     }
     recognized: list[dict[str, Any]] = []
     snapshot_values: dict[str, str] = {}
+    deployment_values: dict[str, str] = {}
     valid_snapshot_bindings: set[tuple[str, str]] = set()
     valid_reputation_weight_digests: set[str] = set()
     snapshot_bound_artifacts: list[dict[str, Any]] = []
@@ -932,7 +940,21 @@ def validate_evidence_set(
         weights_digest = ""
         provider_count = 0
         provider_id = ""
-        validate_common_rollout_context(payload, errors)
+        deployment_id, environment = validate_common_rollout_context(payload, errors)
+        record_consistent_evidence_value(
+            deployment_values,
+            "deployment_id",
+            deployment_id,
+            record_kind,
+            errors,
+        )
+        record_consistent_evidence_value(
+            deployment_values,
+            "environment",
+            environment,
+            record_kind,
+            errors,
+        )
 
         if evidence.kind in SNAPSHOT_ANCHOR_KINDS:
             (
@@ -1154,6 +1176,7 @@ def validate_evidence_set(
 
 def build_parser() -> EvidenceArgumentParser:
     parser = EvidenceArgumentParser(description=__doc__)
+    add_topology_qualification_argument(parser)
     parser.add_argument(
         "--evidence-dir",
         action="append",
@@ -1252,6 +1275,12 @@ def main(argv: list[str] | None = None) -> int:
         summary["status"] = "failed"
         summary["load_errors"] = load_errors
         summary["errors"] = list(summary.get("errors", [])) + load_errors
+    topology_errors = bind_lane_summary_to_topology(
+        summary, args.topology_qualification_summary
+    )
+    if topology_errors:
+        summary["status"] = "failed"
+        summary["errors"] = list(summary.get("errors", [])) + topology_errors
 
     rendered_summary, summary_errors = render_and_write_checker_summary(
         args.summary_out, summary

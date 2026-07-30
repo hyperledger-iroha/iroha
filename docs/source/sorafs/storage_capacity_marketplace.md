@@ -47,9 +47,11 @@ rollout checks required before hosted production settlement.
   `ExpireReplicationOrder` only at an epoch strictly later than the deadline;
   exact expiration replay is idempotent, while early, conflicting, completed,
   missing-permission, and corrupt stored-order transitions fail without mutation.
-  `CompleteReplicationOrder` is provider-scoped: the named assignment's current
-  registered owner must authorize it, exact replay is idempotent, partial
-  completions keep the order pending, and only the completion that reaches
+  `CompleteReplicationOrder` is provider-scoped and uses the exact six-field
+  hard cut. Commit atomically revalidates the named assignment's current owner,
+  four-part signer-policy identity, assignment revision, and finalized
+  height/hash anchor. Exact retained replay is idempotent, partial completions
+  keep the order pending, and only the completion that reaches
   `target_replicas` makes the whole order terminal. Relayers are never accepted
   as provider-signing authorities.
 - `CapacityTelemetryV1` expresses epoch snapshots (declared vs utilised GiB, replication counters, uptime/PoR percentages) that feed fee distribution. Bounds checks keep utilisation within declarations and percentages within 0 – 100 %.【crates/sorafs_manifest/src/capacity.rs:476】
@@ -62,7 +64,7 @@ rollout checks required before hosted production settlement.
 
 | Task | Owner(s) | Notes |
 |------|----------|-------|
-| Native capacity and replication-order ledger records plus authority-checked `RegisterCapacityDeclaration`, `IssueReplicationOrder`, `CompleteReplicationOrder`, and `ExpireReplicationOrder` ISIs. | Core Infra / Smart Contract Team | Implemented with bounded canonical payload decoding, provider-owner completion authority, ordered provider completion evidence, redundancy-target terminality, deterministic state transitions, replay checks, and Norito encoding. |
+| Native capacity and replication-order ledger records plus authority-checked `RegisterCapacityDeclaration`, `IssueReplicationOrder`, `ReviseReplicationOrderAssignments`, `SetProviderIngestCompletionAuthority`, `RevokeProviderIngestCompletionAuthority`, `CompleteReplicationOrder`, and `ExpireReplicationOrder` ISIs. | Core Infra / Smart Contract Team | Implemented with bounded canonical payload decoding, governed provider-owner/signer-policy authority, compare-and-set assignment revision, finalized-anchor binding, ordered provider completion evidence, redundancy-target terminality, deterministic atomic state transitions, replay checks, and Norito encoding. |
 | Expose transaction-submission routes and a committed-state REST projection under `/v1/sorafs/capacity`; do not maintain an independent registry authority. | Core Infra | Implemented for declaration, telemetry, dispute, order lifecycle, and state reads. Finalized-cursor/proof publication remains tracked by the V1 closure ledger. |
 | Accrue the deterministic capacity fee ledger from committed telemetry. | Economics WG / Core Infra | Implemented with fee and provider-credit projections for billing reconciliation. |
 | Register and resolve capacity disputes through governed native ISIs. | Governance Council | Implemented with permission checks, canonical evidence digests, idempotent replay, and chain-authoritative status. |

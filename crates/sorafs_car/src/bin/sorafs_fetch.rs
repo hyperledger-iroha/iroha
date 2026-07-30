@@ -51,13 +51,13 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     AvailabilityTier, CapabilityType, ManifestV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
-    TransportHintV1, TransportProtocol, decode_manifest_v1_canonical,
+    TransportHintV1, TransportProtocol, decode_manifest_v1_canonical, decode_provider_advert_v1,
     hybrid_envelope::{HYBRID_PAYLOAD_ENVELOPE_VERSION_V1, HybridPayloadEnvelopeV1},
     provider_admission::{
         AdmissionRecord, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1,
         verify_advert_against_record,
     },
-    provider_advert::ProviderCapabilitySoranetPqV1,
+    provider_advert::{PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1, ProviderCapabilitySoranetPqV1},
 };
 
 const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
@@ -332,41 +332,37 @@ fn run() -> Result<(), String> {
         } else if let Some(rest) = arg.strip_prefix("--gateway-manifest-cid=") {
             gateway_manifest_cid = Some(rest.trim().to_ascii_lowercase());
         } else if let Some(rest) = arg.strip_prefix("--transport-policy=") {
-            let value = rest.trim();
-            if value.is_empty() {
+            if rest.is_empty() {
                 return Err("`--transport-policy` must not be empty".into());
             }
-            let parsed = TransportPolicy::parse(value).ok_or_else(|| {
+            let parsed = TransportPolicy::parse(rest).ok_or_else(|| {
                 "`--transport-policy` must be one of soranet-first|soranet-strict|direct-only"
                     .to_string()
             })?;
             transport_policy = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--transport-policy-override=") {
-            let value = rest.trim();
-            if value.is_empty() {
+            if rest.is_empty() {
                 return Err("`--transport-policy-override` must not be empty".into());
             }
-            let parsed = TransportPolicy::parse(value).ok_or_else(|| {
+            let parsed = TransportPolicy::parse(rest).ok_or_else(|| {
                 "`--transport-policy-override` must be one of soranet-first|soranet-strict|direct-only"
                     .to_string()
             })?;
             transport_policy_override = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--anonymity-policy=") {
-            let value = rest.trim();
-            if value.is_empty() {
+            if rest.is_empty() {
                 return Err("`--anonymity-policy` must not be empty".into());
             }
-            let parsed = AnonymityPolicy::parse(value).ok_or_else(|| {
+            let parsed = AnonymityPolicy::parse(rest).ok_or_else(|| {
                 "`--anonymity-policy` must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq"
                     .to_string()
             })?;
             anonymity_policy = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--anonymity-policy-override=") {
-            let value = rest.trim();
-            if value.is_empty() {
+            if rest.is_empty() {
                 return Err("`--anonymity-policy-override` must not be empty".into());
             }
-            let parsed = AnonymityPolicy::parse(value).ok_or_else(|| {
+            let parsed = AnonymityPolicy::parse(rest).ok_or_else(|| {
                 "`--anonymity-policy-override` must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq"
                     .to_string()
             })?;
@@ -1066,6 +1062,10 @@ const USAGE: &str = concat!(
      [--gateway-manifest-id=hex] [--gateway-manifest-envelope=base64] \
      [--gateway-client-id=string] [--gateway-chunker-handle=profile] \
      [--gateway-manifest-cid=hex] \
+     [--transport-policy=soranet-first|soranet-strict|direct-only] \
+     [--transport-policy-override=soranet-first|soranet-strict|direct-only] \
+     [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] \
+     [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] \
      [--provider-advert=name=/path/to/advert.norito ...] \
      [--admission-dir=governance/envelopes/] \
      [--admission-trusted-council-key=hex32 ...] \
@@ -2155,9 +2155,8 @@ fn load_provider_advert(
     admissions: Option<&HashMap<[u8; 32], AdmissionRecord>>,
     now_override: Option<u64>,
 ) -> Result<AdvertMetadata, String> {
-    let bytes =
-        fs::read(path).map_err(|err| format!("failed to read provider advert {path:?}: {err}"))?;
-    let advert: ProviderAdvertV1 = decode_from_bytes(&bytes).map_err(|err| err.to_string())?;
+    let bytes = read_provider_advert_bytes(path)?;
+    let advert = decode_provider_advert_v1(&bytes).map_err(|err| err.to_string())?;
     let now = now_override
         .or_else(unix_time_now)
         .unwrap_or(advert.expires_at);
@@ -2219,6 +2218,47 @@ fn load_provider_advert(
         })?;
     }
     provider_advert_to_metadata(advert)
+}
+
+fn read_provider_advert_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let maximum_u64 = u64::try_from(PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)
+        .map_err(|_| "provider advert byte ceiling exceeds u64".to_owned())?;
+    let before = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect provider advert {path:?}: {err}"))?;
+    if before.file_type().is_symlink() || !before.is_file() || before.len() > maximum_u64 {
+        return Err(format!(
+            "provider advert {path:?} must be a direct regular file within the {PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1}-byte ceiling"
+        ));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options
+        .open(path)
+        .map_err(|err| format!("failed to open provider advert {path:?}: {err}"))?;
+    let opened = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect open provider advert {path:?}: {err}"))?;
+    if !opened.is_file() || opened.len() > maximum_u64 || opened.len() != before.len() {
+        return Err(format!(
+            "provider advert {path:?} changed or exceeded its byte ceiling while being opened"
+        ));
+    }
+    let capacity =
+        usize::try_from(opened.len()).map_err(|_| "provider advert is too large".to_owned())?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(maximum_u64.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("failed to read provider advert {path:?}: {err}"))?;
+    if bytes.len() > PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1
+        || u64::try_from(bytes.len()).unwrap_or(u64::MAX) != opened.len()
+    {
+        return Err(format!(
+            "provider advert {path:?} changed or exceeded its byte ceiling while being read"
+        ));
+    }
+    Ok(bytes)
 }
 
 fn metadata_for_provider_spec(
@@ -3263,6 +3303,27 @@ mod tests {
     fn encode_gateway_manifest_envelope(envelope: &HybridPayloadEnvelopeV1) -> String {
         let bytes = to_bytes(envelope).expect("encode envelope");
         base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn provider_advert_reader_accepts_boundary_and_rejects_one_over() {
+        let (_directory, root) = canonical_tempdir();
+        let path = root.join("provider-advert.to");
+        fs::write(&path, vec![0xA5; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1])
+            .expect("write exact-boundary provider advert");
+        assert_eq!(
+            read_provider_advert_bytes(&path)
+                .expect("read exact-boundary provider advert")
+                .len(),
+            PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1
+        );
+
+        fs::write(
+            &path,
+            vec![0xA5; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 + 1],
+        )
+        .expect("write one-over provider advert");
+        assert!(read_provider_advert_bytes(&path).is_err());
     }
 
     #[test]

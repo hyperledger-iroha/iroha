@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -10,13 +11,24 @@ import pytest
 from iroha_python import (
     CompleteReplicationOrderInstruction,
     ExpireReplicationOrderInstruction,
+    Instruction,
     IssueReplicationOrderInstruction,
+    ProviderIngestCompletionAuthorityV1,
+    ProviderIngestCompletionSignerPolicyV1,
+    ProviderIngestFinalizedAnchorV1,
     SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
     decode_replication_order_instruction,
 )
 
 _ORDER_ID = "ab" * 32
 _PROVIDER_ID = "10" * 32
+_PROVIDER_OWNER = (
+    "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+)
+_POLICY_ID = "21" * 32
+_PREDECESSOR_DIGEST = "32" * 32
+_POLICY_DIGEST = "43" * 32
+_BLOCK_HASH = "54" * 32
 _FIXTURE = (
     Path(__file__).resolve().parents[3]
     / "fixtures"
@@ -48,6 +60,34 @@ def _mutated_payload(needle: bytes, replacement: bytes) -> str:
     return base64.b64encode(payload).decode("ascii")
 
 
+def _authority(
+    *,
+    revision: int = 2,
+    predecessor_digest: str | None = _PREDECESSOR_DIGEST,
+    provider_owner: str = _PROVIDER_OWNER,
+) -> ProviderIngestCompletionAuthorityV1:
+    return ProviderIngestCompletionAuthorityV1(
+        provider_owner=provider_owner,
+        signer_policy=ProviderIngestCompletionSignerPolicyV1(
+            policy_id=_POLICY_ID,
+            revision=revision,
+            predecessor_digest=predecessor_digest,
+            policy_digest=_POLICY_DIGEST,
+        ),
+    )
+
+
+def _completion() -> CompleteReplicationOrderInstruction:
+    return CompleteReplicationOrderInstruction(
+        _ORDER_ID,
+        _PROVIDER_ID,
+        27,
+        _authority(),
+        3,
+        ProviderIngestFinalizedAnchorV1(height=41, block_hash=_BLOCK_HASH),
+    )
+
+
 def test_replication_instruction_payloads_use_exact_rust_fields() -> None:
     issue = IssueReplicationOrderInstruction(
         _ORDER_ID,
@@ -65,12 +105,26 @@ def test_replication_instruction_payloads_use_exact_rust_fields() -> None:
     }
     assert IssueReplicationOrderInstruction.from_payload(issue.to_payload()) == issue
 
-    complete = CompleteReplicationOrderInstruction(_ORDER_ID, _PROVIDER_ID, 27)
+    complete = _completion()
     assert complete.to_payload() == {
         "CompleteReplicationOrder": {
             "order_id": _ORDER_ID,
             "provider_id": _PROVIDER_ID,
             "completion_epoch": 27,
+            "expected_authority": {
+                "provider_owner": _PROVIDER_OWNER,
+                "signer_policy": {
+                    "policy_id": _POLICY_ID,
+                    "revision": 2,
+                    "predecessor_digest": _PREDECESSOR_DIGEST,
+                    "policy_digest": _POLICY_DIGEST,
+                },
+            },
+            "expected_assignment_revision": 3,
+            "finalized_anchor": {
+                "height": 41,
+                "block_hash": _BLOCK_HASH,
+            },
         }
     }
     assert decode_replication_order_instruction(complete.to_payload()) == complete
@@ -80,11 +134,18 @@ def test_replication_instruction_payloads_use_exact_rust_fields() -> None:
 
 
 def test_replication_instruction_decoders_are_schema_closed() -> None:
-    with pytest.raises(ValueError, match="provider_id"):
+    with pytest.raises(TypeError):
+        Instruction.complete_replication_order(  # type: ignore[call-arg]
+            _ORDER_ID,
+            _PROVIDER_ID,
+            27,
+        )
+    with pytest.raises(ValueError, match="expected_authority"):
         CompleteReplicationOrderInstruction.from_payload(
             {
                 "CompleteReplicationOrder": {
                     "order_id": _ORDER_ID,
+                    "provider_id": _PROVIDER_ID,
                     "completion_epoch": 27,
                 }
             }
@@ -96,14 +157,51 @@ def test_replication_instruction_decoders_are_schema_closed() -> None:
                     "order_id": _ORDER_ID,
                     "provider_id": _PROVIDER_ID,
                     "completion_epoch": 27,
+                    "expected_authority": _authority().to_payload(),
+                    "expected_assignment_revision": 3,
+                    "finalized_anchor": {
+                        "height": 41,
+                        "block_hash": _BLOCK_HASH,
+                    },
                     "relayer": "confused-deputy",
                 }
             }
         )
     with pytest.raises(ValueError, match="zero identifier"):
-        CompleteReplicationOrderInstruction(_ORDER_ID, "00" * 32, 27)
+        CompleteReplicationOrderInstruction(
+            _ORDER_ID,
+            "00" * 32,
+            27,
+            _authority(),
+            3,
+            ProviderIngestFinalizedAnchorV1(41, _BLOCK_HASH),
+        )
     with pytest.raises(ValueError, match="lowercase hexadecimal"):
-        CompleteReplicationOrderInstruction(_ORDER_ID.upper(), _PROVIDER_ID, 27)
+        CompleteReplicationOrderInstruction(
+            _ORDER_ID.upper(),
+            _PROVIDER_ID,
+            27,
+            _authority(),
+            3,
+            ProviderIngestFinalizedAnchorV1(41, _BLOCK_HASH),
+        )
+    with pytest.raises(ValueError, match="required after revision one"):
+        _authority(revision=2, predecessor_digest=None)
+    with pytest.raises(ValueError, match="absent at revision one"):
+        _authority(revision=1, predecessor_digest=_PREDECESSOR_DIGEST)
+    with pytest.raises(ValueError, match="greater than zero"):
+        CompleteReplicationOrderInstruction(
+            _ORDER_ID,
+            _PROVIDER_ID,
+            27,
+            _authority(),
+            0,
+            ProviderIngestFinalizedAnchorV1(41, _BLOCK_HASH),
+        )
+    with pytest.raises(ValueError, match="greater than zero"):
+        ProviderIngestFinalizedAnchorV1(0, _BLOCK_HASH)
+    with pytest.raises(ValueError, match="exact canonical I105"):
+        _authority(provider_owner=f" {_PROVIDER_OWNER}")
     with pytest.raises(ValueError, match="non-negative u64"):
         ExpireReplicationOrderInstruction(_ORDER_ID, -1)
     with pytest.raises(ValueError, match="greater than issued_epoch"):
@@ -154,18 +252,29 @@ def test_replication_payloads_convert_to_native_instructions() -> None:
         20,
         28,
     )
-    complete = CompleteReplicationOrderInstruction(_ORDER_ID, _PROVIDER_ID, 27)
+    complete = _completion()
     expire = ExpireReplicationOrderInstruction(_ORDER_ID, 29)
-    try:
-        encoded = (
-            issue.to_instruction().to_json(),
-            complete.to_instruction().to_json(),
-            expire.to_instruction().to_json(),
-        )
-    except RuntimeError as error:
-        if "rebuild the extension" in str(error):
-            pytest.skip("checked-in Python native extension is stale")
-        raise
-    assert "IssueReplicationOrder" in encoded[0]
-    assert "provider_id" in encoded[1]
-    assert "ExpireReplicationOrder" in encoded[2]
+    encoded = (
+        issue.to_instruction().to_json(),
+        complete.to_instruction().to_json(),
+        expire.to_instruction().to_json(),
+    )
+    for payload in encoded:
+        encoded_archive = json.loads(payload)
+        assert isinstance(encoded_archive, str)
+        archive = base64.b64decode(encoded_archive, validate=True)
+        assert archive.startswith(b"NRT0")
+        assert base64.b64encode(archive).decode("ascii") == encoded_archive
+        assert Instruction.from_json(payload).to_json() == payload
+
+    assert (
+        Instruction.complete_replication_order(
+            _ORDER_ID,
+            _PROVIDER_ID,
+            27,
+            _authority(),
+            3,
+            ProviderIngestFinalizedAnchorV1(41, _BLOCK_HASH),
+        ).to_json()
+        == encoded[1]
+    )

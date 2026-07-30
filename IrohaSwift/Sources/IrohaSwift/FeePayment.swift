@@ -793,7 +793,9 @@ func isCanonicalFeeSponsorProgramName(_ value: String) -> Bool {
 private func encodeChargeLimits(_ values: [FeeChargeLimit], compact: Bool) throws -> Data {
     if compact {
         var writer = CompactNoritoWriter()
-        writer.writeLength(UInt64(values.count))
+        // Norito's COMPACT_LEN flag applies to enclosing field and element
+        // lengths, not to the sequence element count itself.
+        writer.writeUInt64LE(UInt64(values.count))
         for value in values { writer.writeField(try encodeChargeLimit(value, compact: true)) }
         return writer.data
     }

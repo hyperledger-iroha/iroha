@@ -1315,8 +1315,8 @@ printf '%s\n' \
   '    "[[package]]" \' \
   '    "name = \\"provisioned\\"" \' \
   '    "version = \\"0.0.0\\"" >"${lockfile_path}"' \
+  '  if [[ "${FAKE_PROVISION_EXIT_AFTER_LOCK:-0}" == "1" ]]; then exit 98; fi' \
   'fi' \
-  'if [[ "${FAKE_PROVISION_EXIT_AFTER_LOCK:-0}" == "1" ]]; then exit 98; fi' \
   'if [[ -n "${FAKE_PROVISION_WORKSPACE_LOCK:-}" ]]; then' \
   '  printf "%s\\n" "# adversarial provisioning workspace lock" >"${FAKE_PROVISION_WORKSPACE_LOCK}"' \
   'fi' \
@@ -1548,6 +1548,8 @@ prepare_provision_failure_fixture() {
 
 PROVISION_CARGO_FAILURE_REPOSITORY=\
 "${TEST_ROOT}/provision-cargo-nonzero-repository"
+PROVISION_CARGO_FAILURE_CORRIDOR=\
+"${TEST_ROOT}/provision-cargo-nonzero-corridor"
 PROVISION_CARGO_FAILURE_ENV="${TEST_ROOT}/provision-cargo-nonzero-env"
 PROVISION_CARGO_FAILURE_PATH="${TEST_ROOT}/provision-cargo-nonzero-path"
 prepare_provision_failure_fixture \
@@ -1565,7 +1567,7 @@ expect_failure \
   PATH="${PROVISION_BIN}:${PATH}" \
   bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
   "${PROVISION_CARGO_FAILURE_REPOSITORY}" \
-  "${TEST_ROOT}/provision-cargo-nonzero-corridor" \
+  "${PROVISION_CARGO_FAILURE_CORRIDOR}" \
   "${PROVISION_CARGO_FAILURE_ENV}" \
   "${PROVISION_CARGO_FAILURE_PATH}" \
   "${PROVISION_BIN}/rustup" \
@@ -1573,6 +1575,22 @@ expect_failure \
   "${TEST_PYTHON}"
 [[ ! -s "${PROVISION_CARGO_FAILURE_ENV}" ]]
 [[ ! -s "${PROVISION_CARGO_FAILURE_PATH}" ]]
+[[ -f "${PROVISION_CARGO_FAILURE_CORRIDOR}/lock/Cargo.lock" ]]
+assert_exact_lines "${PROVISION_CARGO_LOG}" \
+  "invocation" \
+  "CARGO_HOME=${PROVISION_CARGO_FAILURE_CORRIDOR}/cargo-home" \
+  "CARGO_NET_OFFLINE=false" \
+  "arg=-Z" \
+  "arg=unstable-options" \
+  "arg=generate-lockfile" \
+  "arg=--manifest-path" \
+  "arg=${PROVISION_CARGO_FAILURE_REPOSITORY}/Cargo.toml" \
+  "arg=--lockfile-path" \
+  "arg=${PROVISION_CARGO_FAILURE_CORRIDOR}/lock/Cargo.lock"
+assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustdoc"
 
 PROVISION_RUSTUP_FAILURE_REPOSITORY=\
 "${TEST_ROOT}/provision-rustup-nonzero-repository"
@@ -1603,6 +1621,8 @@ rm "${PROVISION_BIN}/rustup-exit-after-output"
 [[ ! -s "${PROVISION_RUSTUP_FAILURE_ENV}" ]]
 [[ ! -s "${PROVISION_RUSTUP_FAILURE_PATH}" ]]
 [[ ! -s "${PROVISION_CARGO_LOG}" ]]
+assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
+  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo"
 
 : >"${PROVISION_CARGO_LOG}"
 : >"${PROVISION_BIN}/rustup-args.log"
@@ -1822,9 +1842,13 @@ prepare_python_guard_root() {
     >"${root}/python/iroha_python/src/iroha_python/_crypto.abi3.so"
 }
 
-INTEGRATION_ROOT="${TEST_ROOT}/integration-repository"
-INTEGRATION_PRIVATE_ROOT="${TEST_ROOT}/integration-private"
-INTEGRATION_VENV="${TEST_ROOT}/fake-venv"
+# Literal whitespace and a record-separator-like newline in the repository and
+# venv paths prove the NUL-framed transcript cannot merge or split authenticated
+# argv path elements. The selected lock path retains whitespace but no control
+# characters because the production resolver rejects those before authentication.
+INTEGRATION_ROOT="${TEST_ROOT}/integration root"$'\n'"record-boundary"
+INTEGRATION_PRIVATE_ROOT="${TEST_ROOT}/integration private"
+INTEGRATION_VENV="${TEST_ROOT}/fake venv"$'\n'"record-boundary"
 INTEGRATION_BIN="${TEST_ROOT}/integration-toolchain/1.93.1-aarch64-apple-darwin/bin"
 INTEGRATION_SELECTED_LOCK="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock"
 prepare_python_guard_root "${INTEGRATION_ROOT}"
@@ -3518,9 +3542,10 @@ PY
   "${INTEGRATION_PYTHON_LOG}" \
   "${INTEGRATION_ROOT}" \
   "${INTEGRATION_VENV}" \
-  "${SCRIPT_DIR}/verify_privacy_python_wheel.py" <<'PY'
+  "${SCRIPT_DIR}/verify_privacy_python_wheel.py" \
+  "${INTEGRATION_CARGO_LOG}" <<'PY'
+import os
 import re
-import shlex
 import sys
 from pathlib import Path
 
@@ -3528,24 +3553,68 @@ log_path = Path(sys.argv[1])
 root = Path(sys.argv[2])
 venv = Path(sys.argv[3])
 verifier = Path(sys.argv[4])
-lines = log_path.read_text(encoding="utf-8").splitlines()
-if len(lines) != 6:
+cargo_log_path = Path(sys.argv[5])
+
+
+def nul_records(path: Path) -> list[str]:
+    records = path.read_bytes().split(b"\0")
+    if not records or records[-1] != b"":
+        raise SystemExit(f"transcript is not NUL terminated: {path}")
+    return [os.fsdecode(record) for record in records[:-1]]
+
+
+groups: list[dict[str, object]] = []
+for record in nul_records(log_path):
+    if record == "invocation":
+        groups.append({"kind": None, "arguments": []})
+    elif not groups:
+        raise SystemExit("Python transcript lacks an invocation delimiter")
+    elif record.startswith("kind=") and groups[-1]["kind"] is None:
+        groups[-1]["kind"] = record.removeprefix("kind=")
+    elif record.startswith("arg="):
+        arguments_list = groups[-1]["arguments"]
+        assert isinstance(arguments_list, list)
+        arguments_list.append(record.removeprefix("arg="))
+    else:
+        raise SystemExit(f"malformed Python transcript record: {record!r}")
+
+expected_kinds = [
+    "probe:python-version",
+    "probe:python-version-output",
+    "module:pip",
+    "probe:maturin-version",
+    "module:maturin",
+    "verifier",
+    "module:pip",
+    "verifier",
+    "module:pytest",
+]
+if [group["kind"] for group in groups] != expected_kinds:
     raise SystemExit(
-        f"Python SDK gate must make exactly six authenticated Python calls: {lines!r}"
+        "Python SDK gate call inventory/order drifted: "
+        f"{[group['kind'] for group in groups]!r}"
     )
 
 
-def arguments(index: int, prefix: str) -> list[str]:
-    line = lines[index]
-    if not line.startswith(prefix):
-        raise SystemExit(
-            f"Python SDK call {index} has wrong kind: {line!r}; expected {prefix!r}"
-        )
-    return shlex.split(line.removeprefix(prefix))
+def arguments(index: int) -> list[str]:
+    result = groups[index]["arguments"]
+    assert isinstance(result, list)
+    return result
+
+
+if arguments(0) != [
+    "-I",
+    "-c",
+    'import sys; print(".".join(map(str, sys.version_info[:2])))',
+]:
+    raise SystemExit("venv Python-version probe transcript drifted")
+if arguments(1) != ["-I", "--version"]:
+    raise SystemExit("venv Python executable probe transcript drifted")
 
 
 requirements = root / "python/iroha_python/requirements-ci.lock"
-if arguments(0, "module=pip args=") != [
+if arguments(2) != [
+    "-I",
     "-m",
     "pip",
     "--isolated",
@@ -3561,28 +3630,82 @@ if arguments(0, "module=pip args=") != [
 ]:
     raise SystemExit("requirements installation transcript drifted")
 
-maturin = arguments(1, "module=maturin args=")
-if len(maturin) != 12 or maturin[:10] != [
-    "-m",
-    "maturin",
-    "build",
-    "--release",
-    "--locked",
-    "--offline",
-    "--jobs",
-    "1",
-    "--target-dir",
-    maturin[9],
-] or maturin[10:] != ["--out", maturin[11]]:
-    raise SystemExit(f"Maturin Python transcript drifted: {maturin!r}")
-target = Path(maturin[9])
-wheel_directory = Path(maturin[11])
-if not target.is_absolute() or target.name != "target":
-    raise SystemExit("Maturin target directory is not one private target")
-if not wheel_directory.is_absolute() or wheel_directory.name != "wheels":
-    raise SystemExit("Maturin output directory is not one private wheel directory")
+if arguments(3) != [
+    "-I",
+    "-c",
+    'from importlib.metadata import version; print(version("maturin"))',
+]:
+    raise SystemExit("Maturin-version probe transcript drifted")
 
-preflight = arguments(2, "verifier args=")
+cargo_targets = [
+    Path(record.removeprefix("CARGO_TARGET_DIR="))
+    for record in nul_records(cargo_log_path)
+    if record.startswith("CARGO_TARGET_DIR=")
+]
+
+
+def checked_maturin_layout(
+    maturin_arguments: list[str],
+    observed_cargo_targets: list[Path],
+) -> tuple[Path, Path]:
+    if len(maturin_arguments) != 13 or maturin_arguments[:11] != [
+        "-I",
+        "-m",
+        "maturin",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--jobs",
+        "1",
+        "--target-dir",
+        maturin_arguments[10],
+    ] or maturin_arguments[11:] != ["--out", maturin_arguments[12]]:
+        raise SystemExit(
+            f"Maturin Python transcript drifted: {maturin_arguments!r}"
+        )
+    target_path = Path(maturin_arguments[10])
+    wheel_path = Path(maturin_arguments[12])
+    if not target_path.is_absolute() or target_path.name != "target":
+        raise SystemExit("Maturin target directory is not one private target")
+    if (
+        not wheel_path.is_absolute()
+        or wheel_path.name != "wheels"
+        or target_path.parent != wheel_path.parent
+    ):
+        raise SystemExit(
+            "Maturin output directory is not one private wheel directory"
+        )
+    if observed_cargo_targets != [target_path, target_path]:
+        raise SystemExit(
+            "Maturin target does not match both wrapped Cargo invocations: "
+            f"{observed_cargo_targets!r} != {[target_path, target_path]!r}"
+        )
+    return target_path, wheel_path
+
+
+maturin = arguments(4)
+target, wheel_directory = checked_maturin_layout(maturin, cargo_targets)
+for label, near_miss_arguments, near_miss_targets in (
+    (
+        "Cargo target mismatch",
+        maturin,
+        [target.parent / "other" / "target"] * 2,
+    ),
+    (
+        "wheel output parent mismatch",
+        maturin[:12] + [str(target.parent / "other" / "wheels")],
+        cargo_targets,
+    ),
+):
+    try:
+        checked_maturin_layout(near_miss_arguments, near_miss_targets)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit(f"{label} negative control was accepted")
+
+preflight = arguments(5)
 if len(preflight) != 6 or preflight[:4] != [
     "-I",
     "-B",
@@ -3599,7 +3722,9 @@ if wheel.parent != wheel_directory or not re.fullmatch(
 if not re.fullmatch(r"[0-9a-f]{64}(?::[0-9]+){5}:0o[0-7]+", seal):
     raise SystemExit("wheel preflight did not receive an authenticated seal")
 
-if arguments(3, "module=pip args=") != [
+if arguments(6) != [
+    "-I",
+    "-B",
     "-m",
     "pip",
     "--isolated",
@@ -3615,7 +3740,7 @@ if arguments(3, "module=pip args=") != [
 ]:
     raise SystemExit("private wheel installation transcript drifted")
 
-if arguments(4, "verifier args=") != [
+if arguments(7) != [
     "-I",
     "-B",
     str(verifier),
@@ -3627,7 +3752,9 @@ if arguments(4, "verifier args=") != [
 ]:
     raise SystemExit("installed wheel verification transcript drifted")
 
-if arguments(5, "module=pytest args=") != [
+if arguments(8) != [
+    "-I",
+    "-B",
     "-m",
     "pytest",
     "-q",
@@ -3638,14 +3765,17 @@ if arguments(5, "module=pytest args=") != [
 ]:
     raise SystemExit("installed-package pytest transcript drifted")
 PY
-if grep -Fq -- "${INTEGRATION_ROOT}/Cargo.lock" "${INTEGRATION_CARGO_LOG}"; then
-  echo "Python SDK guard selected the workspace Cargo.lock" >&2
-  exit 1
-fi
 
 integration_cargo_invocation_count() {
-  awk '$0 == "invocation" { count += 1 } END { print count + 0 }' \
-    "${INTEGRATION_CARGO_LOG}"
+  "${TEST_PYTHON}" -I - "${INTEGRATION_CARGO_LOG}" <<'PY'
+import sys
+from pathlib import Path
+
+records = Path(sys.argv[1]).read_bytes().split(b"\0")
+if not records or records[-1] != b"":
+    raise SystemExit("integration Cargo transcript is not NUL terminated")
+print(records[:-1].count(b"invocation"))
+PY
 }
 
 expect_integration_failure_delta() {
@@ -3663,7 +3793,33 @@ expect_integration_failure_delta() {
   after="$(integration_cargo_invocation_count)"
   if [[ $((after - before)) -ne "${expected_delta}" ]]; then
     echo \
-      "integration failure reached fake Cargo $((after - before)) times; expected ${expected_delta}" \
+      "integration failure '${expected}' reached fake Cargo $((after - before)) times; expected ${expected_delta}" \
+      >&2
+    exit 1
+  fi
+}
+
+provision_cargo_invocation_count() {
+  awk '/^invocation$/ { count += 1 } END { print count + 0 }' \
+    "${PROVISION_CARGO_LOG}"
+}
+
+expect_provision_failure_delta() {
+  local expected="$1"
+  local expected_delta="$2"
+  local require_first_diagnostic="$3"
+  shift 3
+  local before after
+  before="$(provision_cargo_invocation_count)"
+  if [[ "${require_first_diagnostic}" == "1" ]]; then
+    expect_failure_first_diagnostic "${expected}" "$@"
+  else
+    expect_failure "${expected}" "$@"
+  fi
+  after="$(provision_cargo_invocation_count)"
+  if [[ $((after - before)) -ne "${expected_delta}" ]]; then
+    echo \
+      "provisioned failure '${expected}' reached authenticated fake Cargo $((after - before)) times; expected ${expected_delta}" \
       >&2
     exit 1
   fi
@@ -3893,7 +4049,7 @@ PATH="${PROVISION_BIN}:${PATH}" \
   done <"${PROVISIONED_GATE_PATH}"
   export PATH
   cd "${PROVISIONED_GATE_ROOT}"
-  expect_integration_failure_delta \
+  expect_provision_failure_delta \
     "Linux Maturin rustc environment is not exactly authenticated" 1 1 \
     env \
     FAKE_MATURIN_OMIT_POLICY=CARGO_ENCODED_RUSTFLAGS \
@@ -4126,7 +4282,7 @@ PYTHON_PYPROJECT_PATH="${SOURCE_ROOT}/python/iroha_python/pyproject.toml"
 [[ "$(grep -Fc 'python-version: "3.12"' "${WORKFLOW_PATH}")" -eq 2 ]]
 [[ "$(grep -Fc 'id: privacy-python' "${WORKFLOW_PATH}")" -eq 2 ]]
 [[ "$(grep -Fc 'update-environment: false' "${WORKFLOW_PATH}")" -eq 2 ]]
-[[ "$(grep -Fc '${{ steps.privacy-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 7 ]]
+[[ "$(grep -Fc '${{ steps.privacy-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 8 ]]
 if grep -Fq 'cache-dependency-path: python/iroha_python/requirements-ci.lock' \
   "${WORKFLOW_PATH}" || grep -Fq 'Swatinem/rust-cache@' "${WORKFLOW_PATH}"; then
   echo "privacy workflow retained a forbidden pip or Rust cache action" >&2
@@ -4451,7 +4607,7 @@ jobs = {
         ),
         "fetch_name": "Prime privacy Python SDK Cargo dependencies",
         "python": True,
-        "python_path_count": 4,
+        "python_path_count": 5,
     },
 }
 
@@ -4484,7 +4640,9 @@ def validate(source: str) -> None:
         in source
     ):
         raise AssertionError("setup-python must remain private and cache-free")
-    if source.count(setup_python_path) != 7:
+    if source.count(setup_python_path) != sum(
+        policy["python_path_count"] for policy in jobs.values()
+    ):
         raise AssertionError("setup-python output threading is incomplete")
     for job, policy in jobs.items():
         block = job_match(source, job).group(1)
@@ -4508,6 +4666,20 @@ def validate(source: str) -> None:
         ]
         if policy["python"]:
             markers.insert(1, "uses: actions/setup-python@")
+        if job == "privacy-sdk-guard":
+            markers.insert(2, "Bind the canonical mobile Python")
+            mobile_python_binding = """      - name: Bind the canonical mobile Python
+        env:
+          SETUP_PYTHON_PATH: ${{ steps.privacy-python.outputs.python-path }}
+        run: |
+          mobile_python="$("$SETUP_PYTHON_PATH" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+"""
+            if block.count(mobile_python_binding) != 1:
+                raise AssertionError(
+                    "privacy-sdk-guard lost the exact canonical mobile Python binding"
+                )
         positions = tuple(block.find(marker) for marker in markers)
         if -1 in positions or positions != tuple(sorted(positions)):
             raise AssertionError(
@@ -4564,6 +4736,22 @@ for job in jobs:
         pass
     else:
         raise SystemExit(f"negative control did not reject {job} final verification bypass")
+    if job == "privacy-sdk-guard":
+        mutated_block = original_block.replace(
+            "          SETUP_PYTHON_PATH: "
+            "${{ steps.privacy-python.outputs.python-path }}\n",
+            "          SETUP_PYTHON_PATH: python3\n",
+            1,
+        )
+        mutated = workflow[: match.start()] + mutated_block + workflow[match.end() :]
+        try:
+            validate(mutated)
+        except AssertionError:
+            pass
+        else:
+            raise SystemExit(
+                "negative control did not reject mobile Python binding bypass"
+            )
 PY
 if grep -Eq '(^|[[:space:]])(cp|install)[[:space:]].*Cargo\.lock' "${WORKFLOW_PATH}"; then
   echo "privacy SDK workflow still copies a checkout Cargo.lock" >&2

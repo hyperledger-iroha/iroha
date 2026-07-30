@@ -1238,6 +1238,11 @@ impl SignedTransaction {
     /// Signatures, multisig bundles, and proof attachments are deliberately not
     /// part of the intent preimage; the complete signed transaction hash remains
     /// independently bound by ordinary transaction admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyTransactionIntentErrorV1`] if instruction inspection
+    /// or canonical intent encoding fails.
     pub fn privacy_transaction_intent_digest_v1(
         &self,
     ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyTransactionIntentErrorV1> {
@@ -1245,6 +1250,12 @@ impl SignedTransaction {
     }
 
     /// Validate and borrow the optional direct privacy submission in this signed transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyTransactionIntentErrorV1`] if the transaction contains
+    /// an invalid privacy-instruction combination or its canonical intent
+    /// cannot be derived.
     pub fn privacy_transaction_intent_binding_if_present_v1(
         &self,
     ) -> Result<
@@ -2687,6 +2698,318 @@ mod tests {
         PrivacyTransactionIntentDigestV1::new(*hasher.finalize().as_bytes())
     }
 
+    fn assert_privacy_binding_absent(payload: &TransactionPayload, message: &str) {
+        assert!(
+            payload
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect(message)
+                .is_none()
+        );
+    }
+
+    fn assert_privacy_digest_rejects_path(
+        payload: &TransactionPayload,
+        path: PrivacyTransactionIntentUnsupportedPathV1,
+        message: &str,
+    ) {
+        assert_eq!(
+            payload
+                .privacy_transaction_intent_digest_v1()
+                .expect_err(message),
+            PrivacyTransactionIntentErrorV1::UnsupportedPath { path }
+        );
+    }
+
+    fn assert_privacy_binding_rejects_path(
+        payload: &TransactionPayload,
+        path: PrivacyTransactionIntentUnsupportedPathV1,
+        message: &str,
+    ) {
+        assert_eq!(
+            payload
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect_err(message),
+            PrivacyTransactionIntentErrorV1::UnsupportedPath { path }
+        );
+    }
+
+    fn assert_privacy_ivm_paths_rejected() {
+        let raw_ivm =
+            privacy_payload_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![1])));
+        assert_privacy_digest_rejects_path(
+            &raw_ivm,
+            PrivacyTransactionIntentUnsupportedPathV1::Ivm,
+            "raw IVM is not a direct typed submission",
+        );
+        assert_privacy_binding_absent(
+            &raw_ivm,
+            "an ordinary IVM transaction has no privacy binding",
+        );
+
+        let ordinary_proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![2]),
+            overlay: vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "ordinary proved overlay".into(),
+            ))]
+            .into(),
+            events_commitment: Hash::new(b"ordinary events"),
+            gas_policy_commitment: Hash::new(b"ordinary gas"),
+        }));
+        assert_privacy_binding_absent(
+            &ordinary_proved,
+            "an ordinary proved transaction has no privacy binding",
+        );
+
+        let proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![2]),
+            overlay: vec![InstructionBox::from(draft_privacy_submission())].into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }));
+        assert_privacy_binding_rejects_path(
+            &proved,
+            PrivacyTransactionIntentUnsupportedPathV1::IvmProved,
+            "proved overlays cannot carry a V1 privacy submission",
+        );
+    }
+
+    fn assert_privacy_dynamic_dispatch_paths_rejected() {
+        let contract =
+            privacy_payload_with_executable(Executable::ContractCall(privacy_test_contract_call()));
+        assert_privacy_digest_rejects_path(
+            &contract,
+            PrivacyTransactionIntentUnsupportedPathV1::ContractCall,
+            "contract call is opaque to the V1 projection",
+        );
+        assert_privacy_binding_absent(
+            &contract,
+            "an ordinary contract transaction has no privacy binding",
+        );
+
+        let mixed_batch = privacy_payload_with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(draft_privacy_submission().into()),
+                ExecutableBatchItem::ContractCall(privacy_test_contract_call()),
+            ]
+            .into(),
+        ));
+        assert_privacy_binding_rejects_path(
+            &mixed_batch,
+            PrivacyTransactionIntentUnsupportedPathV1::BatchContractCall,
+            "a mixed contract batch can enqueue unsigned instructions",
+        );
+        let ordinary_contract_batch = privacy_payload_with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::ContractCall(
+                privacy_test_contract_call(),
+            )]
+            .into(),
+        ));
+        assert_privacy_binding_absent(
+            &ordinary_contract_batch,
+            "an ordinary contract batch has no privacy binding",
+        );
+
+        let custom = privacy_payload_with_executable(
+            vec![
+                InstructionBox::from(draft_privacy_submission()),
+                InstructionBox::from(CustomInstruction::new(Json::new("opaque executor"))),
+            ]
+            .into(),
+        );
+        assert_privacy_binding_rejects_path(
+            &custom,
+            PrivacyTransactionIntentUnsupportedPathV1::CustomInstruction,
+            "custom executor path",
+        );
+        let ordinary_custom = privacy_payload_with_executable(
+            vec![InstructionBox::from(CustomInstruction::new(Json::new(
+                "ordinary executor",
+            )))]
+            .into(),
+        );
+        assert_privacy_binding_absent(
+            &ordinary_custom,
+            "an ordinary custom instruction has no privacy binding",
+        );
+
+        let trigger = privacy_payload_with_executable(
+            vec![
+                InstructionBox::from(draft_privacy_submission()),
+                InstructionBox::from(ExecuteTrigger::new(
+                    TriggerId::from_str("privacy_dynamic").expect("trigger id"),
+                )),
+            ]
+            .into(),
+        );
+        assert_privacy_binding_rejects_path(
+            &trigger,
+            PrivacyTransactionIntentUnsupportedPathV1::ExecuteTrigger,
+            "by-call trigger path",
+        );
+        let ordinary_trigger = privacy_payload_with_executable(
+            vec![InstructionBox::from(ExecuteTrigger::new(
+                TriggerId::from_str("ordinary_dynamic").expect("trigger id"),
+            ))]
+            .into(),
+        );
+        assert_privacy_binding_absent(
+            &ordinary_trigger,
+            "an ordinary trigger instruction has no privacy binding",
+        );
+    }
+
+    fn assert_opaque_privacy_instruction_rejected() {
+        let submission = draft_privacy_submission();
+        let framed = norito::to_bytes(&submission).expect("framed privacy instruction");
+        let opaque = OpaqueInstruction::from_framed(SubmitPrivacyProofV1::WIRE_ID, &framed)
+            .expect("opaque privacy instruction fixture");
+        let payload = privacy_payload_with_executable(vec![InstructionBox::from(opaque)].into());
+        assert_privacy_binding_rejects_path(
+            &payload,
+            PrivacyTransactionIntentUnsupportedPathV1::OpaqueInstruction,
+            "opaque privacy wire id must fail closed",
+        );
+    }
+
+    fn assert_canonical_privacy_intent_kat(
+        payload: &TransactionPayload,
+        expected: PrivacyTransactionIntentDigestV1,
+    ) {
+        let mut normalized = payload.clone();
+        normalized.instructions =
+            normalize_privacy_executable_for_intent_v1(&normalized.instructions)
+                .expect("canonical normalized executable");
+        let normalized_bytes = norito::to_bytes(&normalized).expect("canonical normalized payload");
+        assert_eq!(
+            normalized_bytes.len(),
+            14_176,
+            "the canonical fixture wire length is part of the cross-SDK KAT"
+        );
+        assert_eq!(
+            hex::encode(expected.as_bytes()),
+            "a9dac5175c7e527acd53f8f71a735afaae89cb5b9cb865c4523c03e2fc1710d8",
+            "canonical privacy transaction-intent V1 digest"
+        );
+    }
+
+    fn assert_privacy_proof_bytes_are_projected_out(
+        payload: &TransactionPayload,
+        expected: PrivacyTransactionIntentDigestV1,
+    ) {
+        let mut changed_proof = payload.clone();
+        mutate_direct_privacy_submission(&mut changed_proof, |submission| {
+            submission.envelope.proof.bytes_mut().bytes = vec![9, 8, 7, 6, 5];
+        });
+        assert_eq!(
+            changed_proof
+                .privacy_transaction_intent_digest_v1()
+                .expect("proof bytes are projected out"),
+            expected
+        );
+        changed_proof
+            .validate_privacy_transaction_intent_binding_v1()
+            .expect("proof bytes do not alter either derived digest");
+    }
+
+    fn assert_stored_privacy_digests_are_checked(
+        payload: &TransactionPayload,
+        expected: PrivacyTransactionIntentDigestV1,
+    ) {
+        let mut stale_intent = payload.clone();
+        mutate_direct_privacy_submission(&mut stale_intent, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest =
+                PrivacyTransactionIntentDigestV1::new(privacy_test_bytes(0xD1));
+        });
+        assert_eq!(
+            stale_intent
+                .privacy_transaction_intent_digest_v1()
+                .expect("the derived intent field is projected out"),
+            expected
+        );
+        assert!(matches!(
+            stale_intent
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("stored intent is independently checked"),
+            PrivacyTransactionIntentErrorV1::IntentDigestMismatch { .. }
+        ));
+        let mut zero_intent = payload.clone();
+        mutate_direct_privacy_submission(&mut zero_intent, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
+        });
+        assert_eq!(
+            zero_intent
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("zero stored intent"),
+            PrivacyTransactionIntentErrorV1::ZeroIntentDigest
+        );
+
+        let mut stale_statement = payload.clone();
+        mutate_direct_privacy_submission(&mut stale_statement, |submission| {
+            submission.envelope.statement_digest =
+                PrivacyStatementDigestV1::new(privacy_test_bytes(0xD2));
+        });
+        assert_eq!(
+            stale_statement
+                .privacy_transaction_intent_digest_v1()
+                .expect("the derived statement digest is projected out"),
+            expected
+        );
+        assert!(matches!(
+            stale_statement
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("stored statement digest is independently checked"),
+            PrivacyTransactionIntentErrorV1::StatementDigestMismatch { .. }
+        ));
+        let mut zero_statement = payload.clone();
+        mutate_direct_privacy_submission(&mut zero_statement, |submission| {
+            submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
+        });
+        assert_eq!(
+            zero_statement
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("zero stored statement digest"),
+            PrivacyTransactionIntentErrorV1::ZeroStatementDigest
+        );
+    }
+
+    fn assert_legacy_privacy_digest_cycle_is_broken(expected: PrivacyTransactionIntentDigestV1) {
+        let draft = draft_privacy_payload();
+        let first_legacy = legacy_proof_only_privacy_intent_digest(&draft);
+        let mut inserted = draft;
+        mutate_direct_privacy_submission(&mut inserted, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest = first_legacy;
+            submission.envelope.statement_digest = submission
+                .envelope
+                .statement
+                .digest()
+                .expect("legacy-cycle statement digest");
+        });
+        let second_legacy = legacy_proof_only_privacy_intent_digest(&inserted);
+        assert_ne!(
+            first_legacy, second_legacy,
+            "the old proof-only projection changes after inserting its own result and cannot construct the stored value"
+        );
+        assert_eq!(
+            inserted
+                .privacy_transaction_intent_digest_v1()
+                .expect("canonical projection removes both derived fields"),
+            expected
+        );
+    }
+
     #[test]
     fn transaction_payload_exposes_execution_identity_ttl_and_chain() {
         let chain: ChainId = "payload-accessors".parse().expect("chain id");
@@ -2762,172 +3085,9 @@ mod tests {
 
     #[test]
     fn privacy_transaction_intent_rejects_dynamic_and_opaque_paths() {
-        let raw_ivm =
-            privacy_payload_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![1])));
-        assert_eq!(
-            raw_ivm
-                .privacy_transaction_intent_digest_v1()
-                .expect_err("raw IVM is not a direct typed submission"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::Ivm,
-            }
-        );
-        assert!(
-            raw_ivm
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary IVM transaction has no privacy binding")
-                .is_none()
-        );
-
-        let contract =
-            privacy_payload_with_executable(Executable::ContractCall(privacy_test_contract_call()));
-        assert_eq!(
-            contract
-                .privacy_transaction_intent_digest_v1()
-                .expect_err("contract call is opaque to the V1 projection"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::ContractCall,
-            }
-        );
-        assert!(
-            contract
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary contract transaction has no privacy binding")
-                .is_none()
-        );
-
-        let ordinary_proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(vec![2]),
-            overlay: vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "ordinary proved overlay".into(),
-            ))]
-            .into(),
-            events_commitment: Hash::new(b"ordinary events"),
-            gas_policy_commitment: Hash::new(b"ordinary gas"),
-        }));
-        assert!(
-            ordinary_proved
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary proved transaction has no privacy binding")
-                .is_none()
-        );
-
-        let proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(vec![2]),
-            overlay: vec![InstructionBox::from(draft_privacy_submission())].into(),
-            events_commitment: Hash::new(b"events"),
-            gas_policy_commitment: Hash::new(b"gas"),
-        }));
-        assert_eq!(
-            proved
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("proved overlays cannot carry a V1 privacy submission"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::IvmProved,
-            }
-        );
-
-        let mixed_batch = privacy_payload_with_executable(Executable::Batch(
-            vec![
-                ExecutableBatchItem::Instruction(draft_privacy_submission().into()),
-                ExecutableBatchItem::ContractCall(privacy_test_contract_call()),
-            ]
-            .into(),
-        ));
-        assert_eq!(
-            mixed_batch
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("a mixed contract batch can enqueue unsigned instructions"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::BatchContractCall,
-            }
-        );
-        let ordinary_contract_batch = privacy_payload_with_executable(Executable::Batch(
-            vec![ExecutableBatchItem::ContractCall(
-                privacy_test_contract_call(),
-            )]
-            .into(),
-        ));
-        assert!(
-            ordinary_contract_batch
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary contract batch has no privacy binding")
-                .is_none()
-        );
-
-        let custom = privacy_payload_with_executable(
-            vec![
-                InstructionBox::from(draft_privacy_submission()),
-                InstructionBox::from(CustomInstruction::new(Json::new("opaque executor"))),
-            ]
-            .into(),
-        );
-        assert_eq!(
-            custom
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("custom executor path"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::CustomInstruction,
-            }
-        );
-        let ordinary_custom = privacy_payload_with_executable(
-            vec![InstructionBox::from(CustomInstruction::new(Json::new(
-                "ordinary executor",
-            )))]
-            .into(),
-        );
-        assert!(
-            ordinary_custom
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary custom instruction has no privacy binding")
-                .is_none()
-        );
-
-        let trigger = privacy_payload_with_executable(
-            vec![
-                InstructionBox::from(draft_privacy_submission()),
-                InstructionBox::from(ExecuteTrigger::new(
-                    TriggerId::from_str("privacy_dynamic").expect("trigger id"),
-                )),
-            ]
-            .into(),
-        );
-        assert_eq!(
-            trigger
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("by-call trigger path"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::ExecuteTrigger,
-            }
-        );
-        let ordinary_trigger = privacy_payload_with_executable(
-            vec![InstructionBox::from(ExecuteTrigger::new(
-                TriggerId::from_str("ordinary_dynamic").expect("trigger id"),
-            ))]
-            .into(),
-        );
-        assert!(
-            ordinary_trigger
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary trigger instruction has no privacy binding")
-                .is_none()
-        );
-
-        let submission = draft_privacy_submission();
-        let framed = norito::to_bytes(&submission).expect("framed privacy instruction");
-        let opaque = OpaqueInstruction::from_framed(SubmitPrivacyProofV1::WIRE_ID, &framed)
-            .expect("opaque privacy instruction fixture");
-        let opaque_payload =
-            privacy_payload_with_executable(vec![InstructionBox::from(opaque)].into());
-        assert_eq!(
-            opaque_payload
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("opaque privacy wire id must fail closed"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::OpaqueInstruction,
-            }
-        );
+        assert_privacy_ivm_paths_rejected();
+        assert_privacy_dynamic_dispatch_paths_rejected();
+        assert_opaque_privacy_instruction_rejected();
     }
 
     #[test]
@@ -2936,126 +3096,10 @@ mod tests {
         let expected = payload
             .privacy_transaction_intent_digest_v1()
             .expect("canonical finalized projection");
-        let mut normalized = payload.clone();
-        normalized.instructions =
-            normalize_privacy_executable_for_intent_v1(&normalized.instructions)
-                .expect("canonical normalized executable");
-        let normalized_bytes = norito::to_bytes(&normalized).expect("canonical normalized payload");
-        assert_eq!(
-            normalized_bytes.len(),
-            14_176,
-            "the canonical fixture wire length is part of the cross-SDK KAT"
-        );
-        assert_eq!(
-            hex::encode(expected.as_bytes()),
-            "a9dac5175c7e527acd53f8f71a735afaae89cb5b9cb865c4523c03e2fc1710d8",
-            "canonical privacy transaction-intent V1 digest"
-        );
-
-        let mut changed_proof = payload.clone();
-        mutate_direct_privacy_submission(&mut changed_proof, |submission| {
-            submission.envelope.proof.bytes_mut().bytes = vec![9, 8, 7, 6, 5];
-        });
-        assert_eq!(
-            changed_proof
-                .privacy_transaction_intent_digest_v1()
-                .expect("proof bytes are projected out"),
-            expected
-        );
-        changed_proof
-            .validate_privacy_transaction_intent_binding_v1()
-            .expect("proof bytes do not alter either derived digest");
-
-        let mut stale_intent = payload.clone();
-        mutate_direct_privacy_submission(&mut stale_intent, |submission| {
-            submission
-                .envelope
-                .statement
-                .context_mut()
-                .transaction_intent_digest =
-                PrivacyTransactionIntentDigestV1::new(privacy_test_bytes(0xD1));
-        });
-        assert_eq!(
-            stale_intent
-                .privacy_transaction_intent_digest_v1()
-                .expect("the derived intent field is projected out"),
-            expected
-        );
-        assert!(matches!(
-            stale_intent
-                .validate_privacy_transaction_intent_binding_v1()
-                .expect_err("stored intent is independently checked"),
-            PrivacyTransactionIntentErrorV1::IntentDigestMismatch { .. }
-        ));
-        let mut zero_intent = payload.clone();
-        mutate_direct_privacy_submission(&mut zero_intent, |submission| {
-            submission
-                .envelope
-                .statement
-                .context_mut()
-                .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
-        });
-        assert_eq!(
-            zero_intent
-                .validate_privacy_transaction_intent_binding_v1()
-                .expect_err("zero stored intent"),
-            PrivacyTransactionIntentErrorV1::ZeroIntentDigest
-        );
-
-        let mut stale_statement = payload.clone();
-        mutate_direct_privacy_submission(&mut stale_statement, |submission| {
-            submission.envelope.statement_digest =
-                PrivacyStatementDigestV1::new(privacy_test_bytes(0xD2));
-        });
-        assert_eq!(
-            stale_statement
-                .privacy_transaction_intent_digest_v1()
-                .expect("the derived statement digest is projected out"),
-            expected
-        );
-        assert!(matches!(
-            stale_statement
-                .validate_privacy_transaction_intent_binding_v1()
-                .expect_err("stored statement digest is independently checked"),
-            PrivacyTransactionIntentErrorV1::StatementDigestMismatch { .. }
-        ));
-        let mut zero_statement = payload.clone();
-        mutate_direct_privacy_submission(&mut zero_statement, |submission| {
-            submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
-        });
-        assert_eq!(
-            zero_statement
-                .validate_privacy_transaction_intent_binding_v1()
-                .expect_err("zero stored statement digest"),
-            PrivacyTransactionIntentErrorV1::ZeroStatementDigest
-        );
-
-        let draft = draft_privacy_payload();
-        let first_legacy = legacy_proof_only_privacy_intent_digest(&draft);
-        let mut inserted = draft;
-        mutate_direct_privacy_submission(&mut inserted, |submission| {
-            submission
-                .envelope
-                .statement
-                .context_mut()
-                .transaction_intent_digest = first_legacy;
-            submission.envelope.statement_digest = submission
-                .envelope
-                .statement
-                .digest()
-                .expect("legacy-cycle statement digest");
-        });
-        let second_legacy = legacy_proof_only_privacy_intent_digest(&inserted);
-        assert_ne!(
-            first_legacy, second_legacy,
-            "the old proof-only projection changes after inserting its own result and cannot construct the stored value"
-        );
-        assert_eq!(
-            inserted
-                .privacy_transaction_intent_digest_v1()
-                .expect("canonical projection removes both derived fields"),
-            expected
-        );
+        assert_canonical_privacy_intent_kat(&payload, expected);
+        assert_privacy_proof_bytes_are_projected_out(&payload, expected);
+        assert_stored_privacy_digests_are_checked(&payload, expected);
+        assert_legacy_privacy_digest_cycle_is_broken(expected);
     }
 
     #[test]

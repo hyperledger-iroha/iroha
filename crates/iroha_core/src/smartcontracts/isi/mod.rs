@@ -170,7 +170,7 @@ define_instruction_handlers! {
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
     dispatch_instruction::<TransferAssetBatch>,
-    dispatch_instruction::<iroha_data_model::isi::SetAssetTransferFreeze>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetTransferAvailability>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferBlacklist>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferControl>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetHoldingLimit>,
@@ -214,7 +214,14 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsCapacityDispute>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority,
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority,
+    >,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy>,

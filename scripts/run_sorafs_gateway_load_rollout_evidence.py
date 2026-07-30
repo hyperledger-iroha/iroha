@@ -51,6 +51,8 @@ from sorafs_runner_preflight import (  # noqa: E402
 )
 
 
+from sorafs_topology_qualification import add_topology_qualification_argument  # noqa: E402
+
 PLAN_SCHEMA = "sorafs.gateway_load.rollout_evidence_collection_plan.v1"
 PLAN_FIELDS = frozenset(
     {
@@ -154,6 +156,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     require_runner_non_negative_int(args, "max_error_rate_bps", errors)
     require_runner_positive_int(args, "max_p95_latency_ms", errors)
     require_runner_positive_int(args, "max_p99_latency_ms", errors)
+    if (
+        isinstance(args.min_staging_duration_secs, int)
+        and args.min_staging_duration_secs < DEFAULT_MIN_STAGING_DURATION_SECS
+    ):
+        errors.append(
+            "min_staging_duration_secs must be >= "
+            f"{DEFAULT_MIN_STAGING_DURATION_SECS}"
+        )
+    if isinstance(args.min_streams, int) and args.min_streams < DEFAULT_MIN_STREAMS:
+        errors.append(f"min_streams must be >= {DEFAULT_MIN_STREAMS}")
     return errors
 
 
@@ -172,6 +184,8 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         [
             "--summary-out",
             str(summary_out),
+            "--topology-qualification-summary",
+            str(args.topology_qualification_summary),
             "--max-evidence-age-secs",
             str(args.max_evidence_age_secs),
             "--min-staging-duration-secs",
@@ -358,6 +372,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the verifier command plan without executing it.",
     )
+    add_topology_qualification_argument(parser)
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

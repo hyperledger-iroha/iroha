@@ -39,7 +39,7 @@ restant en tâches d'ingénierie traçables.
 | Attestation de point final | Chaque point final annoncé doit être soutenu par un rapport de certificat mTLS ou QUIC. | Définissez le payload Norito `EndpointAttestationV1` et le stocker par endpoint dans le bundle d'admission. |
 
 ## Workflow d'admission1. **Création de proposition**
-   - CLI : ajouter `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI : ajouter `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      produisant `ProviderAdmissionProposalV1` + bundle d'attestation.
    - Validation : s'assurer des champs requis, enjeux > 0, handle chunker canonique dans `profile_id`.
 2. **Endossement de gouvernance**
@@ -66,7 +66,7 @@ Le flux CLI accepte désormais les bundles de certificats intermédiaires (`--en
 
 ### Référence CLI
 
-Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+Exécutez chaque commande via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - Drapeaux requis : `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, et au moins un `--endpoint=<kind:host>`.
@@ -111,7 +111,7 @@ Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifes
 1. Construisez la paire proposition/annonce successeur avec `provider-admission proposal` et `provider-admission sign`, en continuant `--retention-epoch` et en mettant à jour l'enjeu/endpoints si besoin.
 2. Exécutez
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -129,7 +129,7 @@ Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifes
 #### Révocation d'urgence
 1. Identifiez l'enveloppe compromise et émettez une révocation :
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

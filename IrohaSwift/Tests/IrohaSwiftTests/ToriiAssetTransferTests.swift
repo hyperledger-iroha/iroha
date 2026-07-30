@@ -1887,10 +1887,11 @@ final class ToriiAssetTransferTests: XCTestCase {
         draft: ToriiAssetTransferDraft,
         signingKey: SigningKey
     ) {
-        guard NoritoNativeBridge.shared.isAvailable,
-              NoritoNativeBridge.shared.isDetachedTransactionVerificationAvailable else {
-            throw XCTSkip("detached transaction native bridge is unavailable")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable &&
+                NoritoNativeBridge.shared.isDetachedTransactionVerificationAvailable,
+            "detached transaction native bridge is unavailable"
+        )
         let request = self.request(
             amount: amount,
             memo: nil,

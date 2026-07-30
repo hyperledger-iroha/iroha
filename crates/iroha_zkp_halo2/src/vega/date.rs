@@ -170,7 +170,7 @@ pub(super) fn enforce_not_before(
     let earlier_code = date_code(earlier);
     let later_value = scalar_to_u64(builder.evaluate(&later_code))?;
     let earlier_value = scalar_to_u64(builder.evaluate(&earlier_code))?;
-    let slack = later_value.checked_sub(earlier_value).unwrap_or(0);
+    let slack = later_value.saturating_sub(earlier_value);
     let (_, slack_lc) = allocate_unsigned(builder, slack, 24)?;
     builder.enforce_equal(later_code, earlier_code.plus(&slack_lc))
 }
@@ -311,7 +311,7 @@ fn decimal_digit(
     byte: ByteVar,
 ) -> Result<LinearCombination, CircuitError> {
     let byte_value = scalar_to_u64(builder.evaluate(&byte.lc()))?;
-    let digit_value = byte_value.checked_sub(u64::from(b'0')).unwrap_or(0);
+    let digit_value = byte_value.saturating_sub(u64::from(b'0'));
     let (bits, digit) = allocate_unsigned(builder, digit_value & 0xf, 4)?;
     builder.enforce_equal(
         byte.lc(),

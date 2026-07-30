@@ -145,6 +145,10 @@ __all__ = [
     "build_find_asset_escrow_query",
     "build_find_asset_escrows_by_seller_query",
     "build_find_asset_escrows_by_buyer_query",
+    "build_find_committed_transaction_query",
+    "build_find_block_by_hash_query",
+    "committed_transaction_carrier_block_hash",
+    "verify_committed_transaction_inclusion",
     "hash_blake2b_32",
     "public_key_multihash",
     "private_key_multihash",
@@ -244,10 +248,123 @@ class ContractCall:
         object.__setattr__(self, "arguments", arguments)
 
 
-TransactionExecutableEntry: TypeAlias = Union["Instruction", ContractCall]
+def _native_instruction_builder(name: str) -> Any:
+    """Return one required native instruction builder without compatibility fallback."""
+
+    builder = getattr(_crypto.Instruction, name, None)
+    if builder is None:
+        raise RuntimeError(
+            f"iroha_python._crypto is missing Instruction.{name}(); "
+            "rebuild the extension"
+        )
+    return builder
+
+
+def _native_issue_replication_order(
+    order_id: str,
+    order_payload: str,
+    issued_epoch: int,
+    deadline_epoch: int,
+) -> Any:
+    return _native_instruction_builder("issue_replication_order")(
+        order_id,
+        order_payload,
+        issued_epoch,
+        deadline_epoch,
+    )
+
+
+def _native_complete_replication_order(
+    order_id: str,
+    provider_id: str,
+    completion_epoch: int,
+    expected_authority: Mapping[str, Any],
+    expected_assignment_revision: int,
+    finalized_anchor: Mapping[str, Any],
+) -> Any:
+    return _native_instruction_builder("complete_replication_order")(
+        order_id,
+        provider_id,
+        completion_epoch,
+        dict(expected_authority),
+        expected_assignment_revision,
+        dict(finalized_anchor),
+    )
+
+
+def _native_expire_replication_order(
+    order_id: str,
+    expiration_epoch: int,
+) -> Any:
+    return _native_instruction_builder("expire_replication_order")(
+        order_id,
+        expiration_epoch,
+    )
+
 
 if TYPE_CHECKING:
-    Instruction: TypeAlias = Any
+    from .sorafs_replication import (
+        ProviderIngestCompletionAuthorityV1,
+        ProviderIngestFinalizedAnchorV1,
+    )
+
+    TransactionExecutableEntry: TypeAlias = Any
+
+    class _InstructionTypingMeta(type):
+        """Expose dynamically forwarded native builders to static analyzers."""
+
+        def __getattr__(cls, name: str) -> Any: ...
+
+    class Instruction(Any, metaclass=_InstructionTypingMeta):
+        """Typed surface of the dynamically forwarded native instruction value."""
+
+        @classmethod
+        def from_json(cls, payload: str) -> Instruction: ...
+
+        @staticmethod
+        def cancel_asset_lock(
+            escrow_id: str,
+            expected_remaining_amount: str,
+        ) -> Instruction:
+            """Build the exact two-argument V1 cancellation instruction."""
+
+            ...
+
+        @staticmethod
+        def issue_replication_order(
+            order_id: str,
+            order_payload: str,
+            issued_epoch: int,
+            deadline_epoch: int,
+        ) -> Instruction:
+            """Build one canonical replication-order issue instruction."""
+
+            ...
+
+        @staticmethod
+        def complete_replication_order(
+            order_id: str,
+            provider_id: str,
+            completion_epoch: int,
+            expected_authority: ProviderIngestCompletionAuthorityV1,
+            expected_assignment_revision: int,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1,
+        ) -> Instruction:
+            """Build the exact six-field provider completion instruction."""
+
+            ...
+
+        @staticmethod
+        def expire_replication_order(
+            order_id: str,
+            expiration_epoch: int,
+        ) -> Instruction:
+            """Build one canonical replication-order expiration instruction."""
+
+            ...
+
+        def to_json(self) -> str: ...
+
     PrivacyBootleLanternPresentationActionBuildResultV1: TypeAlias = Any
     PrivacyJindoActionBuildResultV1: TypeAlias = Any
     PrivacyVeRangeActionBuildResultV1: TypeAlias = Any
@@ -259,6 +376,7 @@ if TYPE_CHECKING:
     SignedTransactionEnvelope: TypeAlias = Any
     TransactionBuilder: TypeAlias = Any
 else:
+    TransactionExecutableEntry: TypeAlias = Union["Instruction", ContractCall]
     _NativeInstruction = _crypto.Instruction
 
     def _require_cancel_asset_lock_id(value: Any) -> str:
@@ -330,8 +448,11 @@ else:
             order_id: str,
             provider_id: str,
             completion_epoch: int,
+            expected_authority: ProviderIngestCompletionAuthorityV1,
+            expected_assignment_revision: int,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1,
         ) -> Any:
-            """Build the provider-specific completion instruction."""
+            """Build the exact six-field provider completion instruction."""
 
             from .sorafs_replication import build_complete_replication_order_instruction
 
@@ -339,6 +460,9 @@ else:
                 order_id,
                 provider_id,
                 completion_epoch,
+                expected_authority,
+                expected_assignment_revision,
+                finalized_anchor,
             )
 
         @staticmethod
@@ -420,6 +544,70 @@ def build_find_asset_escrows_by_buyer_query(
             buyer,
         )
     )
+
+
+def build_find_committed_transaction_query(
+    authority: str,
+    private_key: bytes,
+    transaction_hash: str,
+) -> bytes:
+    """Build a signed native query for one canonical committed transaction."""
+
+    return bytes(
+        _crypto.build_find_committed_transaction_query(
+            authority,
+            private_key,
+            transaction_hash,
+        )
+    )
+
+
+def build_find_block_by_hash_query(
+    authority: str,
+    private_key: bytes,
+    block_hash: str,
+) -> bytes:
+    """Build a signed native query for one exact carrier block."""
+
+    return bytes(
+        _crypto.build_find_block_by_hash_query(
+            authority,
+            private_key,
+            block_hash,
+        )
+    )
+
+
+def committed_transaction_carrier_block_hash(
+    transaction_hash: str,
+    response_bytes: bytes,
+) -> str:
+    """Extract the bound carrier hash from an exact native transaction response."""
+
+    return str(
+        _crypto.committed_transaction_carrier_block_hash(
+            transaction_hash,
+            response_bytes,
+        )
+    )
+
+
+def verify_committed_transaction_inclusion(
+    transaction_hash: str,
+    transaction_response_bytes: bytes,
+    block_response_bytes: bytes,
+) -> Mapping[str, Any]:
+    """Verify native committed-transaction proofs against the exact carrier block."""
+
+    payload = _crypto.verify_committed_transaction_inclusion_json(
+        transaction_hash,
+        transaction_response_bytes,
+        block_response_bytes,
+    )
+    decoded = json.loads(payload)
+    if not isinstance(decoded, Mapping):
+        raise RuntimeError("native committed transaction verifier returned malformed JSON")
+    return decoded
 
 
 if not TYPE_CHECKING:

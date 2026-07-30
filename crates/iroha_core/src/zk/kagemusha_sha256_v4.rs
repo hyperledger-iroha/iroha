@@ -7,8 +7,8 @@
 
 use ff::PrimeField;
 use halo2_base::{
-    AssignedValue, Context,
-    gates::{RangeChip, RangeInstructions},
+    AssignedValue, Context, QuantumCell,
+    gates::{GateChip, GateInstructions, RangeChip, RangeInstructions},
     halo2_proofs::{
         circuit::{Layouter, Value},
         plonk::{ConstraintSystem, Error},
@@ -19,8 +19,8 @@ use halo2_base::{
 use sha2::{Digest as _, Sha256};
 
 use super::kagemusha_sha256_table16_v4::{
-    AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions, Table16Chip,
-    Table16Config, canonical_padding_suffix,
+    AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
+    TABLE16_SPREAD_TABLE_ROWS, Table16Chip, Table16Config, canonical_padding_suffix,
 };
 
 /// Independent Table16 lanes fixed by the V4 circuit identity.
@@ -30,11 +30,176 @@ pub(crate) const KAGEMUSHA_SHA256_LANES_V4: usize = 5;
 // margin for layout evolution, plus per-job IV and digest regions.
 const SHA256_ROWS_PER_BLOCK_V4: usize = 2_304;
 const SHA256_ROWS_PER_JOB_V4: usize = 64;
-const SHA256_TABLE_ROWS_V4: usize = 1 << 16;
+const SHA256_TABLE_ROWS_V4: usize = TABLE16_SPREAD_TABLE_ROWS;
+
+/// One Boolean cell produced or checked by the SHA-byte provenance API.
+///
+/// The assigned cell is deliberately private: callers can only obtain this
+/// token through [`KagemushaSha256BitV4::decompose`] or
+/// [`KagemushaSha256BitV4::constrain`], so composing a
+/// [`KagemushaSha256ByteV4`] from eight tokens carries a real Boolean proof.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct KagemushaSha256BitV4<F: ScalarField> {
+    assigned: AssignedValue<F>,
+}
+
+impl<F: BigPrimeField> KagemushaSha256BitV4<F> {
+    /// Decompose one assigned integer into little-endian Boolean cells.
+    pub(super) fn decompose(
+        ctx: &mut Context<F>,
+        gate: &GateChip<F>,
+        value: AssignedValue<F>,
+        bit_len: usize,
+    ) -> Vec<Self> {
+        gate.num_to_bits(ctx, value, bit_len)
+            .into_iter()
+            .map(|assigned| Self { assigned })
+            .collect()
+    }
+
+    /// Check one existing cell is Boolean and retain that provenance.
+    pub(super) fn constrain(
+        ctx: &mut Context<F>,
+        gate: &GateChip<F>,
+        assigned: AssignedValue<F>,
+    ) -> Self {
+        gate.assert_bit(ctx, assigned);
+        Self { assigned }
+    }
+
+    /// Require this bit to be the constant zero.
+    pub(super) fn assert_zero(self, ctx: &mut Context<F>, gate: &GateChip<F>) {
+        gate.assert_is_const(ctx, &self.assigned, &F::ZERO);
+    }
+
+    fn assigned(self) -> AssignedValue<F> {
+        self.assigned
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum KagemushaSha256ByteSourceV4<F: ScalarField> {
+    Constant(u8),
+    Constrained(AssignedValue<F>),
+}
+
+/// A SHA-256 message byte carrying its circuit provenance.
+///
+/// Constants remain Table16 constants. Dynamic bytes can only be constructed
+/// from eight proven Boolean cells, one explicitly constrained Boolean cell,
+/// or the checked fallback in [`KagemushaSha256JobsV4::digest`]. Consequently
+/// [`KagemushaSha256JobsV4::digest_constrained`] does not repeat a Range8
+/// lookup for these values.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct KagemushaSha256ByteV4<F: ScalarField> {
+    source: KagemushaSha256ByteSourceV4<F>,
+}
+
+impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
+    /// Construct a literal message byte.
+    pub(super) const fn constant(byte: u8) -> Self {
+        Self {
+            source: KagemushaSha256ByteSourceV4::Constant(byte),
+        }
+    }
+
+    /// Compose one little-endian byte from eight Boolean-proven cells.
+    pub(super) fn from_bits_le(
+        ctx: &mut Context<F>,
+        gate: &GateChip<F>,
+        bits: &[KagemushaSha256BitV4<F>],
+    ) -> Self {
+        assert_eq!(bits.len(), 8, "one SHA-256 byte has exactly eight bits");
+        let assigned = gate.inner_product(
+            ctx,
+            bits.iter().copied().map(|bit| bit.assigned()),
+            (0..8).map(|bit| QuantumCell::Constant(F::from(1_u64 << bit))),
+        );
+        Self {
+            source: KagemushaSha256ByteSourceV4::Constrained(assigned),
+        }
+    }
+
+    /// Treat one explicitly Boolean-constrained cell as a byte.
+    pub(super) fn from_boolean(
+        ctx: &mut Context<F>,
+        gate: &GateChip<F>,
+        assigned: AssignedValue<F>,
+    ) -> Self {
+        let bit = KagemushaSha256BitV4::constrain(ctx, gate, assigned);
+        Self {
+            source: KagemushaSha256ByteSourceV4::Constrained(bit.assigned()),
+        }
+    }
+
+    /// Decompose one constrained byte back into Boolean-proven cells.
+    pub(super) fn decompose_bits_le(
+        self,
+        ctx: &mut Context<F>,
+        gate: &GateChip<F>,
+    ) -> [KagemushaSha256BitV4<F>; 8] {
+        match self.source {
+            KagemushaSha256ByteSourceV4::Constant(byte) => {
+                std::array::from_fn(|bit| KagemushaSha256BitV4 {
+                    assigned: ctx.load_constant(F::from(u64::from((byte >> bit) & 1))),
+                })
+            }
+            KagemushaSha256ByteSourceV4::Constrained(assigned) => {
+                KagemushaSha256BitV4::decompose(ctx, gate, assigned, 8)
+                    .try_into()
+                    .expect("eight-bit decomposition has fixed length")
+            }
+        }
+    }
+
+    /// Return the underlying assigned cell when this is a dynamic byte.
+    pub(super) fn assigned(self) -> Option<AssignedValue<F>> {
+        match self.source {
+            KagemushaSha256ByteSourceV4::Constant(_) => None,
+            KagemushaSha256ByteSourceV4::Constrained(assigned) => Some(assigned),
+        }
+    }
+
+    /// Range-check one assigned source exactly once and retain that proof for
+    /// the SHA queue.
+    pub(super) fn range_checked(
+        ctx: &mut Context<F>,
+        range: &RangeChip<F>,
+        assigned: AssignedValue<F>,
+    ) -> Self {
+        range.range_check(ctx, assigned, 8);
+        Self {
+            source: KagemushaSha256ByteSourceV4::Constrained(assigned),
+        }
+    }
+
+    /// Read one valid typed byte in focused preimage-parity tests.
+    #[cfg(test)]
+    pub(super) fn test_value(self) -> u8 {
+        self.value(0)
+            .expect("typed SHA-256 test message contains canonical bytes")
+    }
+
+    fn value(self, index: usize) -> Result<u8, String> {
+        match self.source {
+            KagemushaSha256ByteSourceV4::Constant(byte) => Ok(byte),
+            KagemushaSha256ByteSourceV4::Constrained(assigned) => {
+                if assigned.cell.is_none() {
+                    return Err(format!(
+                        "Kagemusha SHA-256 message cell {index} has no virtual-cell identity"
+                    ));
+                }
+                u8::try_from(fe_to_biguint(assigned.value())).map_err(|_| {
+                    format!("Kagemusha SHA-256 message cell {index} is not a canonical byte")
+                })
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct KagemushaSha256JobV4<F: ScalarField> {
-    message: Vec<AssignedValue<F>>,
+    message: Vec<KagemushaSha256ByteV4<F>>,
     output_words: [AssignedValue<F>; DIGEST_SIZE],
 }
 
@@ -91,21 +256,27 @@ where
         range: &RangeChip<F>,
         message: &[AssignedValue<F>],
     ) -> Result<[AssignedValue<F>; DIGEST_SIZE], String> {
-        let mut bytes = Vec::with_capacity(message.len());
-        for (index, assigned) in message.iter().enumerate() {
-            range.range_check(ctx, *assigned, 8);
-            let value = fe_to_biguint(assigned.value());
-            let byte = u8::try_from(value).map_err(|_| {
-                format!("Kagemusha SHA-256 message cell {index} is not a canonical byte")
-            })?;
-            if assigned.cell.is_none() {
-                return Err(format!(
-                    "Kagemusha SHA-256 message cell {index} has no virtual-cell identity"
-                ));
-            }
-            bytes.push(byte);
-        }
+        let constrained = message
+            .iter()
+            .copied()
+            .map(|assigned| KagemushaSha256ByteV4::range_checked(ctx, range, assigned))
+            .collect::<Vec<_>>();
+        self.digest_constrained(ctx, &constrained)
+    }
 
+    /// Queue bytes whose constant or Boolean-decomposition provenance already
+    /// proves they are canonical bytes.
+    pub(super) fn digest_constrained(
+        &mut self,
+        ctx: &mut Context<F>,
+        message: &[KagemushaSha256ByteV4<F>],
+    ) -> Result<[AssignedValue<F>; DIGEST_SIZE], String> {
+        let bytes = message
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, byte)| byte.value(index))
+            .collect::<Result<Vec<_>, _>>()?;
         let digest: [u8; 32] = Sha256::digest(&bytes).into();
         #[cfg(test)]
         let job_index = self.jobs.len();
@@ -258,32 +429,60 @@ where
                 .try_reserve_exact(padded_len)
                 .map_err(|_| Error::Synthesis)?;
 
-            for (byte_index, assigned) in job.message.iter().enumerate() {
+            for (byte_index, byte) in job.message.iter().copied().enumerate() {
                 #[cfg(not(test))]
                 let _ = byte_index;
-                let virtual_cell = assigned.cell.ok_or(Error::Synthesis)?;
-                let physical_cell = *physical_cells.get(&virtual_cell).ok_or(Error::Synthesis)?;
-                let byte =
-                    u8::try_from(fe_to_biguint(assigned.value())).map_err(|_| Error::Synthesis)?;
-                #[cfg(test)]
-                let byte = if let Some((target_job, target_byte, xor)) = self.source_xor {
-                    if target_job == job_index && target_byte == byte_index {
-                        byte ^ xor
-                    } else {
-                        byte
+                let source_xor = {
+                    #[cfg(test)]
+                    {
+                        self.source_xor
+                            .filter(|(target_job, target_byte, _)| {
+                                *target_job == job_index && *target_byte == byte_index
+                            })
+                            .map_or(0, |(_, _, xor)| xor)
                     }
-                } else {
-                    byte
+                    #[cfg(not(test))]
+                    {
+                        0
+                    }
                 };
-                let value = if self.use_unknown {
-                    Value::unknown()
-                } else {
-                    Value::known(byte)
-                };
-                padded.push(PaddedByte::Source(AssignedByte::from_range_checked_cell(
-                    value,
-                    physical_cell,
-                )));
+                match byte.source {
+                    KagemushaSha256ByteSourceV4::Constant(byte) => {
+                        padded.push(PaddedByte::Constant(byte ^ source_xor));
+                    }
+                    KagemushaSha256ByteSourceV4::Constrained(assigned) => {
+                        let virtual_cell = assigned.cell.ok_or_else(|| {
+                            iroha_logger::error!(
+                                job_index,
+                                byte_index,
+                                "Kagemusha SHA-256 source lost its Base virtual-cell identity"
+                            );
+                            Error::Synthesis
+                        })?;
+                        let physical_cell =
+                            *physical_cells.get(&virtual_cell).ok_or_else(|| {
+                                iroha_logger::error!(
+                                    job_index,
+                                    byte_index,
+                                    ?virtual_cell,
+                                    "Kagemusha SHA-256 source is missing from the Base physical-cell map"
+                                );
+                                Error::Synthesis
+                            })?;
+                        let byte = u8::try_from(fe_to_biguint(assigned.value()))
+                            .map_err(|_| Error::Synthesis)?
+                            ^ source_xor;
+                        let value = if self.use_unknown {
+                            Value::unknown()
+                        } else {
+                            Value::known(byte)
+                        };
+                        padded.push(PaddedByte::Source(AssignedByte::from_range_checked_cell(
+                            value,
+                            physical_cell,
+                        )));
+                    }
+                }
             }
             padded.extend(suffix.into_iter().map(PaddedByte::Constant));
 
@@ -358,10 +557,27 @@ where
             layouter.assign_region(
                 || format!("bind Kagemusha SHA-256 digest {job_index}"),
                 |mut region| {
-                    for (actual, expected) in digest.iter().zip(&job.output_words) {
-                        let virtual_cell = expected.cell.ok_or(Error::Synthesis)?;
+                    for (word_index, (actual, expected)) in
+                        digest.iter().zip(&job.output_words).enumerate()
+                    {
+                        let virtual_cell = expected.cell.ok_or_else(|| {
+                            iroha_logger::error!(
+                                job_index,
+                                word_index,
+                                "Kagemusha SHA-256 output lost its Base virtual-cell identity"
+                            );
+                            Error::Synthesis
+                        })?;
                         let physical_cell =
-                            *physical_cells.get(&virtual_cell).ok_or(Error::Synthesis)?;
+                            *physical_cells.get(&virtual_cell).ok_or_else(|| {
+                                iroha_logger::error!(
+                                    job_index,
+                                    word_index,
+                                    ?virtual_cell,
+                                    "Kagemusha SHA-256 output is missing from the Base physical-cell map"
+                                );
+                                Error::Synthesis
+                            })?;
                         region.constrain_equal(actual.cell(), physical_cell);
                     }
                     Ok(())
@@ -524,11 +740,102 @@ mod tests {
         QueueCircuit { builder, jobs }
     }
 
+    fn single_job_queue_circuit(
+        mut builder: BaseCircuitBuilder<Fp>,
+        calculate_params: bool,
+    ) -> QueueCircuit<Fp> {
+        let range = builder.range_chip();
+        let assigned = builder
+            .main(0)
+            .assign_witnesses(b"abc".map(|byte| Fp::from(u64::from(byte))));
+        let mut jobs = KagemushaSha256JobsV4::default();
+        jobs.digest(builder.main(0), &range, &assigned)
+            .expect("canonical single-job queue bytes");
+        if calculate_params {
+            builder.calculate_params(Some(TEST_UNUSABLE_ROWS));
+        }
+        QueueCircuit { builder, jobs }
+    }
+
     fn verify(mutation: Mutation) -> Result<(), Vec<halo2_proofs::dev::VerifyFailure>> {
         let circuit = queue_circuit(mutation);
         MockProver::run(TEST_K, &circuit, vec![])
             .expect("five-lane queue synthesis")
             .verify()
+    }
+
+    fn typed_queue_circuit(source_xor: bool) -> QueueCircuit<Fp> {
+        let mut builder = BaseCircuitBuilder::<Fp>::new(false)
+            .use_k(TEST_K as usize)
+            .use_lookup_bits(15);
+        let range = builder.range_chip();
+        let word = builder.main(0).load_witness(Fp::from(0x4433_2211_u64));
+        let bits = KagemushaSha256BitV4::decompose(builder.main(0), range.gate(), word, 32);
+        let mut message = vec![
+            KagemushaSha256ByteV4::constant(0xaa),
+            KagemushaSha256ByteV4::constant(0xbb),
+        ];
+        message.extend((0..4).map(|byte| {
+            KagemushaSha256ByteV4::from_bits_le(
+                builder.main(0),
+                range.gate(),
+                &bits[byte * 8..byte * 8 + 8],
+            )
+        }));
+        let mut jobs = KagemushaSha256JobsV4::default();
+        jobs.digest_constrained(builder.main(0), &message)
+            .expect("Boolean-derived typed queue bytes");
+        if source_xor {
+            jobs = jobs.with_source_xor(0, 2, 1);
+        }
+        builder.calculate_params(Some(TEST_UNUSABLE_ROWS));
+        QueueCircuit { builder, jobs }
+    }
+
+    fn queued_observation(typed: bool) -> (Vec<u8>, [u64; DIGEST_SIZE], usize) {
+        let mut builder = BaseCircuitBuilder::<Fp>::new(false)
+            .use_k(TEST_K as usize)
+            .use_lookup_bits(15);
+        let range = builder.range_chip();
+        let mut jobs = KagemushaSha256JobsV4::default();
+        let output_words = if typed {
+            let word = builder.main(0).load_witness(Fp::from(0x4433_2211_u64));
+            let bits = KagemushaSha256BitV4::decompose(builder.main(0), range.gate(), word, 32);
+            let mut message = vec![
+                KagemushaSha256ByteV4::constant(0xaa),
+                KagemushaSha256ByteV4::constant(0xbb),
+            ];
+            message.extend((0..4).map(|byte| {
+                KagemushaSha256ByteV4::from_bits_le(
+                    builder.main(0),
+                    range.gate(),
+                    &bits[byte * 8..byte * 8 + 8],
+                )
+            }));
+            jobs.digest_constrained(builder.main(0), &message)
+                .expect("Boolean-derived typed observation bytes")
+        } else {
+            let message: [u8; 6] = [0xaa, 0xbb, 0x11, 0x22, 0x33, 0x44];
+            let assigned = builder
+                .main(0)
+                .assign_witnesses(message.map(|byte| Fp::from(u64::from(byte))));
+            jobs.digest(builder.main(0), &range, &assigned)
+                .expect("generic observation bytes")
+        };
+        let preimage = jobs.jobs[0]
+            .message
+            .iter()
+            .copied()
+            .map(KagemushaSha256ByteV4::test_value)
+            .collect();
+        let output_words =
+            output_words.map(|word| u64::try_from(fe_to_biguint(word.value())).unwrap());
+        let lookup_rows = builder
+            .statistics()
+            .total_lookup_advice_per_phase
+            .into_iter()
+            .sum();
+        (preimage, output_words, lookup_rows)
     }
 
     #[test]
@@ -553,6 +860,36 @@ mod tests {
     #[test]
     fn source_copy_tamper_is_rejected() {
         assert!(verify(Mutation::Source).is_err());
+    }
+
+    #[test]
+    fn constrained_byte_path_matches_generic_preimage_and_removes_range8_lookups() {
+        let generic = queued_observation(false);
+        let constrained = queued_observation(true);
+        assert_eq!(generic.0, vec![0xaa, 0xbb, 0x11, 0x22, 0x33, 0x44]);
+        assert_eq!(constrained.0, generic.0);
+        assert_eq!(constrained.1, generic.1);
+        assert_eq!(generic.2, 12, "six Range8 checks cost two rows each");
+        assert_eq!(
+            constrained.2, 0,
+            "Boolean decomposition and literal bytes need no range lookup"
+        );
+
+        let circuit = typed_queue_circuit(false);
+        MockProver::run(TEST_K, &circuit, vec![])
+            .expect("typed SHA-256 queue synthesis")
+            .assert_satisfied();
+    }
+
+    #[test]
+    fn constrained_dynamic_byte_copy_tamper_is_rejected() {
+        let circuit = typed_queue_circuit(true);
+        assert!(
+            MockProver::run(TEST_K, &circuit, vec![])
+                .expect("typed SHA-256 queue synthesis")
+                .verify()
+                .is_err()
+        );
     }
 
     #[test]
@@ -591,6 +928,17 @@ mod tests {
     }
 
     #[test]
+    fn k16_capacity_uses_only_the_loaded_spread_table_rows() {
+        let jobs = KagemushaSha256JobsV4::<Fp>::default();
+        assert_eq!(TABLE16_SPREAD_TABLE_ROWS, (1 << 16) - TEST_UNUSABLE_ROWS);
+        assert_eq!(jobs.validate_capacity(TABLE16_SPREAD_TABLE_ROWS), Ok(()));
+        assert!(
+            jobs.validate_capacity(TABLE16_SPREAD_TABLE_ROWS - 1)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn witnessless_clone_preserves_exact_keygen_job_shape() {
         let circuit = queue_circuit(Mutation::None);
         let witnessless = circuit.without_witnesses();
@@ -611,5 +959,50 @@ mod tests {
         );
         assert_eq!(actual.lookup_bits, expected.lookup_bits);
         assert_eq!(actual.num_instance_columns, expected.num_instance_columns);
+    }
+
+    #[test]
+    fn witness_only_prover_shape_populates_direct_sha_physical_map() {
+        let keygen = single_job_queue_circuit(
+            BaseCircuitBuilder::<Fp>::new(false)
+                .use_k(TEST_K as usize)
+                .use_lookup_bits(16),
+            true,
+        );
+        MockProver::run(TEST_K, &keygen, vec![])
+            .expect("keygen-style SHA queue synthesis")
+            .assert_satisfied();
+
+        let prover = single_job_queue_circuit(
+            BaseCircuitBuilder::prover(
+                keygen.builder.config_params.clone(),
+                keygen.builder.break_points(),
+            ),
+            false,
+        );
+        assert!(prover.builder.witness_gen_only());
+        let expected_virtual_cells = prover.jobs.jobs[0]
+            .message
+            .iter()
+            .filter_map(|byte| byte.assigned())
+            .chain(prover.jobs.jobs[0].output_words)
+            .map(|assigned| {
+                assigned
+                    .cell
+                    .expect("witness-only Base values retain virtual identities")
+            })
+            .collect::<Vec<_>>();
+        let mock =
+            MockProver::run(TEST_K, &prover, vec![]).expect("witness-only SHA queue synthesis");
+        {
+            let copy_manager = prover.builder.core().copy_manager.lock().unwrap();
+            assert!(
+                expected_virtual_cells
+                    .iter()
+                    .all(|cell| copy_manager.assigned_advices.contains_key(cell)),
+                "witness-only Base synthesis must materialize every SHA source and output"
+            );
+        }
+        mock.assert_satisfied();
     }
 }

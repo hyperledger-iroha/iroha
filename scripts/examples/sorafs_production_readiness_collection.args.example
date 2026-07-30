@@ -30,4 +30,4 @@
 --environment production
 --now-unix 1800400000
 --max-summary-artifact-age-secs 1209600
---dry-run
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

@@ -840,9 +840,12 @@ THEOREM LocalAdmissionPreservesHistoricalLockedBodyLineageSourceRetention ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ HistoricalLockedBodyLineageSourceRetentionInvariant
-    /\ LocalAdmissionStep(node)
+    /\ (LocalAdmissionStep(node)
+          \/ SerializedLocalPrecedesServeIngressStep(node))
     => HistoricalLockedBodyLineageSourceRetentionInvariant'
-BY LocalAdmissionPreservesScheduledCandidateSet, IsaT(300)
+BY LocalAdmissionPreservesScheduledCandidateSet,
+   SelectedLocalAdmissionAdvancePreservesScheduledCandidateSet,
+   IsaT(300)
    DEF HistoricalLockedBodyLineageSourceRetentionInvariant,
        HistoricalLockedBodyRecoveryStageLineaged,
        HistoricalLockedBodyRecoveryStageLineagedWithoutAuthority,
@@ -875,7 +878,10 @@ BY LocalAdmissionPreservesScheduledCandidateSet, IsaT(300)
        FrozenCertifiedResponseBinding,
        FrozenCertifiedRequestRegistration,
        ScheduledCandidateSet, CandidateScheduled,
-       LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
+       LocalAdmissionStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead,
        AsyncRecoveryVars, vars
 
 (***************************************************************************
@@ -1287,7 +1293,7 @@ BY LocalAdmissionPreservesHistoricalLockedBodyLineageSourceRetention,
    IngressDrainPreservesHistoricalLockedBodyLineageSourceRetention,
    SerializedRuntimePreservesHistoricalLockedBodyLineageSourceRetention,
    Isa
-   DEF RunNodeWork
+   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
 
 THEOREM RunNodePreservesHistoricalLockedBodyLineageSourceRetention ==
   \A node \in ValidatorIds:

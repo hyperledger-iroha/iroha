@@ -144,6 +144,9 @@ internal object FixtureGeneratorRunner {
         }
     }
 
+    internal fun cargoBuildCommand(): List<String> =
+        listOf("cargo", "build", "--locked", "--offline", "-p", "kotlin-fixture-gen")
+
     private fun validateLockfilePath(lockfilePath: java.io.File?) {
         if (lockfilePath != null) {
             require(lockfilePath.isFile) {

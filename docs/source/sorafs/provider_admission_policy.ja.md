@@ -6,8 +6,8 @@ direction: ltr
 source: docs/source/sorafs/provider_admission_policy.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 120cfa0719545318d42be9ad91abbcbbb2b72e4581329df3441d585a3da7d0fb
-source_last_modified: "2026-07-26T10:32:11.870261+00:00"
+source_hash: 68625a6e36dbffeb9e594f58c24de3a5166c90774c24bd9f86a2638bf800ea88
+source_last_modified: "2026-07-28T16:10:49.926109+00:00"
 translation_last_reviewed: null
 ---
 

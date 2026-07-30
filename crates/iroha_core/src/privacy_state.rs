@@ -37,13 +37,13 @@ use iroha_data_model::{
         PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
         PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
         PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
-        ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
         VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
+        ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
         ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_LINEAGES_V1,
         ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1,
+        validate_vega_issuer_revocation_v1, validate_vega_issuer_rotation_v1,
         validate_zk_x509_certificate_policy_revocation_v1,
         validate_zk_x509_certificate_policy_rotation_v1,
-        validate_vega_issuer_revocation_v1, validate_vega_issuer_rotation_v1,
         validate_zk_x509_trust_anchor_revocation_v1, validate_zk_x509_trust_anchor_rotation_v1,
     },
 };
@@ -1339,9 +1339,7 @@ fn validate_privacy_vega_issuer_lineage_v1(
                 validate_vega_issuer_revocation_v1(&pair[0], &pair[1])
             }
         };
-        result.map_err(|error| {
-            format!("Vega issuer lineage {issuer_id:?} is invalid: {error}")
-        })?;
+        result.map_err(|error| format!("Vega issuer lineage {issuer_id:?} is invalid: {error}"))?;
     }
     Ok(())
 }
@@ -2269,26 +2267,29 @@ pub(crate) fn validate_privacy_zk_x509_statement_state_v1(
         .map_err(|error| format!("invalid X.509 public statement: {error}"))?;
     if PrivacyNamespaceV1::from_statement(&PrivacyStatementV1::IrohaZkX509StarkP256V0(
         statement.clone(),
-    )) != state.namespace
+    )) != state.namespace()
     {
         return Err("X.509 statement namespace differs from authoritative state".to_owned());
     }
-    if statement.trust_anchor_record_digest != state.trust_anchor.record_digest
-        || statement.trust_anchor_record_epoch != state.trust_anchor.record_epoch
+    let trust_anchor = state.trust_anchor();
+    if statement.trust_anchor_record_digest != trust_anchor.record_digest
+        || statement.trust_anchor_record_epoch != trust_anchor.record_epoch
     {
         return Err(
             "X.509 statement selects a stale or substituted trust-anchor revision".to_owned(),
         );
     }
-    if statement.certificate_policy_record_digest != state.certificate_policy.record_digest
-        || statement.certificate_policy_record_epoch != state.certificate_policy.record_epoch
+    let certificate_policy = state.certificate_policy();
+    if statement.certificate_policy_record_digest != certificate_policy.record_digest
+        || statement.certificate_policy_record_epoch != certificate_policy.record_epoch
     {
         return Err(
             "X.509 statement selects a stale or substituted certificate-policy revision".to_owned(),
         );
     }
-    if statement.crl_record_digest != state.crl_record.record_digest
-        || statement.crl_record_epoch != state.crl_record.record_epoch
+    let crl_record = state.crl_record();
+    if statement.crl_record_digest != crl_record.record_digest
+        || statement.crl_record_epoch != crl_record.record_epoch
     {
         return Err(
             "X.509 statement selects a stale or substituted signed-CRL revision".to_owned(),
@@ -2302,12 +2303,11 @@ pub(crate) fn validate_privacy_zk_x509_statement_state_v1(
             "X.509 executing block timestamp is outside the presentation window".to_owned(),
         );
     }
-    if statement.presentation_not_before_unix_seconds < state.crl_record.this_update_unix_seconds
-        || statement.presentation_not_after_unix_seconds
-            >= state.crl_record.next_update_unix_seconds
+    if statement.presentation_not_before_unix_seconds < crl_record.this_update_unix_seconds
+        || statement.presentation_not_after_unix_seconds >= crl_record.next_update_unix_seconds
         || statement
             .presentation_not_after_unix_seconds
-            .checked_sub(state.crl_record.this_update_unix_seconds)
+            .checked_sub(crl_record.this_update_unix_seconds)
             .is_none_or(|age| age > ZK_X509_MAX_CRL_AGE_SECONDS_V1)
     {
         return Err(
@@ -2315,13 +2315,13 @@ pub(crate) fn validate_privacy_zk_x509_statement_state_v1(
                 .to_owned(),
         );
     }
-    if statement.ca_membership_root != state.ca_membership_root
-        || statement.ca_membership_root_epoch != state.ca_membership_root_epoch
+    if statement.ca_membership_root != state.ca_membership_root()
+        || statement.ca_membership_root_epoch != state.ca_membership_root_epoch()
     {
         return Err("X.509 statement selects a stale or substituted CA root".to_owned());
     }
-    if statement.key_usage != state.certificate_policy.required_key_usage
-        || statement.extended_key_usages != state.certificate_policy.required_extended_key_usages
+    if statement.key_usage != certificate_policy.required_key_usage
+        || statement.extended_key_usages != certificate_policy.required_extended_key_usages
     {
         return Err("X.509 statement predicates differ from the authoritative policy".to_owned());
     }
@@ -2329,8 +2329,7 @@ pub(crate) fn validate_privacy_zk_x509_statement_state_v1(
         .disclosed_attributes
         .iter()
         .map(|attribute| attribute.index)
-        .eq(state
-            .certificate_policy
+        .eq(certificate_policy
             .required_disclosed_attribute_indices
             .iter()
             .copied())
@@ -6907,9 +6906,7 @@ impl PrivacyCommitmentKeyV1 {
             Self::BootleLanternIssuerPolicy { .. } => {
                 PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
             }
-            Self::VegaIssuerRevision { .. } => {
-                PrivacyProtocolIdV1::VegaExistingCredentialZkV0
-            }
+            Self::VegaIssuerRevision { .. } => PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             Self::OrchardPoolState { .. } => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::ProofManagedPoolConfig { namespace }
             | Self::ProofManagedPoolCommitment { namespace, .. }
@@ -9709,9 +9706,8 @@ mod tests {
         PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorNamespaceV1,
         PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVegaIssuerRecordDigestV1,
         PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
-        PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
-        PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1,
+        PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
         PrivacyX509TrustStoreDigestV1, PrivacyZkAcePolicyLifecycleV1,
         PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsKeyImageV1,
         PrivacyZkAmsRegistryIdV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
@@ -10029,10 +10025,10 @@ mod tests {
             epoch,
             PrivacyPolicyDigestV1::new(nonzero(policy_byte)),
             PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: false,
-                key_encipherment: false,
-                key_agreement: false,
+                digital_signature: true.into(),
+                content_commitment: false.into(),
+                key_encipherment: false.into(),
+                key_agreement: false.into(),
             },
             vec![
                 PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -13328,11 +13324,8 @@ mod tests {
         let insert = |storage: &mut Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
                       record: PrivacyVegaIssuerRecordV1| {
             storage.insert(
-                PrivacyCommitmentKeyV1::vega_issuer_revision(
-                    record.issuer_id,
-                    record.record_epoch,
-                )
-                .expect("canonical Vega revision key"),
+                PrivacyCommitmentKeyV1::vega_issuer_revision(record.issuer_id, record.record_epoch)
+                    .expect("canonical Vega revision key"),
                 PrivacyStateItemRecordV1::vega_issuer_governance(record, record.record_epoch)
                     .expect("canonical Vega revision provenance"),
             );
@@ -13431,13 +13424,12 @@ mod tests {
             );
         }
         assert_eq!(
-            privacy_vega_issuer_record_count_v1(&lineage.view())
-                .expect("exact per-lineage cap"),
+            privacy_vega_issuer_record_count_v1(&lineage.view()).expect("exact per-lineage cap"),
             VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1
         );
-        let over_epoch =
-            u64::try_from(VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1).expect("cap fits u64")
-                + 1;
+        let over_epoch = u64::try_from(VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1)
+            .expect("cap fits u64")
+            + 1;
         let over = vega_issuer_record(
             issuer_id,
             over_epoch,
@@ -13476,8 +13468,7 @@ mod tests {
             );
         }
         assert_eq!(
-            privacy_vega_issuer_record_count_v1(&global.view())
-                .expect("exact global Vega cap"),
+            privacy_vega_issuer_record_count_v1(&global.view()).expect("exact global Vega cap"),
             VEGA_MAX_ISSUER_RECORDS_V1
         );
         let over_index =
@@ -15954,7 +15945,7 @@ mod tests {
             candidate.ca_membership_root = PrivacyRootV1::new(nonzero(102));
         });
         assert_statement_rejected("weakened key usage", |candidate| {
-            candidate.key_usage.digital_signature = false;
+            candidate.key_usage.digital_signature = false.into();
         });
         assert_statement_rejected("substituted EKU policy", |candidate| {
             candidate.extended_key_usages = vec![PrivacyX509ExtendedKeyUsageV1::DocumentSigning];

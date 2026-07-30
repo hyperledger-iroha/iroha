@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 646fac1d32af1f09684676598ee5baa8c782e78666ddcc23b7e991d90f286e40
+source_hash: 91256320134c0a4e4e30a4e79c901b7a2449296696a9317dda18bcab32a34f41
 source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -63,7 +63,7 @@ SDKs). היא אוכפת את האינווריאנטים של alias ו-handle ש
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - יש להגיש PR הכולל fixtures, הצעה, דוח דטרמיניזם ועדכוני רישום.

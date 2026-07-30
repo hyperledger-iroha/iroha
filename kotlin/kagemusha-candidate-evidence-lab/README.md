@@ -87,6 +87,19 @@ and duplicates it internally; `nativeAppendV4` must reject that reuse. Static
 append, verify, redeem, duplicate-input, and result archives are prohibited.
 Native code authenticates the candidate record and every framed/payload
 artifact binding; the Android harness does not accept a JVM substitute.
+The eight KRV4 files are deliberately not APK assets: the two proving keys are
+larger than Android's practical APK/ZIP installation corridor. After the small
+marker-bearing APKs are installed and package data is cleared, the runner
+streams each file with `adb shell -T run-as` into an owner-only incoming
+directory below `noBackupFilesDir`, verifies its on-device size and SHA-256,
+writes a candidate/stage/count binding, and atomically renames the complete set
+into place. A free-space preflight reserves room for the external files, one
+complete native spool, and 1 GiB of working space. The harness rejects symlinks,
+non-`0600` files, wrong owners, extra or missing files, stale candidate/stage
+bindings, size mismatches, and SHA-256 mismatches while it streams the same
+bytes into native authentication. The Gradle staging tasks also open both final
+APKs as ZIP archives, reject every KRV4 basename, and enforce a 64 MiB APK cap.
+There is no asset fallback.
 All openings and recipient material in this scenario must belong to disposable
 candidate-only test notes. They are embedded in the unmistakably non-shipping
 lab APK and must never be keys or openings for production funds.
@@ -94,8 +107,10 @@ lab APK and must never be keys or openings for production funds.
 ## Physical-device run
 
 Use `scripts/run_kagemusha_candidate_android_lab.sh`. It builds only the debug
-lab application, installs the marker-bearing APKs, and launches these exact
-classes in separate `AndroidJUnitRunner` processes:
+lab application without KRV4 payloads, installs the marker-bearing APKs, stages
+the exact external artifact set with
+`scripts/stage_kagemusha_candidate_android_artifacts.py`, and launches these
+exact classes in separate `AndroidJUnitRunner` processes:
 
 ```text
 org.hyperledger.iroha.sdk.kagemusha.candidate.lab.KagemushaCandidateLifecycleInstrumentedTest

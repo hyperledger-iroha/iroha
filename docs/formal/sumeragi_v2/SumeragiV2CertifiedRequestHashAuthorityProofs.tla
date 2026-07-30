@@ -278,17 +278,13 @@ BY SMT
        CertifiedRequestOutbox, CertifiedArchiveRoutes,
        AsyncNetworkItem, AsyncCertifiedRequestEnvelope
 
-THEOREM AuthenticatedRestartRetagsSourceConsumerGeneration ==
+THEOREM AuthenticatedRestartStartsFreshSourceConsumerGeneration ==
   \A request:
     /\ TypeInvariant
     /\ request.source = asyncRecoveryNode
-    /\ generation[request.source] \in Nat
     /\ PreGstResponsiveRestart
-    => /\ CurrentDecisionRequestConsumerGeneration(request)'
-             = CurrentDecisionRequestConsumerGeneration(request) + 1
-       /\ CurrentDecisionRequestConsumerGeneration(request)'
-             # CurrentDecisionRequestConsumerGeneration(request)
-BY RestartIncrementsSelectedGeneration, SMT
+    => CurrentDecisionRequestConsumerGeneration(request)' = 0
+BY RestartResetsSelectedGeneration, SMT
    DEF PreGstResponsiveRestart,
        CurrentDecisionRequestConsumerGeneration
 

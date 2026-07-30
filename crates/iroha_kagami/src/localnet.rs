@@ -1236,6 +1236,11 @@ fn generate_localnet_with_line<T: Write>(
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_id = configured_chain_id();
     let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
+    // Keep every account literal and permission payload emitted by this localnet
+    // generation scoped to the selected chain.  Applying the guard only while
+    // rendering/parsing peer configs is too late: the genesis and alias intent
+    // have already serialized account IDs by then.
+    let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
     let peers = build_peers(
         opts.peers.get(),
         seed_bytes,
@@ -1378,10 +1383,10 @@ fn generate_localnet_with_line<T: Write>(
         })
         .collect::<Vec<_>>();
     let client_account_literal = client_identity.account_literal(chain_discriminant);
-    // Runtime signer configuration intentionally accepts only canonical domainless
-    // `AccountId` values, never chain-scoped address literals.
-    let operator_account_literal = client_identity.account_id.to_string();
-    let onboarding_account_literal = onboarding_identity.account_id.to_string();
+    // Runtime signer authorities must use the localnet chain's canonical
+    // address prefix whenever the chain has a known discriminant.
+    let operator_account_literal = client_identity.account_literal(chain_discriminant);
+    let onboarding_account_literal = onboarding_identity.account_literal(chain_discriminant);
     let bootstrap_peer = peers
         .first()
         .expect("localnet always has at least one peer");
@@ -4157,8 +4162,14 @@ fn parse_localnet_peer_config(rendered_config: &str) -> Result<actual::Root> {
             "failed to parse rendered peer config as TOML while deriving consensus policies: {err}"
         )
     })?;
+    // Scope validation to the chain used to render account-typed fields.
+    let chain_discriminant = table
+        .get("chain_discriminant")
+        .and_then(toml::Value::as_integer)
+        .and_then(|value| u16::try_from(value).ok());
+    let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
     actual::Root::from_toml_source(TomlSource::inline(table)).map_err(|err| {
-        eyre!("failed to parse generated peer config while deriving consensus policies: {err}")
+        eyre!("failed to parse generated peer config while deriving consensus policies: {err:?}")
     })
 }
 

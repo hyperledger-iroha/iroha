@@ -754,7 +754,7 @@ pub(super) mod tests {
             assert_unsatisfied(&changed);
         }
         for range in [
-            FIGURE9_LAYOUT.birth_random.clone(),
+            crate::vega::figure9_layout::FIGURE9_BIRTH_RANDOM_RANGE,
             FIGURE9_LAYOUT.birth_date.clone(),
         ] {
             let mut changed = baseline.clone();

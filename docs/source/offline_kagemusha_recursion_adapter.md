@@ -241,6 +241,15 @@ minimum unusable rows, and parent-proof byte bound. Its default value is an
 invalid sentinel; neither local configuration nor FFI input may replace the
 value authenticated by the manifest.
 
+The compact `proof_step_count` is runtime witness data. StepEq copy-constrains
+that public cell to the exact step field inside the native operation relation
+and range-checks it as a `u32`; it must never be assigned through a dynamic
+`assert_is_const`. Key generation uses step one, so placing that value in a
+fixed column would make step two and every later recursive transition
+incompatible with the authenticated proving and verifying key. Release
+validation therefore includes a real step-one-to-step-two proof chain under
+the same final key pair, followed by terminal verification.
+
 Bootstrap payload version 5 also authenticates the exact cumulative
 virtual-region breakpoints captured from the final key-generation circuit for
 each phase. Decoding rejects a phase-count mismatch, non-increasing or
@@ -258,17 +267,13 @@ permutation construction moves out only the completed mapping so union-find
 scratch is released, keeps omega and delta factors separate instead of
 materializing an n-by-m grid, and converts one coefficient column at a time.
 Empty-bootstrap assembly keeps an identity permutation implicit and
-materializes union-find state only on the first nontrivial copy, avoiding
-17,301,504 bytes for the reviewed k16, 11-column mapping. Verifier-key
+materializes union-find state only on the first nontrivial copy. Verifier-key
 construction builds, commits, and drops one permutation polynomial at a time,
-removing 20,971,520 bytes of retained permutation columns and lowering the first
-commitment's live field payload by approximately 18 MiB after accounting for
-the shared omega and delta tables. Those streamed commitments complete before
-assigned fixed columns and bit-packed selectors expand into ten degree-sized
-field polynomials, removing another 11,468,800 bytes from the reviewed
-first-MSM peak. The ordinary borrowed Halo2 entrypoints remain available, and
-the consuming paths produce byte-identical compressed and uncompressed
-processed keys.
+avoiding retention of the complete reviewed 534-column permutation inventory.
+Those streamed commitments complete before assigned fixed columns and
+bit-packed selectors expand into degree-sized field polynomials. The ordinary
+borrowed Halo2 entrypoints remain available, and the consuming paths produce
+byte-identical compressed and uncompressed processed keys.
 
 The proof engine also takes ownership of that witness-only circuit and its
 single processed proving key. It releases the circuit immediately after
@@ -282,9 +287,9 @@ verifier domain alongside them.
 
 The consuming quotient evaluator preserves the ordinary prover's constraint
 and Horner order but transforms only one degree-sized copy-permutation sigma
-chunk at a time. For the reviewed 11-column permutation this replaces 11 live
-sigma cosets with two, removing roughly 18 MiB of avoidable transient field
-storage. Instance conversion is deferred until its Lagrange allocation can be
+chunk at a time. For the reviewed 534-column permutation this keeps at most two
+sigma cosets live instead of retaining the full permutation inventory.
+Instance conversion is deferred until its Lagrange allocation can be
 consumed, and configure metadata, selector polynomials, and the evaluator graph
 are released at their final use. Borrowed and consuming proofs are regression-
 checked byte for byte. Parameter construction also evicts each one-shot
@@ -299,8 +304,9 @@ in a disposable one-worker pool. Large MSMs alone acquire process-wide
 admission before scalar/base preprocessing and run in a fixed two-worker
 window pool, bounding concurrent preprocessing, window buckets, and allocator
 caches without changing accumulator order. The checked static admission
-estimate is 232 MiB, not a physical RSS prediction; the 256 MiB supervisor
-remains authoritative.
+estimate is 9,747,562,496 bytes (9.078125 GiB), not a physical RSS prediction;
+it remains below the reviewed 12 GiB exact-profile preflight ceiling, and the
+16 GiB supervisor remains authoritative.
 
 Each live V4 step carries the exact operation vector, ordered parent state and
 lineage slots, post-proof and branch folds, deferred-equation audit words, and
@@ -361,10 +367,14 @@ python3 scripts/run_kagemusha_v4_generation.py \
 
 Direct unsupervised `generate-candidate` execution is rejected. The launcher
 holds the per-user heavy-job lock shared with the strict TLAPS runner and applies
-a bounded polling ceiling at the lower of 256 MiB or half of physical RAM, with a
-target 50 ms cadence and 200 ms per-inspection timeout. Inspection failure is
-terminal and a supervisor lifeline cleans the exact process group, but this
-portable userspace polling is not an operating-system hard allocation limit.
+a bounded polling ceiling at the lower of 16 GiB or half of physical RAM, with a
+target 50 ms cadence and 2-second per-inspection timeout. Inspection failure is
+terminal and a supervisor lifeline cleans the exact process group; sampling is
+scheduled from completed probes so a delayed macOS inspection cannot create a
+catch-up storm. This portable userspace polling is not an operating-system hard
+allocation limit. Generation also requires at least 16 GiB free on the pinned
+disk-backed output filesystem before it creates the two raw proving-key spools
+and each framed artifact copy.
 Every sample reuses one process snapshot for memory accounting and detection of
 same-user TLAPM, Isabelle, Poly/ML, or Kagemusha work outside the owned group.
 A conflict terminates only the owned generation group with status 74, and a
@@ -379,7 +389,7 @@ normal, failed, signalled, or memory-limited return it securely removes only
 owner-private residue carrying that exact id. Build the binary first: the
 launcher accepts only the prebuilt bundle
 executable followed by `generate-candidate`, so Cargo and rustc are never
-included in the 256 MiB process group. Finalization and candidate validation do
+included in the 16 GiB process group. Finalization and candidate validation do
 not require this generation guard. Commit-signature verification is the
 separate Git step above, and the returned `source_commit` must equal that
 verified commit. The sealed build helper requires the same clean exact source
@@ -414,17 +424,19 @@ between runs.
 
 Generation also computes every ParamsIPA, processed verifier-key, and processed
 proving-key length from the authenticated circuit shape before allocating IPA
-parameters. The reviewed compact profile is degree 16 with `[8]` advice,
-`[1]` lookup-advice, one fixed, and one instance column. Its exact per-parity
-encodings are 4,194,372 bytes for ParamsIPA, 682 bytes for the processed VK,
-and 94,372,718 bytes for the processed PK. Proving keys serialize directly into
-bounded owner-private staging files and are framed by streaming reads; Eq and Ep
+parameters. The reviewed compact profile is degree 16 with `[443]` advice,
+`[47, 0, 0]` lookup-advice, one fixed, and one instance column. The two trailing
+zero lookup phases are canonical `BaseCircuitBuilder` output, not allocated
+advice phases. Its exact per-parity encodings are 4,194,372 bytes for ParamsIPA,
+35,018 bytes for the processed VK, and 4,594,903,830 bytes for the processed PK.
+Proving keys serialize directly into bounded owner-private staging files and are framed by streaming reads; Eq and Ep
 processed keys are never retained together or copied through a release-sized
 `Vec`. The final verifier- and proving-key circuits are consumed after
 post-synthesis breakpoint extraction or validation and before key assembly.
 Generation then stages the exact processed key before handing its owned value
-and the witness-only calibration circuit to the consuming prover. The 96 MiB
-PK role cap and 256 MiB aggregate generation guard are fixed. The complete
+and the witness-only calibration circuit to the consuming prover. The 5 GiB
+PK role cap, 12 GiB exact-profile preflight ceiling, and 16 GiB aggregate
+generation guard are fixed. The complete
 outer generation lifecycle runs inside a disposable one-worker Rayon pool, so
 FFT and quotient scratch cannot multiply the resident key and worker-local FFT
 caches are released at the end of the attempt. Large MSMs use the process-wide

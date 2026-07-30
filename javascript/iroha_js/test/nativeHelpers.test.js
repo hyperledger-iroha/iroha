@@ -8,7 +8,7 @@ import {
   makeNativeTest,
   nativeBinding,
   nativeBindingError,
-  nativeSkipMessage,
+  nativeUnavailableMessage,
   noritoRequiredMethods,
   sm2RequiredMethods,
 } from "./helpers/native.js";
@@ -41,18 +41,79 @@ test("native helper records binding load failures without aborting import", () =
   }
 });
 
-test("makeNativeTest skips when required methods are missing", () => {
+test("makeNativeTest hard-fails when the native binding is unavailable", () => {
   const calls = [];
-  const baseTest = (name, options, fn) => {
-    calls.push({ name, options, fn });
+  const baseTest = (name, optionsOrFn, maybeFn) => {
+    calls.push({
+      name,
+      options:
+        typeof optionsOrFn === "function" ? undefined : optionsOrFn,
+      fn: typeof optionsOrFn === "function" ? optionsOrFn : maybeFn,
+    });
+  };
+  const wrapper = makeNativeTest(baseTest, {
+    require: noritoRequiredMethods,
+    binding: null,
+  });
+  wrapper("native unavailable", () => {});
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options, undefined);
+  assert.throws(
+    calls[0].fn,
+    (error) => {
+      assert.equal(error.code, "ERR_IROHA_NATIVE_TEST_REQUIREMENT");
+      assert.equal(error.message, nativeUnavailableMessage);
+      assert.equal(error.cause, undefined);
+      return true;
+    },
+  );
+});
+
+test("makeNativeTest names every missing required native method", () => {
+  const calls = [];
+  const baseTest = (name, optionsOrFn, maybeFn) => {
+    calls.push({
+      name,
+      options:
+        typeof optionsOrFn === "function" ? undefined : optionsOrFn,
+      fn: typeof optionsOrFn === "function" ? optionsOrFn : maybeFn,
+    });
   };
   const wrapper = makeNativeTest(baseTest, {
     require: noritoRequiredMethods,
     binding: { noritoEncodeInstruction() {} },
   });
-  wrapper("native gating", () => {});
+  wrapper("native method gate", { timeout: 1_000 }, () => {});
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].options.skip, nativeSkipMessage);
+  assert.deepEqual(calls[0].options, { timeout: 1_000 });
+  assert.throws(
+    calls[0].fn,
+    (error) => {
+      assert.equal(error.code, "ERR_IROHA_NATIVE_TEST_REQUIREMENT");
+      assert.equal(
+        error.message,
+        "native iroha_js_host binding is missing required method(s): noritoDecodeInstruction",
+      );
+      return true;
+    },
+  );
+});
+
+test("makeNativeTest distinguishes failed capability predicates", () => {
+  const calls = [];
+  const baseTest = (name, fn) => {
+    calls.push({ name, fn });
+  };
+  const wrapper = makeNativeTest(baseTest, {
+    require: () => false,
+    binding: {},
+  });
+  wrapper("native predicate gate", () => {});
+  assert.equal(calls.length, 1);
+  assert.throws(
+    calls[0].fn,
+    /does not satisfy the required capability predicate/u,
+  );
 });
 
 test("makeNativeTest returns base test when requirements are satisfied", () => {

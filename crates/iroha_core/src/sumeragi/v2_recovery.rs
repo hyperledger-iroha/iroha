@@ -238,7 +238,7 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
                 height: u64::try_from(kura.exact_durable_blocks_count()?)?,
                 reason: "Kura could not bind its verified startup storage inventory",
             })?;
-        let mut plan = plan_v2_startup_replay_inner(kura, Some(&startup_verification))?;
+        let mut plan = plan_v2_startup_replay_inner(kura, &startup_verification)?;
         plan.storage_binding = Some(startup_verification.storage_binding()?);
         Ok(plan)
     })();
@@ -250,15 +250,15 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
 
 fn plan_v2_startup_replay_inner(
     kura: &Kura,
-    startup_verification: Option<&V2StartupFinalityVerificationSession<'_>>,
+    startup_verification: &V2StartupFinalityVerificationSession<'_>,
 ) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
-    let durable_boundary = kura.exact_replay_boundary()?;
+    let durable_boundary = startup_verification.replay_boundary();
     let durable_height = usize::try_from(durable_boundary.count)?;
-    let durable_boundary_hash = v2_startup_replay_boundary_hash(&durable_boundary);
+    let durable_boundary_hash = v2_startup_replay_boundary_hash(durable_boundary);
     let durable_height_u64 = u64::try_from(durable_height)?;
     let mut complete_prefix_height = 0_usize;
     let mut audited_bootstrap_prefix_height = 0_usize;
-    let mut previous_finality: Option<(u64, wire::finality::V2FinalityArtifact)> = None;
+    let mut previous_finality: Option<(u64, Hash)> = None;
 
     for height_index in 1..=durable_height {
         let nonzero = NonZeroUsize::new(height_index)
@@ -275,24 +275,20 @@ fn plan_v2_startup_replay_inner(
             audited_bootstrap_prefix_height = height_index;
             continue;
         }
-        if kura.is_hash_only_block_height(nonzero) {
+        if startup_verification.is_hash_only_height(height) {
             return Err(V2StartupReplayError::InvalidReplayMetadata {
                 height,
                 reason: "zero-length unavailable body is outside the typed audited snapshot import",
             });
         }
 
-        let checkpoint = kura.wsv_checkpoint(height)?;
-        let manifest = kura.commit_manifest(height)?;
-        let finality = if let Some(session) = startup_verification {
-            kura.v2_finality_artifact_with_receipt_for_startup(session, height)?
-        } else {
-            kura.v2_finality_artifact_with_receipt(height)?
-        };
+        let checkpoint = startup_verification.wsv_checkpoint(height);
+        let manifest = startup_verification.commit_manifest(height);
+        let finality = startup_verification.finality_projection(height);
 
-        match (checkpoint.as_ref(), manifest.as_ref(), finality.as_ref()) {
-            (Some(_), Some(manifest), Some((artifact, _))) => {
-                if kura.commit_manifest_binding_state(manifest)?
+        match (checkpoint, manifest, finality) {
+            (Some(_), Some(manifest), Some(finality)) => {
+                if startup_verification.commit_manifest_binding_state(height, manifest)
                     != CommitManifestBindingState::Bound
                 {
                     return Err(V2StartupReplayError::InvalidReplayMetadata {
@@ -300,7 +296,7 @@ fn plan_v2_startup_replay_inner(
                         reason: "finality exists before the checkpoint published its manifest digest",
                     });
                 }
-                if !manifest.binds_authenticated_v2_commit_authority(artifact) {
+                if !finality.binds_manifest(manifest) {
                     return Err(V2StartupReplayError::InvalidReplayMetadata {
                         height,
                         reason: "commit manifest does not bind the exact authenticated v2 finality artifact",
@@ -308,37 +304,33 @@ fn plan_v2_startup_replay_inner(
                 }
                 if previous_finality.is_none() && audited_bootstrap_prefix_height > 0 {
                     let anchor_height = u64::try_from(audited_bootstrap_prefix_height)?;
-                    let anchor_index = NonZeroUsize::new(audited_bootstrap_prefix_height)
-                        .expect("non-empty audited prefix has a non-zero tip");
-                    let anchor_hash = kura.get_durable_block_hash(anchor_index).ok_or(
+                    let anchor_hash = startup_verification.canonical_hash(anchor_height).ok_or(
                         V2StartupReplayError::InvalidReplayMetadata {
                             height,
                             reason: "hash-only snapshot prefix has no durable anchor hash",
                         },
                     )?;
-                    let anchor_matches = artifact
-                        .height_context
-                        .snapshot_bootstrap
-                        .as_ref()
-                        .is_some_and(|anchor| {
-                            anchor.snapshot_height == anchor_height
-                                && anchor.snapshot_block_hash == anchor_hash
-                        });
+                    let anchor_matches =
+                        finality
+                            .snapshot_bootstrap()
+                            .is_some_and(|(height, block_hash)| {
+                                height == anchor_height && block_hash == anchor_hash
+                            });
                     if !anchor_matches {
                         return Err(V2StartupReplayError::InvalidReplayMetadata {
                             height,
                             reason: "first full-body artifact is not bound to the audited snapshot tip",
                         });
                     }
-                } else if artifact.height_context.snapshot_bootstrap.is_some() {
+                } else if finality.snapshot_bootstrap().is_some() {
                     return Err(V2StartupReplayError::InvalidReplayMetadata {
                         height,
                         reason: "snapshot bootstrap anchor appears outside the first executable height",
                     });
                 }
-                if let Some((parent_height, parent)) = previous_finality.as_ref()
+                if let Some((parent_height, parent_commit_qc_hash)) = previous_finality
                     && parent_height.checked_add(1) == Some(height)
-                    && artifact.height_context.parent_commit_qc.as_ref() != Some(&parent.commit_qc)
+                    && finality.parent_commit_qc_hash() != Some(parent_commit_qc_hash)
                 {
                     return Err(V2StartupReplayError::FinalityChainMismatch { height });
                 }
@@ -347,6 +339,12 @@ fn plan_v2_startup_replay_inner(
                 // live crash boundary whose exact lane evidence must gate
                 // successor activation.
                 if height == durable_height_u64 {
+                    let artifact = startup_verification
+                        .durable_tip_finality_artifact(height)
+                        .ok_or(V2StartupReplayError::InvalidReplayMetadata {
+                            height,
+                            reason: "durable-tip finality projection has no authenticated artifact",
+                        })?;
                     match durable_lane_completion_matches_finality(kura, artifact) {
                         Ok(true) => {}
                         Ok(false) => {
@@ -368,7 +366,7 @@ fn plan_v2_startup_replay_inner(
                     }
                 }
                 complete_prefix_height = height_index;
-                previous_finality = Some((height, artifact.clone()));
+                previous_finality = Some((height, finality.commit_qc_hash()));
             }
             (_, _, Some(_)) => {
                 return Err(V2StartupReplayError::InvalidReplayMetadata {
@@ -383,7 +381,7 @@ fn plan_v2_startup_replay_inner(
                 });
             }
             (Some(_), Some(manifest), None) => {
-                if kura.commit_manifest_binding_state(manifest)?
+                if startup_verification.commit_manifest_binding_state(height, manifest)
                     == CommitManifestBindingState::Mismatched
                 {
                     return Err(V2StartupReplayError::InvalidReplayMetadata {
@@ -2381,6 +2379,27 @@ mod tests {
     }
 
     #[test]
+    fn empty_chain_retry_binds_current_lane_auxiliary_storage() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.finish_v2_startup_finality_verification();
+        kura.reset_startup_replay_historical_payload_reads_for_test();
+
+        let plan = plan_v2_startup_replay(kura.as_ref())
+            .expect("empty-chain retry must bind current lane auxiliary storage");
+
+        assert_eq!(plan.durable_height(), 0);
+        assert_eq!(plan.complete_prefix_height(), 0);
+        assert_eq!(plan.pending_tip_height(), None);
+        plan.validate_exact_kura_boundary(kura.as_ref())
+            .expect("empty-chain plan must retain its exact storage binding");
+        assert_eq!(
+            kura.startup_replay_historical_payload_reads_for_test(),
+            0,
+            "empty-chain refresh must not perform historical payload reads"
+        );
+    }
+
+    #[test]
     fn all_hash_only_snapshot_recovers_exact_authenticated_successor() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(3, true);
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan snapshot import");
@@ -3381,6 +3400,7 @@ mod tests {
         assert_eq!(kura.v2_startup_finality_inventory_len_for_test(), 1);
 
         kura.clear_v2_finality_verification_cache_for_test();
+        kura.reset_startup_replay_historical_payload_reads_for_test();
         let second_plan =
             plan_v2_startup_replay(kura.as_ref()).expect("reuse exact startup inventory");
         assert_eq!(first_plan.complete_prefix_height(), 1);
@@ -3389,6 +3409,11 @@ mod tests {
             kura.v2_finality_crypto_verifications_for_test(),
             1,
             "replanning beyond an empty runtime LRU must reuse the startup audit"
+        );
+        assert_eq!(
+            kura.startup_replay_historical_payload_reads_for_test(),
+            0,
+            "replanning must consume the authenticated in-memory boundary, index, checkpoint, manifest, finality, and retained-record projections"
         );
 
         kura.clear_v2_finality_verification_cache_for_test();

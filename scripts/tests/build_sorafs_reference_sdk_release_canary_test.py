@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -32,6 +33,8 @@ assert CHECKER_SPEC and CHECKER_SPEC.loader  # pragma: no cover - defensive
 sys.modules[CHECKER_SPEC.name] = CHECKER
 CHECKER_SPEC.loader.exec_module(CHECKER)
 
+from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
+
 
 NOW_UNIX = 1_800_700_000
 GENERATED_AT = NOW_UNIX - 120
@@ -43,6 +46,9 @@ HEADER_DIGEST = "e" * 64
 FFI_DIGEST = "f" * 64
 POLICY_DIGEST = "1" * 64
 PUBLIC_KEY_DIGEST = "2" * 64
+SBOM_DIGEST = "3" * 64
+VULNERABILITY_DIGEST = "4" * 64
+PROVENANCE_DIGEST = "5" * 64
 
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
@@ -79,8 +85,25 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 PUBLIC_KEY_DIGEST,
                 "--policy-digest-hex",
                 POLICY_DIGEST,
+                "--signing-provider",
+                "external_ed25519_hsm",
+                "--signing-provider-revision",
+                "7",
             ]
         )
+    elif kind == "supply_chain":
+        args.extend(
+            [
+                "--sbom-index-digest-hex",
+                SBOM_DIGEST,
+                "--vulnerability-report-digest-hex",
+                VULNERABILITY_DIGEST,
+                "--provenance-bundle-digest-hex",
+                PROVENANCE_DIGEST,
+            ]
+        )
+        for target in MODULE.REQUIRED_RELEASE_TARGETS:
+            args.extend(["--target", target])
     elif kind == "downstream_bindings":
         args.extend(["--package-index-digest-hex", PACKAGE_DIGEST])
         for package in MODULE.REQUIRED_DOWNSTREAM_PACKAGES:
@@ -106,6 +129,36 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             ]
         )
     return args
+
+
+def write_topology_qualification(path: Path) -> Path:
+    payload = {
+        "schema": "sorafs.l1.deployment_qualification.summary.v1",
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": hashlib.sha256(b"builder-release-manifest").hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"canonical-builder-release-manifest"
+        ).hexdigest(),
+        "deployment": {
+            "deployment_id": "reference-sdk-release-20260701",
+            "environment": "production",
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(CANONICAL_READINESS_LANES),
+        "recognized_lane_slot_count": len(CANONICAL_READINESS_LANES),
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path
 
 
 def assert_rejected_without_artifact(
@@ -149,7 +202,12 @@ def test_generated_canaries_pass_full_reference_sdk_release_gate(
         evidence_paths.append(canary_path(tmp_path, kind))
     summary = tmp_path / "summary.json"
 
-    command = ["--now-unix", str(NOW_UNIX)]
+    command = [
+        "--now-unix",
+        str(NOW_UNIX),
+        "--topology-qualification-summary",
+        str(write_topology_qualification(tmp_path / "l1-topology.summary")),
+    ]
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary)])
@@ -162,6 +220,11 @@ def test_generated_canaries_pass_full_reference_sdk_release_gate(
     assert payload["valid_release_manifest_reference_digests"] == [MANIFEST_DIGEST]
     assert payload["valid_release_key_fingerprints"] == [PUBLIC_KEY_DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    assert payload["valid_provenance_bundle_digests"] == [PROVENANCE_DIGEST]
+    assert payload["valid_sbom_index_digests"] == [SBOM_DIGEST]
+    assert payload["valid_vulnerability_report_digests"] == [
+        VULNERABILITY_DIGEST
+    ]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
         assert payload["required"][kind]["artifacts"][0]["valid"] is True
@@ -180,7 +243,22 @@ def test_response_file_can_build_signed_manifest_canary(tmp_path: Path) -> None:
     assert payload["manifest_digest_hex"] == MANIFEST_DIGEST
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["private_key_absent"] is True
+    assert payload["signing_provider"] == "external_ed25519_hsm"
+    assert payload["signing_provider_revision"] == 7
     assert payload["raw_manifest_included"] is False
+
+
+def test_builds_complete_supply_chain_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("supply_chain", tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, "supply_chain").read_text("utf-8"))
+    assert payload["target_count"] == 5
+    assert [row["target"] for row in payload["target_results"]] == list(
+        MODULE.REQUIRED_RELEASE_TARGETS
+    )
+    assert all(row["high_vulnerability_count"] == 0 for row in payload["target_results"])
+    assert all(row["cosign_provenance_verified"] for row in payload["target_results"])
+    assert payload["sbom_index_digest_hex"] == SBOM_DIGEST
 
 
 def test_policy_digest_kind_inventory_matches_generated_payloads(tmp_path: Path) -> None:
@@ -220,6 +298,21 @@ def test_signed_manifest_rejects_unsupported_signature_algorithm_before_write(
 
     captured = capsys.readouterr()
     assert "--signature-algorithm must be `ed25519`" in captured.err
+    assert not canary_path(tmp_path, "signed_manifest").exists()
+
+
+def test_signed_manifest_requires_external_hsm_provider_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("signed_manifest", tmp_path)
+    index = args.index("--signing-provider")
+    args[index + 1] = "local_file"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--signing-provider must be `external_ed25519_hsm`" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
@@ -373,6 +466,12 @@ def test_unknown_downstream_package_coverage_fails_closed(
     (
         (
             "release_archive",
+            "--target",
+            MODULE.REQUIRED_RELEASE_TARGETS[0],
+            "shadow-release-target",
+        ),
+        (
+            "supply_chain",
             "--target",
             MODULE.REQUIRED_RELEASE_TARGETS[0],
             "shadow-release-target",

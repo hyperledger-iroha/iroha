@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/migration-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 713edfd67ba471ce3384804f28e0dd97a260101c8fd52d97dc29f00a78e93b3f
+source_hash: e150255d49b8fe090c1bd0f9d2db067d7be904c7c34ea2d8244a549931bbbc08
 source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -56,12 +56,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
 #### פקודת פרסום קנונית
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
   --chunk-fetch-plan-out artifacts/docs/book/2025-11-01/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=429391872 \
   --root-cid=f40101... \
   --dag-codec=0x71

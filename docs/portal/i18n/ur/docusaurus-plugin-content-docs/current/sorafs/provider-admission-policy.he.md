@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/provider-admission-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: eb2b7787e303d0abec1b52d30fcee137ae5cc0d4a357aba4bf97ce46ae8f0b52
+source_hash: 4882c4d40d59932925418a94e69c575b75a2abb94faddd9ab48cfedecb6d7a0a
 source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -45,7 +45,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## قبولیت کا ورک فلو
 
 1. **پروپوزل تیار کرنا**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      شامل کریں جو `ProviderAdmissionProposalV1` + توثیقی bundle بنائے۔
    - ویلیڈیشن: ضروری فیلڈز، stake > 0، اور `profile_id` میں canonical chunker handle کو یقینی بنائیں۔
 2. **گورننس کی منظوری**
@@ -71,7 +71,7 @@ canonical proposal/envelope bytes جاری کرتا ہے، اور `sign`/`verify
 
 ### CLI حوالہ
 
-ہر کمانڈ کو `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔
+ہر کمانڈ کو `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔
 
 - `proposal`
   - درکار فلیگز: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -113,7 +113,7 @@ canonical proposal/envelope bytes جاری کرتا ہے، اور `sign`/`verify
    `--retention-epoch` بڑھائیں اور ضرورت کے مطابق stake/endpoints اپڈیٹ کریں۔
 2. چلائیں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -133,7 +133,7 @@ canonical proposal/envelope bytes جاری کرتا ہے، اور `sign`/`verify
 #### ہنگامی منسوخی
 1. متاثرہ envelope کی شناخت کریں اور منسوخی جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

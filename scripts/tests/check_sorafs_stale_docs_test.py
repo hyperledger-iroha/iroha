@@ -19,18 +19,25 @@ def test_hedging_plan_uses_the_current_bridge_abi() -> None:
     plan = read("docs/source/sorafs_hedging_plan.md")
     bridge = read("crates/connect_norito_bridge/src/lib.rs")
     header = read("crates/connect_norito_bridge/include/connect_norito_bridge.h")
+    privacy = read("crates/iroha_data_model/src/privacy.rs")
 
     source_match = re.search(
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*(\d+)",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*"
+        r"PRIVACY_BRIDGE_ABI_VERSION_V1",
         bridge,
+    )
+    canonical_match = re.search(
+        r"PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*(\d+)",
+        privacy,
     )
     header_match = re.search(
         r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+(\d+)",
         header,
     )
     assert source_match is not None
+    assert canonical_match is not None
     assert header_match is not None
-    assert source_match.group(1) == header_match.group(1) == "21"
+    assert canonical_match.group(1) == header_match.group(1) == "21"
     assert "bridge source ABI is now 12" not in plan
     assert "sole first-release ABI, version 21" in plan
 
@@ -44,16 +51,22 @@ def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
         "authorization remain"
     ) not in normalized
     assert "release-wide signed fixture inventory" not in normalized
+    assert "The published and sealed cross-domain fixture inventory" not in normalized
     for marker in (
         "authoritative native ledger and supervised worker now own bounded "
         "price-time matching",
         "atomic custody mutation",
         "authority/signature enforcement",
-        "The canonical cross-domain fixture inventory is complete.",
+        "The checked-in, test-only signed and sealed cross-domain fixture "
+        "inventory binds 82 payload artifacts",
         "82 payload artifacts",
-        "30 `ValidationOutcomeV1` outcomes",
+        "32 `ValidationOutcomeV1` outcomes",
         "38 negative payload vectors",
-        "ten exact parity profiles",
+        "twelve exact parity profiles",
+        "All eight generated `CancelAssetLock` positive/negative files are "
+        "checked in",
+        "The 85-byte canonical frame is byte-exact",
+        "redundant 86-byte `0x21 0x20 <hash>` representation",
         "JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java "
         "Android, and C#",
         "published per-target archives and binding packages",

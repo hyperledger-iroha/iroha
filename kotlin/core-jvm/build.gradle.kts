@@ -61,6 +61,11 @@ tasks.test {
             .dir("..")
             .dir("fixtures/sorafs_manifest/appeal_finance"),
     )
+    inputs.dir(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("fixtures/sorafs_manifest/reference_sdk"),
+    )
 
     // Release CI supplies a freshly built, isolated ABI-21 bridge. Local
     // development retains the conventional root target/debug fallback.

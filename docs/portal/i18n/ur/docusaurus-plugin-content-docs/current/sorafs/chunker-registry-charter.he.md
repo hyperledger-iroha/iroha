@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 59ec91c4c367667ea067b7e942942b10a5f9900250768d0dc3117f2258e39cf6
+source_hash: e946d0b61e79e13cacafda501c1d6122c2b1039790a090354475ef90be8c144a
 source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -61,7 +61,7 @@ SDKs). یہ alias اور handle invariants enforce کرتی ہے جنہیں
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Fixtures، proposal، determinism report، اور registry updates پر مشتمل PR submit کریں۔

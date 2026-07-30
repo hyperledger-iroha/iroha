@@ -10,6 +10,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { verifyNativeBinding } from "../src/native.js";
+import { probeNativeBindingExports } from "./copy-native.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const JS_DIR = path.resolve(SCRIPT_DIR, "..");
@@ -80,7 +81,8 @@ export async function recordReleaseProvenance(options = {}) {
     packEntries: entries.length,
   };
 
-  const nativeInfo = await collectNativeInfo(JS_DIR);
+  const nativeInfoProvider = options.nativeInfoProvider ?? collectNativeInfo;
+  const nativeInfo = await nativeInfoProvider(JS_DIR, gitDescribe);
   if (nativeInfo) {
     metadata.native = nativeInfo;
   }
@@ -223,7 +225,7 @@ function isMainModule() {
   return invoked === self;
 }
 
-async function collectNativeInfo(jsDir) {
+async function collectNativeInfo(jsDir, expectedSourceRevision) {
   const nativePath = path.join(jsDir, "native", "iroha_js_host.node");
   const manifestPath = path.join(jsDir, "native", "iroha_js_host.checksums.json");
   if (!(await exists(nativePath))) {
@@ -236,6 +238,15 @@ async function collectNativeInfo(jsDir) {
       `Native release evidence failed checksum verification (${verification.status})`,
     );
   }
+  if (
+    verification.sourceTreeClean !== true ||
+    verification.sourceGitRevision !== expectedSourceRevision
+  ) {
+    throw new Error(
+      "Native release evidence must come from the exact clean release source revision",
+    );
+  }
+  const bridgeAbiVersion = probeNativeBindingExports(nativePath);
   const sha256 = verification.sha256;
   const sha512 = await hashFile(nativePath, "sha512");
   const platformKey = `${process.platform}-${process.arch}`;
@@ -246,6 +257,9 @@ async function collectNativeInfo(jsDir) {
     sha256,
     sha512,
     expectedSha256: verification.expectedSha256,
+    bridgeAbiVersion,
+    sourceGitRevision: verification.sourceGitRevision,
+    sourceTreeClean: verification.sourceTreeClean,
     platform: platformKey,
     manifestFilename: (await exists(manifestPath)) ? path.basename(manifestPath) : null,
   };

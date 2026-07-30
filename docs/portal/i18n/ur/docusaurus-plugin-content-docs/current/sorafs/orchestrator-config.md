@@ -52,7 +52,7 @@ JSON میں serialize کرتے ہیں، جس سے اسے SDK bindings اور آ�
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

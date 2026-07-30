@@ -37,7 +37,7 @@ translation_last_reviewed: 2026-02-07
 ## Процесс допуска
 
 1. **Создание предложения**
-   - CLI: добавить `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`,
+   - CLI: добавить `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`,
      формирующий `ProviderAdmissionProposalV1` + бандл аттестации.
    - Проверка: подтверждено наличие обязательных полей, доля > 0, дескриптор канонического чанкера в `profile_id`.
 2. **Одобрение управления**
@@ -64,7 +64,7 @@ translation_last_reviewed: 2026-02-07
 
 ### Справочник CLI
 
-Запускайте каждую команду через `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+Запускайте каждую команду через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Обязательные флаги: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     И18НИ00000063Х, И18НИ00000064Х, И18НИ00000065Х,
     `--jurisdiction-code=<ISO3166-1>` и как минимум один `--endpoint=<kind:host>`.
@@ -109,7 +109,7 @@ translation_last_reviewed: 2026-02-07
    Увеличьте `--retention-epoch` и обновите ставку/эндпоинты по мере необходимости.
 2. Выполните
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -130,7 +130,7 @@ translation_last_reviewed: 2026-02-07
 #### Аварийный отзыв
 1. Определите скомпрометированный конверт и выпустите отзыв:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

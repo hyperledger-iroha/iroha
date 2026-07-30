@@ -3278,9 +3278,9 @@ fn native_instruction_ds_effect_disposition(
             }
         };
     }
-    // Freezes, blacklists, and limits do not change balances, but applying them to the policy DS
+    // Availability, blacklists, and limits do not change balances, but applying them to the policy DS
     // would encumber treasury/user holdings outside the signed transfer-and-fee effect.
-    reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferFreeze);
+    reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferAvailability);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferBlacklist);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferControl);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetHoldingLimit);
@@ -5067,18 +5067,21 @@ mod tests {
     fn policy_ds_transfer_controls_cannot_encumber_balances() {
         let treasury = account(3);
         let policy = policy(&treasury);
-        let freeze: InstructionBox = iroha_data_model::isi::SetAssetTransferFreeze::new(
-            treasury,
-            policy_fee_asset(&policy),
-            true,
-            Some("encumber policy DS".to_owned()),
-        )
-        .into();
+        let availability: InstructionBox =
+            iroha_data_model::isi::SetAssetTransferAvailability::new(
+                treasury,
+                policy_fee_asset(&policy),
+                0,
+                iroha_data_model::asset::AssetTransferAvailability::Disabled,
+                iroha_data_model::asset::AssetTransferAvailability::Disabled,
+                Some("encumber policy DS".to_owned()),
+            )
+            .into();
         let instruction_wire_id =
-            core::any::type_name::<iroha_data_model::isi::SetAssetTransferFreeze>();
+            core::any::type_name::<iroha_data_model::isi::SetAssetTransferAvailability>();
 
         assert_eq!(
-            enforce_policy(&tx(1, vec![freeze], Metadata::default()), &policy),
+            enforce_policy(&tx(1, vec![availability], Metadata::default()), &policy),
             Err(
                 ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement {
                     context_index: 0,

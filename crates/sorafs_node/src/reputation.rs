@@ -2331,6 +2331,9 @@ fn prepare_proof_pages(
         for event in &page.events {
             let identity = proof_event_identity(event);
             validate_page_event_order(&mut previous_page_event, identity)?;
+        }
+        for event in &page.events {
+            let identity = proof_event_identity(event);
             let signal = match &event.outcome.projection {
                 ProofOutcomeProjectionV1::Pdp(projection) => ReputationSignalV1::Pdp {
                     provider_id: event.outcome.provider_id,
@@ -3499,7 +3502,7 @@ fn validate_checkpoint(
             .chain(
                 checkpoint
                     .latest_finalized
-                    .map(|identity| finalized_identity_as_event_identity(identity)),
+                    .map(finalized_identity_as_event_identity),
             ),
     )?;
 
@@ -3855,15 +3858,13 @@ const fn signal_is_well_formed(signal: ReputationSignalV1) -> bool {
             success,
             latency_healthy,
             ..
-        } => {
-            (!latency_healthy || success) && (counts_for_provider || (!success && !latency_healthy))
-        }
+        } => (counts_for_provider || !success) && (!latency_healthy || success),
         ReputationSignalV1::Repair {
             terminal,
             breach,
             slashing,
             ..
-        } => (!breach || terminal) && (!slashing || terminal),
+        } => terminal || !breach && !slashing,
     }
 }
 
@@ -3982,7 +3983,8 @@ mod tests {
                 PorTerminalOutcomeV1, ProviderDisputeEventV1, ProviderDisputeKindV1,
                 ProviderDisputeResolutionV1, REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
                 ReputationJournalAuthorityPolicyV1, ReputationJournalEntryV1,
-                ReputationJournalFinalizedCursorV1, StreamTokenValidationOutcomeV1,
+                ReputationJournalFinalizedCursorV1, StreamTokenValidationBindingV1,
+                StreamTokenValidationOutcomeV1,
             },
             reserve::{
                 ReserveDuration, ReserveFinalizedCursorV1, ReserveProviderAccountV1,
@@ -4192,8 +4194,11 @@ mod tests {
             source_time_unix_ms,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
-                validation_id: [marker.max(1); 32],
-                request_digest: [0xB2; 32],
+                binding: StreamTokenValidationBindingV1 {
+                    gateway_id: [marker.max(1); 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [0xB2; 32],
+                },
                 token_body_digest: Some([0xB3; 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: source_time_unix_ms,

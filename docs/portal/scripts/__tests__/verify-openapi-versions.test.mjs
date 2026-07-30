@@ -46,11 +46,12 @@ test('OpenAPI provenance accepts explicit V2 dirty and clean state', () => {
       version: 2,
       generator_commit: 'cd'.repeat(20),
       generator_dirty: false,
+      generator_source_sha256_hex: 'ef'.repeat(32),
     }),
     {
       dirty: false,
       commit: 'cd'.repeat(20),
-      sourceSha256Hex: null,
+      sourceSha256Hex: 'ef'.repeat(32),
     },
   );
 });
@@ -111,27 +112,63 @@ test('OpenAPI provenance rejects dirty-state ambiguity and release smuggling', (
     ],
     [
       'short clean commit',
-      {generator_commit: 'ab'.repeat(19)},
+      {
+        generator_commit: 'ab'.repeat(19),
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
       {},
       /exactly 40 lowercase hexadecimal/i,
     ],
     [
       'uppercase clean commit',
-      {generator_commit: 'AB'.repeat(20)},
+      {
+        generator_commit: 'AB'.repeat(20),
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
       {},
       /exactly 40 lowercase hexadecimal/i,
     ],
     [
       'nonhex clean commit',
-      {generator_commit: 'gg'.repeat(20)},
+      {
+        generator_commit: 'gg'.repeat(20),
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
       {},
       /exactly 40 lowercase hexadecimal/i,
     ],
     [
       'padded clean commit',
-      {generator_commit: ` ${'ab'.repeat(20)} `},
+      {
+        generator_commit: ` ${'ab'.repeat(20)} `,
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
       {},
       /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'zero clean commit',
+      {
+        generator_commit: '00'.repeat(20),
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
+      {},
+      /nonzero Git commit/i,
+    ],
+    [
+      'missing clean source digest',
+      {generator_commit: 'ab'.repeat(20)},
+      {},
+      /requires generator_source_sha256_hex/i,
+    ],
+    [
+      'zero clean source digest',
+      {
+        generator_commit: 'ab'.repeat(20),
+        generator_source_sha256_hex: '00'.repeat(32),
+      },
+      {},
+      /must be nonzero/i,
     ],
   ]) {
     assert.throws(
@@ -176,11 +213,86 @@ test('verifyOpenApiVersions requires explicit unsigned opt-in for dirty provenan
     /dirty provenance cannot be release-verified/i,
   );
   await verifyOpenApiVersions({...context, allowUnsigned: true});
+  await assert.rejects(
+    () =>
+      verifyOpenApiVersions({
+        ...context,
+        allowUnsigned: true,
+        expectedGeneratorCommit: 'ab'.repeat(20),
+      }),
+    /dirty provenance cannot be release-verified/i,
+  );
 });
 
 test('verifyOpenApiVersions validates recorded metadata', async () => {
   const context = await setupFixture();
   await verifyOpenApiVersions(context);
+});
+
+test('verifyOpenApiVersions binds mutable manifests to an explicit source pin', async () => {
+  const context = await setupFixture();
+  await verifyOpenApiVersions({
+    ...context,
+    expectedGeneratorCommit: 'ab'.repeat(20),
+  });
+  await assert.rejects(
+    () =>
+      verifyOpenApiVersions({
+        ...context,
+        expectedGeneratorCommit: 'cd'.repeat(20),
+      }),
+    /generator_commit .* does not match expected source commit/i,
+  );
+  await assert.rejects(
+    () =>
+      verifyOpenApiVersions({
+        ...context,
+        expectedGeneratorCommit: 'AB'.repeat(20),
+      }),
+    /exactly 40 lowercase hexadecimal/i,
+  );
+});
+
+test('verifyOpenApiVersions requires byte-identical mutable manifests', async () => {
+  const context = await setupFixture();
+  const currentManifestPath = join(
+    context.outputDir,
+    'versions',
+    'current',
+    'manifest.json',
+  );
+  const currentManifest = await readFile(currentManifestPath, 'utf8');
+  await writeFile(currentManifestPath, `${currentManifest}\n`, 'utf8');
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /latest and current OpenAPI manifests must be byte-identical/i,
+  );
+});
+
+test('verifyOpenApiVersions requires canonical mutable alias paths', async () => {
+  const context = await setupFixture((manifest) => {
+    const latest = manifest.entries.find((entry) => entry.label === 'latest');
+    latest.path = 'versions/current/torii.json';
+    latest.manifestPath = 'versions/current/manifest.json';
+  });
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /latest path must be exactly torii\.json/i,
+  );
+});
+
+test('verifyOpenApiVersions aligns mutable version-map timestamps', async () => {
+  const context = await setupFixture((manifest) => {
+    const current = manifest.entries.find((entry) => entry.label === 'current');
+    current.updatedAt = '2025-11-10T04:39:41.260Z';
+  });
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /latest updatedAt must match current updatedAt/i,
+  );
 });
 
 test('verifyOpenApiVersions rejects unknown root and entry fields', async () => {
@@ -477,6 +589,8 @@ async function writeManifest(manifestPath, artifactPath, options) {
     generated_unix_ms: 123,
     generator_commit: options.generatorCommit ?? 'ab'.repeat(20),
     generator_dirty: false,
+    generator_source_sha256_hex:
+      options.generatorSourceSha256Hex ?? 'cd'.repeat(32),
     artifact: {
       path: artifactPath,
       bytes: options.bytes ?? 0,

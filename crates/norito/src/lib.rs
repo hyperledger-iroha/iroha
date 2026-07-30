@@ -409,11 +409,13 @@ pub mod codec {
 
     /// Bare encode using the fixed v1 layout flags.
     pub fn encode_adaptive<T: NoritoSerialize>(value: &T) -> Vec<u8> {
+        encode_adaptive_with_flags(value, core::default_encode_flags())
+    }
+
+    fn encode_adaptive_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let encode_guard = core::EncodeContextGuard::enter();
-        // Base flags from compile-time features
-        let base: u8 = core::default_encode_flags();
+        core::validate_header_flags(flags).expect("adaptive encode flags must be supported");
         let _disable_packed_struct = packed_struct_disabled();
-        let flags = base;
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive: flags=0x{flags:02x}");
@@ -431,7 +433,6 @@ pub mod codec {
         #[cfg(not(feature = "adaptive-telemetry"))]
         let __pass1_ns: u64 = 0;
 
-        let mut final_flags = flags;
         let fixed_offsets_used = core::fixed_offsets_used();
         let field_bitset_used = core::field_bitset_used();
         let compact_len_used = core::compact_len_used();
@@ -448,22 +449,12 @@ pub mod codec {
 
         drop(encode_guard);
 
-        if field_bitset_used {
-            final_flags |= core::header_flags::FIELD_BITSET;
-        } else {
-            final_flags &= !core::header_flags::FIELD_BITSET;
-        }
-        if compact_len_used {
-            final_flags |= core::header_flags::COMPACT_LEN;
-        } else {
-            final_flags &= !core::header_flags::COMPACT_LEN;
-        }
-        let packed_seq_used = fixed_offsets_used;
-        if packed_seq_used {
-            final_flags |= core::header_flags::PACKED_SEQ;
-        } else {
-            final_flags &= !core::header_flags::PACKED_SEQ;
-        }
+        let final_flags = core::finalized_encode_flags(
+            flags,
+            fixed_offsets_used,
+            field_bitset_used,
+            compact_len_used,
+        );
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive: final_flags=0x{final_flags:02x}");
@@ -479,10 +470,17 @@ pub mod codec {
         value: &T,
         writer: &mut W,
     ) -> Result<usize, Error> {
+        encode_adaptive_into_with_flags(value, writer, core::default_encode_flags())
+    }
+
+    fn encode_adaptive_into_with_flags<T: NoritoSerialize, W: Write>(
+        value: &T,
+        writer: &mut W,
+        flags: u8,
+    ) -> Result<usize, Error> {
         let encode_guard = core::EncodeContextGuard::enter();
-        let base: u8 = core::default_encode_flags();
+        core::validate_header_flags(flags)?;
         let _disable_packed_struct = packed_struct_disabled();
-        let flags = base;
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive_into: flags=0x{flags:02x}");
@@ -501,7 +499,6 @@ pub mod codec {
         let __pass1_ns: u64 = 0;
 
         let payload_len = counting.bytes_written();
-        let mut final_flags = flags;
         let fixed_offsets_used = core::fixed_offsets_used();
         let field_bitset_used = core::field_bitset_used();
         let compact_len_used = core::compact_len_used();
@@ -517,22 +514,12 @@ pub mod codec {
 
         drop(encode_guard);
 
-        if field_bitset_used {
-            final_flags |= core::header_flags::FIELD_BITSET;
-        } else {
-            final_flags &= !core::header_flags::FIELD_BITSET;
-        }
-        if compact_len_used {
-            final_flags |= core::header_flags::COMPACT_LEN;
-        } else {
-            final_flags &= !core::header_flags::COMPACT_LEN;
-        }
-        let packed_seq_used = fixed_offsets_used;
-        if packed_seq_used {
-            final_flags |= core::header_flags::PACKED_SEQ;
-        } else {
-            final_flags &= !core::header_flags::PACKED_SEQ;
-        }
+        let final_flags = core::finalized_encode_flags(
+            flags,
+            fixed_offsets_used,
+            field_bitset_used,
+            compact_len_used,
+        );
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive_into: final_flags=0x{final_flags:02x}");
@@ -545,7 +532,7 @@ pub mod codec {
     #[allow(clippy::items_after_test_module)]
     mod encode_tests {
         use super::Encode;
-        use crate::NoritoSerialize;
+        use crate::{NoritoDeserialize, NoritoSerialize};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -582,6 +569,12 @@ pub mod codec {
                 EXACT_CALLS.fetch_add(1, Ordering::Relaxed);
                 Some(1)
             }
+        }
+
+        #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+        struct AdaptiveFixedFields {
+            tag: u8,
+            digest: [u8; 32],
         }
 
         #[test]
@@ -624,6 +617,51 @@ pub mod codec {
 
             assert!(super::take_last_encode_flags().is_some());
             assert!(super::take_last_encode_flags().is_none());
+        }
+
+        #[test]
+        fn adaptive_field_bitset_paths_retain_required_header_flags() {
+            let value = AdaptiveFixedFields {
+                tag: 7,
+                digest: [0xA5; 32],
+            };
+            let requested = crate::core::header_flags::FIELD_BITSET
+                | crate::core::header_flags::PACKED_STRUCT
+                | crate::core::header_flags::COMPACT_LEN;
+
+            let payload = super::encode_adaptive_with_flags(&value, requested);
+            let flags =
+                super::take_last_encode_flags().expect("adaptive vector encode records flags");
+
+            let mut streamed_payload = Vec::new();
+            let written =
+                super::encode_adaptive_into_with_flags(&value, &mut streamed_payload, requested)
+                    .expect("stream adaptive field-bitset payload");
+            assert_eq!(written, streamed_payload.len());
+            let streamed_flags =
+                super::take_last_encode_flags().expect("adaptive stream encode records flags");
+            assert_eq!(streamed_payload, payload);
+            assert_eq!(streamed_flags, flags);
+
+            for (label, payload, flags) in [
+                ("vector", payload, flags),
+                ("stream", streamed_payload, streamed_flags),
+            ] {
+                crate::core::validate_header_flags(flags)
+                    .expect("adaptive encoder must advertise valid field-bitset dependencies");
+                assert_eq!(
+                    flags & requested,
+                    requested,
+                    "{label} adaptive encode dropped a field-bitset dependency"
+                );
+                let framed = crate::core::frame_bare_with_header_flags::<AdaptiveFixedFields>(
+                    &payload, flags,
+                )
+                .expect("frame adaptive fixed-field payload");
+                let decoded: AdaptiveFixedFields =
+                    crate::decode_from_bytes(&framed).expect("decode adaptive fixed-field frame");
+                assert_eq!(decoded, value, "{label} adaptive frame changed the value");
+            }
         }
     }
 
@@ -10214,6 +10252,17 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    use std::io::Cursor;
+
+    // Canonical frames are always uncompressed and use the fixed default
+    // layout. Reject either condition from the fixed-size header before a
+    // forged uncompressed-length field can reserve a decompression buffer or
+    // an alternate layout can influence reconstruction.
+    let header = core::Header::read(Cursor::new(bytes))?;
+    if header.compression != Compression::None || header.flags != core::default_encode_flags() {
+        return Err(Error::NonCanonicalEncoding);
+    }
+
     let defaults = canonical_decode_limits(bytes.len());
     with_decode_limits(defaults, || {
         let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
@@ -10314,6 +10363,20 @@ mod canonical_codec_tests {
 
         assert!(matches!(
             decode_canonical::<Vec<String>>(&compressed),
+            Err(Error::NonCanonicalEncoding)
+        ));
+    }
+
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    #[test]
+    fn canonical_decode_rejects_compression_before_decode_allocation_budget() {
+        let value = vec!["compressed expansion".to_owned(); 4096];
+        let compressed = to_compressed_bytes(&value, Some(CompressionConfig::default()))
+            .expect("encode compressed expansion fixture");
+        let no_decode_resources = DecodeLimits::new(0, 0, 0, 0, 0);
+
+        assert!(matches!(
+            decode_canonical_with_limits::<Vec<String>>(&compressed, no_decode_resources),
             Err(Error::NonCanonicalEncoding)
         ));
     }

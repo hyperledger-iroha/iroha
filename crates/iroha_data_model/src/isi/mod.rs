@@ -380,8 +380,8 @@ impl From<crate::isi::asset_alias::SetAssetDefinitionBalancePolicy> for Instruct
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::asset_transfer_control::SetAssetTransferFreeze> for InstructionBox {
-    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferFreeze) -> Self {
+impl From<crate::isi::asset_transfer_control::SetAssetTransferAvailability> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferAvailability) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1165,8 +1165,23 @@ impl From<crate::prelude::CompleteReplicationOrder> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::prelude::ReviseReplicationOrderAssignments> for InstructionBox {
+    fn from(i: crate::prelude::ReviseReplicationOrderAssignments) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::prelude::ExpireReplicationOrder> for InstructionBox {
     fn from(i: crate::prelude::ExpireReplicationOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::prelude::SetProviderIngestCompletionAuthority> for InstructionBox {
+    fn from(i: crate::prelude::SetProviderIngestCompletionAuthority) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::prelude::RevokeProviderIngestCompletionAuthority> for InstructionBox {
+    fn from(i: crate::prelude::RevokeProviderIngestCompletionAuthority) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2049,21 +2064,36 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
 }
 
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
-    let inner = peel_instruction_box(&**instr);
-    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-        return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
+    #[cfg(feature = "packed-struct")]
+    {
+        // `packed-struct` selects the derive's alternate exact-size formula at
+        // compile time, while `Instruction::dyn_encode_into` emits the canonical
+        // adaptive payload and records its actual layout flags. Measure that
+        // payload before exposing an exact length so the wrapper never promotes
+        // an alternate-layout capacity estimate into a byte-exact contract.
+        let payload = encoded_instruction_payload(instr)?;
+        encoded_instruction_tuple_len(payload.name, payload.framed_payload_len)
     }
-    let type_name = Instruction::id(inner);
-    let entry = {
-        let registry = instruction_registry();
-        registry.entry_for_type_name(type_name)?
-    };
-    let payload_len = {
-        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        Instruction::dyn_encoded_len(inner)?
-    };
-    let framed_payload_len = (entry.frame_len)(payload_len)?;
-    encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
+
+    #[cfg(not(feature = "packed-struct"))]
+    {
+        let inner = peel_instruction_box(&**instr);
+        if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+            return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
+        }
+        let type_name = Instruction::id(inner);
+        let entry = {
+            let registry = instruction_registry();
+            registry.entry_for_type_name(type_name)?
+        };
+        let payload_len = {
+            let _guard =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            Instruction::dyn_encoded_len(inner)?
+        };
+        let framed_payload_len = (entry.frame_len)(payload_len)?;
+        encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
+    }
 }
 
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
@@ -2280,19 +2310,51 @@ fn json_required_string(map: &norito::json::Map, key: &str) -> Result<String, no
 }
 
 #[cfg(feature = "json")]
-fn json_optional_string(map: &norito::json::Map, key: &str) -> Option<String> {
-    map.get(key)
-        .and_then(norito::json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-#[cfg(feature = "json")]
 fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito::json::Error> {
     map.get(key)
         .and_then(norito::json::Value::as_bool)
         .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` must be a bool")))
+}
+
+#[cfg(feature = "json")]
+fn json_required_u64(map: &norito::json::Map, key: &str) -> Result<u64, norito::json::Error> {
+    map.get(key)
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| {
+            norito::json::Error::Message(format!("instruction `{key}` must be an unsigned integer"))
+        })
+}
+
+#[cfg(feature = "json")]
+fn json_required_asset_transfer_availability(
+    map: &norito::json::Map,
+    key: &str,
+) -> Result<crate::asset::AssetTransferAvailability, norito::json::Error> {
+    match map.get(key).and_then(norito::json::Value::as_str) {
+        Some("Enabled") => Ok(crate::asset::AssetTransferAvailability::Enabled),
+        Some("Disabled") => Ok(crate::asset::AssetTransferAvailability::Disabled),
+        _ => Err(norito::json::Error::Message(format!(
+            "instruction `{key}` must be exactly `Enabled` or `Disabled`"
+        ))),
+    }
+}
+
+#[cfg(feature = "json")]
+fn json_optional_exact_nonblank_string(
+    map: &norito::json::Map,
+    key: &str,
+) -> Result<Option<String>, norito::json::Error> {
+    match map.get(key) {
+        None | Some(norito::json::Value::Null) => Ok(None),
+        Some(norito::json::Value::String(value))
+            if !value.is_empty() && value.trim() == value.as_str() =>
+        {
+            Ok(Some(value.clone()))
+        }
+        _ => Err(norito::json::Error::Message(format!(
+            "instruction `{key}` must be non-empty exact text or null"
+        ))),
+    }
 }
 
 #[cfg(feature = "json")]
@@ -2332,6 +2394,24 @@ fn json_quantity_opt(
 }
 
 #[cfg(feature = "json")]
+fn json_asset_transfer_target(
+    params: &norito::json::Map,
+) -> Result<(crate::account::AccountId, crate::asset::AssetDefinitionId), norito::json::Error> {
+    use std::str::FromStr as _;
+
+    let account_id = crate::account::AccountId::parse_encoded(
+        json_required_string(params, "account_id")?.as_str(),
+    )
+    .map(crate::account::ParsedAccountId::into_account_id)
+    .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+        json_required_string(params, "asset_definition_id")?.as_str(),
+    )
+    .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    Ok((account_id, asset_definition_id))
+}
+
+#[cfg(feature = "json")]
 fn instruction_box_from_object(
     map: &norito::json::Map,
 ) -> Result<InstructionBox, norito::json::Error> {
@@ -2345,36 +2425,37 @@ fn instruction_box_from_object(
             norito::json::Error::Message("instruction `params` must be an object".to_owned())
         })?;
     match name.as_str() {
-        "SetAssetTransferFreeze" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        "SetAssetTransferAvailability" => {
+            if let Some(unexpected) = params.keys().find(|key| {
+                !matches!(
+                    key.as_str(),
+                    "account_id"
+                        | "asset_definition_id"
+                        | "expected_revision"
+                        | "incoming"
+                        | "outgoing"
+                        | "reason"
+                )
+            }) {
+                return Err(norito::json::Error::Message(format!(
+                    "unsupported SetAssetTransferAvailability field `{unexpected}`"
+                )));
+            }
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
-                crate::isi::asset_transfer_control::SetAssetTransferFreeze::new(
+                crate::isi::asset_transfer_control::SetAssetTransferAvailability::new(
                     account_id,
                     asset_definition_id,
-                    json_required_bool(params, "outgoing_frozen")?,
-                    json_optional_string(params, "reason"),
+                    json_required_u64(params, "expected_revision")?,
+                    json_required_asset_transfer_availability(params, "incoming")?,
+                    json_required_asset_transfer_availability(params, "outgoing")?,
+                    json_optional_exact_nonblank_string(params, "reason")?,
                 )
                 .into(),
             )
         }
         "SetAssetHoldingLimit" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
                 crate::isi::asset_transfer_control::SetAssetHoldingLimit::new(
                     account_id,
@@ -2385,15 +2466,7 @@ fn instruction_box_from_object(
             )
         }
         "SetAssetTransferBlacklist" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
                 crate::isi::asset_transfer_control::SetAssetTransferBlacklist::new(
                     account_id,
@@ -2404,15 +2477,7 @@ fn instruction_box_from_object(
             )
         }
         "SetAssetTransferControl" => {
-            let account_id = crate::account::AccountId::parse_encoded(
-                json_required_string(params, "account_id")?.as_str(),
-            )
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
-                json_required_string(params, "asset_definition_id")?.as_str(),
-            )
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             let limits = params
                 .get("limits")
                 .and_then(norito::json::Value::as_array)
@@ -3678,8 +3743,12 @@ pub mod error {
         pub enum AssetTransferAdmissionError {
             /// HoldingLimitExceeded: {0}
             HoldingLimitExceeded(Box<str>),
-            /// Outbound transfer is frozen: {0}
-            Frozen(Box<str>),
+            /// Incoming asset movement is disabled: {0}
+            IncomingDisabled(Box<str>),
+            /// Outgoing asset movement is disabled: {0}
+            OutgoingDisabled(Box<str>),
+            /// Availability revision did not match: {0}
+            AvailabilityRevisionMismatch(Box<str>),
             /// Account is blacklisted for outbound transfer: {0}
             Blacklisted(Box<str>),
             /// Transfer policy rejected the operation: {0}
@@ -4214,8 +4283,8 @@ pub mod prelude {
             RebindAccountAlias, RenewAliasLease,
         },
         asset_transfer_control::{
-            SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
-            SetAssetTransferFreeze,
+            SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
+            SetAssetTransferControl,
         },
         bridge::{
             ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
@@ -4301,8 +4370,10 @@ pub mod prelude {
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
             RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
             RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-            ResolveSorafsModerationChallenge, RetirePinManifest, SetPricingSchedule,
-            SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
+            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsReserveAppeal,

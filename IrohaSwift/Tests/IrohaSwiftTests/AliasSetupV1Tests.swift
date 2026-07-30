@@ -57,13 +57,14 @@ final class AliasSetupV1Tests: XCTestCase {
         )
 
         let alias = try ResolvedAccountAliasV1(canonicalName: "merchant@banka.paynet", dataspaceId: 7)
-        let authority = try AccountId.makeI105(publicKey: Data(repeating: 0x11, count: 32))
+        let fixtureKeypair = try Keypair(privateKeyBytes: Data(repeating: 0xC1, count: 32))
+        let authority = try AccountId.makeI105(publicKey: fixtureKeypair.publicKey)
         let intent = AliasIntentV1.accountAlias(
             try AliasAccountIntentV1(
                 alias: alias,
                 targetAccount: authority,
-                provision: .existing,
-                role: .additional
+                provision: .create,
+                role: .primary
             )
         )
         let ensureVector = try XCTUnwrap(

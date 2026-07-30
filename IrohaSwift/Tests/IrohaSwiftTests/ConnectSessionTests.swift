@@ -3,13 +3,17 @@ import XCTest
 
 final class ConnectSessionTests: XCTestCase {
     private func requireConnectCodec() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
-                      "NoritoBridge connect codec unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCodecAvailable,
+            "NoritoBridge connect codec unavailable"
+        )
     }
 
     private func requireConnectCrypto() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect crypto unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCryptoAvailable,
+            "NoritoBridge connect crypto unavailable"
+        )
     }
 
     func testSendOpenSendsControlFrame() async throws {
@@ -92,7 +96,9 @@ final class ConnectSessionTests: XCTestCase {
                                                       direction: .walletToApp,
                                                       sequence: 7,
                                                       reason: "shutdown") else {
-            throw XCTSkip("NoritoBridge encryption helpers unavailable")
+            try failRequiredNativeTestCapability(
+                "NoritoBridge encryption helpers unavailable"
+            )
         }
 
         let stub = StubWebSocketTask()
@@ -131,7 +137,9 @@ final class ConnectSessionTests: XCTestCase {
                                                       direction: .walletToApp,
                                                       sequence: 9,
                                                       reason: "done") else {
-            throw XCTSkip("NoritoBridge encryption helpers unavailable")
+            try failRequiredNativeTestCapability(
+                "NoritoBridge encryption helpers unavailable"
+            )
         }
 
         let stub = StubWebSocketTask()
@@ -168,7 +176,9 @@ final class ConnectSessionTests: XCTestCase {
                                                       direction: .walletToApp,
                                                       sequence: 11,
                                                       reason: "shutdown") else {
-            throw XCTSkip("NoritoBridge encryption helpers unavailable")
+            try failRequiredNativeTestCapability(
+                "NoritoBridge encryption helpers unavailable"
+            )
         }
 
         let stub = StubWebSocketTask()
@@ -230,7 +240,9 @@ final class ConnectSessionTests: XCTestCase {
                                                       direction: .walletToApp,
                                                       sequence: 21,
                                                       reason: "missing-key") else {
-            throw XCTSkip("NoritoBridge encryption helpers unavailable")
+            try failRequiredNativeTestCapability(
+                "NoritoBridge encryption helpers unavailable"
+            )
         }
 
         let stub = StubWebSocketTask()
@@ -267,7 +279,9 @@ final class ConnectSessionTests: XCTestCase {
                                                       direction: .walletToApp,
                                                       sequence: 34,
                                                       reason: "retry-decrypt") else {
-            throw XCTSkip("NoritoBridge encryption helpers unavailable")
+            try failRequiredNativeTestCapability(
+                "NoritoBridge encryption helpers unavailable"
+            )
         }
 
         let stub = StubWebSocketTask()

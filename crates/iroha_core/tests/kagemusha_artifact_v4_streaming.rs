@@ -10,8 +10,10 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
     KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-    KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
-    KagemushaPastaCycleProofProfileV4, KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4,
+    KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
+    KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KagemushaPastaCycleArtifactKindV4,
+    KagemushaPastaCycleParityV1, KagemushaPastaCycleProofProfileV4, KagemushaPastaPublicLayoutV4,
+    KagemushaStepCircuitParamsV4,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -22,8 +24,8 @@ fn test_profile() -> KagemushaPastaCycleProofProfileV4 {
     let circuit_params = KagemushaStepCircuitParamsV4 {
         version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
         k,
-        num_advice_per_phase: vec![8],
-        num_lookup_advice_per_phase: vec![1],
+        num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+        num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
         num_fixed: 1,
         lookup_bits: k - 1,
         num_instance_columns: 1,

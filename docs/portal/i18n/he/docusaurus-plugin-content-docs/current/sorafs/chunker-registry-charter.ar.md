@@ -57,7 +57,7 @@ description: ميثاق الحوكمة لتقديم ملفات chunker واعت�
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - قدّم PR يحتوي على fixtures والمقترح وتقرير الحتمية وتحديثات السجل.

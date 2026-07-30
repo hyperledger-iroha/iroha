@@ -71,13 +71,14 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError},
     },
     asset::{
-        AssetBalanceScope, AssetTransferControlWindow, AssetTransferLimit,
+        AssetBalanceScope, AssetTransferAvailability, AssetTransferControlWindow,
+        AssetTransferLimit,
         alias::AssetDefinitionAlias,
         definition::{AssetBalancePolicy, AssetConfidentialPolicy},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
     block::{
-        BlockHeader,
+        BlockHeader, SignedBlock,
         consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
         decode_framed_signed_block,
     },
@@ -90,12 +91,19 @@ use iroha_data_model::{
         AssetEscrowRecord, ConditionalEscrowCondition, ConditionalEscrowValue, EscrowId,
         hash_conditional_escrow_evidence_digest,
     },
-    events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
+    events::{
+        data::prelude::{
+            AssetBatchTransferLegStatus, AssetBatchTransferOutcome, AssetBatchTransferRejectionCode,
+        },
+        time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
+    },
+    executor::{ContractRejection, ValidationFail},
     isi::{
         BatchMode, Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue,
-        Revoke, SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
-        SetAssetTransferFreeze, SetKeyValue, SetParameter, Transfer, TransferAssetBatch,
+        Revoke, SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
+        SetAssetTransferControl, SetKeyValue, SetParameter, Transfer, TransferAssetBatch,
         TransferAssetBatchEntry, Unregister,
+        error::{AssetTransferAdmissionError, InstructionExecutionError, MathError},
         escrow::{
             AttestEscrowCondition, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
             ExpireConditionalEscrow, OpenAssetLock, OpenConditionalEscrow,
@@ -107,6 +115,7 @@ use iroha_data_model::{
             SettlementLeg, SettlementPlan,
         },
         smart_contract_code::CommitContractDeployment,
+        sorafs::{CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder},
         zk::{
             AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAsset, Shield, Unshield,
             VerifyProof, ZkAssetMode, ZkTransfer,
@@ -150,19 +159,29 @@ use iroha_data_model::{
     },
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     query::{
-        ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
-        SingularQueryBox,
-        dsl::{CompoundPredicate, SelectorTuple},
+        CommittedTransaction, ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest,
+        QueryResponse, QueryWithParams, SingularQueryBox,
+        block::prelude::FindBlocks,
+        dsl::{CommittedTxPredicate, CompoundPredicate, SelectorTuple},
         escrow::prelude::{FindAssetEscrowById, FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
         parameters::QueryParams,
+        transaction::prelude::FindTransactions,
     },
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{ContractAddress, ContractAlias},
+    sorafs::{
+        capacity::ProviderId,
+        pin_registry::{
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+        },
+    },
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
-        TransactionBuilder as ModelTransactionBuilder, TransactionPayload,
+        TransactionBuilder as ModelTransactionBuilder, TransactionEntrypoint, TransactionPayload,
         TransactionSubmissionReceipt,
+        error::TransactionRejectionReason,
         executable::{
             ContractArgumentRecord, ContractInvocation, MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
         },
@@ -229,12 +248,13 @@ use sorafs_manifest::{
         SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1, SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
-    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
-    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
-    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
-    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
+    sign_orderbook_payload_bytes_ed25519_v1, validate_appeal_finance_cancel_asset_lock_bytes,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
+    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
+    validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, OrchestratorConfig, RolloutPhase, TransportPolicy, fetch_via_gateway,
@@ -509,6 +529,205 @@ fn parse_account_id(value: &str) -> PyResult<AccountId> {
         Err(err) => Err(err.to_string()),
     };
     parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
+}
+
+fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> {
+    require_non_blank_unpadded(value, field)?;
+    if value.chars().any(char::is_whitespace)
+        || value.contains('@')
+        || value.contains('#')
+        || value.contains('$')
+    {
+        return Err(PyValueError::new_err(format!(
+            "{field} must be an exact canonical I105 account id"
+        )));
+    }
+    let address = AccountAddress::parse_encoded(value, None).map_err(|err| {
+        PyValueError::new_err(format!(
+            "{field} must be an exact canonical I105 account id: {err}"
+        ))
+    })?;
+    address.to_account_id().map_err(|err| {
+        PyValueError::new_err(format!(
+            "{field} must be an exact canonical I105 account id: {err}"
+        ))
+    })
+}
+
+fn parse_nonzero_lower_hex_32(value: &str, field: &str) -> PyResult<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(PyValueError::new_err(format!(
+            "{field} must contain exactly 64 lowercase hexadecimal characters"
+        )));
+    }
+    let decoded = hex::decode(value)
+        .map_err(|err| PyValueError::new_err(format!("invalid {field}: {err}")))?;
+    let bytes: [u8; 32] = decoded
+        .try_into()
+        .map_err(|_| PyValueError::new_err(format!("{field} must contain exactly 32 bytes")))?;
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(PyValueError::new_err(format!(
+            "{field} must not be the zero identifier"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn require_exact_dict_fields(
+    value: &Bound<'_, PyDict>,
+    fields: &[&str],
+    context: &str,
+) -> PyResult<()> {
+    if value.len() != fields.len() {
+        return Err(PyValueError::new_err(format!(
+            "{context} must contain exactly [{}]",
+            fields.join(", ")
+        )));
+    }
+    for key in value.keys().iter() {
+        let key = key
+            .extract::<String>()
+            .map_err(|_| PyTypeError::new_err(format!("{context} field names must be strings")))?;
+        if !fields.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{context} must contain exactly [{}]",
+                fields.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn required_dict_field<'py>(
+    value: &Bound<'py, PyDict>,
+    field: &str,
+    context: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    value
+        .get_item(field)?
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.{field} is required")))
+}
+
+fn required_dict_string(value: &Bound<'_, PyDict>, field: &str, context: &str) -> PyResult<String> {
+    required_dict_field(value, field, context)?
+        .extract::<String>()
+        .map_err(|_| PyTypeError::new_err(format!("{context}.{field} must be a string")))
+}
+
+fn required_dict_u64(value: &Bound<'_, PyDict>, field: &str, context: &str) -> PyResult<u64> {
+    let field_value = required_dict_field(value, field, context)?;
+    if field_value.is_instance_of::<pyo3::types::PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{context}.{field} must be an integer"
+        )));
+    }
+    field_value
+        .extract::<u64>()
+        .map_err(|_| PyTypeError::new_err(format!("{context}.{field} must be a non-negative u64")))
+}
+
+fn parse_provider_ingest_completion_authority(
+    value: &Bound<'_, PyDict>,
+) -> PyResult<ProviderIngestCompletionAuthorityV1> {
+    const CONTEXT: &str = "expected_authority";
+    require_exact_dict_fields(value, &["provider_owner", "signer_policy"], CONTEXT)?;
+    let provider_owner = required_dict_string(value, "provider_owner", CONTEXT)?;
+    let signer_policy_value = required_dict_field(value, "signer_policy", CONTEXT)?;
+    let signer_policy = signer_policy_value
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err("expected_authority.signer_policy must be a mapping"))?;
+    const POLICY_CONTEXT: &str = "expected_authority.signer_policy";
+    require_exact_dict_fields(
+        signer_policy,
+        &[
+            "policy_id",
+            "revision",
+            "predecessor_digest",
+            "policy_digest",
+        ],
+        POLICY_CONTEXT,
+    )?;
+
+    let revision = required_dict_u64(signer_policy, "revision", POLICY_CONTEXT)?;
+    if revision == 0 {
+        return Err(PyValueError::new_err(
+            "expected_authority.signer_policy.revision must be greater than zero",
+        ));
+    }
+    let predecessor_value =
+        required_dict_field(signer_policy, "predecessor_digest", POLICY_CONTEXT)?;
+    let predecessor_digest = if predecessor_value.is_none() {
+        None
+    } else {
+        let predecessor = predecessor_value.extract::<String>().map_err(|_| {
+            PyTypeError::new_err(
+                "expected_authority.signer_policy.predecessor_digest must be a string or null",
+            )
+        })?;
+        Some(parse_nonzero_lower_hex_32(
+            &predecessor,
+            "expected_authority.signer_policy.predecessor_digest",
+        )?)
+    };
+    match (revision, predecessor_digest) {
+        (1, Some(_)) => {
+            return Err(PyValueError::new_err(
+                "expected_authority.signer_policy.predecessor_digest must be absent at revision one",
+            ));
+        }
+        (2.., None) => {
+            return Err(PyValueError::new_err(
+                "expected_authority.signer_policy.predecessor_digest is required after revision one",
+            ));
+        }
+        _ => {}
+    }
+
+    let signer_policy = ProviderIngestCompletionSignerPolicyV1 {
+        policy_id: parse_nonzero_lower_hex_32(
+            &required_dict_string(signer_policy, "policy_id", POLICY_CONTEXT)?,
+            "expected_authority.signer_policy.policy_id",
+        )?,
+        revision,
+        predecessor_digest,
+        policy_digest: parse_nonzero_lower_hex_32(
+            &required_dict_string(signer_policy, "policy_digest", POLICY_CONTEXT)?,
+            "expected_authority.signer_policy.policy_digest",
+        )?,
+    };
+    if !signer_policy.is_valid() {
+        return Err(PyValueError::new_err(
+            "expected_authority.signer_policy is not canonical",
+        ));
+    }
+    Ok(ProviderIngestCompletionAuthorityV1::new(
+        parse_exact_i105_account_id(&provider_owner, "expected_authority.provider_owner")?,
+        signer_policy,
+    ))
+}
+
+fn parse_provider_ingest_finalized_anchor(
+    value: &Bound<'_, PyDict>,
+) -> PyResult<ProviderIngestFinalizedAnchorV1> {
+    const CONTEXT: &str = "finalized_anchor";
+    require_exact_dict_fields(value, &["height", "block_hash"], CONTEXT)?;
+    let height = required_dict_u64(value, "height", CONTEXT)?;
+    if height == 0 {
+        return Err(PyValueError::new_err(
+            "finalized_anchor.height must be greater than zero",
+        ));
+    }
+    Ok(ProviderIngestFinalizedAnchorV1 {
+        height,
+        block_hash: parse_nonzero_lower_hex_32(
+            &required_dict_string(value, "block_hash", CONTEXT)?,
+            "finalized_anchor.block_hash",
+        )?,
+    })
 }
 
 fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
@@ -3530,6 +3749,37 @@ fn sorafs_multi_fetch_local_py(
     Ok(result.unbind())
 }
 
+fn parse_gateway_transport_policy_v1(raw: &str) -> PyResult<TransportPolicy> {
+    if raw.is_empty() {
+        return Err(PyValueError::new_err("transport_policy must not be empty"));
+    }
+    TransportPolicy::parse(raw).ok_or_else(|| {
+        PyValueError::new_err(
+            "transport_policy must be one of 'soranet-first', 'soranet-strict', or 'direct-only'",
+        )
+    })
+}
+
+fn parse_gateway_rollout_phase_v1(raw: &str) -> PyResult<RolloutPhase> {
+    if raw.is_empty() {
+        return Err(PyValueError::new_err("rollout_phase must not be empty"));
+    }
+    RolloutPhase::parse(raw).ok_or_else(|| {
+        PyValueError::new_err("rollout_phase must be one of 'canary', 'ramp', or 'default'")
+    })
+}
+
+fn parse_gateway_anonymity_policy_v1(raw: &str) -> PyResult<AnonymityPolicy> {
+    if raw.is_empty() {
+        return Err(PyValueError::new_err("anonymity_policy must not be empty"));
+    }
+    AnonymityPolicy::parse(raw).ok_or_else(|| {
+        PyValueError::new_err(
+            "anonymity_policy must be one of 'anon-guard-pq', 'anon-majority-pq', or 'anon-strict-pq'",
+        )
+    })
+}
+
 #[pyfunction]
 #[pyo3(
     name = "sorafs_gateway_fetch",
@@ -3701,39 +3951,14 @@ fn sorafs_gateway_fetch_py(
         );
     }
     if let Some(raw) = options.transport_policy.as_ref() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(PyValueError::new_err("transport_policy must not be empty"));
-        }
-        let policy = TransportPolicy::parse(trimmed).ok_or_else(|| {
-            PyValueError::new_err(
-                "transport_policy must be one of 'soranet-first', 'soranet-strict', or 'direct-only'",
-            )
-        })?;
-        orchestrator_config.transport_policy = policy;
+        orchestrator_config.transport_policy = parse_gateway_transport_policy_v1(raw)?;
     }
     if let Some(raw) = options.rollout_phase.as_ref() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(PyValueError::new_err("rollout_phase must not be empty"));
-        }
-        let phase = RolloutPhase::parse(trimmed).ok_or_else(|| {
-            PyValueError::new_err(
-                "rollout_phase must be one of 'canary', 'ramp', 'default', or stage_a/stage_b/stage_c aliases",
-            )
-        })?;
-        orchestrator_config = orchestrator_config.with_rollout_phase(phase);
+        orchestrator_config =
+            orchestrator_config.with_rollout_phase(parse_gateway_rollout_phase_v1(raw)?);
     }
     if let Some(raw) = options.anonymity_policy.as_ref() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(PyValueError::new_err("anonymity_policy must not be empty"));
-        }
-        let policy = AnonymityPolicy::parse(trimmed).ok_or_else(|| {
-            PyValueError::new_err(
-                "anonymity_policy must be one of 'stage-a', 'anon-guard-pq', 'stage-b', 'anon-majority-pq', 'stage-c', or 'anon-strict-pq'",
-            )
-        })?;
+        let policy = parse_gateway_anonymity_policy_v1(raw)?;
         orchestrator_config.anonymity_policy = policy;
         orchestrator_config.anonymity_policy_override = Some(policy);
     }
@@ -4334,6 +4559,21 @@ fn sorafs_fixed32_from_bytes_py(value: &[u8], context: &str) -> PyResult<[u8; 32
     fixed_array::<32>(value, context)
 }
 
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_appeal_finance_cancel_asset_lock_json")]
+fn sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+    norito_bytes: &[u8],
+    label: &str,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let outcome = validate_appeal_finance_cancel_asset_lock_bytes(
+        norito_bytes,
+        label.to_owned(),
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SorafsPdpPayloadKind {
     Commitment,
@@ -4877,6 +5117,42 @@ mod sorafs_reference_validation_py_tests {
         assert_eq!(outcome.status.as_str(), "Ok");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(outcome.generated_at, 1_700_001_234);
+    }
+
+    #[test]
+    fn appeal_finance_cancel_asset_lock_native_outcomes_are_stable() {
+        let canonical = include_bytes!(
+            "../../../../fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to"
+        );
+        let zero = include_bytes!(
+            "../../../../fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to"
+        );
+
+        let accepted = sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+            canonical,
+            "cancel_asset_lock_v1.to",
+            41,
+        )
+        .expect("validate canonical CancelAssetLock");
+        let accepted: norito::json::Value =
+            norito::json::from_json(&accepted).expect("accepted outcome JSON");
+        assert_eq!(
+            accepted.get("code").and_then(norito::json::Value::as_str),
+            Some("SFS-OK-000")
+        );
+
+        let rejected = sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+            zero,
+            "cancel_asset_lock_zero_expected_v1.to",
+            42,
+        )
+        .expect("validate zero-quantity CancelAssetLock");
+        let rejected: norito::json::Value =
+            norito::json::from_json(&rejected).expect("rejected outcome JSON");
+        assert_eq!(
+            rejected.get("code").and_then(norito::json::Value::as_str),
+            Some("SFS-VAL-001")
+        );
     }
 
     #[test]
@@ -7605,6 +7881,11 @@ mod tests {
     }
 
     #[test]
+    fn native_sdk_bridge_abi_version_is_exactly_twenty_one() {
+        assert_eq!(connect_norito_bridge_abi_version_py(), 21);
+    }
+
+    #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
         ensure_python();
         let signing = SigningKey::from_bytes(&[0x11u8; 32]);
@@ -7812,6 +8093,91 @@ mod tests {
             map.get("anonymity_policy_override_label")
                 .is_some_and(json::Value::is_null)
         );
+    }
+
+    #[test]
+    fn python_gateway_policy_parsers_accept_only_exact_v1_labels() {
+        ensure_python();
+        for (label, expected) in [
+            ("soranet-first", TransportPolicy::SoranetPreferred),
+            ("soranet-strict", TransportPolicy::SoranetStrict),
+            ("direct-only", TransportPolicy::DirectOnly),
+        ] {
+            assert_eq!(
+                parse_gateway_transport_policy_v1(label).expect("canonical transport policy"),
+                expected
+            );
+        }
+        for rejected in [
+            "",
+            " soranet-first",
+            "soranet-first ",
+            "SORANET-FIRST",
+            "soranet_first",
+            "soranet_strict",
+            "direct_only",
+            "soranet-only",
+            "soranet_only",
+        ] {
+            assert!(
+                parse_gateway_transport_policy_v1(rejected).is_err(),
+                "noncanonical transport label `{rejected}` must fail"
+            );
+        }
+
+        for (label, expected) in [
+            ("canary", RolloutPhase::Canary),
+            ("ramp", RolloutPhase::Ramp),
+            ("default", RolloutPhase::Default),
+        ] {
+            assert_eq!(
+                parse_gateway_rollout_phase_v1(label).expect("canonical rollout phase"),
+                expected
+            );
+        }
+        for rejected in [
+            "", " canary", "canary ", "CANARY", "stage_a", "stage-a", "stagea", "stage_b",
+            "stage-b", "stageb", "stage_c", "stage-c", "stagec", "ga",
+        ] {
+            assert!(
+                parse_gateway_rollout_phase_v1(rejected).is_err(),
+                "noncanonical rollout label `{rejected}` must fail"
+            );
+        }
+
+        for (label, expected) in [
+            ("anon-guard-pq", AnonymityPolicy::GuardPq),
+            ("anon-majority-pq", AnonymityPolicy::MajorityPq),
+            ("anon-strict-pq", AnonymityPolicy::StrictPq),
+        ] {
+            assert_eq!(
+                parse_gateway_anonymity_policy_v1(label).expect("canonical anonymity policy"),
+                expected
+            );
+        }
+        for rejected in [
+            "",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+            "ANON-GUARD-PQ",
+            "anon_guard_pq",
+            "anon_majority_pq",
+            "anon_strict_pq",
+            "stage_a",
+            "stage-a",
+            "stagea",
+            "stage_b",
+            "stage-b",
+            "stageb",
+            "stage_c",
+            "stage-c",
+            "stagec",
+        ] {
+            assert!(
+                parse_gateway_anonymity_policy_v1(rejected).is_err(),
+                "noncanonical anonymity label `{rejected}` must fail"
+            );
+        }
     }
 
     #[test]
@@ -8736,14 +9102,16 @@ mod tests {
                 &destination,
             )
             .expect("canonical transfer quantity");
-            Instruction::set_asset_transfer_freeze(
+            Instruction::set_asset_transfer_availability(
                 &instruction_type,
                 &owner,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                true,
+                0,
+                "Disabled",
+                "Disabled",
                 Some("operator close".to_owned()),
             )
-            .expect("asset transfer freeze");
+            .expect("asset transfer availability");
             Instruction::set_asset_transfer_blacklist(
                 &instruction_type,
                 &owner,
@@ -8789,6 +9157,59 @@ mod tests {
                 assert!(error.is_instance_of::<PyValueError>(py));
             }
         });
+    }
+
+    #[test]
+    fn verified_transaction_rejection_codes_use_typed_variants() {
+        let validation = |error| {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+        };
+        assert_eq!(
+            transaction_rejection_code(&validation(
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::IncomingDisabled("incoming closed".into()),
+                ),
+            )),
+            "IncomingDisabled"
+        );
+        assert_eq!(
+            transaction_rejection_code(&validation(
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded("limit".into()),
+                ),
+            )),
+            "HoldingLimitExceeded"
+        );
+        assert_eq!(
+            transaction_rejection_code(&validation(InstructionExecutionError::Math(
+                MathError::NotEnoughQuantity,
+            ))),
+            "InsufficientBalance"
+        );
+        assert_eq!(
+            transaction_rejection_code(&TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("permission denied".into()),
+            )),
+            "NotPermitted"
+        );
+        let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
+            ContractRejection {
+                contract: "BoiFiLiquidity".into(),
+                namespace: "FiLiquidityError".into(),
+                name: "BelowMinimum".into(),
+                code: 18,
+            },
+        ));
+        assert_eq!(transaction_rejection_code(&contract), "BelowMinimum");
+        assert_eq!(
+            transaction_contract_rejection_json(&contract),
+            Some(norito::json!({
+                "contract": "BoiFiLiquidity",
+                "namespace": "FiLiquidityError",
+                "name": "BelowMinimum",
+                "code": 18,
+            }))
+        );
     }
 
     #[test]
@@ -10729,6 +11150,121 @@ impl Instruction {
         Ok(Instruction::new(instruction))
     }
 
+    /// Construct one canonical native SoraFS replication-order issue.
+    #[classmethod]
+    fn issue_replication_order(
+        _cls: &Bound<'_, PyType>,
+        order_id: &str,
+        order_payload_base64: &str,
+        issued_epoch: u64,
+        deadline_epoch: u64,
+    ) -> PyResult<Self> {
+        let order_id = parse_nonzero_lower_hex_32(order_id, "order_id")?;
+        if deadline_epoch <= issued_epoch {
+            return Err(PyValueError::new_err(
+                "deadline_epoch must be greater than issued_epoch",
+            ));
+        }
+        if order_payload_base64.is_empty()
+            || order_payload_base64.trim() != order_payload_base64
+            || order_payload_base64.chars().any(char::is_whitespace)
+        {
+            return Err(PyValueError::new_err(
+                "order_payload must be exact canonical standard base64",
+            ));
+        }
+        let order_payload = BASE64.decode(order_payload_base64).map_err(|err| {
+            PyValueError::new_err(format!(
+                "order_payload must be exact canonical standard base64: {err}"
+            ))
+        })?;
+        if order_payload.is_empty()
+            || order_payload.len() > 1_048_576
+            || BASE64.encode(&order_payload) != order_payload_base64
+        {
+            return Err(PyValueError::new_err(
+                "order_payload must be 1..=1048576 bytes of exact canonical standard base64",
+            ));
+        }
+        let decoded: ReplicationOrderV1 = decode_from_bytes(&order_payload).map_err(|err| {
+            PyValueError::new_err(format!(
+                "order_payload must be a canonical ReplicationOrderV1 archive: {err}"
+            ))
+        })?;
+        decoded.validate().map_err(|err| {
+            PyValueError::new_err(format!("invalid ReplicationOrderV1 policy: {err}"))
+        })?;
+        if decoded.order_id != order_id {
+            return Err(PyValueError::new_err(
+                "order_id must match ReplicationOrderV1.order_id",
+            ));
+        }
+        let canonical = norito::to_bytes(&decoded).map_err(|err| {
+            PyValueError::new_err(format!(
+                "failed to re-encode canonical ReplicationOrderV1: {err}"
+            ))
+        })?;
+        if canonical != order_payload {
+            return Err(PyValueError::new_err(
+                "order_payload must use the canonical ReplicationOrderV1 encoding",
+            ));
+        }
+        Ok(Self::new(
+            IssueReplicationOrder::new(
+                ReplicationOrderId::new(order_id),
+                order_payload,
+                issued_epoch,
+                deadline_epoch,
+            )
+            .into(),
+        ))
+    }
+
+    /// Construct one exact six-field SoraFS provider completion.
+    #[classmethod]
+    fn complete_replication_order(
+        _cls: &Bound<'_, PyType>,
+        order_id: &str,
+        provider_id: &str,
+        completion_epoch: u64,
+        expected_authority: &Bound<'_, PyDict>,
+        expected_assignment_revision: u64,
+        finalized_anchor: &Bound<'_, PyDict>,
+    ) -> PyResult<Self> {
+        if expected_assignment_revision == 0 {
+            return Err(PyValueError::new_err(
+                "expected_assignment_revision must be greater than zero",
+            ));
+        }
+        Ok(Self::new(
+            CompleteReplicationOrder::new(
+                ReplicationOrderId::new(parse_nonzero_lower_hex_32(order_id, "order_id")?),
+                ProviderId(parse_nonzero_lower_hex_32(provider_id, "provider_id")?),
+                completion_epoch,
+                parse_provider_ingest_completion_authority(expected_authority)?,
+                expected_assignment_revision,
+                parse_provider_ingest_finalized_anchor(finalized_anchor)?,
+            )
+            .into(),
+        ))
+    }
+
+    /// Construct one canonical native SoraFS replication-order expiration.
+    #[classmethod]
+    fn expire_replication_order(
+        _cls: &Bound<'_, PyType>,
+        order_id: &str,
+        expiration_epoch: u64,
+    ) -> PyResult<Self> {
+        Ok(Self::new(
+            ExpireReplicationOrder::new(
+                ReplicationOrderId::new(parse_nonzero_lower_hex_32(order_id, "order_id")?),
+                expiration_epoch,
+            )
+            .into(),
+        ))
+    }
+
     /// Construct the atomic smart-contract deployment commit instruction.
     #[classmethod]
     #[pyo3(signature = (expected_deploy_nonce, contract_address, code_hash_hex, contract_alias, lease_expiry_ms=None, expected_previous_contract_address=None))]
@@ -11422,12 +11958,14 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (account_id, asset_definition_id, outgoing_frozen, *, reason=None))]
-    fn set_asset_transfer_freeze(
+    #[pyo3(signature = (account_id, asset_definition_id, expected_revision, incoming, outgoing, *, reason=None))]
+    fn set_asset_transfer_availability(
         _cls: &Bound<'_, PyType>,
         account_id: &str,
         asset_definition_id: &str,
-        outgoing_frozen: bool,
+        expected_revision: u64,
+        incoming: &str,
+        outgoing: &str,
         reason: Option<String>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
@@ -11438,12 +11976,27 @@ impl Instruction {
                     "invalid asset definition id `{asset_definition_id}`: {error}"
                 ))
             })?;
-        if let Some(value) = reason.as_deref() {
-            require_non_blank_unpadded(value, "asset transfer freeze reason")?;
-        }
+        iroha_data_model::asset::validate_asset_transfer_availability_reason(reason.as_deref())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let parse_availability = |value: &str, field: &str| match value {
+            "Enabled" => Ok(AssetTransferAvailability::Enabled),
+            "Disabled" => Ok(AssetTransferAvailability::Disabled),
+            _ => Err(PyValueError::new_err(format!(
+                "{field} must be Enabled or Disabled"
+            ))),
+        };
+        let incoming = parse_availability(incoming, "incoming")?;
+        let outgoing = parse_availability(outgoing, "outgoing")?;
         Ok(Instruction::new(
-            SetAssetTransferFreeze::new(account_id, asset_definition_id, outgoing_frozen, reason)
-                .into(),
+            SetAssetTransferAvailability::new(
+                account_id,
+                asset_definition_id,
+                expected_revision,
+                incoming,
+                outgoing,
+                reason,
+            )
+            .into(),
         ))
     }
 
@@ -16455,6 +17008,36 @@ fn sign_py(
     Ok(Py::from(PyBytes::new(py, signature.payload())))
 }
 
+fn sign_query_request(
+    authority: &str,
+    private_key: &[u8],
+    request: QueryRequest,
+) -> PyResult<Vec<u8>> {
+    let authority = parse_account_id(authority)?;
+    ensure_ed25519_account(&authority)?;
+    let private = parse_private_key(private_key)?;
+    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
+        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
+    })?;
+    if key_pair.public_key() != authority.signatory() {
+        return Err(PyValueError::new_err(
+            "query private key does not match the authority account",
+        ));
+    }
+    request
+        .with_authority(authority)
+        .try_sign(&key_pair)
+        .map(|signed| signed.encode_versioned())
+        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))
+}
+
+fn parse_typed_hash<T>(value: &str, context: &str) -> PyResult<HashOf<T>> {
+    let normalized = value.strip_prefix("0x").unwrap_or(value);
+    let hash = Hash::from_str(normalized)
+        .map_err(|error| PyValueError::new_err(format!("invalid {context}: {error}")))?;
+    Ok(HashOf::from_untyped_unchecked(hash))
+}
+
 #[pyfunction]
 #[pyo3(name = "build_find_asset_escrow_query")]
 /// Build the exact versioned Norito signed query for one native escrow record.
@@ -16464,25 +17047,11 @@ fn build_find_asset_escrow_query_py(
     private_key: &[u8],
     escrow_id: &str,
 ) -> PyResult<Py<PyBytes>> {
-    let authority = parse_account_id(authority)?;
-    ensure_ed25519_account(&authority)?;
-    let private = parse_private_key(private_key)?;
-    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
-        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
-    })?;
-    if key_pair.public_key() != authority.signatory() {
-        return Err(PyValueError::new_err(
-            "query private key does not match the authority account",
-        ));
-    }
     let request = QueryRequest::Singular(SingularQueryBox::FindAssetEscrowById(
         FindAssetEscrowById::new(parse_escrow_id(escrow_id, "escrow_id")?),
     ));
-    let signed = request
-        .with_authority(authority)
-        .try_sign(&key_pair)
-        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))?;
-    Ok(Py::from(PyBytes::new(py, &signed.encode_versioned())))
+    let signed = sign_query_request(authority, private_key, request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
 fn build_find_asset_escrows_by_party_query(
@@ -16491,17 +17060,6 @@ fn build_find_asset_escrows_by_party_query(
     private_key: &[u8],
     query_payload: Vec<u8>,
 ) -> PyResult<Py<PyBytes>> {
-    let authority = parse_account_id(authority)?;
-    ensure_ed25519_account(&authority)?;
-    let private = parse_private_key(private_key)?;
-    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
-        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
-    })?;
-    if key_pair.public_key() != authority.signatory() {
-        return Err(PyValueError::new_err(
-            "query private key does not match the authority account",
-        ));
-    }
     let erased = ErasedIterQuery::<AssetEscrowRecord>::new(
         CompoundPredicate::PASS,
         SelectorTuple::default(),
@@ -16509,11 +17067,8 @@ fn build_find_asset_escrows_by_party_query(
     );
     let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
     let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
-    let signed = request
-        .with_authority(authority)
-        .try_sign(&key_pair)
-        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))?;
-    Ok(Py::from(PyBytes::new(py, &signed.encode_versioned())))
+    let signed = sign_query_request(authority, private_key, request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
 #[pyfunction]
@@ -16554,6 +17109,427 @@ fn build_find_asset_escrows_by_buyer_query_py(
         private_key,
         norito::codec::Encode::encode(&query),
     )
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_committed_transaction_query")]
+/// Build a signed `FindTransactions` query for one canonical transaction hash.
+fn build_find_committed_transaction_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    transaction_hash: &str,
+) -> PyResult<Py<PyBytes>> {
+    let transaction_hash =
+        parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
+    let predicate = CompoundPredicate::<CommittedTransaction>::from_committed_tx_predicate(
+        CommittedTxPredicate::EntryEq(transaction_hash),
+    );
+    let erased = ErasedIterQuery::<CommittedTransaction>::new(
+        predicate,
+        SelectorTuple::default(),
+        norito::codec::Encode::encode(&FindTransactions),
+    );
+    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
+    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+    let signed = sign_query_request(authority, private_key, request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_block_by_hash_query")]
+/// Build a signed `FindBlocks` query for one canonical carrier block hash.
+fn build_find_block_by_hash_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    block_hash: &str,
+) -> PyResult<Py<PyBytes>> {
+    let block_hash = parse_typed_hash::<BlockHeader>(block_hash, "block hash")?;
+    let predicate =
+        CompoundPredicate::<SignedBlock>::build(|prototype| prototype.equals("hash", block_hash));
+    let erased = ErasedIterQuery::<SignedBlock>::new(
+        predicate,
+        SelectorTuple::default(),
+        norito::codec::Encode::encode(&FindBlocks),
+    );
+    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
+    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+    let signed = sign_query_request(authority, private_key, request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+fn decode_single_committed_transaction(response_bytes: &[u8]) -> PyResult<CommittedTransaction> {
+    let response = decode_from_bytes::<QueryResponse>(response_bytes).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to decode committed transaction query response: {error}"
+        ))
+    })?;
+    let QueryResponse::Iterable(output) = response else {
+        return Err(PyValueError::new_err(
+            "committed transaction query returned a singular response",
+        ));
+    };
+    if output.has_more || output.continue_cursor.is_some() {
+        return Err(PyValueError::new_err(
+            "committed transaction query returned more than one page",
+        ));
+    }
+    let mut transactions = Vec::new();
+    for batch in output.batch {
+        let QueryOutputBatchBox::CommittedTransaction(mut batch) = batch else {
+            return Err(PyValueError::new_err(
+                "committed transaction query returned an unexpected batch type",
+            ));
+        };
+        transactions.append(&mut batch);
+    }
+    if transactions.len() != 1 {
+        return Err(PyValueError::new_err(format!(
+            "committed transaction query must return exactly one record, got {}",
+            transactions.len()
+        )));
+    }
+    Ok(transactions.remove(0))
+}
+
+fn decode_single_carrier_block(response_bytes: &[u8]) -> PyResult<SignedBlock> {
+    let response = decode_from_bytes::<QueryResponse>(response_bytes).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to decode carrier block query response: {error}"
+        ))
+    })?;
+    let QueryResponse::Iterable(output) = response else {
+        return Err(PyValueError::new_err(
+            "carrier block query returned a singular response",
+        ));
+    };
+    if output.has_more || output.continue_cursor.is_some() {
+        return Err(PyValueError::new_err(
+            "carrier block query returned more than one page",
+        ));
+    }
+    let mut blocks = Vec::new();
+    for batch in output.batch {
+        let QueryOutputBatchBox::Block(mut batch) = batch else {
+            return Err(PyValueError::new_err(
+                "carrier block query returned an unexpected batch type",
+            ));
+        };
+        blocks.append(&mut batch);
+    }
+    if blocks.len() != 1 {
+        return Err(PyValueError::new_err(format!(
+            "carrier block query must return exactly one block, got {}",
+            blocks.len()
+        )));
+    }
+    Ok(blocks.remove(0))
+}
+
+#[pyfunction]
+#[pyo3(name = "committed_transaction_carrier_block_hash")]
+/// Extract and validate the carrier block hash from an exact transaction query response.
+fn committed_transaction_carrier_block_hash_py(
+    transaction_hash: &str,
+    response_bytes: &[u8],
+) -> PyResult<String> {
+    let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
+    let committed = decode_single_committed_transaction(response_bytes)?;
+    if committed.entrypoint_hash != expected {
+        return Err(PyValueError::new_err(
+            "committed transaction response does not match the requested transaction hash",
+        ));
+    }
+    Ok(hex_encode(committed.block_hash.as_ref()))
+}
+
+fn instruction_execution_rejection_code(error: &InstructionExecutionError) -> &'static str {
+    match error {
+        InstructionExecutionError::AssetTransferAdmission(admission) => match admission {
+            AssetTransferAdmissionError::HoldingLimitExceeded(_) => "HoldingLimitExceeded",
+            AssetTransferAdmissionError::IncomingDisabled(_) => "IncomingDisabled",
+            AssetTransferAdmissionError::OutgoingDisabled(_) => "OutgoingDisabled",
+            AssetTransferAdmissionError::AvailabilityRevisionMismatch(_) => {
+                "AvailabilityRevisionMismatch"
+            }
+            AssetTransferAdmissionError::Blacklisted(_) => "Blacklisted",
+            AssetTransferAdmissionError::PolicyRejected(_) => "PolicyRejected",
+        },
+        InstructionExecutionError::Math(MathError::NotEnoughQuantity) => "InsufficientBalance",
+        InstructionExecutionError::Math(_) => "MathError",
+        InstructionExecutionError::Evaluate(_) => "InstructionEvaluationFailed",
+        InstructionExecutionError::Query(_) => "QueryFailed",
+        InstructionExecutionError::Conversion(_) => "ConversionFailed",
+        InstructionExecutionError::Find(_) => "NotFound",
+        InstructionExecutionError::Repetition(_) => "Repetition",
+        InstructionExecutionError::Mintability(_) => "Mintability",
+        InstructionExecutionError::InvalidParameter(_) => "InvalidParameter",
+        InstructionExecutionError::AccountAdmission(_) => "AccountAdmission",
+        InstructionExecutionError::InvariantViolation(_) => "InvariantViolation",
+    }
+}
+
+fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {
+    match reason {
+        TransactionRejectionReason::AccountDoesNotExist(_) => "AccountDoesNotExist",
+        TransactionRejectionReason::LimitCheck(_) => "LimitCheck",
+        TransactionRejectionReason::Validation(validation) => match validation {
+            ValidationFail::NotPermitted(_) => "NotPermitted",
+            ValidationFail::IvmAdmission(_) => "IvmAdmission",
+            ValidationFail::InstructionFailed(error) => instruction_execution_rejection_code(error),
+            ValidationFail::ContractRejected(rejection) => rejection.name.as_str(),
+            ValidationFail::QueryFailed(_) => "QueryFailed",
+            ValidationFail::AxtReject(_) => "AxtRejected",
+            ValidationFail::TooComplex => "TooComplex",
+            ValidationFail::InternalError(_) => "InternalError",
+        },
+        TransactionRejectionReason::InstructionExecution(_) => "InstructionExecutionFailed",
+        TransactionRejectionReason::IvmExecution(_) => "IvmExecutionFailed",
+        TransactionRejectionReason::TriggerExecution(_) => "TriggerExecutionFailed",
+    }
+}
+
+fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> Option<json::Value> {
+    let TransactionRejectionReason::Validation(ValidationFail::ContractRejected(rejection)) =
+        reason
+    else {
+        return None;
+    };
+    let mut value = json::Map::new();
+    value.insert(
+        "contract".into(),
+        json::Value::String(rejection.contract.clone()),
+    );
+    value.insert(
+        "namespace".into(),
+        json::Value::String(rejection.namespace.clone()),
+    );
+    value.insert("name".into(), json::Value::String(rejection.name.clone()));
+    value.insert("code".into(), json::Value::from(rejection.code));
+    Some(json::Value::Object(value))
+}
+
+fn batch_rejection_code(code: AssetBatchTransferRejectionCode) -> &'static str {
+    match code {
+        AssetBatchTransferRejectionCode::InsufficientFunds => "InsufficientFunds",
+        AssetBatchTransferRejectionCode::HoldingLimitExceeded => "HoldingLimitExceeded",
+        AssetBatchTransferRejectionCode::IncomingDisabled => "IncomingDisabled",
+        AssetBatchTransferRejectionCode::OutgoingDisabled => "OutgoingDisabled",
+        AssetBatchTransferRejectionCode::Blacklisted => "Blacklisted",
+        AssetBatchTransferRejectionCode::PolicyRejected => "PolicyRejected",
+    }
+}
+
+fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Value> {
+    let (status, rejection_code, rejection_message) = match &outcome.status {
+        AssetBatchTransferLegStatus::Applied => ("Applied", None, None),
+        AssetBatchTransferLegStatus::Rejected(rejection) => (
+            "Rejected",
+            Some(batch_rejection_code(rejection.code)),
+            Some(rejection.message.as_str()),
+        ),
+    };
+    let mut result = json::Map::new();
+    result.insert("leg_index".into(), json::Value::from(outcome.leg_index));
+    result.insert("leg_id".into(), json::Value::String(outcome.leg_id.clone()));
+    result.insert(
+        "asset".into(),
+        json::to_value(&outcome.asset).map_err(|error| {
+            PyValueError::new_err(format!("failed to serialize batch outcome asset: {error}"))
+        })?,
+    );
+    result.insert(
+        "destination".into(),
+        json::to_value(&outcome.destination).map_err(|error| {
+            PyValueError::new_err(format!(
+                "failed to serialize batch outcome destination: {error}"
+            ))
+        })?,
+    );
+    result.insert(
+        "amount".into(),
+        json::Value::String(outcome.amount.to_string()),
+    );
+    result.insert("status".into(), json::Value::String(status.to_owned()));
+    result.insert(
+        "rejection_code".into(),
+        rejection_code.map_or(json::Value::Null, |code| {
+            json::Value::String(code.to_owned())
+        }),
+    );
+    result.insert(
+        "rejection_message".into(),
+        rejection_message.map_or(json::Value::Null, |message| {
+            json::Value::String(message.to_owned())
+        }),
+    );
+    Ok(json::Value::Object(result))
+}
+
+#[pyfunction]
+#[pyo3(name = "verify_committed_transaction_inclusion_json")]
+/// Verify a committed transaction response against its exact carrier block response.
+fn verify_committed_transaction_inclusion_json_py(
+    transaction_hash: &str,
+    transaction_response_bytes: &[u8],
+    block_response_bytes: &[u8],
+) -> PyResult<String> {
+    let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
+    let committed = decode_single_committed_transaction(transaction_response_bytes)?;
+    if committed.entrypoint_hash != expected {
+        return Err(PyValueError::new_err(
+            "committed transaction response does not match the requested transaction hash",
+        ));
+    }
+    let carrier = decode_single_carrier_block(block_response_bytes)?;
+    if committed.block_hash != carrier.hash() {
+        return Err(PyValueError::new_err(
+            "carrier block response does not match the committed transaction",
+        ));
+    }
+    if !committed.verify_inclusion_in_block(&carrier) {
+        return Err(PyValueError::new_err(
+            "committed transaction inclusion proof verification failed",
+        ));
+    }
+
+    let proof_kind = if committed.merge_inclusion.is_some() {
+        "certified_merge"
+    } else {
+        "ordinary"
+    };
+    let entrypoint_kind = match &committed.entrypoint {
+        TransactionEntrypoint::External(_) => "External",
+        TransactionEntrypoint::SealedCommitment(_) => "SealedCommitment",
+        TransactionEntrypoint::SealedReveal(_) => "SealedReveal",
+        TransactionEntrypoint::PrivateKaigi(_) => "PrivateKaigi",
+        TransactionEntrypoint::Time(_) => "Time",
+    };
+    let external_transaction = match &committed.entrypoint {
+        TransactionEntrypoint::External(transaction) => Some(transaction),
+        _ => None,
+    };
+    let authority = committed
+        .entrypoint
+        .authority_opt()
+        .map(|authority| {
+            json::to_value(authority).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "failed to serialize verified transaction authority: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(json::Value::Null);
+    let metadata = committed
+        .entrypoint
+        .metadata()
+        .map(|metadata| {
+            json::to_value(metadata).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "failed to serialize verified transaction metadata: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(json::Value::Null);
+    let executable = external_transaction
+        .map(|transaction| {
+            json::to_value(transaction.instructions()).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "failed to serialize verified transaction executable: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(json::Value::Null);
+    let signer_public_key_hex = external_transaction
+        .and_then(|transaction| transaction.authority().controller().single_signatory())
+        .map(|public_key| {
+            let (_, bytes) =
+                public_key_to_bytes(public_key, "verified transaction signer public key")?;
+            Ok::<_, PyErr>(hex_encode(bytes))
+        })
+        .transpose()?;
+    let (result_ok, rejection_code, rejection_message, contract_rejection) =
+        match &committed.result.0 {
+            Ok(_) => (true, None, None, None),
+            Err(reason) => (
+                false,
+                Some(transaction_rejection_code(reason)),
+                Some(reason.to_string()),
+                transaction_contract_rejection_json(reason),
+            ),
+        };
+    let batch_outcomes = committed
+        .result
+        .batch_transfer_outcomes()
+        .iter()
+        .map(batch_outcome_json)
+        .collect::<PyResult<Vec<_>>>()?;
+    let committed_json = norito::json::to_value(&committed).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to serialize verified committed transaction: {error}"
+        ))
+    })?;
+    let mut result = norito::json::Map::new();
+    result.insert(
+        "transaction_hash".into(),
+        norito::json::Value::String(hex_encode(committed.entrypoint_hash.as_ref())),
+    );
+    result.insert(
+        "block_hash".into(),
+        norito::json::Value::String(hex_encode(committed.block_hash.as_ref())),
+    );
+    result.insert(
+        "block_height".into(),
+        norito::json::Value::from(carrier.header().height().get()),
+    );
+    result.insert(
+        "result_hash".into(),
+        norito::json::Value::String(hex_encode(committed.result_hash.as_ref())),
+    );
+    result.insert(
+        "proof_kind".into(),
+        norito::json::Value::String(proof_kind.to_owned()),
+    );
+    result.insert(
+        "entrypoint_kind".into(),
+        norito::json::Value::String(entrypoint_kind.to_owned()),
+    );
+    result.insert("authority".into(), authority);
+    result.insert(
+        "signer_public_key_hex".into(),
+        signer_public_key_hex.map_or(norito::json::Value::Null, norito::json::Value::String),
+    );
+    result.insert("metadata".into(), metadata);
+    result.insert("executable".into(), executable);
+    result.insert("result_ok".into(), norito::json::Value::Bool(result_ok));
+    result.insert(
+        "rejection_code".into(),
+        rejection_code.map_or(norito::json::Value::Null, |code| {
+            norito::json::Value::String(code.to_owned())
+        }),
+    );
+    result.insert(
+        "rejection_message".into(),
+        rejection_message.map_or(norito::json::Value::Null, norito::json::Value::String),
+    );
+    result.insert(
+        "contract_rejection".into(),
+        contract_rejection.unwrap_or(norito::json::Value::Null),
+    );
+    result.insert(
+        "batch_outcomes".into(),
+        norito::json::Value::Array(batch_outcomes),
+    );
+    result.insert("committed_transaction".into(), committed_json);
+    norito::json::to_string(&norito::json::Value::Object(result)).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to encode verified committed transaction JSON: {error}"
+        ))
+    })
 }
 
 #[pyfunction]
@@ -17949,6 +18925,12 @@ fn privacy_bridge_abi_version_py() -> u32 {
 }
 
 #[pyfunction]
+#[pyo3(name = "connect_norito_bridge_abi_version")]
+fn connect_norito_bridge_abi_version_py() -> u32 {
+    21
+}
+
+#[pyfunction]
 #[pyo3(name = "canonical_genesis_header_hash_v1")]
 fn canonical_genesis_header_hash_v1_py(
     py: Python<'_>,
@@ -18014,6 +18996,19 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         build_find_asset_escrows_by_buyer_query_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_find_committed_transaction_query_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(build_find_block_by_hash_query_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        committed_transaction_carrier_block_hash_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        verify_committed_transaction_inclusion_json_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(verify_py, module)?)?;
@@ -18118,6 +19113,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         sorafs_validate_orderbook_payload_json_py,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_appeal_finance_cancel_asset_lock_json_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(sorafs_sign_orderbook_payload_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_derive_orderbook_order_id_py,
@@ -18214,6 +19213,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        connect_norito_bridge_abi_version_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(privacy_capabilities_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         privacy_validate_capabilities_v1_py,

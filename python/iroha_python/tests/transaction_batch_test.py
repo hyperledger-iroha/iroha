@@ -97,8 +97,8 @@ def test_wallet_transfer_controls_chain_into_one_atomic_draft(
 
     class FakeInstruction:
         @staticmethod
-        def set_asset_transfer_freeze(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
-            instruction = ("freeze", *args, kwargs)
+        def set_asset_transfer_availability(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+            instruction = ("availability", *args, kwargs)
             calls.append(instruction)
             return instruction
 
@@ -124,10 +124,12 @@ def test_wallet_transfer_controls_chain_into_one_atomic_draft(
     draft = TransactionDraft(config())
 
     returned = (
-        draft.set_asset_transfer_freeze(
+        draft.set_asset_transfer_availability(
             "wallet",
             "digital_shekel",
-            True,
+            0,
+            tx_module.AssetTransferAvailability.DISABLED,
+            tx_module.AssetTransferAvailability.DISABLED,
             reason="operator close",
         )
         .set_asset_transfer_blacklist(
@@ -147,10 +149,12 @@ def test_wallet_transfer_controls_chain_into_one_atomic_draft(
     assert tuple(draft.entries) == tuple(calls)
     assert calls == [
         (
-            "freeze",
+            "availability",
             "wallet",
             "digital_shekel",
-            True,
+            0,
+            "Disabled",
+            "Disabled",
             {"reason": "operator close"},
         ),
         ("blacklist", "wallet", "digital_shekel", False),
@@ -162,6 +166,36 @@ def test_wallet_transfer_controls_chain_into_one_atomic_draft(
         ),
         ("holding_limit", "wallet", "digital_shekel", "0"),
     ]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "line\nbreached",
+        "ר" * 257,
+    ],
+)
+def test_asset_transfer_availability_rejects_noncanonical_reason_before_native_call(
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str,
+) -> None:
+    class FakeInstruction:
+        @staticmethod
+        def set_asset_transfer_availability(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+            raise AssertionError(
+                f"native constructor must not be called: {args!r} {kwargs!r}"
+            )
+
+    monkeypatch.setattr(tx_module, "Instruction", FakeInstruction)
+    with pytest.raises(ValueError):
+        TransactionDraft(config()).set_asset_transfer_availability(
+            "wallet",
+            "digital_shekel",
+            0,
+            tx_module.AssetTransferAvailability.DISABLED,
+            tx_module.AssetTransferAvailability.DISABLED,
+            reason=reason,
+        )
 
 
 def test_asset_transfer_caps_reject_duplicate_windows_before_native_call(

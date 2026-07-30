@@ -36,7 +36,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## 受け入れワークフロー
 
 1. **提案作成**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      を追加し、`ProviderAdmissionProposalV1` とアテステーション・バンドルを生成する。
    - 検証: 必須フィールド、stake > 0、`profile_id` 内の正規 chunker handle を保証する。
 2. **ガバナンス承認**
@@ -66,7 +66,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
 
 ### CLI リファレンス
 
-各コマンドは `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` で実行する。
+各コマンドは `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` で実行する。
 
 - `proposal`
   - 必須フラグ: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -109,7 +109,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
    `--retention-epoch` を増やし、必要に応じて stake/エンドポイントを更新する。
 2. 実行:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -129,7 +129,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
 #### 緊急失効
 1. 侵害された envelope を特定し、失効を発行する:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

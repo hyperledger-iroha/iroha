@@ -5223,10 +5223,10 @@ PROOF
     <2>1. TypeInvariant'
       <3>1. /\ generation \in [ValidatorIds -> Generations]
             /\ node \in ValidatorIds
-            /\ generation[node] + 1 \in Generations
+            /\ 0 \in Generations
         BY <1>1
            DEF StrongInductiveInvariant, Safety, TypeInvariant,
-               Restart
+               Restart, ModelConfiguration, Generations
       <3>3. generation' \in [ValidatorIds -> Generations]
         BY <1>1, <3>1, Isa DEF Restart
       <3> QED BY <1>1, <3>3, Isa
@@ -11480,6 +11480,8 @@ PROOF
     <2> DEFINE Certificate == request.tc
     <2> DEFINE SelectedRank == TcHighRank(Certificate)
     <2> DEFINE SelectedSubject == TcHighSubject(Certificate)
+    <2> DEFINE SameRoundUpgrade ==
+          StrictSameRoundTcUpgrade(Node, Certificate)
     <2> DEFINE StableVars ==
           <<height, context, contextHistory, up, gst, availableBodies,
             durableBodies, retainedLockedBodies, invalidBodies, seenProposals,
@@ -11496,7 +11498,8 @@ PROOF
           /\ TCValid(Certificate)
           /\ Certificate.votes # {}
           /\ Certificate.view + 1 \in Views
-          /\ Certificate.view >= nodeView[Node]
+          /\ \/ Certificate.view >= nodeView[Node]
+             \/ SameRoundUpgrade
           /\ Node \in ValidatorIds
           /\ TcWellTyped(Certificate)
           /\ request.rebroadcast \in BOOLEAN
@@ -11505,7 +11508,7 @@ PROOF
              ReducerProvenanceInvariant,
              PendingCertificateWritesAuthorized, PersistInstallTC,
              InstallTcWalSet, TcRecordSet, TcWellTyped,
-             Certificate, Node
+             Certificate, Node, SameRoundUpgrade
     <2>2. /\ SelectedRank \in Ranks
           /\ (SelectedRank = NoRank => SelectedSubject = NoSubject)
           /\ (SelectedRank # NoRank
@@ -11563,9 +11566,12 @@ PROOF
         BY <1>1, <3>1,
            PersistInstallTCPreservesValidationReceiptTypeAndSoundness
       <3>3. /\ nodeView' =
-                   [nodeView EXCEPT ![Node] = Certificate.view + 1]
+                   [nodeView EXCEPT ![Node] =
+                      IF SameRoundUpgrade THEN @
+                      ELSE Certificate.view + 1]
             /\ generation' =
-                   [generation EXCEPT ![Node] = @ + 1]
+                   [generation EXCEPT ![Node] =
+                      IF SameRoundUpgrade THEN @ + 1 ELSE 0]
             /\ highestRank' =
                    [highestRank EXCEPT ![Node] =
                       IF SelectedRank > highestRank[Node]
@@ -11584,7 +11590,7 @@ PROOF
                       THEN SelectedSubject ELSE @]
         BY <1>1
            DEF PersistInstallTC, Node, Certificate,
-               SelectedRank, SelectedSubject
+               SelectedRank, SelectedSubject, SameRoundUpgrade
       <3>4. nodeView' \in [ValidatorIds -> Views]
         BY <2>1, <3>1, <3>3, Isa
            DEF TypeInvariant
@@ -11593,8 +11599,12 @@ PROOF
           BY <3>1 DEF TypeInvariant
         <4>2. Node \in ValidatorIds
           BY <2>1
-        <4>3. generation[Node] + 1 \in Generations
-          BY <1>1 DEF PersistInstallTC, Node
+        <4>3. (IF SameRoundUpgrade
+               THEN generation[Node] + 1 ELSE 0) \in Generations
+          BY <1>1, <3>1, SMT
+             DEF PersistInstallTC, TypeInvariant, ModelConfiguration,
+                 Generations, GenerationCanIncrement, SameRoundUpgrade,
+                 Node, Certificate
         <4> QED BY <3>3, <4>1, <4>2, <4>3, Isa
       <3>6. /\ highestRank' \in [ValidatorIds -> Ranks]
             /\ lockRank' \in [ValidatorIds -> Ranks]
@@ -11626,6 +11636,12 @@ PROOF
         <4>6. lockSubject' \in [ValidatorIds -> SubjectOrNone]
           BY <3>3, <4>1, <4>2, Isa
         <4> QED BY <4>3, <4>4, <4>5, <4>6
+      <3>6a. \A other \in ValidatorIds:
+                 generation'[other] <= highestRank'[other] + 1
+        BY <1>1, <2>1, <2>2, <3>1, <3>3, SMT
+           DEF TypeInvariant, ModelConfiguration, Ranks, Views, NoRank,
+               SameRoundUpgrade, StrictSameRoundTcUpgrade,
+               SelectedRank, Certificate, Node
       <3>7. installedTCs' =
                installedTCs
                  \cup {[node |-> Node, tc |-> Certificate]}
@@ -11670,7 +11686,7 @@ PROOF
           BY <1>1
              DEF PersistInstallTC, Node, Certificate
         <4> QED BY <4>1, <4>3, <4>4, Isa
-      <3> QED BY <3>1, <3>2, <3>2a, <3>4, <3>5, <3>6, <3>8,
+      <3> QED BY <3>1, <3>2, <3>2a, <3>4, <3>5, <3>6, <3>6a, <3>8,
                    <3>10, <3>11, Isa
          DEF TypeInvariant, StableVars
     <2>5. LockBelowHighest'
@@ -11895,7 +11911,9 @@ PROOF
           BY <1>1
              DEF StrongInductiveInvariant, Safety, TypeInvariant
         <4>2. /\ nodeView' =
-                       [nodeView EXCEPT ![Node] = Certificate.view + 1]
+                       [nodeView EXCEPT ![Node] =
+                          IF SameRoundUpgrade THEN @
+                          ELSE Certificate.view + 1]
               /\ highestRank' =
                        [highestRank EXCEPT ![Node] =
                           IF SelectedRank > highestRank[Node]
@@ -11914,7 +11932,7 @@ PROOF
                           THEN SelectedSubject ELSE @]
           BY <1>1
              DEF PersistInstallTC, Node, Certificate,
-                 SelectedRank, SelectedSubject
+                 SelectedRank, SelectedSubject, SameRoundUpgrade
         <4>3. ASSUME NEW other \in AllPendingRequests'
                PROVE /\ other.node \in ValidatorIds
                      /\ nodeView'[other.node] = nodeView[other.node]
@@ -12364,12 +12382,19 @@ PROOF
                 /\ lockRank[other] \in Int
                 /\ lockRank[Node] \in Int
                 /\ SelectedRank \in Int
-                /\ Certificate.view >= nodeView[Node]
+                /\ \/ Certificate.view >= nodeView[Node]
+                   \/ SameRoundUpgrade
+                /\ (SameRoundUpgrade
+                      => Certificate.view + 1 = nodeView[Node])
             BY <1>1, <2>1, <2>2, <4>1, <5>1, SMT
                DEF StrongInductiveInvariant, Safety, TypeInvariant,
-                   ModelConfiguration, TCValid, Views, Ranks, NoRank
+                   ModelConfiguration, TCValid, Views, Ranks, NoRank,
+                   SameRoundUpgrade, StrictSameRoundTcUpgrade,
+                   Node, Certificate
           <5>3. /\ nodeView' =
-                         [nodeView EXCEPT ![Node] = Certificate.view + 1]
+                         [nodeView EXCEPT ![Node] =
+                            IF SameRoundUpgrade THEN @
+                            ELSE Certificate.view + 1]
                 /\ lockRank' =
                          [lockRank EXCEPT ![Node] =
                             IF SelectedRank > lockRank[Node]
@@ -12380,28 +12405,23 @@ PROOF
                             THEN SelectedSubject ELSE @]
             BY <1>1
                DEF PersistInstallTC, Node, Certificate,
-                   SelectedRank, SelectedSubject
+                   SelectedRank, SelectedSubject, SameRoundUpgrade
           <5>4. CASE other = Node
-            <6>1. /\ nodeView'[other] = Certificate.view + 1
-                  /\ lockRank'[other] =
+            <6>1. /\ lockRank'[other] =
                        IF SelectedRank > lockRank[other]
                        THEN SelectedRank ELSE lockRank[other]
                   /\ lockSubject'[other] =
                        IF SelectedRank > lockRank[other]
                        THEN SelectedSubject ELSE lockSubject[other]
               BY <5>1, <5>3, <5>4, Isa
-            <6>2. nodeView[other] = nodeView[Node]
-              BY <5>4
-            <6>3. Certificate.view + 1 >= nodeView[other]
-              BY <5>2, <6>2, SMT
-            <6>4. nodeView'[other] >= nodeView[other]
-              BY <6>1, <6>3
+            <6>2. nodeView'[other] >= nodeView[other]
+              BY <5>2, <5>3, <5>4, SMT
             <6>5. lockRank'[other] >= lockRank[other]
               BY <5>2, <6>1, SMT
             <6>6. lockRank'[other] = lockRank[other]
                      => lockSubject'[other] = lockSubject[other]
               BY <5>2, <6>1, SMT
-            <6> QED BY <6>4, <6>5, <6>6
+            <6> QED BY <6>2, <6>5, <6>6
           <5>5. CASE other # Node
             <6>1. /\ nodeView'[other] = nodeView[other]
                   /\ lockRank'[other] = lockRank[other]

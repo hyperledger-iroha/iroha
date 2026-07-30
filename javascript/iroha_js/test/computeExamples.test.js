@@ -7,14 +7,14 @@ import {
   validatePayloadHash,
 } from "../src/compute.js";
 
-test.skip("compute fixtures carry a stable payload hash", () => {
+test("compute fixtures carry a stable payload hash", () => {
   const fixtures = loadComputeFixtures();
   const hashLiteral = validatePayloadHash(fixtures);
   assert.equal(hashLiteral, fixtures.call.request.payload_hash);
   assert.equal(fixtures.call.route.method, "quote");
 });
 
-test.skip("compute simulation echoes payload by default", () => {
+test("compute simulation echoes payload by default", () => {
   const fixtures = loadComputeFixtures();
   const result = simulateCompute(fixtures);
   const expectedB64 = Buffer.from(fixtures.payload).toString("base64");
@@ -22,7 +22,7 @@ test.skip("compute simulation echoes payload by default", () => {
   assert.equal(result.outcome, "Success");
 });
 
-test.skip("gateway request builder encodes payload", () => {
+test("gateway request builder encodes payload", () => {
   const fixtures = loadComputeFixtures();
   const request = buildGatewayRequest(fixtures);
   const expectedB64 = Buffer.from(fixtures.payload).toString("base64");

@@ -3292,40 +3292,49 @@ pub mod sorafs {
     );
 
     /// Read the latest reputation snapshot.
-    pub const REPUTATION_LATEST_GET: RouteDescriptor = documented_get(
+    pub const REPUTATION_LATEST_GET: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.latest",
         "/v1/sorafs/reputation/latest",
-    );
+    )
+    .with_implicit_head(false);
     /// Read one historical reputation snapshot.
-    pub const REPUTATION_SNAPSHOT: RouteDescriptor = documented_get(
+    pub const REPUTATION_SNAPSHOT: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.read",
         "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
-    );
+    )
+    .with_implicit_head(false);
     /// Read one provider's reputation record and proof.
-    pub const REPUTATION_PROVIDER: RouteDescriptor = documented_get(
+    pub const REPUTATION_PROVIDER: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_provider.read",
         "/v1/sorafs/reputation/providers/{provider_id}",
-    );
+    )
+    .with_implicit_head(false);
     /// Read the active reputation weights.
-    pub const REPUTATION_WEIGHTS: RouteDescriptor = documented_get(
+    pub const REPUTATION_WEIGHTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_weight.read",
         "/v1/sorafs/reputation/weights",
-    );
+    )
+    .with_implicit_head(false);
     /// Read a bounded reputation-event snapshot.
-    pub const REPUTATION_EVENTS: RouteDescriptor = documented_get(
+    pub const REPUTATION_EVENTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_event.list",
         "/v1/sorafs/reputation/events",
-    );
+    )
+    .with_implicit_head(false);
     /// Stream reputation events over SSE.
     pub const REPUTATION_EVENTS_STREAM: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_stream",
         "/v1/sorafs/reputation/events/stream",
-    );
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_implicit_head(false);
     /// Stream reputation events over WebSocket.
     pub const REPUTATION_EVENTS_WEBSOCKET: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_websocket",
         "/v1/sorafs/reputation/events/ws",
-    );
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_implicit_head(false);
 
     /// Read the `SoraFS` pin registry.
     pub const PIN_REGISTRY: RouteDescriptor = documented_get("sorafs.pin.list", "/v1/sorafs/pin");
@@ -6172,14 +6181,37 @@ mod tests {
 
     #[test]
     fn reputation_surface_is_committed_projection_read_only() {
-        let matching = CATALOGED_ROUTES
-            .iter()
-            .filter(|route| route.path() == "/v1/sorafs/reputation/latest")
-            .collect::<Vec<_>>();
-        assert_eq!(matching.len(), 1);
-        assert_eq!(matching[0].method(), HttpMethod::Get);
+        let routes = [
+            sorafs::REPUTATION_LATEST_GET,
+            sorafs::REPUTATION_SNAPSHOT,
+            sorafs::REPUTATION_PROVIDER,
+            sorafs::REPUTATION_WEIGHTS,
+            sorafs::REPUTATION_EVENTS,
+            sorafs::REPUTATION_EVENTS_STREAM,
+            sorafs::REPUTATION_EVENTS_WEBSOCKET,
+        ];
+        for route in routes {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert!(
+                !route.implicit_head(),
+                "authenticated reputation GET routes must reject implicit HEAD"
+            );
+            assert_eq!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .filter(|candidate| { candidate.stable_route_id() == route.stable_route_id() })
+                    .count(),
+                1,
+                "reputation route `{}` must appear exactly once",
+                route.stable_route_id()
+            );
+        }
         assert_eq!(
-            matching[0].stable_route_id(),
+            sorafs::REPUTATION_LATEST_GET.stable_route_id(),
             "sorafs.reputation_snapshot.latest"
         );
         assert!(

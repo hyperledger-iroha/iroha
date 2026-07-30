@@ -639,7 +639,7 @@ Stage3RankProgressExit(candidate, position) ==
 THEOREM Stage3FifoRuntimeStrictlyProgressesObligation ==
   \A candidate, position:
     /\ Stage3KernelPending(candidate, position)
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ FifoRuntimeStep(candidate.node)
     => Stage3RankProgressExit(candidate, position)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
@@ -659,6 +659,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CandidateServiceRank, ServiceRankLess, SchedulerServiceRank,
        SchedulerClassPrefixIndices, SchedulerCandidateIndices,
        ClassPrefixThrough, RemovalTargetIndex, FifoRuntimeStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
        RemoveNextNodeCommand, NextNodeCommand, SequenceSet,
        CandidateScheduled, QueuedCandidates, DeferredCandidates,
        CausalCandidates, TrackedWorkCandidates,
@@ -676,6 +678,61 @@ Stage3AuxProgress(candidate, position, rank) ==
        rank, ReadyRunAuxOrdering, ReadyRunAuxCarrier):
        Stage3AuxBlocked(candidate, position, lower)
 
+(***************************************************************************
+The exact Serve target-only Runtime-to-Ingress turn deliberately crosses the
+zero point of `RuntimeReachRank`.  It is therefore a finite ingress episode,
+not an action-local `ReadyRunAuxRank` descent.  The original candidate and
+rank remain frozen while the immutable/coalesced Serve admission is drained;
+the separate property below is the exact closure seam consumed by the
+well-founded Stage-3 proof.
+***************************************************************************)
+
+Stage3ServeEpisodeResidual(candidate, position, rank) ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ Stage3KernelPending(candidate, position)
+  /\ ~Stage3AuxProgress(candidate, position, rank)
+  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+
+Stage3FiniteServeEpisodeResidualProperty(specification) ==
+  specification
+    => \A candidate, position:
+         \A rank \in ReadyRunAuxCarrier:
+           Stage3ServeEpisodeResidual(candidate, position, rank)
+             ~> Stage3AuxProgress(candidate, position, rank)
+
+THEOREM Stage3TargetOnlyCreatesServeEpisodeOutcome ==
+  \A candidate, position:
+    \A rank \in ReadyRunAuxCarrier:
+    /\ Stage3AuxBlocked(candidate, position, rank)
+    /\ PostGstRunNode(candidate.node)
+    /\ AsyncServeIngressTargetOnlyTurn(candidate.node)
+    => \/ Stage3AuxProgress(candidate, position, rank)'
+       \/ Stage3ServeEpisodeResidual(candidate, position, rank)'
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   ReadyRunAuxRankInCarrier, IsaT(300)
+   DEF Stage3AuxProgress, Stage3ServeEpisodeResidual,
+       Stage3AuxBlocked, Stage3KernelPending,
+       Stage3RankProgressExit, ProtectedOwnedAtServiceRank,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       PostGstRunNode, RunNode,
+       AsyncServeIngressTargetOnlyTurn,
+       CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
 THEOREM Stage3AuxRankInCarrierObligation ==
   \A candidate, position:
     Stage3KernelPending(candidate, position)
@@ -684,18 +741,21 @@ BY Stage3KernelCarrierFacts, ReadyRunAuxRankInCarrier,
    AsyncStrongTypeProjectsAsyncType
    DEF Stage3KernelPending
 
-THEOREM Stage3SameNodeRunAuxDescentObligation ==
+THEOREM Stage3SameNodeRunAuxOutcomeObligation ==
   \A candidate, position:
     \A rank \in ReadyRunAuxCarrier:
       /\ Stage3AuxBlocked(candidate, position, rank)
       /\ PostGstRunNode(candidate.node)
-      => Stage3AuxProgress(candidate, position, rank)'
+      => \/ Stage3AuxProgress(candidate, position, rank)'
+         \/ Stage3ServeEpisodeResidual(candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW candidate, NEW position,
                 NEW rank \in ReadyRunAuxCarrier,
                 Stage3AuxBlocked(candidate, position, rank),
                 PostGstRunNode(candidate.node)
-         PROVE Stage3AuxProgress(candidate, position, rank)'
+         PROVE \/ Stage3AuxProgress(candidate, position, rank)'
+               \/ Stage3ServeEpisodeResidual(
+                    candidate, position, rank)'
     <2>1. RunNode(candidate.node)
       BY <1>1 DEF PostGstRunNode
     <2>2. CASE LocalAdmissionStep(candidate.node)
@@ -750,9 +810,12 @@ PROOF
              AsyncProgressOwnershipInvariant,
              AsyncLogicalCandidateOwnershipInvariant,
              AsyncOutstandingCarrierInvariant, AsyncAllVars
-    <2>4. CASE SerializedRuntimeStep(candidate.node)
+    <2>4. CASE SerializedRunnerRuntimeStep(candidate.node)
       <3>1. RuntimeStep(candidate.node)
-        BY <2>4 DEF SerializedRuntimeStep
+        BY <2>4
+           DEF SerializedRunnerRuntimeStep,
+               SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep
       <3>2. CASE DeferredDrainStep(candidate.node)
         BY <1>1, <2>4, <3>2,
            AsyncBracketNextPreservesStrongTypeInvariant,
@@ -773,7 +836,9 @@ PROOF
                ReadyRunInnerCarrier, ReadyFifoDebt,
                ReadyDeferredCount, ReadyTimeoutDebt,
                ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-               SerializedRuntimeStep, DeferredDrainStep,
+               SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               DeferredDrainStep,
                RemoveNextDeferredCommand, DiscardCommand,
                AdvanceNextDeferredClass, DeferredQueueNonempty,
                CandidateScheduled, SequenceSet,
@@ -800,7 +865,9 @@ PROOF
                ReadyRunInnerCarrier, ReadyFifoDebt,
                ReadyDeferredCount, ReadyTimeoutDebt,
                ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-               SerializedRuntimeStep, DeferredTagStep,
+               SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               DeferredTagStep,
                DeferredTimeoutStep, DeferredRetransmitStep,
                CandidateScheduled, SequenceSet,
                AsyncProgressOwnershipInvariant,
@@ -826,7 +893,9 @@ PROOF
                ReadyRunInnerCarrier, ReadyFifoDebt,
                ReadyDeferredCount, ReadyTimeoutDebt,
                ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-               SerializedRuntimeStep, DirectTimeoutStep, TimeoutDue,
+               SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               DirectTimeoutStep, TimeoutDue,
                CandidateScheduled, SequenceSet,
                AsyncProgressOwnershipInvariant,
                AsyncLogicalCandidateOwnershipInvariant,
@@ -857,7 +926,9 @@ PROOF
                ReadyRunInnerCarrier, ReadyFifoDebt,
                ReadyDeferredCount, ReadyTimeoutDebt,
                ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-               SerializedRuntimeStep, DirectRetransmitStep,
+               SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               DirectRetransmitStep,
                LocalAdmissionCanAdvance, ProducerCompletionCanAdmit,
                CanEnqueueClass, AsyncQueueDepth, NodeQueueNonempty,
                CandidateScheduled, SequenceSet,
@@ -877,13 +948,46 @@ PROOF
                ProtectedCandidateOwned, CandidateServiceRank,
                ServiceRankLess, CandidateScheduled, SequenceSet,
                NodeQueueNonempty, IdleRuntimeStep,
-               SerializedRuntimeStep,
+               SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
                AsyncProgressOwnershipInvariant,
                AsyncLogicalCandidateOwnershipInvariant,
                AsyncOutstandingCarrierInvariant, AsyncAllVars
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, <3>6, <3>7
            DEF RuntimeStep
-    <2> QED BY <2>1, <2>2, <2>3, <2>4 DEF RunNode
+    <2>5. CASE AsyncServeIngressTargetOnlyTurn(candidate.node)
+      BY <1>1, <2>5,
+         Stage3TargetOnlyCreatesServeEpisodeOutcome
+    <2>6. CASE SerializedLocalPrecedesServeIngressStep(candidate.node)
+      BY <1>1, <2>6,
+         AsyncBracketNextPreservesStrongTypeInvariant,
+         AsyncBracketNextPreservesProgressOwnership,
+         SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
+         ReadyRunAuxRankInCarrier, Isa
+         DEF Stage3AuxProgress, Stage3AuxBlocked,
+             Stage3KernelPending, Stage3RankProgressExit,
+             ProtectedOwnedAtServiceRank,
+             ProtectedServiceOwnershipExit,
+             ResponsiveProtectedCandidateOwned,
+             ProtectedCandidateOwned, CandidateServiceRank,
+             ServiceRankLess, ReadyRunAuxRank,
+             ReadyRunDeferredRank, ReadyRunTimeoutRank,
+             ReadyRunInnerRank, ReadyRunAuxOrdering,
+             ReadyRunAuxCarrier, ReadyRunDeferredOrdering,
+             ReadyRunDeferredCarrier, ReadyRunTimeoutOrdering,
+             ReadyRunTimeoutCarrier, ReadyRunInnerOrdering,
+             ReadyRunInnerCarrier, ReadyFifoDebt,
+             ReadyDeferredCount, ReadyTimeoutDebt,
+             ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+             SerializedLocalPrecedesServeIngressStep,
+             SelectedLocalAdmissionAdvance,
+             CandidateScheduled, SequenceSet,
+             AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant,
+             AsyncOutstandingCarrierInvariant, AsyncAllVars
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+         RunNodeWorkConcreteActionCaseSplit
+         DEF RunNode
   <1> QED BY <1>1
 
 THEOREM Stage3OtherStepUnlessAuxDescentObligation ==
@@ -930,6 +1034,11 @@ PROOF
                ReadyRunDeferredRank, ReadyRunTimeoutRank,
                ReadyRunInnerRank, RunNode,
                RunHistoricalRecoveryNode, RunNodeWork,
+               SerializedLocalPrecedesServeIngressStep,
+               SelectedLocalAdmissionAdvance,
+               SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               AsyncServeIngressTargetOnlyTurn,
                RunHistoricalServer, CandidateScheduled, SequenceSet,
                AsyncProgressOwnershipInvariant,
                AsyncLogicalCandidateOwnershipInvariant,
@@ -1088,12 +1197,16 @@ PROOF
 THEOREM FairStage3AuxOneStepObligation ==
   \A initialContext, candidate, position:
     \A rank \in ReadyRunAuxCarrier:
-      AsyncSpecAt(initialContext)
-        => (Stage3AuxBlocked(candidate, position, rank)
-              ~> Stage3AuxProgress(candidate, position, rank))
+      Stage3FiniteServeEpisodeResidualProperty(
+        AsyncSpecAt(initialContext))
+        => (AsyncSpecAt(initialContext)
+              => (Stage3AuxBlocked(candidate, position, rank)
+                    ~> Stage3AuxProgress(candidate, position, rank)))
 PROOF
   <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
-                NEW rank \in ReadyRunAuxCarrier
+                NEW rank \in ReadyRunAuxCarrier,
+                Stage3FiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage3AuxBlocked(candidate, position, rank)
                        ~> Stage3AuxProgress(candidate, position, rank))
@@ -1102,30 +1215,52 @@ PROOF
                     = AsyncVotersAt(initialContext))
       BY AsyncSpecAlwaysUsesFixedResponsiveVoters
     <2>2. /\ Stage3AuxBlocked(candidate, position, rank)
-             /\ ~Stage3AuxProgress(candidate, position, rank)
+             /\ ~(Stage3AuxProgress(candidate, position, rank)
+                    \/ Stage3ServeEpisodeResidual(
+                         candidate, position, rank))
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
       BY ProtectedOwnedCandidateEnablesFairRunNode
          DEF Stage3AuxBlocked, Stage3KernelPending,
              ProtectedOwnedAtServiceRank, Stage3AuxProgress
     <2>3. /\ Stage3AuxBlocked(candidate, position, rank)
-             /\ ~Stage3AuxProgress(candidate, position, rank)
+             /\ ~(Stage3AuxProgress(candidate, position, rank)
+                    \/ Stage3ServeEpisodeResidual(
+                         candidate, position, rank))
              /\ <<PostGstRunNode(candidate.node)>>_AsyncAllVars
-            => Stage3AuxProgress(candidate, position, rank)'
-      BY Stage3SameNodeRunAuxDescentObligation, Isa
+            => \/ Stage3AuxProgress(candidate, position, rank)'
+               \/ Stage3ServeEpisodeResidual(
+                    candidate, position, rank)'
+      BY Stage3SameNodeRunAuxOutcomeObligation, Isa
          DEF PostGstRunNode
     <2>4. Stage3AuxBlocked(candidate, position, rank)
               /\ [AsyncNext]_AsyncAllVars
             => Stage3AuxBlocked(candidate, position, rank)'
                  \/ Stage3AuxProgress(candidate, position, rank)'
-      BY Stage3SameNodeRunAuxDescentObligation,
+                 \/ Stage3ServeEpisodeResidual(
+                      candidate, position, rank)'
+      BY Stage3SameNodeRunAuxOutcomeObligation,
          Stage3OtherStepUnlessAuxDescentObligation, Isa
     <2>5. CASE candidate.node \in AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => WF_AsyncAllVars(PostGstRunNode(candidate.node))
         BY <2>5 DEF AsyncSpecAt, AsyncFairnessAt
-      <3> QED BY <2>2, <2>3, <2>4, <3>1, PTL
-           DEF AsyncSpecAt
+      <3>2. AsyncSpecAt(initialContext)
+               => (Stage3AuxBlocked(candidate, position, rank)
+                     ~> (Stage3AuxProgress(candidate, position, rank)
+                          \/ Stage3ServeEpisodeResidual(
+                               candidate, position, rank)))
+        BY <2>2, <2>3, <2>4, <3>1, PTL DEF AsyncSpecAt
+      <3>3. AsyncSpecAt(initialContext)
+               => (Stage3ServeEpisodeResidual(
+                     candidate, position, rank)
+                     ~> Stage3AuxProgress(candidate, position, rank))
+        BY <1>1 DEF Stage3FiniteServeEpisodeResidualProperty
+      <3>4. AsyncSpecAt(initialContext)
+               => (Stage3AuxBlocked(candidate, position, rank)
+                     ~> Stage3AuxProgress(candidate, position, rank))
+        BY <3>2, <3>3, PTL
+      <3> QED BY <3>4
     <2>6. CASE candidate.node \notin AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => []~Stage3AuxBlocked(candidate, position, rank)
@@ -1139,12 +1274,16 @@ PROOF
 
 THEOREM FairStage3AuxRankDescentObligation ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => \A rank \in ReadyRunAuxCarrier:
-           Stage3AuxBlocked(candidate, position, rank)
-             ~> Stage3RankProgressExit(candidate, position)
+    Stage3FiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => \A rank \in ReadyRunAuxCarrier:
+                 Stage3AuxBlocked(candidate, position, rank)
+                   ~> Stage3RankProgressExit(candidate, position))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage3FiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => \A rank \in ReadyRunAuxCarrier:
                       Stage3AuxBlocked(candidate, position, rank)
@@ -1166,9 +1305,14 @@ PROOF
 
 THEOREM ProtectedStage3RankProgressFromFairSchedulerObligation ==
   \A initialContext:
-    ProtectedStage3RankProgressProperty(AsyncSpecAt(initialContext))
+    Stage3FiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => ProtectedStage3RankProgressProperty(
+           AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                Stage3FiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ProtectedStage3RankProgressProperty(
                  AsyncSpecAt(initialContext))
     <2>1. ASSUME NEW candidate \in AsyncCandidateSet,
@@ -1205,7 +1349,10 @@ PROOF
 
 THEOREM FairProtectedStage3RankProgress ==
   \A initialContext:
-    ProtectedStage3RankProgressProperty(AsyncSpecAt(initialContext))
+    Stage3FiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => ProtectedStage3RankProgressProperty(
+           AsyncSpecAt(initialContext))
 BY ProtectedStage3RankProgressFromFairSchedulerObligation
 
 =============================================================================

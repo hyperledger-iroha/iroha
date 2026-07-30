@@ -26,6 +26,14 @@ def test_default_chain_id_targets_public_sumeragi_v2_taira() -> None:
     assert MODULE.DEFAULT_CHAIN_ID == "fc56984b-2be7-431d-840e-21514d1883f0"
 
 
+def test_default_alias_uses_canonical_dataspace_root() -> None:
+    assert MODULE.build_alias(
+        "canary",
+        "ed0123456789ABCDEF",
+        MODULE.DEFAULT_DOMAIN,
+    ) == "canary0123456789abcdef@universal"
+
+
 def test_build_alias_preserves_full_normalized_domain() -> None:
     assert MODULE.build_alias(
         "Taira-Rollout_Canary",
@@ -34,12 +42,12 @@ def test_build_alias_preserves_full_normalized_domain() -> None:
     ) == "tairarolloutcanary0123456789abcdef@wonderland.universal"
 
 
-def test_build_alias_expands_single_segment_domain() -> None:
+def test_build_alias_preserves_single_segment_dataspace_root() -> None:
     assert MODULE.build_alias(
         "canary",
         "ed0123456789ABCDEF",
         "Wonderland",
-    ) == "canary0123456789abcdef@wonderland.universal"
+    ) == "canary0123456789abcdef@wonderland"
 
 
 def test_pipeline_status_requires_current_nested_shape() -> None:

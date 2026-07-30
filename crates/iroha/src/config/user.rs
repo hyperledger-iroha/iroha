@@ -296,7 +296,7 @@ impl Root {
                     Report::new(ParseError::InvalidSorafsRolloutPhase {
                         value: rollout_phase.clone(),
                     })
-                    .attach("invalid `sorafs.rollout_phase`; expected canary|ramp|default or stage_a|stage_b|stage_c aliases"),
+                    .attach("invalid `sorafs.rollout_phase`; expected exactly canary|ramp|default"),
                 );
                 SorafsRolloutPhase::default()
             });
@@ -313,7 +313,7 @@ impl Root {
                             value: label.clone(),
                         })
                         .attach(format!(
-                            "invalid `sorafs.anonymity_policy` value `{label}`; expected anon-guard-pq|anon-majority-pq|anon-strict-pq or stage_a/stage_b/stage_c aliases"
+                            "invalid `sorafs.anonymity_policy` value `{label}`; expected exactly anon-guard-pq|anon-majority-pq|anon-strict-pq"
                         )),
                     );
                     phase_default_policy

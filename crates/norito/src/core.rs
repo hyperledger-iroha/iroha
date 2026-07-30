@@ -998,6 +998,35 @@ pub(crate) fn take_last_header_flags() -> Option<u8> {
     LAST_HEADER_FLAGS.with(|cell| cell.replace(None))
 }
 
+#[inline]
+pub(crate) fn finalized_encode_flags(
+    base_flags: u8,
+    fixed_offsets_used: bool,
+    field_bitset_used: bool,
+    compact_len_used: bool,
+) -> u8 {
+    debug_assert!(validate_header_flags(base_flags).is_ok());
+
+    let mut final_flags = base_flags;
+    if fixed_offsets_used {
+        final_flags |= header_flags::PACKED_SEQ;
+    } else {
+        final_flags &= !header_flags::PACKED_SEQ;
+    }
+    if field_bitset_used {
+        final_flags |=
+            header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN;
+    } else {
+        final_flags &= !header_flags::FIELD_BITSET;
+        if compact_len_used {
+            final_flags |= header_flags::COMPACT_LEN;
+        } else {
+            final_flags &= !header_flags::COMPACT_LEN;
+        }
+    }
+    final_flags
+}
+
 // Thread-local payload context: base pointer, length, and optional schema hash.
 thread_local! {
     static DECODE_PAYLOAD_CTX: RefCell<Option<PayloadCtxState>> = const { RefCell::new(None) };
@@ -1255,13 +1284,19 @@ pub fn payload_slice_from_ptr(ptr: *const u8) -> Result<&'static [u8], Error> {
     Ok(&payload[offset..])
 }
 
+/// Return an exact, bounds-checked range from the active decode payload.
+///
+/// Generated decoders use this instead of constructing slices directly from
+/// pointers supplied by an archived value.
+#[doc(hidden)]
 #[inline]
-fn payload_range_from_ptr(ptr: *const u8, len: usize) -> Result<&'static [u8], Error> {
+pub fn payload_range_from_ptr(ptr: *const u8, len: usize) -> Result<&'static [u8], Error> {
     let (payload, offset) = payload_bytes_with_offset(ptr)?;
     let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
     if end > payload.len() {
         return Err(Error::LengthMismatch);
     }
+    record_payload_access(ptr, len);
     Ok(&payload[offset..end])
 }
 
@@ -5246,8 +5281,13 @@ impl Header {
         Ok(())
     }
 
-    /// Read a header from the given reader and validate it.
-    pub(crate) fn read(mut r: impl Read) -> Result<Self, Error> {
+    /// Read and validate one fixed-size Norito archive header.
+    ///
+    /// # Errors
+    ///
+    /// Returns an archive-header error when the magic, version, compression,
+    /// feature flags, or fixed-width fields are invalid or incomplete.
+    pub fn read(mut r: impl Read) -> Result<Self, Error> {
         let mut magic = [0u8; 4];
         r.read_exact(&mut magic)?;
         if magic != MAGIC {
@@ -5530,9 +5570,25 @@ pub fn decode_archived_field<T>(bytes: &[u8]) -> Result<T, Error>
 where
     T: for<'de> NoritoDeserialize<'de>,
 {
-    let archived = ArchiveSlice::new_owned(bytes, core::mem::align_of::<Archived<T>>())?;
+    let logical_len = bytes.len();
+    let min_size = core::mem::size_of::<Archived<T>>();
+    let mut padded = Vec::new();
+    let decode_bytes = if logical_len < min_size {
+        padded
+            .try_reserve_exact(min_size)
+            .map_err(|_| Error::AllocationFailed {
+                bytes: u64::try_from(min_size).unwrap_or(u64::MAX),
+            })?;
+        padded.extend_from_slice(bytes);
+        padded.resize(min_size, 0);
+        padded.as_slice()
+    } else {
+        bytes
+    };
+    let archived =
+        ArchiveSlice::new_owned(decode_bytes, core::mem::align_of::<Archived<T>>())?;
     let archived_bytes = archived.as_slice();
-    let _payload_guard = PayloadCtxGuard::enter(archived_bytes);
+    let _payload_guard = PayloadCtxGuard::enter_with_len(archived_bytes, logical_len);
     let archived_ptr = if archived_bytes.is_empty() {
         core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
     } else {
@@ -5540,7 +5596,7 @@ where
     };
     // SAFETY: `ArchiveSlice::new_owned` keeps one allocation with the required
     // `Archived<T>` alignment alive for this entire deserialization call.
-    T::try_deserialize(unsafe { &*archived_ptr })
+    crate::guarded_try_deserialize(|| T::try_deserialize(unsafe { &*archived_ptr }))
 }
 
 /// Interpret `bytes` as an archived value and ensure the slice is large enough.
@@ -7820,6 +7876,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 ) -> Result<(Vec<u8>, u8), Error> {
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    validate_header_flags(base_flags)?;
     let estimated = value
         .encoded_len_exact()
         .or_else(|| value.encoded_len_hint())
@@ -7835,23 +7892,12 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let mut final_flags = flags;
-    if field_bitset_used {
-        final_flags |= header_flags::FIELD_BITSET;
-    } else {
-        final_flags &= !header_flags::FIELD_BITSET;
-    }
-    if compact_len_used {
-        final_flags |= header_flags::COMPACT_LEN;
-    } else {
-        final_flags &= !header_flags::COMPACT_LEN;
-    }
-    let packed_seq_used = fixed_offsets_used;
-    if packed_seq_used {
-        final_flags |= header_flags::PACKED_SEQ;
-    } else {
-        final_flags &= !header_flags::PACKED_SEQ;
-    }
+    let final_flags = finalized_encode_flags(
+        flags,
+        fixed_offsets_used,
+        field_bitset_used,
+        compact_len_used,
+    );
     record_last_header_flags(final_flags);
     Ok((payload, final_flags))
 }
@@ -7869,6 +7915,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 pub fn encoded_payload_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
     let encode_guard = EncodeContextGuard::enter();
     let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    validate_header_flags(flags)?;
     let mut sink = std::io::sink();
     let mut counted = CountingWriter {
         inner: &mut sink,
@@ -7926,6 +7973,7 @@ pub fn to_bytes<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
 pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(), Error> {
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    validate_header_flags(base_flags)?;
     let estimated = value
         .encoded_len_exact()
         .or_else(|| value.encoded_len_hint())
@@ -7945,23 +7993,12 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     let compact_len_used = compact_len_used();
     drop(encode_guard);
 
-    let mut final_flags = flags;
-    if field_bitset_used {
-        final_flags |= header_flags::FIELD_BITSET;
-    } else {
-        final_flags &= !header_flags::FIELD_BITSET;
-    }
-    if compact_len_used {
-        final_flags |= header_flags::COMPACT_LEN;
-    } else {
-        final_flags &= !header_flags::COMPACT_LEN;
-    }
-    let packed_seq_used = fixed_offsets_used;
-    if packed_seq_used {
-        final_flags |= header_flags::PACKED_SEQ;
-    } else {
-        final_flags &= !header_flags::PACKED_SEQ;
-    }
+    let final_flags = finalized_encode_flags(
+        flags,
+        fixed_offsets_used,
+        field_bitset_used,
+        compact_len_used,
+    );
     record_last_header_flags(final_flags);
 
     let mut header = Header::new(T::schema_hash(), payload_len, checksum);
@@ -7987,6 +8024,7 @@ where
     let start = writer.stream_position()?;
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    validate_header_flags(base_flags)?;
     let flags = base_flags;
 
     let zero_header = [0u8; Header::SIZE];
@@ -8019,22 +8057,12 @@ where
     let compact_len_used = compact_len_used();
     drop(encode_guard);
 
-    let mut final_flags = flags;
-    if field_bitset_used {
-        final_flags |= header_flags::FIELD_BITSET;
-    } else {
-        final_flags &= !header_flags::FIELD_BITSET;
-    }
-    if compact_len_used {
-        final_flags |= header_flags::COMPACT_LEN;
-    } else {
-        final_flags &= !header_flags::COMPACT_LEN;
-    }
-    if fixed_offsets_used {
-        final_flags |= header_flags::PACKED_SEQ;
-    } else {
-        final_flags &= !header_flags::PACKED_SEQ;
-    }
+    let final_flags = finalized_encode_flags(
+        flags,
+        fixed_offsets_used,
+        field_bitset_used,
+        compact_len_used,
+    );
     record_last_header_flags(final_flags);
 
     let end = payload_writer.inner.stream_position()?;
@@ -8600,6 +8628,10 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
     let payload = payload_without_leading_padding_exact(slice, payload_len, padding)?;
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
+    }
+    let min_size = core::mem::size_of::<Archived<T>>();
+    if payload.len() < min_size {
+        return Err(Error::LengthMismatch);
     }
     let align = std::mem::align_of::<Archived<T>>();
     if align > 1 && (payload.as_ptr() as usize & (align - 1)) != 0 {

@@ -4201,6 +4201,7 @@ fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_la
     // A governed artifact may carry either the normalized Core STARK key or
     // the richer audited BFV-native descriptor. These are distinct typed
     // artifact formats; each must use its one canonical V1 representation.
+    #[cfg(feature = "zk-stark")]
     if let Err(core_err) = norito::decode_canonical::<crate::zk_stark::StarkFriVerifyingKeyV1>(
         &native_material.native_payload,
     ) {
@@ -4213,6 +4214,15 @@ fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_la
             ))
         })?;
     }
+    #[cfg(not(feature = "zk-stark"))]
+    norito::decode_canonical::<
+        iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
+    >(&native_material.native_payload)
+    .map_err(|native_err| {
+        invalid_parameter(format!(
+            "FHE full-bootstrap execution native verifier-key payload must use the canonical BFV-native governed V1 format when Core STARK support is disabled: {native_err}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -18342,6 +18352,7 @@ mod tests {
             SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
             SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
             SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
+            SoracloudRuntimeProvenancePurposeV1, encode_soracloud_runtime_provenance_preimage_v1,
         },
         sorafs::pin_registry::ManifestDigest,
     };
@@ -32816,8 +32827,7 @@ mod tests {
         );
         let mut weak_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
             norito::decode_from_bytes(&weak_vk.bytes).expect("decode sample STARK VK");
-        weak_payload.n_log2 =
-            crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2.saturating_sub(1);
+        weak_payload.n_log2 = crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2.saturating_sub(1);
         let canonical_native_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
             norito::decode_from_bytes(
                 &iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
@@ -43723,6 +43733,44 @@ mod tests {
             signer: ALICE_KEYPAIR.public_key().clone(),
             signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
+    }
+
+    #[test]
+    fn model_host_heartbeat_verifier_rejects_cross_purpose_replay() {
+        let heartbeat_expires_at_ms = 160_000;
+        let valid = model_host_heartbeat_provenance(&ALICE_ID, heartbeat_expires_at_ms);
+        verify_model_host_heartbeat_provenance(
+            &ALICE_ID,
+            &ALICE_ID,
+            heartbeat_expires_at_ms,
+            &valid,
+        )
+        .expect("correctly purpose-bound heartbeat provenance must verify");
+
+        let semantic_payload =
+            norito::encode_canonical(&(ALICE_ID.clone(), heartbeat_expires_at_ms))
+                .expect("encode heartbeat semantic payload");
+        let wrong_purpose_preimage = encode_soracloud_runtime_provenance_preimage_v1(
+            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+            &semantic_payload,
+        )
+        .expect("encode cross-purpose replay preimage");
+        let replay = ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &wrong_purpose_preimage),
+        };
+
+        let error = verify_model_host_heartbeat_provenance(
+            &ALICE_ID,
+            &ALICE_ID,
+            heartbeat_expires_at_ms,
+            &replay,
+        )
+        .expect_err("an Inrou-purpose signature must not verify as a heartbeat");
+        assert_invalid_parameter_contains(
+            error,
+            "model host heartbeat provenance signature verification failed",
+        );
     }
 
     fn model_host_withdraw_provenance(validator_account_id: &AccountId) -> ManifestProvenance {

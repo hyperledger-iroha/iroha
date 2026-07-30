@@ -1422,7 +1422,10 @@ impl From<CheckpointStoreError> for ProofOutcomeOutboxError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::{fs, io::Write as _, time::Duration};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt as _;
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -1454,6 +1457,18 @@ mod tests {
 
     #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
     struct NestedSourceDepthBomb(Option<Box<NestedSourceDepthBomb>>);
+
+    fn write_private_checkpoint(path: &Path, bytes: &[u8]) {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options
+            .open(path)
+            .expect("create private checkpoint fixture");
+        file.write_all(bytes)
+            .expect("write private checkpoint fixture");
+    }
 
     fn policy() -> ProofOutcomeOutboxPolicyV1 {
         ProofOutcomeOutboxPolicyV1 {
@@ -1952,13 +1967,12 @@ mod tests {
         replace_norito_schema::<PotrReceiptV1>(&mut allocation_bomb);
         let allocation_checkpoint = checkpoint_with_corrupt_potr_source(allocation_bomb);
         let allocation_dir = TempDir::new().unwrap();
-        fs::write(
-            allocation_dir
+        write_private_checkpoint(
+            &allocation_dir
                 .path()
                 .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
-            norito::to_bytes(&allocation_checkpoint).unwrap(),
-        )
-        .unwrap();
+            &norito::to_bytes(&allocation_checkpoint).unwrap(),
+        );
         assert!(matches!(
             ProofOutcomeOutbox::open(allocation_dir.path(), policy()),
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
@@ -1987,13 +2001,12 @@ mod tests {
         replace_norito_schema::<PotrReceiptV1>(&mut depth_bytes);
         let depth_checkpoint = checkpoint_with_corrupt_potr_source(depth_bytes);
         let depth_dir = TempDir::new().unwrap();
-        fs::write(
-            depth_dir
+        write_private_checkpoint(
+            &depth_dir
                 .path()
                 .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
-            norito::to_bytes(&depth_checkpoint).unwrap(),
-        )
-        .unwrap();
+            &norito::to_bytes(&depth_checkpoint).unwrap(),
+        );
         assert!(matches!(
             ProofOutcomeOutbox::open(depth_dir.path(), policy()),
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
@@ -2074,12 +2087,11 @@ mod tests {
         validate_checkpoint_source_bindings(&decoded).unwrap();
 
         let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path()
+        write_private_checkpoint(
+            &dir.path()
                 .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
             &bytes,
-        )
-        .unwrap();
+        );
         drop(ProofOutcomeOutbox::open(dir.path(), exact_policy).unwrap());
         let one_byte_too_small = ProofOutcomeOutboxPolicyV1 {
             checkpoint_max_bytes: exact_policy.checkpoint_max_bytes - 1,
@@ -2130,12 +2142,11 @@ mod tests {
         );
 
         let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path()
+        write_private_checkpoint(
+            &dir.path()
                 .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
             &compressed,
-        )
-        .unwrap();
+        );
         let bomb_policy = ProofOutcomeOutboxPolicyV1 {
             max_completed: 20_000,
             checkpoint_max_bytes: u64::try_from(compressed.len()).unwrap(),

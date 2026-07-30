@@ -4,9 +4,21 @@ Current source ABI: 21. ABI 14 added
 `connect_norito_encode_transfer_instruction_box` for native multisig proposal
 instruction boxes; later additive revisions include the native Kagemusha V2
 surfaces and the bounded SoraFS Governance DAG block/head-chain reference
-validators consumed by the C# SDK. The archive checksums below are historical and do not establish an
-ABI-21 artifact. Regenerate, verify, and republish the bridge artifacts before
-cutting an SDK release that depends on the current source surface.
+validators consumed by the C# SDK. The ABI-21 Kotlin/JVM and Java/Android
+`NativeSignerBridge` surface additionally requires native-signer JNI contract
+revision 1. This descriptor revision is checked separately so that an older
+ABI-21 artifact fails closed instead of dispatching through a stale JNI calling
+convention.
+
+The exact-12 privacy KAT ABI is compiled through the narrow
+`iroha_data_model/privacy-exact12-conformance` feature. Shipping bridge builds
+do not enable the data model's general `test-fixtures` feature, random-key
+feature edge, or block-tampering helpers.
+
+The archive checksums below are historical and do not establish a current
+ABI-21/revision-1 artifact. Regenerate, verify, and republish the bridge
+artifacts before cutting an SDK release that depends on the current source
+surface.
 
 - `NoritoBridge.xcframework.zip`
   - SHA-256: 9bdd96f97f2eccc9e901c0500bd8f2b046c600080ebbe1213a4febba13c44efd

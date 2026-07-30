@@ -1,4 +1,4 @@
-use iroha_data_model::{isi::InstructionRegistry, prelude::*};
+use iroha_data_model::{instruction_registry, isi::InstructionRegistry, prelude::*};
 
 fn main() {
     let _registry: InstructionRegistry = instruction_registry!(

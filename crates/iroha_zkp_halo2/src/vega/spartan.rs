@@ -74,13 +74,14 @@ impl RelaxedSpartanProof {
         assignment.extend_from_slice(&witness.values);
         assignment.push(instance.relaxation);
         assignment.extend_from_slice(&instance.public_inputs);
-        let (a_z, b_z, c_z) = shape.multiply(&assignment)?;
+        let products = shape.multiply(&assignment)?;
 
         let mut tau = Vec::with_capacity(dimensions.outer_rounds);
         for _ in 0..dimensions.outer_rounds {
             tau.push(transcript.squeeze(b"t")?);
         }
-        let u_cz_plus_error: Vec<_> = c_z
+        let u_cz_plus_error: Vec<_> = products
+            .c
             .iter()
             .copied()
             .zip(witness.error.iter().copied())
@@ -89,8 +90,8 @@ impl RelaxedSpartanProof {
         let (outer_sumcheck, row_point, outer_claims) = prove_cubic_with_three_inputs(
             Scalar::zero(),
             &tau,
-            &a_z,
-            &b_z,
+            &products.a,
+            &products.b,
             &u_cz_plus_error,
             transcript,
         )?;
@@ -347,7 +348,7 @@ fn validate_instance(
 mod tests {
     use super::*;
     use crate::vega::{
-        nifs::NovaNifs,
+        nifs::{NovaNifs, NovaNifsProverInput},
         r1cs::{Instance, SparseMatrix, Witness},
     };
 
@@ -427,14 +428,17 @@ mod tests {
     ) {
         let (key, shape, u1, w1, u2, w2) = fixture();
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
+        let cross_term_blindings = [s(31), s(37)];
         let (nifs, folded_instance, folded_witness) = NovaNifs::prove(
-            &key,
-            &shape,
-            &u1,
-            &w1,
-            &u2,
-            &w2,
-            &[s(31), s(37)],
+            NovaNifsProverInput {
+                key: &key,
+                shape: &shape,
+                relaxed_instance: &u1,
+                relaxed_witness: &w1,
+                regular_instance: &u2,
+                regular_witness: &w2,
+                cross_term_blindings: &cross_term_blindings,
+            },
             &mut transcript,
         )
         .expect("NIFS");

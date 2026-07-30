@@ -32,6 +32,14 @@ no Torii evidence-viewer audit scheduler. The signed receipt checkpoint and the
 exact `(sequence, receipt_digest)` transparency projection derived from it are
 the sole audit authority.
 
+The surrounding finalized moderation workflow now has a supervised,
+payload-free panel-notification path. It durably claims a finalized-event
+identity before calling a separately qualified idempotent provider and records
+the exact receipt or bounded retry/dead-letter result. That source path carries
+no evidence locator, message body, assertion, grant, or bearer secret. A real
+deployment-owned messaging/portal provider and its multi-instance evidence are
+still required.
+
 ## Authoritative Security Model
 
 Every evidence API operation that reads or changes protected state requires
@@ -65,11 +73,15 @@ payload-free session metadata, signed payload-free receipts, legal holds,
 retention decisions, erasure commitments, and idempotency tombstones. The
 service persists a public Ed25519-signed checkpoint anchor containing the
 canonical checkpoint digest, retained receipt count, and exact receipt-chain
-head. A missing installation must durably create this signed genesis anchor
-before the service becomes available. Non-receipt state therefore cannot be
-altered independently of the receipt chain. Audit reads return the retained
-anchor without calling the signer. Secret wrapper types redact debug output and
-scrub owned buffers on drop.
+head. The canonical checkpoint is retained in a signed, predecessor-bound
+record under a qualified external compare-and-swap authority; the configured
+local file is only an exact or one-generation-behind verified cache and can
+never seed or replace that authority. A missing installation must durably create
+this signed genesis anchor before the service becomes available. Startup
+accepts that genesis only after exact authoritative readback. Non-receipt state
+therefore cannot be altered independently of the receipt chain. Audit reads
+return the retained anchor without calling the signer. Secret wrapper types
+redact debug output and scrub owned buffers on drop.
 
 ## Runtime Dependencies and Configuration
 
@@ -77,28 +89,88 @@ Production behavior is configured under
 `sorafs.storage.evidence_viewer`. Enabling it requires SoraFS storage and
 all of these non-secret policy values:
 
-- an absolute private checkpoint file and bounded checkpoint size;
+- an absolute private local checkpoint-cache file and bounded checkpoint size;
 - session, challenge, and grant lifetimes within the 15-minute ceiling;
 - an authenticated range limit and bounded collection limits;
 - the WebAuthn relying-party id and exact canonical HTTPS origins;
-- opaque production handles for WebAuthn, grant, erasure, and Ed25519 receipt
-  signing services; and
+- opaque production handles for the authoritative checkpoint store, WebAuthn,
+  grant, erasure, Ed25519 receipt-signing, and immutable compaction-archive
+  services;
+- the independently governed non-zero revision and 32-byte public policy digest
+  for each of those six runtime providers;
+- the archive's stable non-zero namespace id, exact Ed25519 verification key,
+  `1000..=86400000` millisecond worker cadence, and `1..=1024` record tick
+  bound; and
 - the exact governed Ed25519 receipt-verification key.
 
-Torii exposes runtime injection seams whose opaque handles and public key must
-match configuration exactly. Startup fails closed for missing, partial, or
-mismatched dependencies. There is no file key, environment secret, `KeyPair`,
-or in-process production fallback. The standard launcher intentionally does not
-construct real WebAuthn, grant, HSM signer, or KMS implementations; deployment
-owners must construct and inject those runtime dependencies.
+The qualification keys are the exact
+`checkpoint_store_revision`/`checkpoint_store_policy_digest_hex`,
+`webauthn_revision`/`webauthn_policy_digest_hex`,
+`grant_revision`/`grant_policy_digest_hex`,
+`erasure_revision`/`erasure_policy_digest_hex`,
+`compaction_archive_revision`/`compaction_archive_policy_digest_hex`, and
+`receipt_signer_revision`/`receipt_signer_policy_digest_hex` pairs. They are
+required when the service is enabled, forbidden as stale bindings when it is
+disabled, and accept only non-zero revisions plus canonical lowercase non-zero
+32-byte digests.
+
+The sanitized daemon registry and Torii expose runtime injection seams whose
+opaque handles, archive namespace, and public keys must match configuration
+exactly. Startup fails closed for missing, partial, unrequested, or mismatched
+dependencies. There is no file key, environment secret, `KeyPair`, or
+in-process production fallback.
+The local checkpoint cache is not an authority fallback. The standard launcher
+intentionally does not construct a real external CAS, WebAuthn, grant, HSM
+signer, KMS, or immutable object-lock implementation; deployment owners must
+construct and inject those runtime dependencies. The complete non-secret shape
+is shown in
+[`sorafs/snippets/evidence_viewer_runtime_binding.toml`](sorafs/snippets/evidence_viewer_runtime_binding.toml).
+
+Each external security provider must expose its active non-zero
+deployment/policy revision and non-zero public-policy digest through a typed,
+payload-free readiness result. Before reading the local cache or reading or
+creating the authoritative evidence-viewer checkpoint, the service validates
+the configured and injected handles, rejects test/development markers and
+substitutions, and requires each provider's exact qualification to match the
+independently configured expected revision and digest. It also pins the receipt
+signer's governed Ed25519 public key plus the archive namespace and Ed25519
+verification key. Every external checkpoint load/CAS, WebAuthn, grant, signing,
+erasure, and archive install/readback call revalidates that configured identity
+and policy around the operation. A stale or changed provider therefore fails
+closed, including when it changes while an operation is in flight. Vendor
+diagnostic text remains inside protected provider telemetry and cannot enter
+service errors or debug output.
+When an authoritative checkpoint already carries an archive head, startup and
+an explicit live refresh traverse the signed predecessor operation ids all the
+way to archive genesis. Every exact historical artifact is re-read and its
+canonical bytes, payload/head commitment, configured archive identity, archive
+receipt signature, signer signature, generation, and predecessor link are
+verified before the local cache or in-memory state is adopted. A missing,
+forged, substituted, forked, rolled-back, or over-bound historical readback
+fails closed.
 
 The injected boundaries are:
 
 - finalized moderation authorization reader;
 - WebAuthn challenge and assertion verifier;
 - rotating-grant issuer, verifier, and revoker;
-- PKCS#11/HSM Ed25519 receipt signer; and
-- KMS or cryptographic-erasure service.
+- PKCS#11/HSM Ed25519 receipt signer;
+- KMS or cryptographic-erasure service;
+- linearizable signed checkpoint-store CAS authority; and
+- immutable object-lock archive returning an Ed25519-authenticated exact
+  readback receipt.
+
+The shutdown-aware Torii worker takes the current signed checkpoint and archive
+head as its fence, archives at most `compaction_max_records`, and uses a stable
+operation id for exact retry. The service verifies canonical readback, its own
+signed payload/head commitment, the configured archive identity, and the
+archive receipt signature before it removes any expired challenge/session
+record or attempts the authoritative checkpoint CAS. A failed or ambiguous CAS
+therefore leaves the installed artifact replayable under the same operation id;
+forged, trailing, forked, rolled-back, skipped-generation, or provider-drift
+readback never authorizes pruning. A completed erasure remains terminal even
+when an older expired session is compacted later: compaction must not recreate
+a default retention floor for that quarantine object.
 
 Transparency publication is a separate deployment boundary. The node provides
 a bounded, signed `EvidenceViewerTransparencyProjectionV1`, but the repository
@@ -163,15 +235,19 @@ legal-hold-based erasure denial appends an Ed25519-signed receipt. Receipts have
 
 Checkpoint loading requires canonical Norito re-encoding, bounded sequences,
 unique sorted identities, an unbroken receipt chain, signed record linkage, and
-valid receipt and checkpoint-envelope signatures under the configured signer
-identity. Atomic checkpoint writes use the hardened local checkpoint
-implementation, including symlink, hardlink, and replacement defenses. A
-post-rename durability ambiguity makes the service unavailable rather than
-allowing unrecorded access.
+valid receipt and checkpoint-record signatures under the configured signer
+identity. The external store enforces monotonic predecessor CAS over the
+deterministic signed record revision. Reported-success and ambiguous CAS
+results require exact authoritative readback; an unchanged predecessor is a
+safe rejection, while a different successor or failed readback poisons local
+state until restart. The local cache retains the hardened no-follow,
+same-directory atomic replacement, symlink, hardlink, and replacement
+defenses, but it is never accepted as authority.
 
-The signed checkpoint is the sole durable audit record. Its signed public
-anchor binds the complete canonical checkpoint digest, receipt count, and exact
-receipt-chain head. A consumer first obtains and verifies that anchor from
+The signed record in the external checkpoint authority is the sole durable
+audit record. Its signed public anchor binds the complete canonical checkpoint
+digest, receipt count, and exact receipt-chain head. A consumer first obtains
+and verifies that anchor from
 `/v1/evidence/status`, then supplies its non-zero
 `expected_checkpoint_digest_hex` on every `/v1/evidence/audit` request. The
 bounded transparency projection also requires an explicit page limit and an
@@ -194,9 +270,10 @@ returns HTTP `409 Conflict`; the consumer must fetch and verify the new status
 anchor and explicitly restart instead of silently mixing pages. Consumers must
 durably retain the exact signed checkpoint anchor and `(sequence, digest)`
 cursor. An unknown digest, same-sequence substitution, malformed anchor,
-signature change, or local checkpoint rollback fails closed. The authenticated
-audit and status routes are read projections of the checkpoint and do not call
-the signer. Neither legacy tombstone can create or modify audit state.
+signature change, local cache fork, or cache rollback beyond the single
+verified predecessor fails closed. The authenticated audit and status routes
+are read projections of the checkpoint and do not call the signer. Neither
+legacy tombstone can create or modify audit state.
 
 A signature proves anchor integrity and governed signer identity, not global
 freshness to a first-time client. Such a client cannot distinguish an older
@@ -209,7 +286,13 @@ For a range request, decryption completes first but bytes are not returned until
 the signed access receipt and rotated grant state are durably committed. Erasure
 holds the state boundary across legal-hold evaluation and the irreversible KMS
 operation, preventing a hold/erasure race. A definite erasure followed by an
-ambiguous checkpoint result leaves the service fail-closed.
+ambiguous checkpoint result leaves the service fail-closed. Restart and live
+refresh reconcile retained erasure intents by their stable operation ids; an
+unavailable or ambiguous provider, a zero commit digest, a finalize failure, or
+a partial multi-intent result immediately marks process durability uncertain
+and blocks subsequent reads until authoritative restart reconciliation.
+Likewise, a poisoned quarantine-object index is surfaced as unavailable state,
+never converted into a false object-not-found result.
 
 ## Embedded Viewer Controls
 
@@ -229,21 +312,36 @@ events to `/v1/evidence/log/{session_id_hex}`.
 
 ## Remaining Production Blockers
 
+- Package and operate a deployment-owned executable around the in-tree
+  `serve_runtime_provider_broker_v1` injected server-library boundary. No
+  checked-in executable calls it, and no credential loader, HSM/KMS/sealed-store
+  implementation, or vendor backend is packaged. Its bounded canonical
+  client/server protocol covers all six viewer slots (22–26 and 47), including
+  exact public qualification metadata, replay-safe operation identities,
+  ambiguity typing, signed readback, and authoritative CAS/archive
+  verification.
 - Construct and inject deployment-owned WebAuthn, rotating-grant, PKCS#11/HSM
-  receipt-signer, and KMS/erasure implementations, with startup identity and
-  readiness checks.
+  receipt-signer, KMS/erasure, linearizable sealed-CAS checkpoint-store, and
+  immutable object-lock/archive implementations that satisfy the shipped
+  qualification and exact-readback contracts; collect external readiness,
+  rotation, revocation, CAS, archive durability, rollback, and recovery
+  evidence for those real services.
 - Build a deployment-owned transparency producer adapter that consumes only
   `EvidenceViewerTransparencyProjectionV1`, durably acknowledges the exact
   signed checkpoint anchor and `(sequence, digest)` cursor, anchors a monotonic
   public head for first-contact freshness, and reconciles publication. A
   Torii-local scheduler is not part of this design.
-- Add durable, retry-safe notification delivery for the surrounding
-  evidence-viewer workflow, including reconciliation and dead-letter handling.
-- Replace single-process checkpoint serialization with multi-instance
-  compare-and-swap or an equivalent single-writer lease so two Torii instances
-  cannot allocate the same receipt sequence or overwrite each other's state.
-- Add bounded compaction and authenticated archive/recovery while preserving
-  receipt-chain verification and exact-cursor continuity.
+- Deploy and qualify a real messaging/portal provider for the shipped
+  retry-safe surrounding panel-notification path, then exercise reconciliation,
+  dead-letter handling, outage, restart, and failover with the protected viewer.
+- Deploy at least two Torii replicas against the same qualified checkpoint
+  authority and prove stale-reader fencing, concurrent CAS rejection,
+  ambiguous-result readback, restart adoption, rollback resistance, and
+  identical post-recovery state.
+- Deploy the supervised compaction worker against at least two replicas sharing
+  the real archive/checkpoint authorities and prove exact replay after archive
+  success plus checkpoint failure, archive-signature rejection, bounded
+  pruning, recovery, and receipt-chain/exact-cursor continuity.
 - Collect reviewed multi-instance deployment, security, recovery, and
   payload-free promotion evidence.
 
@@ -261,8 +359,11 @@ cargo test -p iroha_torii_shared route_catalog
 Release validation must additionally exercise unauthorized and operator-only
 accounts, revoked assignments, challenge/assertion/grant replay, expiry and
 rotation, wrong case/object/policy binding, malformed and oversized inputs,
-range substitution, receipt/signature/chain tampering, checkpoint corruption
-and filesystem attacks, crash points around atomic persistence, concurrent
+range substitution, missing/substituted/test-marked/stale provider startup,
+provider revision and policy drift before and during operations,
+receipt/signature/chain tampering, authoritative checkpoint substitution,
+stale/forked CAS heads, ambiguous CAS readback, local-cache corruption and
+filesystem attacks, crash points around persistence, concurrent
 legal-hold/erasure requests, KMS ambiguity, viewer CSP/offline controls, and
 payload/secret log scanning.
 

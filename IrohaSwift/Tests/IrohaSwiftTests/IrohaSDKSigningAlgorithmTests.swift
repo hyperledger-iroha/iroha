@@ -39,9 +39,10 @@ final class IrohaSDKSigningAlgorithmTests: XCTestCase {
         let sdk = IrohaSDK(baseURL: baseURL, defaultSigningAlgorithm: .mlDsa)
         let seed = Data("iroha-swift-ml-dsa-seed".utf8)
 
-        guard NoritoNativeBridge.shared.keypairFromSeed(algorithm: .mlDsa, seed: seed) != nil else {
-            throw XCTSkip("NoritoBridge ML-DSA seed derivation unavailable")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.keypairFromSeed(algorithm: .mlDsa, seed: seed) != nil,
+            "NoritoBridge ML-DSA seed derivation unavailable"
+        )
 
         let signingKey = try sdk.signingKey(fromSeed: seed)
         XCTAssertEqual(signingKey.algorithm, .mlDsa)

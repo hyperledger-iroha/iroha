@@ -53,7 +53,11 @@ Flag scoping rules:
 - `COMPACT_LEN` affects per-value length prefixes only.
 - Reserved layout bits (`VARINT_OFFSETS`, `COMPACT_SEQ_LEN`) are rejected when decoding headers.
 
-These flags are independent; no heuristic cross-effects are permitted.
+Except for the declared `FIELD_BITSET` dependency, flags have no heuristic
+cross-effects. Encoders and decoders reject `FIELD_BITSET` unless both
+`PACKED_STRUCT` and `COMPACT_LEN` are present. When a hybrid packed struct emits
+a field bitset, its final header retains those two required flags even if every
+field is self-delimiting and therefore no explicit compact size prefix appears.
 
 Default v1 payloads use `COMPACT_LEN` (`flags = 0x02`) while keeping the minor
 version byte fixed at `0x00`. The header flag byte is therefore the source of

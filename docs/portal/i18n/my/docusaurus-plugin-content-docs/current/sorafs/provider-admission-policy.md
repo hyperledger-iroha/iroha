@@ -41,7 +41,7 @@ SoraFS Architecture RFC တွင် အကွပ်ပြပြီး ကျန
 ## ဝင်ခွင့်အလုပ်အသွားအလာ
 
 1. **အဆိုပြုချက် ဖန်တီးခြင်း**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` ထည့်ပါ။
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …` ထည့်ပါ။
      `ProviderAdmissionProposalV1` + သက်သေအတွဲကို ထုတ်လုပ်သည်။
    - အတည်ပြုခြင်း- `profile_id` တွင် လိုအပ်သော အကွက်များ၊ လောင်းကြေး > 0၊ canonical chunker လက်ကိုင်ကို သေချာပါစေ။
 2. **အုပ်ချုပ်မှု ထောက်ခံချက်**
@@ -70,7 +70,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
 
 ### CLI အကိုးအကား
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` မှတဆင့် command တစ်ခုစီကို run ပါ။
+`cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …` မှတဆင့် command တစ်ခုစီကို run ပါ။
 
 - `proposal`
   - လိုအပ်သောအလံများ- `--provider-id=<hex32>`၊ `--chunker-profile=<namespace.name@semver>`၊
@@ -117,7 +117,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
 1. `provider-admission proposal` နှင့် `provider-admission sign` ဖြင့် ဆက်ခံမည့် အဆိုပြုချက်/ကြော်ငြာအတွဲကို တည်ဆောက်ပါ၊ `--retention-epoch` ကို တိုးမြှင့်ပြီး လိုအပ်သလို လောင်းကြေး/အဆုံးမှတ်များကို အပ်ဒိတ်လုပ်ပါ။
 2. အကောင်အထည်ဖော်ပါ။  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
 #### အရေးပေါ်ရုတ်သိမ်းခြင်း။
 1. အပေးအယူခံရသော စာအိတ်ကို ဖော်ထုတ်ပြီး ပြန်လည်ရုတ်သိမ်းကြောင်း ထုတ်ပြန်ပါ-
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

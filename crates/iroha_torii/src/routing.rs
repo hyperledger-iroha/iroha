@@ -217,8 +217,10 @@ use sorafs_manifest::{
     PinPolicyConstraints as ManifestPinPolicyConstraints, StorageClass as ManifestStorageClass,
     capacity::{CapacityDeclarationV1, CapacityDeclarationValidationError},
     por::{
-        AuditVerdictV1, PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1,
-        PorReportIsoWeek, PorWeeklyReportV1,
+        AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditVerdictV1,
+        POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_PROOF_MAX_CANONICAL_BYTES_V1,
+        PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1, PorReportIsoWeek,
+        PorWeeklyReportV1, decode_audit_verdict_v1, decode_por_proof_v1,
     },
     validate_manifest,
 };
@@ -5055,7 +5057,12 @@ pub fn verify_signed_query_request(
     query: SignedQuery,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     let iroha_data_model::query::QuerySignature(sig) = &query.signature;
-    match query.payload.authority.signatory().try_algorithm() {
+    let signatory = query.payload.authority.try_signatory().ok_or_else(|| {
+        Error::from(ValidationFail::NotPermitted(
+            "signed query authority must use a single-key controller".to_string(),
+        ))
+    })?;
+    match signatory.try_algorithm() {
         Ok(Algorithm::Ed25519) => {
             iroha_crypto::ed25519_parse_signature(sig.payload()).map_err(|err| {
                 Error::from(ValidationFail::NotPermitted(format!(
@@ -5072,12 +5079,11 @@ pub fn verify_signed_query_request(
         }
         _ => {}
     }
-    sig.verify(query.payload.authority.signatory(), &query.payload)
-        .map_err(|_| {
-            Error::from(ValidationFail::NotPermitted(
-                "query signature failed verification".to_string(),
-            ))
-        })?;
+    sig.verify(signatory, &query.payload).map_err(|_| {
+        Error::from(ValidationFail::NotPermitted(
+            "query signature failed verification".to_string(),
+        ))
+    })?;
     Ok(query.payload)
 }
 
@@ -5085,7 +5091,7 @@ pub fn verify_signed_query_request(
 mod signed_query_verification_tests {
     use iroha_crypto::SignatureOf;
     use iroha_data_model::{
-        account::AccountId,
+        account::{AccountId, MultisigMember, MultisigPolicy},
         query::{QueryRequest, QuerySignature, SingularQueryBox, runtime::prelude::FindAbiVersion},
     };
 
@@ -5156,6 +5162,28 @@ mod signed_query_verification_tests {
         signed.payload.authority = AccountId::new(other.public_key().clone());
 
         assert!(verify_signed_query_request(signed).is_err());
+    }
+
+    #[test]
+    fn verify_signed_query_rejects_multisig_authority_without_panicking() {
+        let signer = checked_routing_fixture_keypair(
+            0xe8,
+            Algorithm::Ed25519,
+            "derive signed query multisig fixture key",
+        );
+        let member =
+            MultisigMember::new(signer.public_key().clone(), 1).expect("valid multisig member");
+        let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
+        let mut malformed = signed_find_abi_version(&signer);
+        malformed.payload.authority = AccountId::new_multisig(policy);
+
+        let response = verify_signed_query_request(malformed)
+            .expect_err("directly signed multisig query authority must be rejected")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        verify_signed_query_request(signed_find_abi_version(&signer))
+            .expect("a valid follow-up query must still verify");
     }
 
     #[test]
@@ -23345,7 +23373,7 @@ fn multisig_asset_transfer_control_operation(
 ) -> Option<(&'static str, IrohaJson)> {
     if let Some(isi) = instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::SetAssetTransferFreeze>()
+        .downcast_ref::<iroha_data_model::isi::SetAssetTransferAvailability>()
     {
         let mut payload = Map::new();
         payload.insert("account_id".into(), Value::from(isi.account_id.to_string()));
@@ -23353,7 +23381,24 @@ fn multisig_asset_transfer_control_operation(
             "asset_definition_id".into(),
             Value::from(isi.asset_definition_id.to_string()),
         );
-        payload.insert("outgoing_frozen".into(), Value::from(isi.outgoing_frozen));
+        payload.insert(
+            "expected_revision".into(),
+            Value::from(isi.expected_revision),
+        );
+        payload.insert(
+            "incoming".into(),
+            Value::from(match isi.incoming {
+                iroha_data_model::asset::AssetTransferAvailability::Enabled => "Enabled",
+                iroha_data_model::asset::AssetTransferAvailability::Disabled => "Disabled",
+            }),
+        );
+        payload.insert(
+            "outgoing".into(),
+            Value::from(match isi.outgoing {
+                iroha_data_model::asset::AssetTransferAvailability::Enabled => "Enabled",
+                iroha_data_model::asset::AssetTransferAvailability::Disabled => "Disabled",
+            }),
+        );
         payload.insert(
             "reason".into(),
             isi.reason
@@ -23361,7 +23406,7 @@ fn multisig_asset_transfer_control_operation(
                 .map_or(Value::Null, |reason| Value::from(reason.clone())),
         );
         return Some((
-            "ASSET_TRANSFER_FREEZE",
+            "ASSET_TRANSFER_AVAILABILITY",
             IrohaJson::new(Value::Object(payload)),
         ));
     }
@@ -26930,10 +26975,12 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::SetAssetTransferFreeze::new(
+                dm::SetAssetTransferAvailability::new(
                     signer_two_id.clone(),
                     asset_definition_id.clone(),
-                    true,
+                    3,
+                    dm::AssetTransferAvailability::Disabled,
+                    dm::AssetTransferAvailability::Disabled,
                     Some("risk review".to_owned()),
                 )
                 .into(),
@@ -26960,8 +27007,8 @@ mod multisig_selector_tests {
             .proposals
             .iter()
             .find(|item| item.instructions_hash == freeze_hash)
-            .expect("freeze proposal in query");
-        assert_eq!(query_item.operation_type, "ASSET_TRANSFER_FREEZE");
+            .expect("availability proposal in query");
+        assert_eq!(query_item.operation_type, "ASSET_TRANSFER_AVAILABILITY");
         let query_intent = query_item
             .intent
             .clone()
@@ -26972,7 +27019,9 @@ mod multisig_selector_tests {
             query_intent["account_id"].as_str(),
             Some(signer_two_id.to_string().as_str())
         );
-        assert_eq!(query_intent["outgoing_frozen"].as_bool(), Some(true));
+        assert_eq!(query_intent["expected_revision"].as_u64(), Some(3));
+        assert_eq!(query_intent["incoming"].as_str(), Some("Disabled"));
+        assert_eq!(query_intent["outgoing"].as_str(), Some("Disabled"));
         assert_eq!(query_intent["reason"].as_str(), Some("risk review"));
 
         let JsonBody(resolve_response) = handle_post_multisig_proposals_resolve(
@@ -26985,7 +27034,10 @@ mod multisig_selector_tests {
         )
         .await
         .expect("resolve proposal");
-        assert_eq!(resolve_response.operation_type, "ASSET_TRANSFER_FREEZE");
+        assert_eq!(
+            resolve_response.operation_type,
+            "ASSET_TRANSFER_AVAILABILITY"
+        );
         let resolve_intent = resolve_response
             .intent
             .expect("freeze get intent")
@@ -26995,7 +27047,7 @@ mod multisig_selector_tests {
             resolve_intent["asset_definition_id"].as_str(),
             Some(asset_definition_id.to_string().as_str())
         );
-        assert_eq!(resolve_intent["outgoing_frozen"].as_bool(), Some(true));
+        assert_eq!(resolve_intent["outgoing"].as_str(), Some("Disabled"));
     }
 
     #[tokio::test]
@@ -27265,7 +27317,10 @@ mod multisig_selector_tests {
 
         let record = dm::AssetTransferControlRecord {
             asset_definition_id: asset_definition_id.clone(),
-            outgoing_frozen: true,
+            availability_revision: 5,
+            incoming_availability: dm::AssetTransferAvailability::Disabled,
+            outgoing_availability: dm::AssetTransferAvailability::Enabled,
+            availability_reason: Some("inbound review".to_owned()),
             blacklisted: false,
             holding_limit: Some(1_000_u32.into()),
             limits: vec![
@@ -27307,7 +27362,19 @@ mod multisig_selector_tests {
         .await
         .expect("load stored control");
 
-        assert!(response.control.outgoing_frozen);
+        assert_eq!(response.control.availability_revision, 5);
+        assert_eq!(
+            response.control.incoming,
+            dm::AssetTransferAvailability::Disabled
+        );
+        assert_eq!(
+            response.control.outgoing,
+            dm::AssetTransferAvailability::Enabled
+        );
+        assert_eq!(
+            response.control.availability_reason.as_deref(),
+            Some("inbound review")
+        );
         assert!(!response.control.blacklisted);
         assert_eq!(response.control.limits.len(), 2);
         assert_eq!(response.control.limits[0].window, "DAY");
@@ -29754,7 +29821,8 @@ pub async fn handle_post_asset_transfer_control_get(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<AssetTransferControlGetRequestDto>,
 ) -> Result<JsonBody<AssetTransferControlGetResponseDto>> {
-    let world = state.world_view();
+    let view = state.view();
+    let world = &view.world;
     let account = world
         .account(&req.account_id)
         .map_err(|_| conversion_error(format!("account not found: {}", req.account_id)))?;
@@ -29768,17 +29836,24 @@ pub async fn handle_post_asset_transfer_control_get(
         })?;
 
     let store = load_asset_transfer_control_store(account.id(), account.metadata())?;
-    let record = store.find(&req.asset_definition_id).cloned().unwrap_or(
-        iroha_data_model::asset::AssetTransferControlRecord {
-            asset_definition_id: req.asset_definition_id.clone(),
-            outgoing_frozen: false,
-            blacklisted: false,
-            holding_limit: None,
-            limits: Vec::new(),
-            usages: Vec::new(),
-            updated_at_ms: None,
-        },
-    );
+    let record = store
+        .find(&req.asset_definition_id)
+        .cloned()
+        .unwrap_or_else(|| {
+            iroha_data_model::asset::AssetTransferControlRecord::new(
+                req.asset_definition_id.clone(),
+            )
+        });
+    let checkpoint = view
+        .latest_block_hash()
+        .map(|block_hash| -> Result<AssetTransferControlCheckpointDto> {
+            Ok(AssetTransferControlCheckpointDto {
+                block_height: u64::try_from(view.height())
+                    .map_err(|_| conversion_error("ledger height exceeds u64".to_owned()))?,
+                block_hash: block_hash.to_string(),
+            })
+        })
+        .transpose()?;
 
     let cap_by_window = record
         .limits
@@ -29817,7 +29892,10 @@ pub async fn handle_post_asset_transfer_control_get(
         control: AssetTransferControlDto {
             account_id: req.account_id,
             asset_definition_id: req.asset_definition_id,
-            outgoing_frozen: record.outgoing_frozen,
+            availability_revision: record.availability_revision,
+            incoming: record.incoming_availability,
+            outgoing: record.outgoing_availability,
+            availability_reason: record.availability_reason,
             blacklisted: record.blacklisted,
             holding_limit: record.holding_limit,
             limits,
@@ -29827,6 +29905,7 @@ pub async fn handle_post_asset_transfer_control_get(
                 .transpose()?,
         },
         usages,
+        checkpoint,
     }))
 }
 
@@ -32614,7 +32693,11 @@ pub struct AssetTransferUsageBucketDto {
 pub struct AssetTransferControlDto {
     pub account_id: iroha_data_model::account::AccountId,
     pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
-    pub outgoing_frozen: bool,
+    pub availability_revision: u64,
+    pub incoming: iroha_data_model::asset::AssetTransferAvailability,
+    pub outgoing: iroha_data_model::asset::AssetTransferAvailability,
+    #[norito(default)]
+    pub availability_reason: Option<String>,
     pub blacklisted: bool,
     #[norito(default)]
     pub holding_limit: Option<Quantity>,
@@ -32625,11 +32708,21 @@ pub struct AssetTransferControlDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Ledger tip at which an asset-transfer control read was observed.
+pub struct AssetTransferControlCheckpointDto {
+    pub block_height: u64,
+    pub block_hash: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload for asset-transfer control reads.
 pub struct AssetTransferControlGetResponseDto {
     pub control: AssetTransferControlDto,
     #[norito(default)]
     pub usages: Vec<AssetTransferUsageBucketDto>,
+    #[norito(default)]
+    pub checkpoint: Option<AssetTransferControlCheckpointDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -33672,7 +33765,15 @@ pub fn handle_get_sorafs_por_status(
         epoch: query.epoch,
         status: outcome,
     };
-    Ok(coordinator.query_statuses(&filter, query.limit, page_token))
+    let limit = query
+        .limit
+        .unwrap_or(POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1);
+    if limit > POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 {
+        return Err(conversion_error(format!(
+            "`limit` {limit} exceeds the PoR status page maximum of {POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1}"
+        )));
+    }
+    Ok(coordinator.query_statuses(&filter, Some(limit), page_token))
 }
 
 #[cfg(feature = "app_api")]
@@ -33809,15 +33910,60 @@ fn capacity_declaration_validation_error(err: CapacityDeclarationValidationError
     )
 }
 
-pub(crate) fn decode_por_payload<T>(payload_b64: &str, kind: &str) -> Result<T, Error>
-where
-    T: for<'de> norito::NoritoDeserialize<'de>,
-{
+const fn canonical_padded_base64_len(maximum_decoded_bytes: usize) -> usize {
+    maximum_decoded_bytes.div_ceil(3) * 4
+}
+
+pub(crate) const POR_PROOF_SUBMISSION_MAX_HTTP_BODY_BYTES_V1: usize =
+    canonical_padded_base64_len(POR_PROOF_MAX_CANONICAL_BYTES_V1) + b"{\"proof_b64\":\"\"}".len();
+pub(crate) const POR_VERDICT_SUBMISSION_MAX_HTTP_BODY_BYTES_V1: usize =
+    canonical_padded_base64_len(AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1)
+        + b"{\"verdict_b64\":\"\"}".len();
+
+fn decode_bounded_por_base64(
+    payload_b64: &str,
+    kind: &str,
+    maximum_decoded_bytes: usize,
+) -> Result<Vec<u8>, Error> {
+    let maximum_encoded_bytes = maximum_decoded_bytes
+        .checked_add(2)
+        .and_then(|value| value.checked_div(3))
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(|| conversion_error(format!("{kind} payload size limit overflow")))?;
+    if payload_b64.len() > maximum_encoded_bytes {
+        return Err(conversion_error(format!(
+            "{kind}_b64 has {} bytes; maximum canonical base64 length is {maximum_encoded_bytes}",
+            payload_b64.len()
+        )));
+    }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(payload_b64.as_bytes())
         .map_err(|err| conversion_error(format!("invalid base64 in {kind}_b64: {err}")))?;
-    norito::decode_from_bytes(&bytes)
-        .map_err(|err| conversion_error(format!("invalid {kind} payload: {err}")))
+    if bytes.len() > maximum_decoded_bytes {
+        return Err(conversion_error(format!(
+            "{kind} payload has {} decoded bytes; maximum is {maximum_decoded_bytes}",
+            bytes.len()
+        )));
+    }
+    if base64::engine::general_purpose::STANDARD.encode(&bytes) != payload_b64 {
+        return Err(conversion_error(format!(
+            "{kind}_b64 is not canonical padded base64"
+        )));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn decode_por_proof_payload(payload_b64: &str) -> Result<PorProofV1, Error> {
+    let bytes = decode_bounded_por_base64(payload_b64, "proof", POR_PROOF_MAX_CANONICAL_BYTES_V1)?;
+    decode_por_proof_v1(&bytes)
+        .map_err(|err| conversion_error(format!("invalid proof payload: {err}")))
+}
+
+pub(crate) fn decode_por_verdict_payload(payload_b64: &str) -> Result<AuditVerdictV1, Error> {
+    let bytes =
+        decode_bounded_por_base64(payload_b64, "verdict", AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1)?;
+    decode_audit_verdict_v1(&bytes)
+        .map_err(|err| conversion_error(format!("invalid verdict payload: {err}")))
 }
 
 #[cfg(feature = "app_api")]
@@ -35851,14 +35997,39 @@ mod sorafs_capacity_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn por_challenge_payload_decoder_rejects_invalid_base64() {
-        let err = decode_por_payload::<PorChallengeV1>("not-base64%%", "challenge")
-            .expect_err("invalid base64 must fail");
+    async fn por_proof_payload_decoder_rejects_invalid_base64() {
+        let err = decode_por_proof_payload("not-base64%%").expect_err("invalid base64 must fail");
 
         match err {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(msg),
             )) => assert!(msg.contains("invalid base64")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn por_base64_preflight_enforces_decoded_bound_before_decode() {
+        assert_eq!(
+            POR_PROOF_SUBMISSION_MAX_HTTP_BODY_BYTES_V1,
+            canonical_padded_base64_len(POR_PROOF_MAX_CANONICAL_BYTES_V1)
+                + b"{\"proof_b64\":\"\"}".len()
+        );
+        assert_eq!(
+            POR_VERDICT_SUBMISSION_MAX_HTTP_BODY_BYTES_V1,
+            canonical_padded_base64_len(AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1)
+                + b"{\"verdict_b64\":\"\"}".len()
+        );
+        assert_eq!(
+            decode_bounded_por_base64("AQID", "proof", 3).expect("three bytes fit the exact bound"),
+            vec![1, 2, 3]
+        );
+        let err = decode_bounded_por_base64("AQIDBA==", "proof", 3)
+            .expect_err("four decoded bytes must exceed the bound");
+        match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(msg),
+            )) => assert!(msg.contains("maximum canonical base64 length")),
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -50098,13 +50269,28 @@ mod app_api_integration_tests {
                     issued_epoch: 8,
                     deadline_epoch: 24,
                     canonical_order,
+                    assignment_revision: 1,
                     provider_completions: vec![
                         iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
                             provider_id: iroha_data_model::sorafs::capacity::ProviderId::new(
                                 provider_id,
                             ),
-                            completed_by: issuer,
+                            completed_by: issuer.clone(),
                             completion_epoch: 9,
+                            assignment_revision: 1,
+                            completion_authority: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+                                issuer,
+                                iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                                    policy_id: [0xA1; 32],
+                                    revision: 1,
+                                    predecessor_digest: None,
+                                    policy_digest: [0xA2; 32],
+                                },
+                            ),
+                            finalized_anchor: iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
+                                height: 9,
+                                block_hash: [0xA3; 32],
+                            },
                         },
                     ],
                     status: iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(9),
@@ -55098,7 +55284,8 @@ mod validation_fee_torii_ingress_tests {
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},
-        smartcontracts::{Execute, ivm::cache::IvmCache},
+        smartcontracts::Execute,
+        smartcontracts::ivm::cache::IvmCache,
         state::{State, World},
     };
     use iroha_crypto::{Algorithm, KeyPair, blake2::Blake2b512};
@@ -55107,10 +55294,20 @@ mod validation_fee_torii_ingress_tests {
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
+        events::{
+            EventFilterBox,
+            time::{ExecutionTime, TimeEventFilter},
+        },
         isi::Transfer,
         metadata::Metadata,
+        nexus::DataSpaceId,
         prelude::*,
+        smart_contract::{
+            ContractAddress,
+            manifest::{TriggerCallback, TriggerDescriptor},
+        },
         transaction::SignedTransaction,
+        trigger::action::Repeats,
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
             VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
@@ -55131,7 +55328,7 @@ mod validation_fee_torii_ingress_tests {
         json::Json,
         numeric::{NumericSpec, Quantity},
     };
-    use sha2::Digest as _;
+    use sha2::{Digest as _, Sha256};
 
     use super::*;
 
@@ -55184,16 +55381,35 @@ mod validation_fee_torii_ingress_tests {
         )
     }
 
-    fn payout_contract_address(
-        user: &AccountId,
-    ) -> iroha_data_model::smart_contract::ContractAddress {
-        iroha_data_model::smart_contract::ContractAddress::derive(
+    fn payout_contract_address(user: &AccountId) -> ContractAddress {
+        ContractAddress::derive(
             iroha_config::parameters::defaults::common::chain_discriminant(),
             user,
             42,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            DataSpaceId::UNIVERSAL,
         )
-        .expect("validation-fee payout contract address")
+        .expect("derive validation-fee payout contract address")
+    }
+
+    fn pool_contract_address() -> ContractAddress {
+        let (deployer, _) = account(4, "derive validation-fee pool deployer");
+        ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &deployer,
+            43,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive validation-fee pool contract address")
+    }
+
+    fn payout_pool_vault_account() -> AccountId {
+        pool_contract_address().subject_id()
+    }
+
+    fn payout_recipient_accounts() -> Vec<AccountId> {
+        (5..=8)
+            .map(|seed| account(seed, "derive validation-fee payout recipient").0)
+            .collect()
     }
 
     fn payout_contract_artifact() -> (
@@ -55220,7 +55436,19 @@ mod validation_fee_torii_ingress_tests {
             write_keys: Vec::new(),
             access_hints_complete: None,
             access_hints_skipped: Vec::new(),
-            triggers: Vec::new(),
+            triggers: vec![TriggerDescriptor {
+                id: "validation_fee_payout_tick"
+                    .parse()
+                    .expect("payout trigger id"),
+                repeats: Repeats::Indefinitely,
+                filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
+                authority: None,
+                metadata: Metadata::default(),
+                callback: TriggerCallback {
+                    namespace: None,
+                    entrypoint: "autonomous_validation_fee_tick".to_owned(),
+                },
+            }],
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "ValidationFeePayout".to_owned(),
@@ -55255,6 +55483,65 @@ mod validation_fee_torii_ingress_tests {
         (artifact, verified.manifest)
     }
 
+    fn pool_contract_artifact() -> (
+        Vec<u8>,
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+    ) {
+        let metadata = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1,
+            abi_version: 1,
+        };
+        let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
+            name: "swap_exact_in_quote_public".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: Some("CanInvokeContractEntrypoint".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: None,
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        };
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "ValidationFeePool".to_owned(),
+            compiler_fingerprint: "validation-fee-pool-torii-ingress-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: entrypoint.name.clone(),
+                kind: entrypoint.kind,
+                params: entrypoint.params.clone(),
+                argument_schema: entrypoint.argument_schema.clone(),
+                return_type: entrypoint.return_type.clone(),
+                return_schema: entrypoint.return_schema.clone(),
+                permission: entrypoint.permission.clone(),
+                read_keys: entrypoint.read_keys.clone(),
+                write_keys: entrypoint.write_keys.clone(),
+                access_hints_complete: entrypoint.access_hints_complete,
+                access_hints_skipped: entrypoint.access_hints_skipped.clone(),
+                triggers: entrypoint.triggers.clone(),
+                entry_pc: 0,
+            }],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        let mut artifact = metadata.encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let verified =
+            ivm::verify_contract_artifact(&artifact).expect("valid pool contract artifact");
+        (artifact, verified.manifest)
+    }
+
     fn payout_binding(
         user: &AccountId,
         fee_asset: &AssetDefinitionId,
@@ -55264,19 +55551,20 @@ mod validation_fee_torii_ingress_tests {
         ValidationFeeTreasuryPayoutBindingV1 {
             treasury_account_id: contract_address.subject_id(),
             contract_address,
-            code_hash: <[u8; 32]>::from(sha2::Sha256::digest(contract_artifact)),
+            code_hash: <[u8; 32]>::from(Sha256::digest(contract_artifact)),
             entrypoint: "autonomous_validation_fee_tick"
                 .parse()
                 .expect("payout entrypoint"),
             sbd_asset_id: fee_asset.clone(),
             xor_asset_id: xor_asset_definition_id(),
-            pool_vault_account_id: account(20, "derive validation-fee pool vault").0,
+            pool_vault_account_id: payout_pool_vault_account(),
             batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
             min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
             max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
-            recipients: (21..=24)
-                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
-                    account_id: account(seed, "derive validation-fee payout recipient").0,
+            recipients: payout_recipient_accounts()
+                .into_iter()
+                .map(|account_id| ValidationFeeTreasuryPayoutRecipientV1 {
+                    account_id,
                     share: iroha_data_model::validation_fee::validation_fee_payout_recipient_share(
                     ),
                 })
@@ -55310,11 +55598,14 @@ mod validation_fee_torii_ingress_tests {
             Account::new(user.clone()).build(user),
             Account::new(recipient.clone()).build(user),
             Account::new(treasury.clone()).build(user),
-            Account::new(account(20, "derive validation-fee pool vault").0).build(user),
+            Account::new(payout_pool_vault_account()).build(user),
+            Account::new(account(4, "derive validation-fee multisig account").0).build(user),
         ];
-        accounts.extend((21..=24).map(|seed| {
-            Account::new(account(seed, "derive validation-fee payout recipient").0).build(user)
-        }));
+        accounts.extend(
+            payout_recipient_accounts()
+                .into_iter()
+                .map(|account_id| Account::new(account_id).build(user)),
+        );
         World::with_assets(
             [domain],
             accounts,
@@ -55410,7 +55701,10 @@ mod validation_fee_torii_ingress_tests {
         genesis_hash: [u8; 32],
     ) -> ValidationFeePolicyV1 {
         let payout_binding = payout_binding(user, &fee_asset);
-        assert_eq!(treasury, payout_binding.treasury_account_id);
+        assert_eq!(
+            treasury, payout_binding.treasury_account_id,
+            "policy treasury must be the immutable payout contract subject"
+        );
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             chain_id: state.chain_id.clone(),
@@ -55502,26 +55796,32 @@ mod validation_fee_torii_ingress_tests {
             eligibility_rule:
                 ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
         };
+        assert_eq!(
+            plain_electorate_rules.invariant_error(),
+            None,
+            "Torii validation-fee fixture must retain an enactable PLAIN electorate contract"
+        );
+
         let payout_binding = policy
             .treasury_payout_binding
             .clone()
-            .expect("enabled validation-fee fixture policy carries a payout binding");
-        let lifecycle_kind =
+            .expect("enabled validation-fee fixture must carry its payout binding");
+        let payout_lifecycle_kind =
             ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
                 payout_binding: payout_binding.clone(),
                 plain_electorate_rules: plain_electorate_rules.clone(),
             });
-        let lifecycle_id = lifecycle_kind.fingerprint();
-        let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        let payout_lifecycle_id = payout_lifecycle_kind.fingerprint();
+        let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
             policy: policy.clone(),
-            payout_lifecycle_proposal_id: Some(lifecycle_id),
+            payout_lifecycle_proposal_id: Some(payout_lifecycle_id),
             plain_electorate_rules: plain_electorate_rules.clone(),
         });
-        let proposal_id = kind.fingerprint();
+        let policy_proposal_id = policy_kind.fingerprint();
         let approval_gate_height = TEST_REFERENDUM_START_HEIGHT - 1;
-        let electorate_for = |id| {
+        let electorate_for = |proposal_id| {
             let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
-                id,
+                proposal_id,
                 authority.clone(),
                 TEST_REFERENDUM_START_HEIGHT,
                 approval_gate_height,
@@ -55533,52 +55833,66 @@ mod validation_fee_torii_ingress_tests {
             )
             .expect("canonical validation-fee Torii PLAIN electorate snapshot");
             assert_eq!(
-                electorate.context_error(id, authority, &plain_electorate_rules),
+                electorate.context_error(proposal_id, authority, &plain_electorate_rules),
                 None
             );
             electorate
         };
-        let authorization_for = |id, electorate: &ValidationFeePlainElectorateSnapshotV1| {
-            ValidationFeeParliamentAuthorizationV1 {
-                proposal_id: id,
-                proposal_fingerprint: id,
-                proposal_time_roster_root: roster_root,
-                plain_electorate_snapshot_root: electorate.roster_root,
-                plain_electorate_snapshot_member_count: electorate.member_count,
-                plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
-                plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
-                referendum_window: ValidationFeeGovernanceWindowV1 {
-                    lower: TEST_REFERENDUM_START_HEIGHT,
-                    upper: TEST_REFERENDUM_END_HEIGHT,
-                },
-                finalization: ValidationFeeFinalizationEvidenceV1 {
-                    referendum_id: id,
-                    finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
-                    mode: ValidationFeeGovernanceVotingModeV1::Plain,
-                    approve: 1,
-                    reject: 0,
-                    abstain: 0,
-                    min_turnout: 1,
-                    approval_threshold_numerator: 1,
-                    approval_threshold_denominator: 2,
-                    approved: true,
-                },
-                enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
-            }
-        };
-        let lifecycle_electorate = electorate_for(lifecycle_id);
-        let lifecycle_authorization = authorization_for(lifecycle_id, &lifecycle_electorate);
-        let electorate = electorate_for(proposal_id);
-        let authorization = authorization_for(proposal_id, &electorate);
+        let payout_lifecycle_electorate = electorate_for(payout_lifecycle_id);
+        let policy_electorate = electorate_for(policy_proposal_id);
+        let authorization_for =
+            |proposal_id, electorate: &ValidationFeePlainElectorateSnapshotV1| {
+                ValidationFeeParliamentAuthorizationV1 {
+                    proposal_id,
+                    proposal_fingerprint: proposal_id,
+                    proposal_time_roster_root: roster_root,
+                    plain_electorate_snapshot_root: electorate.roster_root,
+                    plain_electorate_snapshot_member_count: electorate.member_count,
+                    plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
+                    plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
+                    referendum_window: ValidationFeeGovernanceWindowV1 {
+                        lower: TEST_REFERENDUM_START_HEIGHT,
+                        upper: TEST_REFERENDUM_END_HEIGHT,
+                    },
+                    finalization: ValidationFeeFinalizationEvidenceV1 {
+                        referendum_id: proposal_id,
+                        finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
+                        mode: ValidationFeeGovernanceVotingModeV1::Plain,
+                        approve: 1,
+                        reject: 0,
+                        abstain: 0,
+                        min_turnout: plain_electorate_rules.min_turnout,
+                        approval_threshold_numerator: plain_electorate_rules
+                            .approval_threshold_numerator,
+                        approval_threshold_denominator: plain_electorate_rules
+                            .approval_threshold_denominator,
+                        approved: true,
+                    },
+                    enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
+                }
+            };
+        let payout_lifecycle_authorization =
+            authorization_for(payout_lifecycle_id, &payout_lifecycle_electorate);
+        let policy_authorization = authorization_for(policy_proposal_id, &policy_electorate);
+        assert_eq!(
+            payout_lifecycle_authorization.invariant_error(),
+            None,
+            "payout lifecycle fixture must retain canonical Parliament authorization"
+        );
+        assert_eq!(
+            policy_authorization.invariant_error(),
+            None,
+            "policy fixture must retain canonical Parliament authorization"
+        );
         let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
             policy,
             plain_electorate_rules.clone(),
-            authorization.clone(),
+            policy_authorization,
             Some(ValidationFeePayoutLifecycleReferenceV1 {
                 lifecycle_seal: payout_binding
                     .lifecycle_seal()
                     .expect("derive payout lifecycle seal"),
-                parliament_authorization: lifecycle_authorization.clone(),
+                parliament_authorization: payout_lifecycle_authorization,
                 plain_electorate_rules: plain_electorate_rules.clone(),
             }),
         )
@@ -55586,11 +55900,26 @@ mod validation_fee_torii_ingress_tests {
         let registry = ValidationFeePolicyRegistryV1 {
             registered_policies: vec![entry],
         };
+        registry
+            .validate()
+            .expect("Torii validation-fee fixture registry must validate before persistence");
+        let custom_registry = registry.clone().into_custom_parameter();
+        let decoded_registry =
+            ValidationFeePolicyRegistryV1::from_custom_parameter(&custom_registry)
+                .expect("Torii validation-fee fixture registry must decode after persistence");
+        assert_eq!(
+            decoded_registry, registry,
+            "Torii validation-fee fixture registry must survive exact custom-parameter roundtrip"
+        );
+        decoded_registry
+            .validate()
+            .expect("roundtripped Torii validation-fee fixture registry must validate");
         let mut block = state.block(block_header(
             TEST_POLICY_ENACTMENT_HEIGHT,
             1_700_000_001_000,
         ));
         let mut stx = block.transaction();
+
         let register_permission: iroha_data_model::permission::Permission =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
                 .into();
@@ -55616,22 +55945,47 @@ mod validation_fee_torii_ingress_tests {
             registered_code_hash,
             &mut stx,
         )
-        .expect("activate payout-contract subject");
+        .expect("activate immutable payout-contract subject");
+        let (pool_artifact, pool_manifest) = pool_contract_artifact();
+        let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
+            authority,
+            pool_artifact,
+            &mut stx,
+        )
+        .expect("register pool-contract bytes");
+        iroha_core::smartcontracts::code::register_manifest(
+            authority,
+            pool_manifest.signed(authority_key_pair),
+            &mut stx,
+        )
+        .expect("register signed pool-contract manifest");
+        iroha_core::smartcontracts::code::activate_instance(
+            authority,
+            pool_contract_address(),
+            pool_code_hash,
+            &mut stx,
+        )
+        .expect("activate protected pool-contract subject");
 
-        for (id, exact_kind, exact_authorization, exact_electorate) in [
+        for (proposal_id, kind, authorization, electorate) in [
             (
-                lifecycle_id,
-                lifecycle_kind,
-                lifecycle_authorization,
-                lifecycle_electorate,
+                payout_lifecycle_id,
+                payout_lifecycle_kind,
+                payout_lifecycle_authorization,
+                payout_lifecycle_electorate,
             ),
-            (proposal_id, kind, authorization, electorate),
+            (
+                policy_proposal_id,
+                policy_kind,
+                policy_authorization,
+                policy_electorate,
+            ),
         ] {
             stx.world.governance_proposals_mut().insert(
-                id,
+                proposal_id,
                 iroha_core::state::GovernanceProposalRecord {
                     proposer: authority.clone(),
-                    kind: exact_kind,
+                    kind,
                     created_height: TEST_REFERENDUM_START_HEIGHT,
                     status: iroha_core::state::GovernanceProposalStatus::Enacted,
                     pipeline: iroha_core::state::GovernancePipeline::default(),
@@ -55642,31 +55996,31 @@ mod validation_fee_torii_ingress_tests {
                         bodies: bodies.clone(),
                     }),
                     finalization_evidence: Some(GovernanceFinalizationEvidence {
-                        proposal_id: id,
-                        referendum_id: id,
-                        finalized_at_height: exact_authorization.finalization.finalized_at_height,
+                        proposal_id,
+                        referendum_id: authorization.finalization.referendum_id,
+                        finalized_at_height: authorization.finalization.finalized_at_height,
                         mode: VotingMode::Plain,
-                        approve: exact_authorization.finalization.approve,
-                        reject: exact_authorization.finalization.reject,
-                        abstain: exact_authorization.finalization.abstain,
-                        min_turnout: exact_authorization.finalization.min_turnout,
-                        approval_threshold_numerator: exact_authorization
+                        approve: authorization.finalization.approve,
+                        reject: authorization.finalization.reject,
+                        abstain: authorization.finalization.abstain,
+                        min_turnout: authorization.finalization.min_turnout,
+                        approval_threshold_numerator: authorization
                             .finalization
                             .approval_threshold_numerator,
-                        approval_threshold_denominator: exact_authorization
+                        approval_threshold_denominator: authorization
                             .finalization
                             .approval_threshold_denominator,
-                        approved: exact_authorization.finalization.approved,
+                        approved: authorization.finalization.approved,
                     }),
-                    enacted_at_height: Some(TEST_POLICY_ENACTMENT_HEIGHT),
+                    enacted_at_height: Some(authorization.enacted_at_height),
                 },
             );
-            let referendum_id = hex::encode(id);
+            let referendum_id = hex::encode(proposal_id);
             stx.world.governance_referenda_mut().insert(
                 referendum_id.clone(),
                 iroha_core::state::GovernanceReferendumRecord {
-                    h_start: TEST_REFERENDUM_START_HEIGHT,
-                    h_end: TEST_REFERENDUM_END_HEIGHT,
+                    h_start: authorization.referendum_window.lower,
+                    h_end: authorization.referendum_window.upper,
                     status: iroha_core::state::GovernanceReferendumStatus::Closed,
                     mode: iroha_core::state::GovernanceReferendumMode::Plain,
                 },
@@ -55685,8 +56039,8 @@ mod validation_fee_torii_ingress_tests {
                     .ensure_stage(body, 1, 1, 10_000)
                     .record(authority.clone());
             }
-            approvals.approval_gate_height = Some(approval_gate_height);
-            approvals.validation_fee_plain_electorate_snapshot = Some(exact_electorate);
+            approvals.approval_gate_height = Some(electorate.approval_gate_height);
+            approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
             stx.world
                 .governance_stage_approvals_mut()
                 .insert(referendum_id, approvals);
@@ -55694,7 +56048,7 @@ mod validation_fee_torii_ingress_tests {
         stx.world
             .parameters_mut_for_testing()
             .get_mut()
-            .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
+            .set_parameter(Parameter::Custom(custom_registry));
         stx.apply();
         block.commit().expect("commit validation-fee policy");
     }
@@ -55889,8 +56243,11 @@ mod validation_fee_torii_ingress_tests {
             &missing_fee_queue,
             TEST_ACTIVE_VALIDATION_HEIGHT,
         );
+        let expected_missing_fee = format!(
+            "missing validation-fee transfer of {TEST_VALIDATION_FEE_MINOR_UNITS} minor units"
+        );
         assert!(
-            missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
+            missing_fee_error.contains(&expected_missing_fee),
             "unexpected missing-fee rejection: {missing_fee_error}"
         );
 
@@ -56062,9 +56419,9 @@ mod validation_fee_torii_ingress_tests {
     }
 
     #[tokio::test]
-    async fn public_transaction_handler_fails_closed_without_synced_transport() {
+    async fn public_transaction_handler_requires_authoritative_queue_plan_transport() {
         let (app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
-        let transaction = signed_transfer(
+        let exact_fee_tx = signed_transfer(
             &app.state,
             &user,
             &user_key_pair,
@@ -56073,7 +56430,7 @@ mod validation_fee_torii_ingress_tests {
             &policy,
             true,
         );
-        let response = submit_via_public_transaction_handler(Arc::clone(&app), transaction).await;
+        let response = submit_via_public_transaction_handler(Arc::clone(&app), exact_fee_tx).await;
         assert_eq!(
             response.status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE
@@ -56081,7 +56438,7 @@ mod validation_fee_torii_ingress_tests {
         assert_eq!(
             app.queue.active_len(),
             0,
-            "a transaction without durable globally synchronized admission must not enter the queue"
+            "stateless admission must not enqueue before authenticated durable QueuePlan admission"
         );
         #[cfg(any(feature = "p2p_ws", feature = "connect"))]
         let expected_reject_code = "route_unavailable";
@@ -56120,8 +56477,11 @@ mod validation_fee_torii_ingress_tests {
             &missing_fee_app.queue,
             TEST_ACTIVE_VALIDATION_HEIGHT,
         );
+        let expected_missing_fee = format!(
+            "missing validation-fee transfer of {TEST_VALIDATION_FEE_MINOR_UNITS} minor units"
+        );
         assert!(
-            missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
+            missing_fee_error.contains(&expected_missing_fee),
             "unexpected missing-fee rejection: {missing_fee_error}"
         );
 
@@ -56173,8 +56533,11 @@ mod validation_fee_torii_ingress_tests {
             &missing_fee_app.queue,
             TEST_ACTIVE_VALIDATION_HEIGHT,
         );
+        let expected_missing_fee = format!(
+            "missing validation-fee transfer of {TEST_VALIDATION_FEE_MINOR_UNITS} minor units"
+        );
         assert!(
-            missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
+            missing_fee_error.contains(&expected_missing_fee),
             "unexpected missing-fee rejection: {missing_fee_error}"
         );
 
@@ -82026,6 +82389,19 @@ mod tests {
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].challenge_id, challenge_a.challenge_id);
 
+        let oversized_status_query = PorStatusQueryDto {
+            manifest: None,
+            provider: None,
+            epoch: None,
+            status: None,
+            limit: Some(POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 + 1),
+            page_token: None,
+        };
+        assert!(
+            super::handle_get_sorafs_por_status(coordinator.clone(), oversized_status_query)
+                .is_err()
+        );
+
         let export = super::handle_get_sorafs_por_export(
             coordinator.clone(),
             PorExportQueryDto {
@@ -82036,6 +82412,20 @@ mod tests {
         .expect("export handler responds");
         assert_eq!(export.statuses.len(), 1);
         assert_eq!(export.statuses[0].challenge_id, challenge_a.challenge_id);
+
+        let invalid_report_response = super::handle_get_sorafs_por_report(
+            coordinator.clone(),
+            PorReportIsoWeek {
+                year: 9999,
+                week: 52,
+            },
+        )
+        .expect_err("an ISO week whose end is not representable must be rejected")
+        .into_response();
+        assert_eq!(
+            invalid_report_response.status(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
 
         let report = super::handle_get_sorafs_por_report(
             coordinator.clone(),

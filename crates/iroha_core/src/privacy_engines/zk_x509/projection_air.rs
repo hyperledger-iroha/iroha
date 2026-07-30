@@ -3404,10 +3404,10 @@ pub(crate) mod tests {
             ca_membership_root: PrivacyRootV1::new(raw(13)),
             ca_membership_root_epoch: 1,
             key_usage: PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: false,
-                key_encipherment: false,
-                key_agreement: false,
+                digital_signature: true.into(),
+                content_commitment: false.into(),
+                key_encipherment: false.into(),
+                key_agreement: false.into(),
             },
             extended_key_usages: vec![
                 PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,

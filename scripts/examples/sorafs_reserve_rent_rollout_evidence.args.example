@@ -17,3 +17,4 @@ policy_config,quote_matrix,ledger_digest,lifecycle_service,signed_routes,reserve
 1500
 --max-bake-age-secs
 1209600
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

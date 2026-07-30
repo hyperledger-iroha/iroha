@@ -631,15 +631,12 @@ impl TransportPolicy {
         }
     }
 
-    /// Parse a [`TransportPolicy`] from a textual label (accepts dash or underscore separators).
+    /// Parse a [`TransportPolicy`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
-        let normalised = label.trim().to_ascii_lowercase();
-        match normalised.as_str() {
-            "soranet_first" | "soranet-first" => Some(Self::SoranetPreferred),
-            "soranet_strict" | "soranet-strict" | "soranet_only" | "soranet-only" => {
-                Some(Self::SoranetStrict)
-            }
-            "direct_only" | "direct-only" => Some(Self::DirectOnly),
+        match label {
+            "soranet-first" => Some(Self::SoranetPreferred),
+            "soranet-strict" => Some(Self::SoranetStrict),
+            "direct-only" => Some(Self::DirectOnly),
             _ => None,
         }
     }
@@ -667,16 +664,12 @@ impl AnonymityPolicy {
         }
     }
 
-    /// Parse an [`AnonymityPolicy`] from a textual representation.
+    /// Parse an [`AnonymityPolicy`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
-        let normalised = label.trim().to_ascii_lowercase();
-        match normalised.as_str() {
-            "anon_guard_pq" | "anon-guard-pq" => Some(Self::GuardPq),
-            "stage_a" | "stage-a" | "stagea" => Some(Self::GuardPq),
-            "anon_majority_pq" | "anon-majority-pq" => Some(Self::MajorityPq),
-            "stage_b" | "stage-b" | "stageb" => Some(Self::MajorityPq),
-            "anon_strict_pq" | "anon-strict-pq" => Some(Self::StrictPq),
-            "stage_c" | "stage-c" | "stagec" => Some(Self::StrictPq),
+        match label {
+            "anon-guard-pq" => Some(Self::GuardPq),
+            "anon-majority-pq" => Some(Self::MajorityPq),
+            "anon-strict-pq" => Some(Self::StrictPq),
             _ => None,
         }
     }
@@ -715,13 +708,12 @@ impl RolloutPhase {
         }
     }
 
-    /// Parse a rollout phase from a textual label (accepts stage aliases).
+    /// Parse a rollout phase from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
-        let normalised = label.trim().to_ascii_lowercase();
-        match normalised.as_str() {
-            "canary" | "stage_a" | "stage-a" | "stagea" => Some(Self::Canary),
-            "ramp" | "stage_b" | "stage-b" | "stageb" => Some(Self::Ramp),
-            "default" | "ga" | "stage_c" | "stage-c" | "stagec" => Some(Self::Default),
+        match label {
+            "canary" => Some(Self::Canary),
+            "ramp" => Some(Self::Ramp),
+            "default" => Some(Self::Default),
             _ => None,
         }
     }
@@ -748,21 +740,20 @@ pub enum WriteModeHint {
 }
 
 impl WriteModeHint {
-    /// Stable string label used in logs and metrics.
+    /// Stable canonical V1 label used in JSON, logs, and metrics.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::ReadOnly => "read_only",
-            Self::UploadPqOnly => "upload_pq_only",
+            Self::ReadOnly => "read-only",
+            Self::UploadPqOnly => "upload-pq-only",
         }
     }
 
-    /// Parse a [`WriteModeHint`] from a textual label.
+    /// Parse a [`WriteModeHint`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
-        let normalised = label.trim().to_ascii_lowercase();
-        match normalised.as_str() {
-            "read_only" | "read-only" => Some(Self::ReadOnly),
-            "upload_pq_only" | "upload-pq-only" => Some(Self::UploadPqOnly),
+        match label {
+            "read-only" => Some(Self::ReadOnly),
+            "upload-pq-only" => Some(Self::UploadPqOnly),
             _ => None,
         }
     }
@@ -1591,9 +1582,7 @@ pub mod bindings {
                 ConfigJsonError::new("rollout_phase must be a string when present")
             })?;
             let phase = RolloutPhase::parse(label).ok_or_else(|| {
-                ConfigJsonError::new(
-                    "rollout_phase must be one of canary|ramp|default|stage_a|stage-a|stagea|stage_b|stage-b|stageb|stage_c|stage-c|stagec|ga",
-                )
+                ConfigJsonError::new("rollout_phase must be one of canary|ramp|default")
             })?;
             config.rollout_phase = phase;
             if config.anonymity_policy_override.is_none() {
@@ -1607,7 +1596,7 @@ pub mod bindings {
             })?;
             let policy = AnonymityPolicy::parse(label).ok_or_else(|| {
                 ConfigJsonError::new(
-                    "anonymity_policy_override must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq or stage_a|stage_b|stage_c aliases",
+                    "anonymity_policy_override must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq",
                 )
             })?;
             config.anonymity_policy = policy;
@@ -1620,7 +1609,7 @@ pub mod bindings {
             })?;
             let policy = AnonymityPolicy::parse(label).ok_or_else(|| {
                 ConfigJsonError::new(
-                    "anonymity_policy must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq or stage_a|stage_b|stage_c aliases",
+                    "anonymity_policy must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq",
                 )
             })?;
             config.anonymity_policy = policy;
@@ -1633,7 +1622,7 @@ pub mod bindings {
             })?;
             config.transport_policy = TransportPolicy::parse(label).ok_or_else(|| {
                 ConfigJsonError::new(
-                    "transport_policy must be one of soranet_first|soranet-first|soranet_strict|soranet-strict|soranet_only|soranet-only|direct_only|direct-only",
+                    "transport_policy must be one of soranet-first|soranet-strict|direct-only",
                 )
             })?;
         }
@@ -1650,10 +1639,9 @@ pub mod bindings {
                     let label = label.as_str().ok_or_else(|| {
                         ConfigJsonError::new("policy_override.transport_policy must be a string")
                     })?;
-                    let normalized = label.trim().to_ascii_lowercase().replace('-', "_");
-                    let policy = TransportPolicy::parse(&normalized).ok_or_else(|| {
+                    let policy = TransportPolicy::parse(label).ok_or_else(|| {
                         ConfigJsonError::new(
-                            "policy_override.transport_policy must be one of soranet_first|soranet-first|soranet_strict|soranet-strict|soranet_only|soranet-only|direct_only|direct-only",
+                            "policy_override.transport_policy must be one of soranet-first|soranet-strict|direct-only",
                         )
                     })?;
                     overrides.transport_policy = Some(policy);
@@ -1664,7 +1652,7 @@ pub mod bindings {
                     })?;
                     let policy = AnonymityPolicy::parse(label).ok_or_else(|| {
                         ConfigJsonError::new(
-                            "policy_override.anonymity_policy must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq or stage_a|stage_b|stage_c aliases",
+                            "policy_override.anonymity_policy must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq",
                         )
                     })?;
                     overrides.anonymity_policy = Some(policy);
@@ -2152,9 +2140,7 @@ pub mod bindings {
                 .as_str()
                 .ok_or_else(|| ConfigJsonError::new("write_mode must be a string when present"))?;
             config.write_mode = WriteModeHint::parse(label).ok_or_else(|| {
-                ConfigJsonError::new(
-                    "write_mode must be one of read_only|read-only|upload_pq_only|upload-pq-only",
-                )
+                ConfigJsonError::new("write_mode must be one of read-only|upload-pq-only")
             })?;
         }
 
@@ -7464,21 +7450,182 @@ mod tests {
     }
 
     #[test]
-    fn anonymity_policy_parses_stage_aliases() {
+    fn policy_parsers_accept_only_exact_v1_labels() {
         assert_eq!(
-            AnonymityPolicy::parse("stage-a"),
+            TransportPolicy::parse("soranet-first"),
+            Some(TransportPolicy::SoranetPreferred)
+        );
+        assert_eq!(
+            TransportPolicy::parse("soranet-strict"),
+            Some(TransportPolicy::SoranetStrict)
+        );
+        assert_eq!(
+            TransportPolicy::parse("direct-only"),
+            Some(TransportPolicy::DirectOnly)
+        );
+        assert_eq!(
+            AnonymityPolicy::parse("anon-guard-pq"),
             Some(AnonymityPolicy::GuardPq)
         );
         assert_eq!(
-            AnonymityPolicy::parse("stage_b"),
+            AnonymityPolicy::parse("anon-majority-pq"),
             Some(AnonymityPolicy::MajorityPq)
         );
         assert_eq!(
-            AnonymityPolicy::parse("stageC"),
+            AnonymityPolicy::parse("anon-strict-pq"),
             Some(AnonymityPolicy::StrictPq)
         );
-        assert_eq!(AnonymityPolicy::parse("anon-unknown"), None);
-        assert_eq!(AnonymityPolicy::parse("stage_0"), None);
+        assert_eq!(RolloutPhase::parse("canary"), Some(RolloutPhase::Canary));
+        assert_eq!(RolloutPhase::parse("ramp"), Some(RolloutPhase::Ramp));
+        assert_eq!(RolloutPhase::parse("default"), Some(RolloutPhase::Default));
+        assert_eq!(
+            WriteModeHint::parse("read-only"),
+            Some(WriteModeHint::ReadOnly)
+        );
+        assert_eq!(
+            WriteModeHint::parse("upload-pq-only"),
+            Some(WriteModeHint::UploadPqOnly)
+        );
+
+        for alias in [
+            "soranet_first",
+            "soranet_strict",
+            "soranet_only",
+            "soranet-only",
+            "direct_only",
+            "SORANET-FIRST",
+            "Soranet-Strict",
+            "DIRECT-ONLY",
+            " soranet-first",
+            "soranet-first ",
+            "",
+            "unknown",
+        ] {
+            assert_eq!(
+                TransportPolicy::parse(alias),
+                None,
+                "accepted transport alias {alias:?}"
+            );
+        }
+        for alias in [
+            "anon_guard_pq",
+            "anon_majority_pq",
+            "anon_strict_pq",
+            "stage_a",
+            "stage-a",
+            "stagea",
+            "stage_b",
+            "stage-b",
+            "stageb",
+            "stage_c",
+            "stage-c",
+            "stagec",
+            "ANON-GUARD-PQ",
+            "Anon-Majority-Pq",
+            "ANON-STRICT-PQ",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+            "",
+            "anon-unknown",
+        ] {
+            assert_eq!(
+                AnonymityPolicy::parse(alias),
+                None,
+                "accepted anonymity alias {alias:?}"
+            );
+        }
+        for alias in [
+            "stage_a", "stage-a", "stagea", "stage_b", "stage-b", "stageb", "stage_c", "stage-c",
+            "stagec", "ga", "CANARY", "Ramp", "DEFAULT", " canary", "canary ", "", "unknown",
+        ] {
+            assert_eq!(
+                RolloutPhase::parse(alias),
+                None,
+                "accepted rollout alias {alias:?}"
+            );
+        }
+        for alias in [
+            "read_only",
+            "upload_pq_only",
+            "READ-ONLY",
+            "Upload-Pq-Only",
+            " read-only",
+            "read-only ",
+            "",
+            "unknown",
+        ] {
+            assert_eq!(
+                WriteModeHint::parse(alias),
+                None,
+                "accepted write-mode alias {alias:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_json_policy_override_accepts_only_exact_v1_labels() {
+        let canonical = norito::json!({
+            "policy_override": {
+                "transport_policy": "direct-only",
+                "anonymity_policy": "anon-strict-pq",
+            },
+            "write_mode": "upload-pq-only",
+        });
+        let parsed = config_from_json(&canonical).expect("parse exact V1 policy labels");
+        assert_eq!(
+            parsed.policy_override.transport_policy,
+            Some(TransportPolicy::DirectOnly)
+        );
+        assert_eq!(
+            parsed.policy_override.anonymity_policy,
+            Some(AnonymityPolicy::StrictPq)
+        );
+        assert_eq!(parsed.write_mode, WriteModeHint::UploadPqOnly);
+
+        for alias in [
+            "soranet_first",
+            "Soranet_Strict",
+            "soranet-only",
+            " direct-only",
+            "direct-only ",
+        ] {
+            let value = norito::json!({
+                "policy_override": {
+                    "transport_policy": alias,
+                },
+            });
+            let error = config_from_json(&value)
+                .err()
+                .expect("nested transport aliases must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("policy_override.transport_policy must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
+        for alias in [
+            "anon_guard_pq",
+            "stage-a",
+            "ANON-STRICT-PQ",
+            " anon-majority-pq",
+            "anon-majority-pq ",
+        ] {
+            let value = norito::json!({
+                "policy_override": {
+                    "anonymity_policy": alias,
+                },
+            });
+            let error = config_from_json(&value)
+                .err()
+                .expect("nested anonymity aliases must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("policy_override.anonymity_policy must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
     }
 
     #[test]

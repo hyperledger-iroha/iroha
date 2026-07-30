@@ -345,8 +345,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     private func requireEd25519Encoder() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
     }
 
     private func normalizeNativeSignedTransaction(
@@ -1312,8 +1314,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testBuildRegisterZkAssetProducesEnvelope() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
         let keypair = try makeFixtureKeypair()
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -1325,8 +1329,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testBuildClaimIdentifierProducesEnvelope() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
         let keypair = try makeFixtureKeypair()
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -1565,8 +1571,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testSetMetadataMatchesNativeBridge() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -1606,8 +1614,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testClaimIdentifierMatchesNativeBridge() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -1640,8 +1650,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testGovernanceProposeDeployMatchesNativeBridge() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -1688,8 +1700,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testPersistCouncilMatchesNativeBridge() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -1761,9 +1775,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testDecodeSignedTransactionJSONWhenAvailable() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "NoritoBridge native encoder not linked"
+        )
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -1786,9 +1801,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testDecodeSignedTransactionJSONIncludesSponsorProgramIntent() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "NoritoBridge native encoder not linked"
+        )
 
         let keypair = try Keypair.generate()
         let sponsorKeypair = try Keypair.generate()
@@ -1848,8 +1864,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testSetMetadataNativeBridgeWhenAvailable() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -1869,8 +1887,10 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testProposeDeployNativeBridgeWhenAvailable() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)

@@ -21,7 +21,7 @@ privacy_min_contributors = 5
 
 [orchestrator]
 telemetry_region = "testnet-t0"
-transport_policy = "soranet_first"
+transport_policy = "soranet-first"
 anonymity_policy = "anon-guard-pq"
 max_providers = 8
 

@@ -1,5 +1,7 @@
 import com.android.build.api.artifact.SingleArtifact
 import groovy.json.JsonSlurper
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.OutputDirectory
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.io.File
 import java.io.FileInputStream
@@ -8,6 +10,7 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
@@ -240,6 +243,26 @@ val artifactFiles = listOf(
     "step-ep.verifying-key.krv4",
     "step-ep.bootstrap-witness.krv4",
 )
+val maxCandidateLabApkBytes = 64L * 1024 * 1024
+
+fun File.requireSmallArtifactFreeApk(label: String): File {
+    requireRegularFile(label)
+    if (length() <= 0L || length() > maxCandidateLabApkBytes) {
+        throw GradleException("$label must remain within the 64 MiB installation corridor: $this")
+    }
+    ZipFile(this).use { archive ->
+        val entries = archive.entries()
+        while (entries.hasMoreElements()) {
+            val name = entries.nextElement().name
+            val baseName = name.substringAfterLast('/').substringAfterLast('\\')
+            if (baseName in artifactFiles) {
+                throw GradleException("$label embeds forbidden external KRV4 artifact $name")
+            }
+        }
+    }
+    return this
+}
+
 val scenarioFiles = listOf(
     "init-top-up-anchor-v4.norito",
     "init-top-up-finality-proof-v2.norito",
@@ -432,7 +455,12 @@ val stagedTestApkName =
 // Maven repository.
 layout.buildDirectory.set(evidenceRoot.resolve("gradle/kagemusha-candidate-evidence-lab"))
 
-val prepareCandidateLabAssets by tasks.registering(Sync::class) {
+abstract class CandidateLabSync : Sync() {
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+}
+
+val prepareCandidateLabAssets = tasks.register<CandidateLabSync>("prepareCandidateLabAssets") {
     from(candidateStageManifest) {
         into("stage")
     }
@@ -444,23 +472,21 @@ val prepareCandidateLabAssets by tasks.registering(Sync::class) {
             "candidate-validation-v1.json",
         )
     }
-    from(evidenceRoot.resolve("evidence/candidate/artifacts")) {
-        into("artifacts")
-        include(artifactFiles)
-    }
     from(evidenceRoot.resolve("scenario")) {
         into("scenario")
         include(scenarioFiles)
     }
-    into(generatedAssets)
+    outputDirectory.set(generatedAssets)
+    into(outputDirectory)
     includeEmptyDirs = false
 }
 
-val prepareCandidateLabNative by tasks.registering(Sync::class) {
+val prepareCandidateLabNative = tasks.register<CandidateLabSync>("prepareCandidateLabNative") {
     from(nativeLibrary) {
         rename { "libconnect_norito_bridge_candidate_lab.so" }
     }
-    into(generatedJni.map { it.dir("arm64-v8a") })
+    outputDirectory.set(generatedJni)
+    into(outputDirectory.dir("arm64-v8a"))
     doFirst {
         if (!nativeLibrary.containsAscii(candidateLabMarker) ||
             !nativeLibrary.containsAscii(
@@ -513,13 +539,6 @@ android {
         buildConfig = true
     }
 
-    sourceSets {
-        getByName("main") {
-            assets.srcDir(generatedAssets)
-            jniLibs.srcDir(generatedJni)
-        }
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
@@ -543,11 +562,27 @@ androidComponents {
         variant.enable = false
     }
     onVariants(selector().withBuildType("debug")) { variant ->
+        requireNotNull(variant.sources.assets) {
+            "AGP did not expose assets sources for ${variant.name}"
+        }.addGeneratedSourceDirectory(
+            prepareCandidateLabAssets,
+            CandidateLabSync::outputDirectory,
+        )
+        requireNotNull(variant.sources.jniLibs) {
+            "AGP did not expose jniLibs sources for ${variant.name}"
+        }.addGeneratedSourceDirectory(
+            prepareCandidateLabNative,
+            CandidateLabSync::outputDirectory,
+        )
         tasks.register<Copy>("stageCandidateLabApk") {
             from(variant.artifacts.get(SingleArtifact.APK))
             include("*.apk")
             into(evidenceRoot.resolve("evidence"))
             rename { stagedApkName }
+            doLast {
+                evidenceRoot.resolve("evidence/$stagedApkName")
+                    .requireSmallArtifactFreeApk("candidate lab main APK")
+            }
         }
     }
 }
@@ -571,6 +606,10 @@ tasks.register<Copy>("stageCandidateLabTestApk") {
             )
         }
     }
+    doLast {
+        evidenceRoot.resolve("evidence/$stagedTestApkName")
+            .requireSmallArtifactFreeApk("candidate lab androidTest APK")
+    }
 }
 
 tasks.configureEach {
@@ -580,6 +619,7 @@ tasks.configureEach {
 }
 
 dependencies {
+    androidTestImplementation(project(":core-jvm"))
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

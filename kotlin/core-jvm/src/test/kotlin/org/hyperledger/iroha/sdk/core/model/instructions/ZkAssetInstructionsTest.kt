@@ -5,10 +5,12 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
 import org.hyperledger.iroha.sdk.core.model.FeeChargeLimit
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.crypto.NativeSignedTransaction
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
@@ -134,19 +136,27 @@ class ZkAssetInstructionsTest {
 
     @Test
     fun proofAttachmentValidatesBackendAndJsonShape() {
+        val proofBytes = byteArrayOf(0x40, 0x41)
         val attachment = ProofAttachment(
             backend = "halo2/ipa",
-            proofBytes = byteArrayOf(0x40, 0x41),
+            proofBytes = proofBytes,
             verifyingKeyRef = ProofVerifierKeyRef("halo2/ipa", "unshield-v3"),
             verifyingKeyCommitment = fill(0x55, 32),
-            envelopeHash = fill(0x66, 32),
+            envelopeHash = IrohaHash.prehash(proofBytes),
         )
 
         val json = attachment.toNativeJson()
         assert(json.contains("\"backend\":\"halo2/ipa\""))
         assert(json.contains("\"proof_b64\":\"QEE=\""))
         assert(json.contains("\"vk_ref\":{\"backend\":\"halo2/ipa\",\"name\":\"unshield-v3\"}"))
+        assert(json.contains("\"envelope_hash_hex\":\"99108c58a4d312fe46d8e0d5d36340d62413cd2ffb4b1c4ec8d78ea40b8679a1\""))
         assertFalse(json.contains("vk_inline"))
+        val derivedEnvelopeJson = ProofAttachment(
+            backend = "halo2/ipa",
+            proofBytes = proofBytes,
+            verifyingKeyRef = ProofVerifierKeyRef("halo2/ipa", "unshield-v3"),
+        ).toNativeJson()
+        assert(derivedEnvelopeJson.contains("\"envelope_hash_hex\":\"99108c58a4d312fe46d8e0d5d36340d62413cd2ffb4b1c4ec8d78ea40b8679a1\""))
 
         assertFailsWith<IllegalArgumentException> {
             ProofAttachment(
@@ -168,6 +178,14 @@ class ZkAssetInstructionsTest {
                 proofBytes = byteArrayOf(1),
                 verifyingKeyRef = ProofVerifierKeyRef("halo2/ipa", "vk"),
                 verifyingKeyCommitment = ByteArray(32),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ProofAttachment(
+                backend = "halo2/ipa",
+                proofBytes = proofBytes,
+                verifyingKeyRef = ProofVerifierKeyRef("halo2/ipa", "vk"),
+                envelopeHash = fill(0x66, 32),
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -399,7 +417,11 @@ class ZkAssetInstructionsTest {
     @Test
     fun nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable() {
         assertEquals(21, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
-        if (!NativeSignerBridge.isNativeAvailable()) return
+        assertEquals(1, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
+        assertTrue(
+            NativeSignerBridge.isNativeAvailable(),
+            "connect_norito_bridge ABI 21 native-signer contract revision 1 is required",
+        )
 
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
             SigningAlgorithm.ED25519,

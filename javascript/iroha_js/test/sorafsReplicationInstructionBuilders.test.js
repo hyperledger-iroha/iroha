@@ -23,8 +23,37 @@ const ORDER_PAYLOAD = fs.readFileSync(path.join(FIXTURE_ROOT, "order_v1.to"));
 const ORDER_PAYLOAD_BASE64 = ORDER_PAYLOAD.toString("base64");
 const ORDER_ID = "ab".repeat(32);
 const PROVIDER_ID = "10".repeat(32);
+const PROVIDER_OWNER =
+  "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+const POLICY_ID = "21".repeat(32);
+const PREDECESSOR_DIGEST = "32".repeat(32);
+const POLICY_DIGEST = "43".repeat(32);
+const BLOCK_HASH = "54".repeat(32);
 const CRC64_POLY = 0xc96c5795d7870f42n;
 const U64_MASK = 0xffff_ffff_ffff_ffffn;
+
+function completionOptions(overrides = {}) {
+  return {
+    orderId: ORDER_ID,
+    providerId: PROVIDER_ID,
+    completionEpoch: 27,
+    expectedAuthority: {
+      providerOwner: PROVIDER_OWNER,
+      signerPolicy: {
+        policyId: POLICY_ID,
+        revision: 2,
+        predecessorDigest: PREDECESSOR_DIGEST,
+        policyDigest: POLICY_DIGEST,
+      },
+    },
+    expectedAssignmentRevision: 3,
+    finalizedAnchor: {
+      height: 41,
+      blockHash: BLOCK_HASH,
+    },
+    ...overrides,
+  };
+}
 
 function crc64(payload) {
   let crc = U64_MASK;
@@ -67,16 +96,26 @@ test("SoraFS replication instruction builders emit canonical native field names"
     },
   });
 
-  const complete = buildCompleteReplicationOrderInstruction({
-    orderId: ORDER_ID,
-    providerId: PROVIDER_ID,
-    completionEpoch: 27,
-  });
+  const complete = buildCompleteReplicationOrderInstruction(completionOptions());
   assert.deepEqual(complete, {
     CompleteReplicationOrder: {
       order_id: ORDER_ID,
       provider_id: PROVIDER_ID,
       completion_epoch: 27,
+      expected_authority: {
+        provider_owner: PROVIDER_OWNER,
+        signer_policy: {
+          policy_id: POLICY_ID,
+          revision: 2,
+          predecessor_digest: PREDECESSOR_DIGEST,
+          policy_digest: POLICY_DIGEST,
+        },
+      },
+      expected_assignment_revision: 3,
+      finalized_anchor: {
+        height: 41,
+        block_hash: BLOCK_HASH,
+      },
     },
   });
   assert.deepEqual(
@@ -101,21 +140,65 @@ test("SoraFS replication instruction builders emit canonical native field names"
 test("SoraFS replication builders reject identifiers, epochs, legacy completion, and unknown fields", () => {
   assert.throws(
     () =>
-      buildCompleteReplicationOrderInstruction({
-        orderId: ORDER_ID,
+      buildCompleteReplicationOrderInstruction(completionOptions({
         providerId: "00".repeat(32),
-        completionEpoch: 1,
-      }),
+      })),
     /zero identifier/,
   );
   assert.throws(
     () =>
-      buildCompleteReplicationOrderInstruction({
+      buildCompleteReplicationOrderInstruction(completionOptions({
         orderId: ORDER_ID.toUpperCase(),
+      })),
+    /lowercase hexadecimal/,
+  );
+  assert.throws(
+    () =>
+      buildCompleteReplicationOrderInstruction({
+        orderId: ORDER_ID,
         providerId: PROVIDER_ID,
         completionEpoch: 1,
       }),
-    /lowercase hexadecimal/,
+    /expectedAuthority is required/,
+  );
+  assert.throws(
+    () =>
+      buildCompleteReplicationOrderInstruction(completionOptions({
+        expectedAuthority: {
+          providerOwner: PROVIDER_OWNER,
+          signerPolicy: {
+            policyId: POLICY_ID,
+            revision: 2,
+            predecessorDigest: null,
+            policyDigest: POLICY_DIGEST,
+          },
+        },
+      })),
+    /predecessorDigest is required after revision 1/,
+  );
+  assert.throws(
+    () =>
+      buildCompleteReplicationOrderInstruction(completionOptions({
+        expectedAuthority: {
+          providerOwner: ` ${PROVIDER_OWNER}`,
+          signerPolicy: completionOptions().expectedAuthority.signerPolicy,
+        },
+      })),
+    /exact canonical I105 account id/,
+  );
+  assert.throws(
+    () =>
+      buildCompleteReplicationOrderInstruction(completionOptions({
+        expectedAssignmentRevision: 0,
+      })),
+    /positive integer/,
+  );
+  assert.throws(
+    () =>
+      buildCompleteReplicationOrderInstruction(completionOptions({
+        finalizedAnchor: { height: 0, blockHash: BLOCK_HASH },
+      })),
+    /positive integer/,
   );
   assert.throws(
     () =>
@@ -149,10 +232,11 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
       noritoEncodeInstruction({
         CompleteReplicationOrder: {
           order_id: ORDER_ID,
+          provider_id: PROVIDER_ID,
           completion_epoch: 8,
         },
       }),
-    /provider_id/,
+    /expected_authority/,
   );
   assert.throws(
     () =>
@@ -161,6 +245,17 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
           order_id: ORDER_ID,
           provider_id: PROVIDER_ID,
           completion_epoch: 8,
+          expected_authority: {
+            provider_owner: PROVIDER_OWNER,
+            signer_policy: {
+              policy_id: POLICY_ID,
+              revision: 2,
+              predecessor_digest: PREDECESSOR_DIGEST,
+              policy_digest: POLICY_DIGEST,
+            },
+          },
+          expected_assignment_revision: 3,
+          finalized_anchor: { height: 41, block_hash: BLOCK_HASH },
           relayer_id: "confused-deputy",
         },
       }),

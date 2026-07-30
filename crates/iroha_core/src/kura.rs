@@ -178,6 +178,10 @@ const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 /// Hard limit for the complete private record, including its retained block header.
 const MAX_KURA_V2_FINALITY_RECORD_BYTES: usize = MAX_V2_FINALITY_ARTIFACT_BYTES + 256 * 1024;
 const KURA_V2_FINALITY_RECORD_VERSION: u16 = 2;
+/// Hard limit for one startup replay WSV checkpoint.
+const MAX_WSV_CHECKPOINT_BYTES: usize = 64 * 1024;
+/// Hard limit for one startup replay commit manifest.
+const MAX_COMMIT_MANIFEST_BYTES: usize = 64 * 1024;
 /// Number of immutable sidecar identities whose successful BLS verification
 /// is remembered. Entries retain only stable path/file/directory metadata and
 /// an artifact hash, not the potentially multi-megabyte artifact itself.
@@ -208,10 +212,76 @@ struct VerifiedRetainedBlockCacheEntry {
     metadata: StableSidecarMetadata,
 }
 
+/// Small immutable projection of one fully verified finality artifact.
+///
+/// Retaining complete historical artifacts would allow a maximum-size roster
+/// to consume several MiB per height. Startup replay only needs these fixed
+/// commitments; the sole durable-tip artifact is retained separately for lane
+/// completion validation.
+#[derive(Debug, Clone)]
+pub(crate) struct V2StartupFinalityProjection {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    subject_block_hash: HashOf<BlockHeader>,
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    commit_qc_hash: Hash,
+    commit_authority_hash: Hash,
+    parent_commit_qc_hash: Option<Hash>,
+    snapshot_bootstrap: Option<(u64, HashOf<BlockHeader>)>,
+}
+
+impl V2StartupFinalityProjection {
+    fn from_artifact(artifact: &V2FinalityArtifact) -> Self {
+        let execution = artifact.commit_qc.execution_commitment;
+        Self {
+            height: artifact.height,
+            block_hash: artifact.block_hash,
+            subject_block_hash: artifact.subject.block_hash,
+            parent_state_root: execution.parent_state_root,
+            post_state_root: execution.post_state_root,
+            commit_qc_hash: Hash::new(artifact.commit_qc.encode()),
+            commit_authority_hash: v2_commit_authority_hash(artifact),
+            parent_commit_qc_hash: artifact
+                .height_context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| Hash::new(qc.encode())),
+            snapshot_bootstrap: artifact
+                .height_context
+                .snapshot_bootstrap
+                .map(|anchor| (anchor.snapshot_height, anchor.snapshot_block_hash)),
+        }
+    }
+
+    pub(crate) fn binds_manifest(&self, manifest: &CommitManifest) -> bool {
+        manifest.height == self.height
+            && manifest.block_hash == self.block_hash
+            && self.subject_block_hash == self.block_hash
+            && manifest.parent_state_root == Some(self.parent_state_root)
+            && manifest.post_state_root == Some(self.post_state_root)
+            && manifest.commit_qc_hash == Some(self.commit_qc_hash)
+            && manifest.commit_authority_hash == Some(self.commit_authority_hash)
+    }
+
+    pub(crate) const fn commit_qc_hash(&self) -> Hash {
+        self.commit_qc_hash
+    }
+
+    pub(crate) const fn parent_commit_qc_hash(&self) -> Option<Hash> {
+        self.parent_commit_qc_hash
+    }
+
+    pub(crate) const fn snapshot_bootstrap(&self) -> Option<(u64, HashOf<BlockHeader>)> {
+        self.snapshot_bootstrap
+    }
+}
+
 #[derive(Debug, Clone)]
 struct VerifiedV2StartupFinalityEntry {
     finality: VerifiedV2FinalityCacheEntry,
     retained_block: VerifiedRetainedBlockCacheEntry,
+    projection: V2StartupFinalityProjection,
 }
 
 #[derive(Debug, Clone)]
@@ -235,35 +305,47 @@ struct StableSidecarDirectoryInventory {
     files: BTreeMap<PathBuf, StableSidecarMetadata>,
 }
 
-#[derive(Debug, Default)]
-struct V2StartupFinalityVerificationInventory {
-    boundary: Option<ExactReplayBoundary>,
-    canonical_storage: Option<StableCanonicalBlockStoreMetadata>,
-    finality_directory: Option<StableSidecarDirectoryMetadata>,
-    retained_directory: Option<StableSidecarDirectoryMetadata>,
-    evicted_heights: BTreeSet<u64>,
-    entries: BTreeMap<u64, VerifiedV2StartupFinalityEntry>,
+#[derive(Debug, Clone)]
+struct V2StartupReplaySidecar<T> {
+    value: T,
+    metadata: StableSidecarMetadata,
 }
 
-/// Kura-minted identity binding carried from replay planning into active-height
-/// recovery.
-///
-/// The binding contains metadata only: it never retains historical block
-/// bodies or finality artifacts. Its fields are private so callers cannot
-/// construct a replay authorization without Kura's complete startup audit.
-#[derive(Debug, Clone)]
-pub(crate) struct V2StartupReplayStorageBinding {
+#[derive(Debug, Clone, Default)]
+struct V2StartupReplaySidecarsAtHeight {
+    checkpoint: Option<V2StartupReplaySidecar<WsvCheckpoint>>,
+    manifest: Option<V2StartupReplaySidecar<CommitManifest>>,
+}
+
+#[derive(Debug)]
+struct V2StartupFinalityVerificationInventory {
     boundary: ExactReplayBoundary,
     canonical_storage: StableCanonicalBlockStoreMetadata,
     finality_directory: StableSidecarDirectoryMetadata,
     retained_directory: StableSidecarDirectoryMetadata,
     auxiliary_sidecars: BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
+    hash_only_heights: BTreeSet<u64>,
     entries: BTreeMap<u64, VerifiedV2StartupFinalityEntry>,
+    replay_sidecars: Vec<V2StartupReplaySidecarsAtHeight>,
+    durable_tip_artifact: Option<V2FinalityArtifact>,
+}
+
+/// Kura-minted identity binding carried from replay planning into active-height
+/// recovery.
+///
+/// The binding never retains historical block bodies or full historical
+/// finality artifacts. It carries fixed-size projections for history and the
+/// sole durable-tip artifact needed for exact lane-completion validation. Its
+/// fields are private so callers cannot construct a replay authorization
+/// without Kura's complete startup audit.
+#[derive(Debug, Clone)]
+pub(crate) struct V2StartupReplayStorageBinding {
+    inventory: Arc<V2StartupFinalityVerificationInventory>,
 }
 
 impl V2StartupReplayStorageBinding {
-    pub(crate) const fn replay_boundary(&self) -> &ExactReplayBoundary {
-        &self.boundary
+    pub(crate) fn replay_boundary(&self) -> &ExactReplayBoundary {
+        &self.inventory.boundary
     }
 }
 
@@ -274,16 +356,9 @@ impl V2StartupReplayStorageBinding {
 /// guards keep internal writers out while bodyless historical reads reuse the
 /// exact live-body validation performed by the startup audit.
 pub(crate) struct V2StartupFinalityVerificationSession<'a> {
-    kura: &'a Kura,
     _prune_guard: parking_lot::MutexGuard<'a, ()>,
     _canonical_chain_guard: parking_lot::MutexGuard<'a, ()>,
-    boundary: ExactReplayBoundary,
-    canonical_storage: StableCanonicalBlockStoreMetadata,
-    finality_directory: StableSidecarDirectoryMetadata,
-    retained_directory: StableSidecarDirectoryMetadata,
-    auxiliary_sidecars: BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
-    evicted_heights: BTreeSet<u64>,
-    entries: BTreeMap<u64, VerifiedV2StartupFinalityEntry>,
+    inventory: Arc<V2StartupFinalityVerificationInventory>,
 }
 
 #[derive(Debug, Clone)]
@@ -1349,7 +1424,8 @@ pub struct Kura {
     /// the audit only while the exact bytes and stable filesystem identity are
     /// unchanged. It is cleared after active-height recovery; the ordinary
     /// runtime cache remains fixed at [`V2_FINALITY_VERIFICATION_CACHE_CAPACITY`].
-    v2_startup_finality_verification_inventory: Mutex<V2StartupFinalityVerificationInventory>,
+    v2_startup_finality_verification_inventory:
+        Mutex<Option<Arc<V2StartupFinalityVerificationInventory>>>,
     /// Serialize sparse merge-carrier index publication and reconciliation.
     merge_carrier_lock: Mutex<()>,
     /// Validated in-memory sparse carrier maps loaded during startup reconciliation.
@@ -1523,6 +1599,10 @@ pub struct Kura {
     /// Counts actual v2 finality BLS verification passes for cache tests.
     #[cfg(test)]
     v2_finality_crypto_verifications: AtomicUsize,
+    /// Number of historical payload files reopened after the startup replay
+    /// projection was built.
+    #[cfg(test)]
+    startup_replay_historical_payload_reads: AtomicUsize,
     /// Test hook for forcing a bounded number of roster sidecar writes to fail.
     #[cfg(test)]
     fail_next_roster_sidecar_writes: AtomicUsize,
@@ -4359,9 +4439,7 @@ impl Kura {
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock: Mutex::new(()),
             v2_finality_verification_cache: Mutex::new(VecDeque::new()),
-            v2_startup_finality_verification_inventory: Mutex::new(
-                V2StartupFinalityVerificationInventory::default(),
-            ),
+            v2_startup_finality_verification_inventory: Mutex::new(None),
             merge_carrier_lock: Mutex::new(()),
             merge_carrier_index: Mutex::new(MergeCarrierIndex::default()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
@@ -4466,6 +4544,8 @@ impl Kura {
             #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
+            startup_replay_historical_payload_reads: AtomicUsize::new(0),
+            #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
@@ -4513,12 +4593,10 @@ impl Kura {
                 kura.complete_recovered_prune_intent(intent)?;
             }
 
-            if block_count > 0 {
-                let _ = kura.commit_manifest(block_count as u64)?;
-            }
             kura.repair_lane_merge_application_frontiers_on_startup()?;
             kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
             kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
+            kura.refresh_v2_startup_replay_auxiliary_binding()?;
         }
 
         match kura.kura_disk_usage_bytes() {
@@ -4544,8 +4622,8 @@ impl Kura {
         let verified_finality_count = kura
             .v2_startup_finality_verification_inventory
             .lock()
-            .entries
-            .len();
+            .as_ref()
+            .map_or(0, |inventory| inventory.entries.len());
         info!(
             mode = ?config.init_mode,
             block_count,
@@ -4662,9 +4740,7 @@ impl Kura {
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
             v2_finality_verification_cache: Mutex::new(VecDeque::new()),
-            v2_startup_finality_verification_inventory: Mutex::new(
-                V2StartupFinalityVerificationInventory::default(),
-            ),
+            v2_startup_finality_verification_inventory: Mutex::new(None),
             merge_carrier_lock: Mutex::new(()),
             merge_carrier_index: Mutex::new(MergeCarrierIndex::default()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
@@ -4771,6 +4847,8 @@ impl Kura {
             #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
+            startup_replay_historical_payload_reads: AtomicUsize::new(0),
+            #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
@@ -4867,6 +4945,12 @@ impl Kura {
     fn set_pipeline_sidecar_queue_cap_for_testing(&self, queue_cap: usize) {
         self.pipeline_sidecar_queue_cap
             .store(queue_cap.max(1), Ordering::Relaxed);
+    }
+
+    /// Return the number of pipeline recovery sidecars pending in the test-only writer queue.
+    #[cfg(test)]
+    pub(crate) fn pipeline_sidecar_queue_len_for_testing(&self) -> usize {
+        self.pipeline_sidecar_queue.lock().len()
     }
 
     /// Root directory used by this Kura instance.
@@ -9091,6 +9175,15 @@ impl Kura {
     ) -> Result<Option<Vec<u8>>> {
         Self::read_regular_sidecar_bytes_for(&self.store_root, path, expected_directory, byte_limit)
     }
+
+    #[cfg(test)]
+    fn record_startup_replay_historical_payload_read(&self) {
+        self.startup_replay_historical_payload_reads
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(test))]
+    fn record_startup_replay_historical_payload_read(&self) {}
 
     fn block_merge_reference(
         block: &SignedBlock,
@@ -14323,9 +14416,7 @@ impl Kura {
                 &finalization_authority,
             )?;
             self.reconcile_merge_carriers_during_snapshot_finalization(&finalization_authority)?;
-            if block_count > 0 {
-                let _ = self.commit_manifest(u64::try_from(block_count)?)?;
-            }
+            self.refresh_v2_startup_replay_auxiliary_binding()?;
             self.refresh_disk_usage_bytes()?;
             self.refresh_total_disk_usage_bytes()?;
             // Publish the immutable first-height context last. After this
@@ -14848,6 +14939,7 @@ impl Kura {
         path: &Path,
         directory: &Path,
     ) -> Result<Option<(KuraRetainedBlockRecord, StableSidecarRead)>> {
+        self.record_startup_replay_historical_payload_read();
         let Some(snapshot) =
             self.read_regular_sidecar_snapshot(path, directory, MAX_RETAINED_BLOCK_RECORD_BYTES)?
         else {
@@ -15285,13 +15377,13 @@ impl Kura {
         let canonical_storage = self.canonical_block_store_metadata(&blocks_dir)?;
         let reuse_startup_validation = {
             let inventory = self.v2_startup_finality_verification_inventory.lock();
-            inventory.boundary.as_ref() == Some(&boundary)
-                && inventory
-                    .canonical_storage
-                    .as_ref()
-                    .is_some_and(|expected| {
-                        Self::canonical_block_store_metadata_unchanged(expected, &canonical_storage)
-                    })
+            inventory.as_ref().is_some_and(|inventory| {
+                inventory.boundary == boundary
+                    && Self::canonical_block_store_metadata_unchanged(
+                        &inventory.canonical_storage,
+                        &canonical_storage,
+                    )
+            })
         };
         let retained_heights = Self::retained_block_record_heights_for(
             &self.store_root,
@@ -16078,6 +16170,269 @@ impl Kura {
             .collect()
     }
 
+    fn decode_v2_startup_wsv_checkpoint(
+        &self,
+        path: &Path,
+        directory: &Path,
+    ) -> Result<Option<V2StartupReplaySidecar<WsvCheckpoint>>> {
+        self.record_startup_replay_historical_payload_read();
+        let Some(snapshot) =
+            self.read_regular_sidecar_snapshot(path, directory, MAX_WSV_CHECKPOINT_BYTES)?
+        else {
+            return Ok(None);
+        };
+        let mut cursor = snapshot.bytes.as_slice();
+        let value = WsvCheckpoint::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        if value.encode() != snapshot.bytes {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "WSV checkpoint is not canonically encoded",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(Some(V2StartupReplaySidecar {
+            value,
+            metadata: snapshot.metadata,
+        }))
+    }
+
+    fn decode_v2_startup_commit_manifest(
+        &self,
+        path: &Path,
+        directory: &Path,
+    ) -> Result<Option<V2StartupReplaySidecar<CommitManifest>>> {
+        self.record_startup_replay_historical_payload_read();
+        let Some(snapshot) =
+            self.read_regular_sidecar_snapshot(path, directory, MAX_COMMIT_MANIFEST_BYTES)?
+        else {
+            return Ok(None);
+        };
+        let mut cursor = snapshot.bytes.as_slice();
+        let value = CommitManifest::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        if value.encode() != snapshot.bytes {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "commit manifest is not canonically encoded",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(Some(V2StartupReplaySidecar {
+            value,
+            metadata: snapshot.metadata,
+        }))
+    }
+
+    fn v2_startup_replay_sidecar_projections_match_inventory(
+        &self,
+        blocks_dir: &Path,
+        projections: &[V2StartupReplaySidecarsAtHeight],
+        auxiliary: &BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
+    ) -> bool {
+        let checkpoint_dir = Self::wsv_checkpoint_dir_for(blocks_dir);
+        let manifest_dir = Self::commit_manifest_dir_for(blocks_dir);
+        let Some(checkpoint_inventory) = auxiliary.get(&checkpoint_dir) else {
+            return false;
+        };
+        let Some(manifest_inventory) = auxiliary.get(&manifest_dir) else {
+            return false;
+        };
+        for (index, projection) in projections.iter().enumerate() {
+            let Ok(height) = u64::try_from(index).map(|index| index.saturating_add(1)) else {
+                return false;
+            };
+            let checkpoint_path = Self::wsv_checkpoint_path_for(blocks_dir, height);
+            let manifest_path = Self::commit_manifest_path_for(blocks_dir, height);
+            let checkpoint_matches = match &projection.checkpoint {
+                Some(checkpoint) => checkpoint_inventory
+                    .files
+                    .get(&checkpoint_path)
+                    .is_some_and(|metadata| {
+                        Self::stable_sidecar_metadata_unchanged(&checkpoint.metadata, metadata)
+                    }),
+                None => !checkpoint_inventory.files.contains_key(&checkpoint_path),
+            };
+            let manifest_matches = match &projection.manifest {
+                Some(manifest) => {
+                    manifest_inventory
+                        .files
+                        .get(&manifest_path)
+                        .is_some_and(|metadata| {
+                            Self::stable_sidecar_metadata_unchanged(&manifest.metadata, metadata)
+                        })
+                }
+                None => !manifest_inventory.files.contains_key(&manifest_path),
+            };
+            if !checkpoint_matches || !manifest_matches {
+                return false;
+            }
+        }
+        let projection_height = u64::try_from(projections.len()).unwrap_or(u64::MAX);
+        for inventory in [checkpoint_inventory, manifest_inventory] {
+            if inventory.files.keys().any(|path| {
+                numbered_norito_sidecar_height(path)
+                    .is_some_and(|height| height == 0 || height > projection_height)
+            }) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn capture_v2_startup_replay_sidecar_projections(
+        &self,
+        blocks_dir: &Path,
+        boundary: &ExactReplayBoundary,
+    ) -> Result<(
+        Vec<V2StartupReplaySidecarsAtHeight>,
+        BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
+    )> {
+        use rayon::prelude::*;
+
+        let checkpoint_dir = Self::wsv_checkpoint_dir_for(blocks_dir);
+        let manifest_dir = Self::commit_manifest_dir_for(blocks_dir);
+        let results = boundary
+            .hashes
+            .par_iter()
+            .enumerate()
+            .map(|(index, &canonical_hash)| {
+                let height = u64::try_from(index)?.saturating_add(1);
+                let checkpoint_path = Self::wsv_checkpoint_path_for(blocks_dir, height);
+                let manifest_path = Self::commit_manifest_path_for(blocks_dir, height);
+                let checkpoint =
+                    self.decode_v2_startup_wsv_checkpoint(&checkpoint_path, &checkpoint_dir)?;
+                let manifest =
+                    self.decode_v2_startup_commit_manifest(&manifest_path, &manifest_dir)?;
+                if let Some(checkpoint) = checkpoint.as_ref() {
+                    if checkpoint.value.height != height {
+                        return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                            "WSV checkpoint height mismatch: expected {height}, got {}",
+                            checkpoint.value.height
+                        ))));
+                    }
+                    if checkpoint.value.block_hash != canonical_hash {
+                        return Err(Error::BlockHeightConflict {
+                            height,
+                            expected: canonical_hash,
+                            actual: checkpoint.value.block_hash,
+                        });
+                    }
+                }
+                if let Some(manifest) = manifest.as_ref() {
+                    if manifest.value.height != height {
+                        return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                            "commit manifest height mismatch: expected {height}, got {}",
+                            manifest.value.height
+                        ))));
+                    }
+                    if manifest.value.block_hash != canonical_hash {
+                        return Err(Error::BlockHeightConflict {
+                            height,
+                            expected: canonical_hash,
+                            actual: manifest.value.block_hash,
+                        });
+                    }
+                    if let Some(checkpoint) = checkpoint.as_ref() {
+                        Self::ensure_checkpoint_matches_manifest(
+                            &checkpoint.value,
+                            &manifest.value,
+                        )?;
+                    }
+                } else if checkpoint
+                    .as_ref()
+                    .is_some_and(|checkpoint| checkpoint.value.commit_manifest_hash.is_some())
+                {
+                    return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                        "WSV checkpoint #{height} proves a commit manifest was published, but the manifest is missing"
+                    ))));
+                }
+                Ok::<V2StartupReplaySidecarsAtHeight, Error>(
+                    V2StartupReplaySidecarsAtHeight {
+                        checkpoint,
+                        manifest,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let projections = results.into_iter().collect::<Result<Vec<_>>>()?;
+        let auxiliary = [checkpoint_dir, manifest_dir]
+            .into_iter()
+            .map(|directory| {
+                self.stable_sidecar_directory_inventory(&directory)
+                    .map(|inventory| (directory, inventory))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        if !self.v2_startup_replay_sidecar_projections_match_inventory(
+            blocks_dir,
+            &projections,
+            &auxiliary,
+        ) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "startup replay sidecars changed during projection capture",
+                ),
+                blocks_dir.to_path_buf(),
+            ));
+        }
+        Ok((projections, auxiliary))
+    }
+
+    /// Refresh only the auxiliary directory binding after deterministic
+    /// startup repair or State geometry setup has published lane evidence.
+    ///
+    /// Checkpoint and manifest projections must still match byte-for-byte
+    /// stable file identities. Finality, retained-block, and canonical journal
+    /// bindings are deliberately not refreshed here; a change there forces a
+    /// complete authenticated audit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the authenticated startup inventory is absent or
+    /// already shared, when checkpoint or manifest identity changed, or when
+    /// the active lane sidecar inventory cannot be captured safely.
+    pub fn refresh_v2_startup_replay_auxiliary_binding(&self) -> Result<()> {
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let checkpoint_dir = Self::wsv_checkpoint_dir_for(&blocks_dir);
+        let manifest_dir = Self::commit_manifest_dir_for(&blocks_dir);
+        let lane_auxiliary = self
+            .v2_startup_replay_auxiliary_sidecar_directories()
+            .into_iter()
+            .filter(|directory| directory != &checkpoint_dir && directory != &manifest_dir)
+            .map(|directory| {
+                self.stable_sidecar_directory_inventory(&directory)
+                    .map(|inventory| (directory, inventory))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let mut installed = self.v2_startup_finality_verification_inventory.lock();
+        let Some(inventory) = installed.as_mut().and_then(Arc::get_mut) else {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "startup replay inventory cannot be refreshed while it is shared",
+                ),
+                blocks_dir,
+            ));
+        };
+        if !self.v2_startup_replay_sidecar_projections_match_inventory(
+            &blocks_dir,
+            &inventory.replay_sidecars,
+            &inventory.auxiliary_sidecars,
+        ) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "checkpoint or manifest changed after startup replay projection capture",
+                ),
+                blocks_dir,
+            ));
+        }
+        inventory.auxiliary_sidecars.extend(lane_auxiliary);
+        Ok(())
+    }
+
     /// Validate every durable finality envelope against its canonical header,
     /// retained complete-block wire hash, live body when present, and CommitQC.
     ///
@@ -16102,22 +16457,20 @@ impl Kura {
         let canonical_storage = self.canonical_block_store_metadata(&blocks_dir)?;
         let boundary = self.exact_replay_boundary()?;
         let durable_height = boundary.count;
-        let evicted_heights = {
+        let hash_only_heights = {
             let durable_height_usize = usize::try_from(durable_height)?;
             let mut indices = vec![BlockIndex::default(); durable_height_usize];
             self.block_store
                 .lock()
                 .read_block_indices(0, &mut indices)?;
-            indices
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, block_index)| {
-                    block_index
-                        .is_evicted()
-                        .then(|| u64::try_from(index).ok()?.checked_add(1))
-                        .flatten()
-                })
-                .collect::<BTreeSet<_>>()
+            let mut hash_only = BTreeSet::new();
+            for (index, block_index) in indices.into_iter().enumerate() {
+                let height = u64::try_from(index)?.saturating_add(1);
+                if block_index.length == 0 {
+                    hash_only.insert(height);
+                }
+            }
+            hash_only
         };
         let finality_directory_path = Self::v2_finality_artifact_dir_for(&blocks_dir);
         let retained_directory_path = Self::retained_block_record_dir_for(&blocks_dir);
@@ -16137,6 +16490,7 @@ impl Kura {
         }
         let directory = finality_directory_path;
         let mut verified = Vec::with_capacity(finalized_heights.len());
+        let mut durable_tip_artifact = None;
         for batch in finalized_heights.chunks(V2_FINALITY_STARTUP_VERIFICATION_BATCH_SIZE) {
             let batch_results = batch
                 .par_iter()
@@ -16185,28 +16539,40 @@ impl Kura {
                         proposal_wire_hash,
                         executed_block_wire_hash,
                     )?;
-                    Ok::<VerifiedV2StartupFinalityEntry, Error>(VerifiedV2StartupFinalityEntry {
-                        finality,
-                        retained_block: VerifiedRetainedBlockCacheEntry {
-                            bytes_hash: retained_identity.bytes_hash,
-                            metadata: retained_identity.metadata,
+                    let projection = V2StartupFinalityProjection::from_artifact(&record.artifact);
+                    let tip_artifact =
+                        (height == durable_height).then_some(record.artifact.clone());
+                    Ok::<_, Error>((
+                        VerifiedV2StartupFinalityEntry {
+                            finality,
+                            retained_block: VerifiedRetainedBlockCacheEntry {
+                                bytes_hash: retained_identity.bytes_hash,
+                                metadata: retained_identity.metadata,
+                            },
+                            projection,
                         },
-                    })
+                        tip_artifact,
+                    ))
                 })
                 .collect::<Vec<_>>();
             for result in batch_results {
-                let entry = result?;
+                let (entry, tip_artifact) = result?;
                 self.remember_verified_v2_finality_entry(entry.finality.clone());
+                if tip_artifact.is_some() {
+                    durable_tip_artifact = tip_artifact;
+                }
                 verified.push(entry);
             }
         }
-        let after_boundary = self.exact_replay_boundary()?;
+        let (replay_sidecars, auxiliary_sidecars) =
+            self.capture_v2_startup_replay_sidecar_projections(&blocks_dir, &boundary)?;
+        let boundary_tip_unchanged = self.v2_startup_replay_boundary_tip_matches(&boundary)?;
         let after_storage = self.canonical_block_store_metadata(&blocks_dir)?;
         let after_finality_directory =
             self.stable_sidecar_directory_metadata(&finality_directory.expected_path)?;
         let after_retained_directory =
             self.stable_sidecar_directory_metadata(&retained_directory.expected_path)?;
-        if after_boundary != boundary
+        if !boundary_tip_unchanged
             || !Self::canonical_block_store_metadata_unchanged(&canonical_storage, &after_storage)
             || !Self::stable_sidecar_directory_metadata_unchanged(
                 &finality_directory,
@@ -16231,15 +16597,18 @@ impl Kura {
             "Validated Kura v2 finality inventory"
         );
         Ok(V2StartupFinalityVerificationInventory {
-            boundary: Some(boundary),
-            canonical_storage: Some(after_storage),
-            finality_directory: Some(after_finality_directory),
-            retained_directory: Some(after_retained_directory),
-            evicted_heights,
+            boundary,
+            canonical_storage: after_storage,
+            finality_directory: after_finality_directory,
+            retained_directory: after_retained_directory,
+            auxiliary_sidecars,
+            hash_only_heights,
             entries: verified
                 .into_iter()
                 .map(|entry| (entry.finality.height, entry))
                 .collect(),
+            replay_sidecars,
+            durable_tip_artifact,
         })
     }
 
@@ -16349,7 +16718,7 @@ impl Kura {
         &self,
         inventory: V2StartupFinalityVerificationInventory,
     ) {
-        *self.v2_startup_finality_verification_inventory.lock() = inventory;
+        *self.v2_startup_finality_verification_inventory.lock() = Some(Arc::new(inventory));
     }
 
     /// Rebuild the complete startup finality inventory when a caller-created
@@ -16358,6 +16727,7 @@ impl Kura {
     pub(crate) fn refresh_v2_startup_finality_verification(&self) -> Result<()> {
         let inventory = self.validate_v2_finality_inventory_on_startup()?;
         self.install_v2_startup_finality_verification_inventory(inventory);
+        self.refresh_v2_startup_replay_auxiliary_binding()?;
         Ok(())
     }
 
@@ -16369,10 +16739,12 @@ impl Kura {
         metadata: &StableSidecarMetadata,
     ) -> bool {
         let inventory = self.v2_startup_finality_verification_inventory.lock();
-        inventory.entries.get(&height).is_some_and(|entry| {
-            entry.finality.artifact_hash == artifact_hash
-                && entry.finality.bytes_hash == bytes_hash
-                && Self::stable_sidecar_metadata_unchanged(&entry.finality.metadata, metadata)
+        inventory.as_ref().is_some_and(|inventory| {
+            inventory.entries.get(&height).is_some_and(|entry| {
+                entry.finality.artifact_hash == artifact_hash
+                    && entry.finality.bytes_hash == bytes_hash
+                    && Self::stable_sidecar_metadata_unchanged(&entry.finality.metadata, metadata)
+            })
         })
     }
 
@@ -16381,16 +16753,15 @@ impl Kura {
     ///
     /// Runtime callers continue to use the fixed-size finality LRU.
     pub(crate) fn finish_v2_startup_finality_verification(&self) {
-        *self.v2_startup_finality_verification_inventory.lock() =
-            V2StartupFinalityVerificationInventory::default();
+        *self.v2_startup_finality_verification_inventory.lock() = None;
     }
 
     #[cfg(test)]
     pub(crate) fn v2_startup_finality_inventory_len_for_test(&self) -> usize {
         self.v2_startup_finality_verification_inventory
             .lock()
-            .entries
-            .len()
+            .as_ref()
+            .map_or(0, |inventory| inventory.entries.len())
     }
 
     #[cfg(test)]
@@ -16410,28 +16781,47 @@ impl Kura {
         self.v2_finality_verification_cache.lock().clear();
     }
 
+    #[cfg(test)]
+    pub(crate) fn startup_replay_historical_payload_reads_for_test(&self) -> usize {
+        self.startup_replay_historical_payload_reads
+            .load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_startup_replay_historical_payload_reads_for_test(&self) {
+        self.startup_replay_historical_payload_reads
+            .store(0, Ordering::Relaxed);
+    }
+
     fn validate_v2_startup_replay_storage_binding_unlocked(
         &self,
         binding: &V2StartupReplayStorageBinding,
     ) -> Result<()> {
+        let inventory = binding.inventory.as_ref();
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        let current_boundary = self.exact_replay_boundary()?;
         let current_storage = self.canonical_block_store_metadata(&blocks_dir)?;
+        let boundary_tip_matches =
+            self.v2_startup_replay_boundary_tip_matches(&inventory.boundary)?;
+        let current_storage_after_tip = self.canonical_block_store_metadata(&blocks_dir)?;
         let current_finality_directory =
-            self.stable_sidecar_directory_metadata(&binding.finality_directory.expected_path)?;
+            self.stable_sidecar_directory_metadata(&inventory.finality_directory.expected_path)?;
         let current_retained_directory =
-            self.stable_sidecar_directory_metadata(&binding.retained_directory.expected_path)?;
-        if current_boundary != binding.boundary
+            self.stable_sidecar_directory_metadata(&inventory.retained_directory.expected_path)?;
+        if !boundary_tip_matches
             || !Self::canonical_block_store_metadata_unchanged(
-                &binding.canonical_storage,
+                &inventory.canonical_storage,
                 &current_storage,
             )
+            || !Self::canonical_block_store_metadata_unchanged(
+                &current_storage,
+                &current_storage_after_tip,
+            )
             || !Self::stable_sidecar_directory_metadata_unchanged(
-                &binding.finality_directory,
+                &inventory.finality_directory,
                 &current_finality_directory,
             )
             || !Self::stable_sidecar_directory_metadata_unchanged(
-                &binding.retained_directory,
+                &inventory.retained_directory,
                 &current_retained_directory,
             )
         {
@@ -16444,8 +16834,8 @@ impl Kura {
             ));
         }
         let current_auxiliary = self.capture_v2_startup_replay_auxiliary_sidecars()?;
-        if current_auxiliary.len() != binding.auxiliary_sidecars.len()
-            || binding
+        if current_auxiliary.len() != inventory.auxiliary_sidecars.len()
+            || inventory
                 .auxiliary_sidecars
                 .iter()
                 .any(|(directory, expected)| {
@@ -16464,7 +16854,7 @@ impl Kura {
         }
         let finality_directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
         let retained_directory = Self::retained_block_record_dir_for(&blocks_dir);
-        for (&height, entry) in &binding.entries {
+        for (&height, entry) in &inventory.entries {
             let finality_path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
             let current_finality = self
                 .regular_sidecar_metadata(&finality_path, &finality_directory)?
@@ -16515,8 +16905,8 @@ impl Kura {
         Ok(())
     }
 
-    /// Revalidate the metadata-only storage authorization carried by a replay
-    /// plan immediately before active-height recovery.
+    /// Revalidate the bounded storage authorization carried by a replay plan
+    /// immediately before active-height recovery.
     pub(crate) fn validate_v2_startup_replay_storage_binding(
         &self,
         binding: &V2StartupReplayStorageBinding,
@@ -16540,44 +16930,15 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let canonical_chain_guard = self.canonical_chain_lock.lock();
         self.ensure_canonical_storage_not_poisoned()?;
-        let (
-            boundary,
-            canonical_storage,
-            finality_directory,
-            retained_directory,
-            evicted_heights,
-            entries,
-        ) = {
+        let inventory = {
             let inventory = self.v2_startup_finality_verification_inventory.lock();
-            let Some(boundary) = inventory.boundary.clone() else {
+            let Some(inventory) = inventory.as_ref() else {
                 return Ok(None);
             };
-            let Some(canonical_storage) = inventory.canonical_storage.clone() else {
-                return Ok(None);
-            };
-            let Some(finality_directory) = inventory.finality_directory.clone() else {
-                return Ok(None);
-            };
-            let Some(retained_directory) = inventory.retained_directory.clone() else {
-                return Ok(None);
-            };
-            (
-                boundary,
-                canonical_storage,
-                finality_directory,
-                retained_directory,
-                inventory.evicted_heights.clone(),
-                inventory.entries.clone(),
-            )
+            Arc::clone(inventory)
         };
-        let auxiliary_sidecars = self.capture_v2_startup_replay_auxiliary_sidecars()?;
         let binding = V2StartupReplayStorageBinding {
-            boundary: boundary.clone(),
-            canonical_storage: canonical_storage.clone(),
-            finality_directory: finality_directory.clone(),
-            retained_directory: retained_directory.clone(),
-            auxiliary_sidecars: auxiliary_sidecars.clone(),
-            entries: entries.clone(),
+            inventory: Arc::clone(&inventory),
         };
         if self
             .validate_v2_startup_replay_storage_binding_unlocked(&binding)
@@ -16587,41 +16948,10 @@ impl Kura {
             return Ok(None);
         }
         Ok(Some(V2StartupFinalityVerificationSession {
-            kura: self,
             _prune_guard: prune_guard,
             _canonical_chain_guard: canonical_chain_guard,
-            boundary,
-            canonical_storage,
-            finality_directory,
-            retained_directory,
-            auxiliary_sidecars,
-            evicted_heights,
-            entries,
+            inventory,
         }))
-    }
-
-    fn v2_startup_finality_entry_matches(
-        &self,
-        height: u64,
-        finality_identity: &StableSidecarRead,
-        retained_identity: &StableSidecarRead,
-    ) -> bool {
-        self.v2_startup_finality_verification_inventory
-            .lock()
-            .entries
-            .get(&height)
-            .is_some_and(|entry| {
-                entry.finality.bytes_hash == finality_identity.bytes_hash
-                    && Self::stable_sidecar_metadata_unchanged(
-                        &entry.finality.metadata,
-                        &finality_identity.metadata,
-                    )
-                    && entry.retained_block.bytes_hash == retained_identity.bytes_hash
-                    && Self::stable_sidecar_metadata_unchanged(
-                        &entry.retained_block.metadata,
-                        &retained_identity.metadata,
-                    )
-            })
     }
 
     fn v2_startup_retained_entry_matches(
@@ -16631,14 +16961,15 @@ impl Kura {
     ) -> bool {
         self.v2_startup_finality_verification_inventory
             .lock()
-            .entries
-            .get(&height)
-            .is_some_and(|entry| {
-                entry.retained_block.bytes_hash == retained_identity.bytes_hash
-                    && Self::stable_sidecar_metadata_unchanged(
-                        &entry.retained_block.metadata,
-                        &retained_identity.metadata,
-                    )
+            .as_ref()
+            .is_some_and(|inventory| {
+                inventory.entries.get(&height).is_some_and(|entry| {
+                    entry.retained_block.bytes_hash == retained_identity.bytes_hash
+                        && Self::stable_sidecar_metadata_unchanged(
+                            &entry.retained_block.metadata,
+                            &retained_identity.metadata,
+                        )
+                })
             })
     }
 
@@ -17045,6 +17376,7 @@ impl Kura {
         path: &Path,
         directory: &Path,
     ) -> Result<Option<(KuraV2FinalityRecord, StableSidecarRead)>> {
+        self.record_startup_replay_historical_payload_read();
         let Some(snapshot) =
             self.read_regular_sidecar_snapshot(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?
         else {
@@ -17266,75 +17598,6 @@ impl Kura {
         };
         let receipt = v2_commit_receipt(&artifact);
         Ok(Some((artifact, receipt)))
-    }
-
-    /// Recover finality during startup replay while reusing the exact
-    /// live-body and BLS validation performed by Kura initialization.
-    ///
-    /// The session holds prune/canonical mutation guards and binds the full
-    /// block journals. Bodyless retained-record validation is used only when
-    /// both finality and retained sidecars still match their audited bytes,
-    /// path, file, and directory identities. Any mismatch falls back to the
-    /// ordinary live-body and cryptographic validation path.
-    pub(crate) fn v2_finality_artifact_with_receipt_for_startup(
-        &self,
-        session: &V2StartupFinalityVerificationSession<'_>,
-        height: u64,
-    ) -> Result<Option<(V2FinalityArtifact, KuraV2CommitReceipt)>> {
-        if !std::ptr::eq(self, session.kura) {
-            return Err(Error::NoritoFrame(norito::core::Error::Message(
-                "startup finality verification session belongs to another Kura".to_owned(),
-            )));
-        }
-        self.ensure_prune_recovery_not_required()?;
-        self.ensure_canonical_storage_not_poisoned()?;
-        let canonical_hash = session
-            .canonical_hash(height)
-            .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        let directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
-        let path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
-        let Some((record, finality_identity)) =
-            self.decode_v2_finality_record_at(&path, &directory)?
-        else {
-            return Ok(None);
-        };
-        Self::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-
-        let Some((bodyless_retained, retained_identity)) = self
-            .retained_block_record_at_with_identity(&blocks_dir, height, canonical_hash, false)?
-        else {
-            return Err(Error::MissingRetainedBlockRecord { height });
-        };
-        let retained = if !session.evicted_heights.contains(&height)
-            && self.v2_startup_finality_entry_matches(
-                height,
-                &finality_identity,
-                &retained_identity,
-            ) {
-            bodyless_retained
-        } else {
-            self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
-                .ok_or(Error::MissingRetainedBlockRecord { height })?
-        };
-        let (retained_header, proposal_wire_hash, executed_block_wire_hash, _) = retained;
-        if retained_header != record.block_header {
-            return Err(Error::ConflictingRetainedBlockRecord { height });
-        }
-        Self::validate_v2_finality_wire_bindings(
-            height,
-            &record.artifact,
-            proposal_wire_hash,
-            executed_block_wire_hash,
-        )?;
-        self.verify_v2_finality_artifact_at(
-            &path,
-            &directory,
-            &record.artifact,
-            &finality_identity,
-        )?;
-        let receipt = v2_commit_receipt(&record.artifact);
-        Ok(Some((record.artifact, receipt)))
     }
 
     fn staged_kagemusha_topup_finality_from_witness(
@@ -18458,6 +18721,7 @@ impl Kura {
     /// sidecar locks in the global order.
     fn commit_manifest_under_sidecar_guard(&self, height: u64) -> Result<Option<CommitManifest>> {
         self.ensure_prune_recovery_not_required()?;
+        self.record_startup_replay_historical_payload_read();
         let path = self.commit_manifest_path(height);
         let manifest = Self::decode_commit_manifest_at(&path)?;
         let Some(manifest) = manifest else {
@@ -18842,6 +19106,7 @@ impl Kura {
     /// Read a WSV checkpoint while the caller holds `sidecar_lock`.
     fn wsv_checkpoint_under_sidecar_guard(&self, height: u64) -> Result<Option<WsvCheckpoint>> {
         self.ensure_prune_recovery_not_required()?;
+        self.record_startup_replay_historical_payload_read();
         let path = self.wsv_checkpoint_path(height);
         let checkpoint = Self::decode_wsv_checkpoint_at(&path)?;
         let Some(checkpoint) = checkpoint else {
@@ -23686,6 +23951,36 @@ impl Kura {
         Ok(ExactReplayBoundary { count, hashes })
     }
 
+    /// Recheck an audited replay boundary with O(1) journal reads.
+    ///
+    /// Callers separately compare stable metadata for every canonical journal
+    /// file. Once those identities are unchanged, the exact durable count and
+    /// terminal hash are sufficient to guard against a stale logical boundary
+    /// without rereading the complete hash prefix.
+    fn v2_startup_replay_boundary_tip_matches(
+        &self,
+        boundary: &ExactReplayBoundary,
+    ) -> Result<bool> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let mut store = self.block_store.lock();
+        let count = store.read_exact_durable_index_count()?;
+        if count != boundary.count {
+            return Ok(false);
+        }
+        if count == 0 {
+            return Ok(boundary.hashes.is_empty());
+        }
+        if usize::try_from(count)? != boundary.hashes.len() {
+            return Ok(false);
+        }
+        let durable_tip = store
+            .read_block_hashes(count.saturating_sub(1), 1)?
+            .first()
+            .copied();
+        Ok(durable_tip == boundary.hashes.last().copied()
+            && store.read_exact_durable_index_count()? == count)
+    }
+
     /// Exclude canonical Kura writers while a fully prevalidated replay State
     /// receipt is published. The caller must not invoke a Kura mutation while
     /// holding this lease because canonical mutations acquire the same lock.
@@ -25092,25 +25387,76 @@ pub(crate) struct ExactReplayBoundary {
 }
 
 impl V2StartupFinalityVerificationSession<'_> {
-    fn canonical_hash(&self, height: u64) -> Option<HashOf<BlockHeader>> {
-        let index = usize::try_from(height.checked_sub(1)?).ok()?;
-        self.boundary.hashes.get(index).copied()
+    pub(crate) fn replay_boundary(&self) -> &ExactReplayBoundary {
+        &self.inventory.boundary
     }
 
-    /// Return the exact metadata-only authorization minted by the startup
-    /// audit after rechecking it under the session's mutation guards.
-    pub(crate) fn storage_binding(&self) -> Result<V2StartupReplayStorageBinding> {
-        let binding = V2StartupReplayStorageBinding {
-            boundary: self.boundary.clone(),
-            canonical_storage: self.canonical_storage.clone(),
-            finality_directory: self.finality_directory.clone(),
-            retained_directory: self.retained_directory.clone(),
-            auxiliary_sidecars: self.auxiliary_sidecars.clone(),
-            entries: self.entries.clone(),
+    pub(crate) fn canonical_hash(&self, height: u64) -> Option<HashOf<BlockHeader>> {
+        let index = usize::try_from(height.checked_sub(1)?).ok()?;
+        self.inventory.boundary.hashes.get(index).copied()
+    }
+
+    pub(crate) fn is_hash_only_height(&self, height: u64) -> bool {
+        self.inventory.hash_only_heights.contains(&height)
+    }
+
+    fn replay_sidecars_at(&self, height: u64) -> Option<&V2StartupReplaySidecarsAtHeight> {
+        let index = usize::try_from(height.checked_sub(1)?).ok()?;
+        self.inventory.replay_sidecars.get(index)
+    }
+
+    pub(crate) fn wsv_checkpoint(&self, height: u64) -> Option<&WsvCheckpoint> {
+        self.replay_sidecars_at(height)?
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| &checkpoint.value)
+    }
+
+    pub(crate) fn commit_manifest(&self, height: u64) -> Option<&CommitManifest> {
+        self.replay_sidecars_at(height)?
+            .manifest
+            .as_ref()
+            .map(|manifest| &manifest.value)
+    }
+
+    pub(crate) fn commit_manifest_binding_state(
+        &self,
+        height: u64,
+        manifest: &CommitManifest,
+    ) -> CommitManifestBindingState {
+        let Some(checkpoint) = self.wsv_checkpoint(height) else {
+            return CommitManifestBindingState::Unbound;
         };
-        self.kura
-            .validate_v2_startup_replay_storage_binding_unlocked(&binding)?;
-        Ok(binding)
+        match checkpoint.commit_manifest_hash {
+            None => CommitManifestBindingState::Unbound,
+            Some(hash) if hash == manifest.encoded_hash() => CommitManifestBindingState::Bound,
+            Some(_) => CommitManifestBindingState::Mismatched,
+        }
+    }
+
+    pub(crate) fn finality_projection(&self, height: u64) -> Option<&V2StartupFinalityProjection> {
+        self.inventory
+            .entries
+            .get(&height)
+            .map(|entry| &entry.projection)
+    }
+
+    pub(crate) fn durable_tip_finality_artifact(&self, height: u64) -> Option<&V2FinalityArtifact> {
+        if height == self.inventory.boundary.count {
+            self.inventory.durable_tip_artifact.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Return the exact bounded authorization minted by the startup audit.
+    /// [`Kura::begin_v2_startup_finality_verification`] already
+    /// rechecked it under this session's mutation guards, so minting the
+    /// binding is an O(1) `Arc` clone rather than a third historical scan.
+    pub(crate) fn storage_binding(&self) -> Result<V2StartupReplayStorageBinding> {
+        Ok(V2StartupReplayStorageBinding {
+            inventory: Arc::clone(&self.inventory),
+        })
     }
 }
 
@@ -50865,14 +51211,18 @@ mod tests {
             .begin_v2_startup_finality_verification()
             .expect("bind startup inventory")
             .expect("startup inventory is reusable");
+        kura.reset_startup_replay_historical_payload_reads_for_test();
         for _ in 0..2 {
             for artifact in &artifacts {
-                let observed = kura
-                    .v2_finality_artifact_with_receipt_for_startup(&session, artifact.height)
-                    .expect("read audited startup finality")
-                    .expect("audited finality exists")
-                    .0;
-                assert_eq!(observed, *artifact);
+                let observed = session
+                    .finality_projection(artifact.height)
+                    .expect("audited finality projection exists");
+                assert_eq!(observed.height, artifact.height);
+                assert_eq!(observed.block_hash, artifact.block_hash);
+                assert_eq!(
+                    observed.commit_qc_hash,
+                    Hash::new(artifact.commit_qc.encode())
+                );
             }
         }
         let _binding = session
@@ -50882,6 +51232,11 @@ mod tests {
             kura.v2_finality_crypto_verifications_for_test(),
             artifact_count,
             "an O(H) startup capability must not thrash the fixed 64-entry runtime LRU"
+        );
+        assert_eq!(
+            kura.startup_replay_historical_payload_reads_for_test(),
+            0,
+            "projection reuse must not reopen finality or retained-block payloads"
         );
         drop(session);
 
@@ -50894,6 +51249,69 @@ mod tests {
             kura.v2_finality_crypto_verifications_for_test(),
             artifact_count.saturating_add(1),
             "cleanup must restore fixed-LRU runtime verification behavior"
+        );
+    }
+
+    #[test]
+    fn startup_lane_geometry_refresh_reuses_authenticated_replay_inventory() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store startup lane-geometry fixture block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let _receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store startup lane-geometry fixture finality");
+        let checkpoint_hash = Hash::new(b"startup lane-geometry fixture checkpoint");
+        kura.store_wsv_checkpoint(1, block.hash(), checkpoint_hash)
+            .expect("store startup lane-geometry fixture checkpoint");
+        kura.store_commit_manifest(
+            CommitManifest::new(1, block.hash(), None, None, checkpoint_hash, None)
+                .with_authenticated_v2_commit_authority(&artifact),
+        )
+        .expect("store startup lane-geometry fixture manifest");
+
+        kura.clear_v2_finality_verification_cache_for_test();
+        kura.reset_v2_finality_crypto_verifications_for_test();
+        let inventory = kura
+            .validate_v2_finality_inventory_on_startup()
+            .expect("audit startup lane-geometry fixture");
+        assert_eq!(
+            kura.v2_finality_crypto_verifications_for_test(),
+            1,
+            "the authenticated startup audit verifies the fixture exactly once"
+        );
+        kura.install_v2_startup_finality_verification_inventory(inventory);
+
+        // Production Kura opens only the authenticated primary lane. State startup then
+        // publishes the remaining configured lane directories before replay planning.
+        let lane_config = two_lane_runtime_config();
+        let secondary = lane_config
+            .entry(LaneId::from(1))
+            .expect("two-lane fixture contains its secondary lane");
+        let secondary_artifacts =
+            Kura::lane_artifact_dir(&secondary.blocks_dir(&kura.store_root()));
+        std::fs::create_dir_all(&secondary_artifacts)
+            .expect("publish secondary lane artifact directory");
+        kura.replace_lane_storage_entries_for_test(&lane_config);
+
+        kura.clear_v2_finality_verification_cache_for_test();
+        kura.reset_startup_replay_historical_payload_reads_for_test();
+        kura.refresh_v2_startup_replay_auxiliary_binding()
+            .expect("refresh only post-geometry auxiliary identities");
+        let plan = crate::sumeragi::plan_v2_startup_replay(kura.as_ref())
+            .expect("reuse authenticated audit after lane geometry setup");
+
+        assert_eq!(plan.durable_height(), 1);
+        assert_eq!(
+            kura.v2_finality_crypto_verifications_for_test(),
+            1,
+            "post-geometry planning must not run a second finality audit"
+        );
+        assert_eq!(
+            kura.startup_replay_historical_payload_reads_for_test(),
+            0,
+            "post-geometry planning must reuse in-memory replay projections"
         );
     }
 

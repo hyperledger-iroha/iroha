@@ -1104,15 +1104,13 @@ pub fn capability_name(capability: CapabilityType) -> &'static str {
 /// Parse a capability name used in configuration into the corresponding enum value.
 #[must_use]
 pub fn parse_capability_name(name: &str) -> Option<CapabilityType> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "torii" | "torii_gateway" => Some(CapabilityType::ToriiGateway),
-        "quic" | "quic_noise" => Some(CapabilityType::QuicNoise),
-        "soranet" | "soranet_pq" | "soranet-pq" | "soranet-hybrid-pq" => {
-            Some(CapabilityType::SoraNetHybridPq)
-        }
-        "range" | "chunk_range_fetch" => Some(CapabilityType::ChunkRangeFetch),
-        "potr_mldsa" | "potr-mldsa" => Some(CapabilityType::PotrMlDsa),
-        "vendor_reserved" | "vendor" => Some(CapabilityType::VendorReserved),
+    match name {
+        "torii_gateway" => Some(CapabilityType::ToriiGateway),
+        "quic_noise" => Some(CapabilityType::QuicNoise),
+        "chunk_range_fetch" => Some(CapabilityType::ChunkRangeFetch),
+        "soranet_pq" => Some(CapabilityType::SoraNetHybridPq),
+        "potr_mldsa" => Some(CapabilityType::PotrMlDsa),
+        "vendor_reserved" => Some(CapabilityType::VendorReserved),
         _ => None,
     }
 }
@@ -1141,6 +1139,47 @@ fn collect_warnings(advert: &ProviderAdvertV1) -> Vec<AdvertWarning> {
         }
     }
     warnings
+}
+
+#[cfg(test)]
+mod capability_name_tests {
+    use super::*;
+
+    #[test]
+    fn capability_names_round_trip_only_the_v1_canonical_labels() {
+        let canonical = [
+            ("torii_gateway", CapabilityType::ToriiGateway),
+            ("quic_noise", CapabilityType::QuicNoise),
+            ("chunk_range_fetch", CapabilityType::ChunkRangeFetch),
+            ("soranet_pq", CapabilityType::SoraNetHybridPq),
+            ("potr_mldsa", CapabilityType::PotrMlDsa),
+            ("vendor_reserved", CapabilityType::VendorReserved),
+        ];
+        for (name, capability) in canonical {
+            assert_eq!(parse_capability_name(name), Some(capability));
+            assert_eq!(capability_name(capability), name);
+        }
+
+        for alias in [
+            "torii",
+            "quic",
+            "range",
+            "soranet",
+            "soranet-pq",
+            "soranet-hybrid-pq",
+            "potr-mldsa",
+            "vendor",
+            "TORII_GATEWAY",
+            " torii_gateway",
+            "torii_gateway ",
+        ] {
+            assert_eq!(
+                parse_capability_name(alias),
+                None,
+                "alias {alias:?} must fail"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

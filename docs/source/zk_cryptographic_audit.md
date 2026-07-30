@@ -1,6 +1,6 @@
 # Iroha ZK Cryptographic Audit
 
-Date: 2026-06-02
+Date: 2026-07-30
 
 This report audits Iroha-owned zero-knowledge verifier code and proof-bearing runtime
 integrations. Vendored Halo2, curve, hash, encoding, and arithmetic libraries are
@@ -11,17 +11,20 @@ lane proof binding.
 
 ## Executive Summary
 
-Normal ledger-grade ZK admission is designed to fail closed. A ledger-accepted proof
-must bind an active registered verifying key, backend label, circuit id,
-schema/public-input commitment, verifying-key hash, and proof bytes. Registry policy
-and runtime guardrails reject trusted-setup and developer-only backend labels before
-verifier dispatch.
+Normal ledger-grade ZK admission is designed to fail closed. A
+registry-dispatched proof must bind an active registered verifying key, backend
+label, circuit id, schema/public-input commitment, verifying-key hash, and
+proof bytes. A typed privacy proof instead binds an exact compiled protocol
+activation, statement schema, verifier and engine digests, signed transaction
+intent, and proof bytes. Both surfaces reject unsupported or substituted
+artifacts before verifier dispatch.
 
-The native STARK/FRI verifier performs canonical Goldilocks field checks, Merkle
-opening checks, Fiat-Shamir query derivation, FRI folding checks, AIR composition
-checks, and OpenVerifyEnvelope metadata binding. ZK-ACE adds exact policy/action/
-domain binding, transfer digest binding, replay-nullifier deduplication, active
-identity/policy checks, and witness nonzero constraints.
+The native STARK/FRI verifier performs canonical Goldilocks field checks,
+Merkle opening checks, Fiat--Shamir query derivation, FRI folding checks, and
+AIR composition checks. Generic circuits bind `OpenVerifyEnvelope` metadata.
+ZK-ACE uses the separate typed `PrivacyProofEnvelopeV1` path and adds compiled
+profile, governed policy, signed transaction intent, trusted genesis, transfer,
+and replay-nullifier binding.
 
 The Iroha-owned IPA/Halo2 stack is a transparent IPA verifier wrapper. This audit
 does not source-audit vendored Halo2 or curve crates; it audits Iroha's generator
@@ -42,8 +45,12 @@ records that as the primary finding and models the same class of failure in TLA+
 Audited code evidence:
 
 - [../../crates/iroha_data_model/src/zk.rs](../../crates/iroha_data_model/src/zk.rs):
-  `OpenVerifyEnvelope`, STARK wrapper payloads, ZK-ACE public inputs, witness
-  commitments, replay nullifiers, schema hashes, and public-input digests.
+  `OpenVerifyEnvelope`, generic STARK wrapper payloads,
+  `ZkAcePrivacyPublicInputsV1`, replay-nullifier derivation, and canonical
+  public-input hashing.
+- [../../crates/iroha_data_model/src/privacy.rs](../../crates/iroha_data_model/src/privacy.rs):
+  the closed privacy protocol registry, compiled-artifact bindings, governed
+  ZK-ACE policy records, typed statements, and proof envelopes.
 - [../../crates/iroha_data_model/src/proof.rs](../../crates/iroha_data_model/src/proof.rs):
   `ProofBox`, `ProofAttachment`, `VerifyingKeyBox`, `VerifyingKeyRecord`, key status,
   and backend/commitment serialization policy.
@@ -51,17 +58,25 @@ Audited code evidence:
   dispatch, preverify/dedup, backend-label guardrails, envelope metadata checks,
   STARK/Halo2 entry points, and timing/size guardrails.
 - [../../crates/iroha_core/src/zk_stark.rs](../../crates/iroha_core/src/zk_stark.rs):
-  native Goldilocks STARK/FRI verifier, AIR bindings, ZK-ACE AIR synthesis and
-  verification helpers.
+  generic native Goldilocks STARK/FRI verifier and AIR bindings; the generic
+  boundary explicitly rejects the retired ZK-ACE relation.
+- [../../crates/iroha_core/src/privacy_engines/zk_ace.rs](../../crates/iroha_core/src/privacy_engines/zk_ace.rs)
+  and
+  [../../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs](../../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs):
+  the private zeroizing witness, compiled profile, dedicated masked AIR,
+  theorem-bound DEEP/FRI prover, and native verifier.
 - [../../crates/iroha_zkp_halo2/src/lib.rs](../../crates/iroha_zkp_halo2/src/lib.rs):
   IPA verifier wrapper, generator derivation, envelope decoding, limits, and batch
   verification API.
 - [../../crates/zk_ace_prover/src/lib.rs](../../crates/zk_ace_prover/src/lib.rs):
-  ZK-ACE v0 parameters, VK payload construction, proof attachment construction, and
-  witness validation.
+  governed transfer construction, typed proof-envelope assembly, exact
+  transaction-intent binding, and signed `SubmitPrivacyProofV1` creation.
+- [../../crates/iroha_core/src/smartcontracts/isi/privacy.rs](../../crates/iroha_core/src/smartcontracts/isi/privacy.rs):
+  privacy activation and ZK-ACE policy governance, typed proof verification,
+  atomic transfer effects, and replay-nullifier consumption.
 - [../../crates/iroha_core/src/smartcontracts/isi/world.rs](../../crates/iroha_core/src/smartcontracts/isi/world.rs):
-  verifying-key registry policy, `VerifyProof`, ZK-ACE authorized transfer,
-  governance privacy proof checks, and FASTPQ lane relay admission.
+  generic verifying-key registry policy, `VerifyProof`, governance proof
+  checks, and FASTPQ lane relay admission.
 - [../../crates/iroha_core/src/smartcontracts/ivm/host.rs](../../crates/iroha_core/src/smartcontracts/ivm/host.rs):
   IVM VK loading, envelope enforcement, verifier syscalls, and batch verification.
 - [../../crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs](../../crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs):
@@ -93,21 +108,28 @@ when committed-result trust is set; the flag may log the replay condition but no
 longer authorizes transfer execution, replay-nullifier consumption, or balance
 movement for a failed ZK-ACE proof.
 
-Evidence: `SubmitZkAceAuthorizedTransfer` in
-[../../crates/iroha_core/src/smartcontracts/isi/world.rs](../../crates/iroha_core/src/smartcontracts/isi/world.rs)
-performs local STARK verification and returns `invalid ZK-ACE authorization proof`
-on verifier failure. When `state_transaction.trust_committed_execution_results` is
-set, the code only logs the replay mismatch before returning the same error.
+Evidence: the direct `SubmitZkAceAuthorizedTransfer` wire is retired. The
+canonical `zk_ace_prover` path selects an active governed
+`PrivacyZkAcePolicyRecordV1`, builds a typed statement and native proof, wraps
+them in exactly one signed `SubmitPrivacyProofV1`, and does not expose a
+caller-selected backend, verifier key, proof attachment, or generic
+`OpenVerifyEnvelope`. `SubmitPrivacyProofV1` execution in
+[../../crates/iroha_core/src/smartcontracts/isi/privacy.rs](../../crates/iroha_core/src/smartcontracts/isi/privacy.rs)
+validates the signed transaction intent, compiled activation, governed policy,
+native proof, and replay state before committing the transfer effects. The
+native verifier does not consult committed-result trust.
 
 Impact: the original bypass could authorize a transparent transfer and consume a
 replay nullifier if the flag were enabled during new block production, fresh
 transaction admission, or uncommitted ledger execution. The remediated ZK-ACE path
 no longer depends on that operational boundary.
 
-Regression coverage: `zk_ace_rejects_inner_stark_tamper_even_when_committed_result_trust_is_set`
-builds a valid ZK-ACE STARK proof, tampers the inner STARK envelope after metadata
-binding, enables committed-result trust, and asserts rejection plus unchanged balances
-and unconsumed replay nullifier.
+Regression coverage:
+`zk_ace_production_dispatch_derives_exact_effects_and_rejects_adversarial_binding`
+rejects proof and typed-statement substitution, while
+`zk_ace_submit_atomically_transfers_and_records_replay_nullifier` exercises the
+governed transfer and one-shot replay effect. Transaction-intent tests reject
+missing, stale, substituted, and consumed bindings before effects.
 
 Residual recommendation: keep `trust_committed_execution_results` restricted to
 committed-block replay/recovery contexts for all other proof-bearing flows, and avoid
@@ -135,24 +157,32 @@ posts a successful diagnostic `/v1/zk/submit-proof` request, derives the corresp
 ledger proof id, and asserts that `/v1/proofs/{id}` still reports not found because no
 ledger `VerifyProof` path ran.
 
-### ZK-AUDIT-03: ZK-ACE v0 STARK/FRI parameters need an explicit production floor
+### ZK-AUDIT-03: ZK-ACE v0 STARK/FRI profile must remain compiled and soundness-bound
 
 Severity: Medium.
 
-Status: Hardened. `zk_ace_stark_fri_params_v1()` now configures `n_log2 = 10`,
-`blowup_log2 = 3`, `queries = 24`, binary folding, binary Merkle paths, and
-SHA-256, with a 1 MiB max proof cap on the bundled VK record and the default
-confidential proof admission cap. Ledger-grade ZK-ACE identity admission decodes
-the inline STARK VK payload and rejects active VK records below that production
-floor.
+Status: Hardened. ZK-ACE uses one compiled native profile: a 4,096-row masked
+trace, 65,536-row low-degree extension, quartic Goldilocks challenges, 108
+unique FRI queries, binary folding and Merkle paths, and SHA-256 transcript
+binding. The fixed proof wire is 1,341,142 bytes and the compiled certificate
+claims 128 work-normalized bits in the classical random-oracle model; it does
+not claim a quantum-random-oracle reduction. The profile digest binds the
+parameter, verifier, statement-schema, and engine-manifest digests used by
+privacy activation and proof admission.
 
-Residual recommendation: maintain a quantitative production security target and
-derive future `n_log2`, blowup, query count, hash mode, AIR degree, and grinding
-bounds from that target. Treat parameter changes as governance-visible VK changes.
+Residual recommendation: maintain the quantitative security certificate and
+rederive its AIR degree, masking, DEEP, FRI, query, and Fiat--Shamir bounds for
+any profile change. A changed profile requires a new protocol identity and data
+model release; callers cannot substitute verifier parameters through governance
+or the proof wire.
 
-Regression coverage: `zk_ace_rejects_downgraded_stark_verifier_parameters` installs
-an active inline ZK-ACE VK with the historical PoC parameters and asserts that
-identity registration fails before any ZK-ACE identity state is recorded.
+Regression coverage: `zk_ace_profile_is_deterministic_complete_and_bounded` and
+`zk_ace_compiled_profile_rejects_every_binding_mismatch` pin the activation
+tuple. The native STARK tests
+`air_degree_mask_and_work_security_substitution_fail_closed`,
+`fri_theorem_precondition_substitutions_fail_closed`, and
+`theorem_backed_fp4_soundness_budget_clears_128_bits` pin the compiled security
+geometry.
 
 ### ZK-AUDIT-04: BN254/Halo2 naming must remain segregated from ledger-grade IPA policy
 
@@ -181,10 +211,13 @@ and runtime dispatch.
 
 ## Binding and Guardrails
 
-`OpenVerifyEnvelope` carries backend tag, circuit id, VK hash, public inputs, proof
-bytes, and auxiliary bytes. Admission validation rejects unsupported backends, empty
-circuit ids, zero VK hashes, empty public inputs, empty proofs, oversized fields, and
-nonempty aux unless explicitly allowed.
+`OpenVerifyEnvelope` carries backend tag, circuit id, VK hash, public inputs,
+proof bytes, and auxiliary bytes for the generic proof surface. Admission
+validation rejects unsupported backends, empty circuit ids, zero VK hashes,
+empty public inputs, empty proofs, oversized fields, and nonempty aux unless
+explicitly allowed. ZK-ACE identifiers are reserved at this generic boundary;
+the generic STARK prover and verifier reject them and direct callers to
+`SubmitPrivacyProofV1`.
 
 `ProofAttachment` rejects inconsistent backend fields and legacy inline VK fields.
 `VerifyingKeyRecord` binds circuit id, backend, curve, schema hash, commitment, size
@@ -203,38 +236,43 @@ noncanonical field elements, validates verifier parameters, verifies Merkle open
 derives Fiat-Shamir query indices from bound transcript material, checks FRI folds,
 and binds AIR trace/composition/public digests.
 
-STARK OpenVerifyEnvelope dispatch additionally checks backend tag, VK hash, backend
-profile hash mode, normalized circuit ids, inner STARK params, derived domain tag,
-and ZK-ACE public-input digest. This binds registry record, wrapper envelope, inner
-STARK statement, transcript, and public inputs.
+The ZK-ACE ledger path instead carries
+`PrivacyProofEnvelopeV1::ZkAcePqAuthorizationV0`. Its public input is
+`ZkAcePrivacyPublicInputsV1`: the exact typed
+`ZkAcePqAuthorizationStatementV1` plus the trusted genesis hash. The statement
+binds the chain, action index, transaction-intent digest, compiled artifact
+digests, governed policy id and digest, authorization epoch, identity
+commitment, transfer participants, asset, atomic amount, and replay nullifier.
+The low-level AIR projection is internal to the dedicated prover and verifier.
 
-ZK-ACE AIR binds identity commitment, replay nullifier, transaction digest, chain id,
-domain tag, action class, policy hash, transfer participants, asset id, amount, and
-verifier key id. Witness validation rejects zero identity root, zero identity
-blinding, zero replay secret, zero public commitment/nullifier/policy hash, and empty
-action/domain strings. Runtime admission additionally requires canonical ZK-ACE
-action/domain constants, active identity/policy, allowed source account, exact public
-input bytes, exact schema hash, canonical backend, and active canonical VK.
+`ZkAcePrivacyWitnessV1` owns the identity root, identity blinding, and replay
+secret behind private fields. It is non-serializable, non-cloneable, and
+zeroized on drop; construction rejects an all-zero component. Runtime admission
+requires the exact active compiled protocol activation, a valid active governed
+policy, an allowlisted source, the signed transaction-intent binding, trusted
+genesis, matching statement and policy epochs, a valid native proof, and an
+unused replay nullifier.
 
-The AIR places witness limbs in a private row and tries up to 256 deterministic
-blinding attempts to avoid opening that row under transcript-derived queries. Existing
-tests assert safe openings do not recover witness material and reject tampered AIR or
-public-input bindings. The privacy claim remains a proof obligation for production.
+The prover independently masks the execution trace and the full FRI batching
+space before transcript challenges, links the AIR at a quartic-extension DEEP
+point, and self-verifies each produced proof. Adversarial tests mutate typed
+public bindings, witness relations, mask geometry, DEEP openings, query
+schedules, and FRI paths.
 
 ## Parameter Security
 
-ZK-ACE v0 uses `n_log2 = 10`, `blowup_log2 = 3`, `fold_arity = 2`, `queries = 24`,
-`merkle_arity = 2`, SHA-256, and domain tag `iroha:zk-ace:stark-fri:v0`. The code
-binds these values correctly through VK payloads, envelope metadata, inner params,
-transcript challenge derivation, and domain tags. Ledger admission rejects active
-ZK-ACE VK payloads whose `n_log2`, blowup, or query count falls below that floor.
+ZK-ACE v0 fixes its profile in the compiled engine descriptor rather than a
+caller- or registry-supplied VK payload. The descriptor commits the Goldilocks
+base and quartic extension, degree-two AIR, 4,096-row trace, 65,536-row LDE,
+trace and FRI masks, one DEEP point, 108 unique queries, twelve binary FRI
+rounds, SHA-256 domains, fixed proof wire, and work-normalized classical-ROM
+bound. Admission requires the activation record to match the compiled profile
+exactly.
 
-Security interpretation: SHA-256 Merkle and Fiat-Shamir binding is a strong
-dependency assumption. The hardened floor removes the historical domain-16/two-query
-PoC profile from ledger-grade admission, but exact soundness remains a proof
-obligation because this audit does not supply a formal STARK/FRI reduction. The
-256-attempt blinding loop limits privacy-row grinding, but its security depends on
-transcript query distribution and AIR shape.
+Security interpretation: SHA-256 Merkle and Fiat--Shamir binding remains a
+dependency assumption. The implementation carries a theorem-derived
+classical-ROM certificate and fail-closed geometry tests; this audit does not
+independently reproduce that reduction, and no qROM claim is made.
 
 ## IPA/Halo2 Verification
 
@@ -291,8 +329,8 @@ counterexamples.
 | Circuit/schema/public inputs cannot be swapped | Satisfied for registry-bound paths | normalized circuit checks, schema hash checks, public-input digest checks |
 | STARK domain tag is bound | Satisfied | derived STARK domain tag checked against inner envelope |
 | Malformed STARK proof rejection | Satisfied by code shape and tests | decode, parameter, Merkle, AIR, and FRI checks |
-| ZK-ACE replay rejected | Satisfied; verifier-failure trust bypass remediated | replay nullifier WSV checks; see ZK-AUDIT-01 |
-| ZK-ACE privacy strength | Proof obligation | private-row avoidance and tests exist; production proof absent |
+| ZK-ACE replay rejected | Satisfied; verifier-failure trust bypass remediated | signed transaction intent, governed policy, and replay-nullifier checks; see ZK-AUDIT-01 |
+| ZK-ACE privacy strength | Compiled classical-ROM certificate; qROM not claimed | independent trace/FRI masking, FP4 DEEP/FRI, 128-bit work-normalized bound, adversarial geometry tests |
 | IPA metadata binding | Satisfied for Iroha-owned wrapper | generator DST, transcript limits, shape checks, VK/envelope checks |
 | Trusted setup fail-closed | Satisfied in audited policy | registry and runtime label rejection |
 | Diagnostic endpoint not ledger-grade | Satisfied in code; documentation risk | Torii attachment/prover worker are report-only; see ZK-AUDIT-02 |
@@ -316,12 +354,13 @@ when circuit-synthesis evidence is required. The default slice still exercises
 the fast builder, preflight, public-input substitution, transcript, range, and
 metadata-binding negative paths.
 
-Audit-driven regression coverage includes the fresh ZK-ACE trust-flag bypass,
-diagnostic success not creating ledger proof records, continued backend-label
-rejection, VK/domain binding on parameter changes, and ZK-ACE rejection of
-downgraded STARK/FRI verifier parameters. Additional trust-boundary regressions cover
-tampered Kagemusha confidential-transfer and asset-hidden transfer proofs when
-committed-result trust is set. Add further regressions only for newly confirmed gaps.
+Audit-driven regression coverage includes the retired ZK-ACE trust-flag
+bypass, diagnostic success not creating ledger proof records, continued
+backend-label rejection, compiled-profile substitution, typed-statement
+mutation, governed-policy drift, and malformed dedicated STARK proofs.
+Additional trust-boundary regressions cover tampered Kagemusha
+confidential-transfer and asset-hidden transfer proofs when committed-result
+trust is set. Add further regressions only for newly confirmed gaps.
 
 ## Conclusion
 
@@ -331,8 +370,9 @@ public-input binding, and proof dispatch are consistently tied together. Native
 STARK/FRI and FASTPQ verification include meaningful malformed-proof rejection and
 statement-binding checks.
 
-The remaining work is the quantitative parameter proof. The historical ZK-ACE
-PoC-scale parameter profile is now rejected by ledger-grade admission, but a
-production soundness analysis is still required for exact security margins.
+ZK-ACE now carries a quantitative compiled-profile certificate and fixed proof
+wire instead of the historical caller-selected PoC parameters. Independent
+review must be repeated if that profile changes, and the current certificate is
+strictly a classical random-oracle claim rather than a qROM claim.
 Recovery-only trust and diagnostic endpoints must remain outside fresh ledger
 admission, with tests proving that separation across proof-bearing flows.

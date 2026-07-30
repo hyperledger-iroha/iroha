@@ -5,6 +5,37 @@ import XCTest
 final class SorafsReplicationInstructionBuildersTests: XCTestCase {
     private let orderId = String(repeating: "ab", count: 32)
     private let providerId = String(repeating: "10", count: 32)
+    private let providerOwner =
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+    private let policyId = String(repeating: "21", count: 32)
+    private let predecessorDigest = String(repeating: "32", count: 32)
+    private let policyDigest = String(repeating: "43", count: 32)
+    private let blockHash = String(repeating: "54", count: 32)
+
+    private func completionAuthority(
+        revision: UInt64 = 2,
+        predecessorDigest: String? = nil,
+        providerOwner: String? = nil
+    ) throws -> SorafsProviderIngestCompletionAuthorityV1 {
+        try SorafsProviderIngestCompletionAuthorityV1(
+            providerOwner: providerOwner ?? self.providerOwner,
+            signerPolicy: SorafsProviderIngestCompletionSignerPolicyV1(
+                policyId: policyId,
+                revision: revision,
+                predecessorDigest: predecessorDigest ?? self.predecessorDigest,
+                policyDigest: policyDigest
+            )
+        )
+    }
+
+    private func finalizedAnchor(
+        height: UInt64 = 41
+    ) throws -> SorafsProviderIngestFinalizedAnchorV1 {
+        try SorafsProviderIngestFinalizedAnchorV1(
+            height: height,
+            blockHash: blockHash
+        )
+    }
 
     func testIssueUsesExactRustFieldsAndValidatesFixture() throws {
         let fixture = try replicationFixture()
@@ -53,21 +84,59 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
         let instruction = try SorafsReplicationInstructionBuilders.completeReplicationOrder(
             orderId: orderId,
             providerId: providerId,
-            completionEpoch: 27
+            completionEpoch: 27,
+            expectedAuthority: completionAuthority(),
+            expectedAssignmentRevision: 3,
+            finalizedAnchor: finalizedAnchor()
         )
+        let outer = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: instruction.data) as? [String: Any]
+        )
+        let body = try XCTUnwrap(
+            outer["CompleteReplicationOrder"] as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(body.keys),
+            [
+                "order_id",
+                "provider_id",
+                "completion_epoch",
+                "expected_authority",
+                "expected_assignment_revision",
+                "finalized_anchor",
+            ]
+        )
+        let authority = try XCTUnwrap(body["expected_authority"] as? [String: Any])
+        XCTAssertEqual(authority["provider_owner"] as? String, providerOwner)
+        let policy = try XCTUnwrap(authority["signer_policy"] as? [String: Any])
+        XCTAssertEqual(policy["policy_id"] as? String, policyId)
+        XCTAssertEqual((policy["revision"] as? NSNumber)?.uint64Value, 2)
+        XCTAssertEqual(policy["predecessor_digest"] as? String, predecessorDigest)
+        XCTAssertEqual(policy["policy_digest"] as? String, policyDigest)
+        XCTAssertEqual(
+            (body["expected_assignment_revision"] as? NSNumber)?.uint64Value,
+            3
+        )
+        let anchor = try XCTUnwrap(body["finalized_anchor"] as? [String: Any])
+        XCTAssertEqual((anchor["height"] as? NSNumber)?.uint64Value, 41)
+        XCTAssertEqual(anchor["block_hash"] as? String, blockHash)
         let decoded = try SorafsReplicationInstructionBuilders.decode(instruction)
         XCTAssertEqual(
             decoded,
             .complete(try SorafsCompleteReplicationOrderInstruction(
                 orderId: orderId,
                 providerId: providerId,
-                completionEpoch: 27
+                completionEpoch: 27,
+                expectedAuthority: completionAuthority(),
+                expectedAssignmentRevision: 3,
+                finalizedAnchor: finalizedAnchor()
             ))
         )
 
         let legacy = try NoritoJSON.fromJSONObject([
             "CompleteReplicationOrder": [
                 "order_id": orderId,
+                "provider_id": providerId,
                 "completion_epoch": 27,
             ],
         ])
@@ -78,6 +147,9 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
                 "order_id": orderId,
                 "provider_id": providerId,
                 "completion_epoch": 27,
+                "expected_authority": authority,
+                "expected_assignment_revision": 3,
+                "finalized_anchor": anchor,
                 "relayer": "not-an-authority",
             ],
         ])
@@ -86,14 +158,42 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
             try SorafsCompleteReplicationOrderInstruction(
                 orderId: orderId,
                 providerId: String(repeating: "00", count: 32),
-                completionEpoch: 27
+                completionEpoch: 27,
+                expectedAuthority: completionAuthority(),
+                expectedAssignmentRevision: 3,
+                finalizedAnchor: finalizedAnchor()
             )
         )
         XCTAssertThrowsError(
             try SorafsCompleteReplicationOrderInstruction(
                 orderId: orderId.uppercased(),
                 providerId: providerId,
-                completionEpoch: 27
+                completionEpoch: 27,
+                expectedAuthority: completionAuthority(),
+                expectedAssignmentRevision: 3,
+                finalizedAnchor: finalizedAnchor()
+            )
+        )
+        XCTAssertThrowsError(
+            try SorafsCompleteReplicationOrderInstruction(
+                orderId: orderId,
+                providerId: providerId,
+                completionEpoch: 27,
+                expectedAuthority: completionAuthority(),
+                expectedAssignmentRevision: 0,
+                finalizedAnchor: finalizedAnchor()
+            )
+        )
+        XCTAssertThrowsError(try finalizedAnchor(height: 0))
+        XCTAssertThrowsError(
+            try completionAuthority(providerOwner: " \(providerOwner)")
+        )
+        XCTAssertThrowsError(
+            try SorafsProviderIngestCompletionSignerPolicyV1(
+                policyId: policyId,
+                revision: 2,
+                predecessorDigest: nil,
+                policyDigest: policyDigest
             )
         )
     }

@@ -38,7 +38,7 @@ use super::{
     date::{RFC3339_SECONDS_PER_DAY_V1, RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1},
     figure9::{VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaMdlFigure9WitnessV1, synthesize_figure9},
     figure9_layout::FIGURE9_LAYOUT,
-    nifs::NovaNifs,
+    nifs::{NovaNifs, NovaNifsProverInput},
     r1cs::{Instance, RelaxedInstance, RelaxedWitness, Shape, SparseMatrix, Witness},
     spartan::RelaxedSpartanProof,
     sponge::{Keccak256, keccak256},
@@ -422,13 +422,15 @@ pub fn prove_vega_mdl_figure9_v1<R: VegaRandomSourceV1>(
     let cross_term_blindings = sample_nonzero_scalars(random, dimensions.error_commitment_points)?;
     let mut transcript = release_transcript(context, public_inputs, &shape, dimensions)?;
     let (nifs, folded_instance, folded_witness) = NovaNifs::prove(
-        &key,
-        &shape,
-        &mask_instance,
-        &mask_witness,
-        &regular_instance,
-        &regular_witness,
-        &cross_term_blindings,
+        NovaNifsProverInput {
+            key: &key,
+            shape: &shape,
+            relaxed_instance: &mask_instance,
+            relaxed_witness: &mask_witness,
+            regular_instance: &regular_instance,
+            regular_witness: &regular_witness,
+            cross_term_blindings: &cross_term_blindings,
+        },
         &mut transcript,
     )
     .map_err(|_| VegaMdlProofErrorV1::InvalidCompiledProfile)?;
@@ -510,6 +512,7 @@ pub fn verify_vega_mdl_figure9_v1(
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 struct CommitmentWireV1 {
     points: Vec<VegaPointWireV1>,
@@ -518,6 +521,7 @@ struct CommitmentWireV1 {
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 struct VegaMdlProofWireV1 {
     version: u8,
@@ -758,13 +762,14 @@ fn sample_relaxed_mask<R: VegaRandomSourceV1>(
     assignment.extend_from_slice(&values);
     assignment.push(relaxation);
     assignment.extend_from_slice(&public_inputs);
-    let (a, b, c) = shape
+    let products = shape
         .multiply(&assignment)
         .map_err(|_| VegaMdlProofErrorV1::InvalidCompiledProfile)?;
-    let error = a
+    let error = products
+        .a
         .into_iter()
-        .zip(b)
-        .zip(c)
+        .zip(products.b)
+        .zip(products.c)
         .map(|((a, b), c)| a * b - relaxation * c)
         .collect::<Vec<_>>();
     let witness_blindings = sample_nonzero_scalars(random, dimensions.witness_commitment_points)?;

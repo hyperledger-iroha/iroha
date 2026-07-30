@@ -35,7 +35,7 @@ translation_last_reviewed: 2026-02-07
 ## سير عمل القبول
 
 1. **Получить информацию**
-   - CLI: добавлен `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`.
+   - CLI: добавлен `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`.
      لإنتاج `ProviderAdmissionProposalV1` + حزمة الاستيثاق.
    - Результат: установлен размер ставки > 0, установлен чанкер на `profile_id`.
 2. **Вечеринка**
@@ -58,7 +58,7 @@ translation_last_reviewed: 2026-02-07
 
 ### Интерфейс командной строки
 
-На сайте `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+На сайте `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Дополнительные сведения: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     И18НИ00000063Х, И18НИ00000064Х, И18НИ00000065Х,
     `--jurisdiction-code=<ISO3166-1>`, а также `--endpoint=<kind:host>`.
@@ -95,7 +95,7 @@ translation_last_reviewed: 2026-02-07
 1. أنشئ زوج المقترح/advert اللاحق باستخدام `provider-admission proposal` и `provider-admission sign`, `--retention-epoch` обеспечивает ставку/конечные точки.
 2. Нога
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -111,7 +111,7 @@ translation_last_reviewed: 2026-02-07
 #### إلغاء طارئ
 1. Отправьте конверт в виде конверта:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

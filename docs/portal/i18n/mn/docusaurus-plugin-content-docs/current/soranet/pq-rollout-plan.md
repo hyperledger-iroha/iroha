@@ -97,11 +97,11 @@ rollout_phase = "default"
 
 | Гадаргуу | Канар (А шат) | Налуу зам (Б шат) | Өгөгдмөл (С шат) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` авах | `--anonymity-policy stage-a` эсвэл үе шат дээр тулгуурлана | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` авах | `--anonymity-policy anon-guard-pq` эсвэл үе шат дээр тулгуурлана | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Оркестрийн тохиргоо JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust клиентийн тохиргоо (`iroha.toml`) | `rollout_phase = "canary"` (анхдагч) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` гарын үсэг зурсан командууд | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, сонголтоор `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, сонголтоор `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, сонголтоор `.ANON_STRICT_PQ` |
+| `iroha_cli` гарын үсэг зурсан командууд | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, сонголтоор `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, сонголтоор `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, сонголтоор `.ANON_STRICT_PQ` |
 | JavaScript оркестрын туслахууд | `rolloutPhase: "canary"` эсвэл `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -124,7 +124,7 @@ rollout_phase = "default"
 
 3. **Клиент/SDK канар (T нэмэх 1 долоо хоног)**
 
-   - Үйлчлүүлэгчийн тохиргоонд `rollout_phase = "ramp"`-г эргүүлэх эсвэл SDK когортуудад зориулсан `stage-b`-г хүчингүй болгох.
+   - Үйлчлүүлэгчийн тохиргоонд `rollout_phase = "ramp"`-г эргүүлэх эсвэл SDK когортуудад зориулсан `anon-majority-pq`-г хүчингүй болгох.
    - Телеметрийн ялгааг (`sorafs_orchestrator_policy_events_total` `client_id` болон `region`-р бүлэглэсэн) авч, тэдгээрийг танилцуулах ослын бүртгэлд хавсаргана.
 
 4. **Өгөгдмөл урамшуулал (T нэмэх 3 долоо хоног)**
@@ -160,7 +160,7 @@ rollout_phase = "default"
 ### Налуу зам → Канар (Б шат → А шат)
 
 1. `sorafs_cli guard-directory import --guard-directory guards.json`-ээр дэвшихээс өмнө авсан хамгаалалтын лавлах агшин зуурын агшинг импортлож, `sorafs_cli guard-directory verify`-г дахин ажиллуулснаар буулгах багцад хэш багтана.
-2. Оркестр болон үйлчлүүлэгчийн тохиргоон дээр `rollout_phase = "canary"` (эсвэл `anonymity_policy stage-a`-ээр дарах) тохируулаад, дараа нь [PQ ratchet runbook](./pq-ratchet-runbook.md)-аас PQ ратчет өрөмдлөгийг дахин тоглуулж, бууралтын шугамыг баталгаажуулна уу.
+2. Оркестр болон үйлчлүүлэгчийн тохиргоон дээр `rollout_phase = "canary"` (эсвэл `anonymity_policy anon-guard-pq`-ээр дарах) тохируулаад, дараа нь [PQ ratchet runbook](./pq-ratchet-runbook.md)-аас PQ ратчет өрөмдлөгийг дахин тоглуулж, бууралтын шугамыг баталгаажуулна уу.
 3. Засаглалд мэдэгдэхээсээ өмнө шинэчлэгдсэн PQ Ratchet болон SN16 телеметрийн дэлгэцийн агшин болон сэрэмжлүүлгийн үр дүнг ослын бүртгэлд хавсаргана уу.
 
 ### Хамгаалалтын хашлага сануулга- Буурах бүрд `docs/source/ops/soranet_transport_rollback.md` лавлагаа авч, дараагийн ажилд зориулж түр зуурын бууралтыг `TODO:` зүйл болгон бүртгэлд бүртгүүлнэ үү.

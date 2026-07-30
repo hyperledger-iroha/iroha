@@ -85,6 +85,27 @@ truncation fields.
 
 Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
+### Evidence-viewer checkpoint authority
+
+Before enabling `[sorafs.storage.evidence_viewer]`, bind
+`checkpoint_store_handle`, non-zero `checkpoint_store_revision`, and canonical
+non-zero `checkpoint_store_policy_digest_hex` to the deployment's exact
+linearizable sealed-CAS provider, alongside the required WebAuthn, grant,
+receipt-signer, and erasure bindings. These are public identity and policy pins
+only; CAS credentials, private keys, and vendor diagnostics remain inside the
+runtime provider. The deployment registry must return all five dependencies
+when the viewer is enabled and none when it is disabled. Missing, unrequested,
+substituted, stale, unavailable, or test-marked providers stop startup.
+
+Treat the external signed head as authoritative. `checkpoint_path` names only a
+private revalidated cache: it may be absent, match the authoritative record, or
+be exactly one predecessor behind it, but it must never seed or replace the
+external head. Operate at least two Torii replicas against the same authority
+and rehearse concurrent CAS rejection, ambiguous-result readback, provider
+rotation, rollback, restart, and cache-loss recovery before promotion. The
+source tree supplies the injection contract, not a production CAS/HSM
+implementation or deployment evidence.
+
 ## 2. Finalized Registration → Provider Ingest → Fetch
 
 1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).

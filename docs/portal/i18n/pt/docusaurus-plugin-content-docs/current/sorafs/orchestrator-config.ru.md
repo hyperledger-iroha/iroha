@@ -59,7 +59,7 @@ Configurado em Norito JSON, ele é configurado automaticamente com o SDK e o dis
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

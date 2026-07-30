@@ -99,11 +99,11 @@ Les assistants `cargo xtask` planifient la génération et automatisent la captu
 
 | Surfaces | Canari (stade A) | Rampe (étape B) | Par défaut (étape C) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` récupérer | `--anonymity-policy stage-a` phase en cours | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` récupérer | `--anonymity-policy anon-guard-pq` phase en cours | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Configuration de l'orchestrateur JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Configuration du client Rust (`iroha.toml`) | `rollout_phase = "canary"` (par défaut) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| Commandes signées `iroha_cli` | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, en option `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, en option `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, en option `.ANON_STRICT_PQ` |
+| Commandes signées `iroha_cli` | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, en option `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, en option `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, en option `.ANON_STRICT_PQ` |
 | Aides de l'orchestrateur JavaScript | `rolloutPhase: "canary"` et `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python`fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Rapide `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ Le SDK bascule entre l'analyseur de scène et la carte et l'orchestrateur pour l
 
 3. **Canari client/SDK (T plus 1 semaine)**
 
-   - Les configurations client comme `rollout_phase = "ramp"` retournent les cohortes SDK et remplacent `stage-b`.
+   - Les configurations client comme `rollout_phase = "ramp"` retournent les cohortes SDK et remplacent `anon-majority-pq`.
    - Capture des différences de télémétrie (`sorafs_orchestrator_policy_events_total` et `client_id` et `region` du groupe) et journal des incidents de déploiement ساتھ attacher کریں۔
 
 4. **Promotion par défaut (T plus 3 semaines)**- Approbation de la gouvernance pour l'orchestrateur et les configurations du client pour `rollout_phase = "default"` pour le commutateur et la liste de contrôle de préparation signée pour la publication des artefacts et la rotation des éléments
@@ -158,7 +158,7 @@ Alerte règles de sécurité `stage` étiquette Canary et phases par défaut seu
 ### Rampe -> Canary (Étape B -> Étape A)
 
 1. Promotion pour capturer un instantané du répertoire de garde `sorafs_cli guard-directory import --guard-directory guards.json` et importer un instantané et `sorafs_cli guard-directory verify` pour rétrograder paquet de hachages شامل ہوں۔
-2. Orchestrator pour les configurations du client comme `rollout_phase = "canary"` défini comme (`anonymity_policy stage-a` remplacement) et pour [PQ Ratchet Runbook] (./pq-ratchet-runbook.md) et PQ Ratchet Drill Repeat comme Le pipeline de déclassement prouve ہو۔
+2. Orchestrator pour les configurations du client comme `rollout_phase = "canary"` défini comme (`anonymity_policy anon-guard-pq` remplacement) et pour [PQ Ratchet Runbook] (./pq-ratchet-runbook.md) et PQ Ratchet Drill Repeat comme Le pipeline de déclassement prouve ہو۔
 3. Mise à jour des captures d'écran de télémétrie PQ Ratchet et SN16 et des résultats des alertes et du journal des incidents et de la pièce jointe de la gouvernance et de la notification.
 
 ### Rappels de garde-corps

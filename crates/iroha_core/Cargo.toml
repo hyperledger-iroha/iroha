@@ -91,9 +91,14 @@ zk-halo2 = ["dep:kaigi_zk"]
 zk-groth16 = []
 zk-stark = []
 # Non-shipping native privacy release evidence. This is deliberately not a
-# default feature and is forwarded only by `iroha_test_network`; `irohad`
-# cannot enable deterministic fixture constructors or the evidence API.
-privacy-release-evidence = ["zk-stark", "json", "iroha_data_model/test-fixtures"]
+# default feature and is forwarded only by `iroha_test_network`; it enables
+# only the exact-12 conformance generator, never the data model's general
+# fixture constructors or block-tampering helpers.
+privacy-release-evidence = [
+    "zk-stark",
+    "json",
+    "iroha_data_model/privacy-exact12-conformance",
+]
 # Transparent Halo2 (IPA over Pasta). Default-on.
 zk-halo2-ipa = ["zk-ipa-native"]
 # Native IPA polynomial-opening verifier (no external halo2 libs). Default-on.

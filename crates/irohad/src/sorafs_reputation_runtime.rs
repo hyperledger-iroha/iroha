@@ -6,8 +6,6 @@
 //! identity-pinned runtime adapters.
 
 use std::{
-    collections::BTreeMap,
-    fmt,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -16,26 +14,14 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, bail};
-use iroha_config::parameters::actual::SorafsReputationRuntime;
-use iroha_core::{
-    queue::{Error as QueueError, Queue},
-    state::{State, StateReadOnly, WorldReadOnly},
-    tx::AcceptedTransaction,
-};
-use iroha_crypto::KeyPair;
+use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_data_model::{
     ChainId,
-    account::AccountId,
-    isi::InstructionBox,
     query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
     sorafs::{
         capacity::ProviderId,
-        reputation::{
-            PorTerminalOutcomeV1, ReputationJournalFinalizedCursorV1,
-            StreamTokenValidationOutcomeV1,
-        },
+        reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
     },
-    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_manifest::{
@@ -45,217 +31,32 @@ use sorafs_node::reputation::{
     ReputationIngestMetricsSnapshot, ReputationIngestPolicyV1, ReputationIngestService,
     ReputationIngestStatusV1,
     runtime::{
+        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
         ReputationCommittedProjectorRuntimeV1, ReputationCommittedReadApiV1,
-        ReputationCommittedReadProjectionV1, ReputationExternalFailureV1,
-        ReputationFinalizedAnchorV1, ReputationFinalizedQueryPolicyV1, ReputationFinalizedQueryV1,
-        ReputationGovernanceDagClientV1, ReputationJournalAppendInstructionV1,
-        ReputationJournalDeliveryMetricsV1, ReputationJournalDeliveryPolicyV1,
-        ReputationJournalDeliveryWorkerV1, ReputationJournalProducerOutboxV1,
-        ReputationJournalProducerPolicyV1, ReputationJournalTransactionRequestV1,
-        ReputationJournalTransactionSubmitOutcomeV1, ReputationJournalTransactionSubmitterV1,
+        ReputationCommittedReadProjectionV1, ReputationFinalizedQueryPolicyV1,
+        ReputationFinalizedQueryV1, ReputationGovernanceDagClientV1,
+        ReputationJournalDeliveryFinalizedViewV1, ReputationJournalDeliveryMetricsV1,
+        ReputationJournalDeliveryPolicyV1, ReputationJournalDeliveryWorkerV1,
+        ReputationJournalProducerOutboxV1, ReputationJournalProducerPolicyV1,
+        ReputationJournalTransactionSubmitterV1, ReputationNativeOutcomeAdmissionApiV1,
         ReputationPublicationPolicyV1, ReputationPublicationReconcilerV1, ReputationRuntimeError,
-        ReputationRuntimeStatusV1, ReputationRuntimeSupervisorV1,
-        ReputationThresholdSignerClientV1,
+        ReputationRuntimeProviderQualificationV1, ReputationRuntimeStatusV1,
+        ReputationRuntimeSupervisorV1, ReputationThresholdSignerClientV1,
+        reputation_journal_submitter_policy_digest_v1,
     },
 };
+
+use crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlV1;
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const MIN_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONCILIATION_TIMEOUT_POLL_MULTIPLIER: u32 = 3;
 const RECONCILIATION_FRESHNESS_GRACE_POLLS: u32 = 2;
 
-type ReputationReconciliationResult = std::result::Result<
-    sorafs_node::reputation::runtime::ReputationRuntimeTickOutcomeV1,
-    ReputationRuntimeError,
->;
+type ReputationReconciliationResult =
+    Result<sorafs_node::reputation::runtime::ReputationRuntimeTickOutcomeV1>;
 type ReputationJoinedReconciliationResult =
     std::result::Result<ReputationReconciliationResult, tokio::task::JoinError>;
-
-const fn journal_cursor(
-    anchor: &ReputationFinalizedAnchorV1,
-) -> ReputationJournalFinalizedCursorV1 {
-    ReputationJournalFinalizedCursorV1 {
-        height: anchor.identity.height,
-        block_hash: anchor.identity.block_hash,
-        finalized_at_unix_ms: anchor.finalized_at_unix_ms,
-    }
-}
-
-fn reputation_external_failure(marker: u8) -> ReputationExternalFailureV1 {
-    ReputationExternalFailureV1::try_new([marker; 32])
-        .expect("fixed non-zero reputation failure marker")
-}
-
-/// Runtime-only signer map and normal-queue journal transaction submitter.
-pub(crate) struct QueuedReputationJournalTransactionSubmitterV1 {
-    handle: String,
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
-    state: Arc<State>,
-    signers: BTreeMap<AccountId, KeyPair>,
-}
-
-impl fmt::Debug for QueuedReputationJournalTransactionSubmitterV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("QueuedReputationJournalTransactionSubmitterV1")
-            .field("handle", &self.handle)
-            .field("signer_count", &self.signers.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl QueuedReputationJournalTransactionSubmitterV1 {
-    /// Bind runtime-only identities to the normal transaction queue.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an unsafe handle, empty signer set, duplicate authority, or a
-    /// signer whose public key does not derive the supplied account.
-    pub(crate) fn try_new(
-        handle: String,
-        chain_id: Arc<ChainId>,
-        queue: Arc<Queue>,
-        state: Arc<State>,
-        signers: impl IntoIterator<Item = (AccountId, KeyPair)>,
-    ) -> Result<Self> {
-        if !is_production_handle(&handle) {
-            bail!("reputation transaction-submitter handle is not production-safe");
-        }
-        let mut signer_map = BTreeMap::new();
-        for (authority, signer) in signers {
-            if AccountId::new(signer.public_key().clone()) != authority
-                || signer_map.insert(authority, signer).is_some()
-            {
-                bail!("reputation transaction signer identity is invalid or duplicated");
-            }
-        }
-        if signer_map.is_empty() {
-            bail!("reputation transaction submitter requires a runtime-only signer");
-        }
-        Ok(Self {
-            handle,
-            chain_id,
-            queue,
-            state,
-            signers: signer_map,
-        })
-    }
-}
-
-impl ReputationJournalTransactionSubmitterV1 for QueuedReputationJournalTransactionSubmitterV1 {
-    fn handle(&self) -> &str {
-        &self.handle
-    }
-
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-        let view = self.state.query_view();
-        if self.signers.is_empty()
-            || view.latest_block().is_none()
-            || &view.chain_id != self.chain_id.as_ref()
-        {
-            Err(reputation_external_failure(0x41))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn supports_authority(&self, authority: &AccountId) -> bool {
-        self.signers.contains_key(authority)
-    }
-
-    fn submit(
-        &self,
-        request: &ReputationJournalTransactionRequestV1,
-    ) -> ReputationJournalTransactionSubmitOutcomeV1 {
-        let not_queued = |marker| ReputationJournalTransactionSubmitOutcomeV1::NotQueued {
-            receipt: reputation_submission_receipt(request.idempotency_key, marker),
-        };
-        if request.validate().is_err() {
-            return not_queued(0x51);
-        }
-        if request.chain_id != *self.chain_id {
-            return not_queued(0x52);
-        }
-        let Some(signer) = self.signers.get(&request.authority) else {
-            return not_queued(0x53);
-        };
-        let instruction = match &request.instruction {
-            ReputationJournalAppendInstructionV1::Por(instruction) => {
-                if instruction.entry.event_id != request.event_id
-                    || instruction.entry.source_id != request.source_id
-                    || instruction.entry.recorded_by != request.authority
-                {
-                    return not_queued(0x54);
-                }
-                InstructionBox::from(instruction.clone())
-            }
-            ReputationJournalAppendInstructionV1::StreamToken(instruction) => {
-                if instruction.entry.event_id != request.event_id
-                    || instruction.entry.source_id != request.source_id
-                    || instruction.entry.recorded_by != request.authority
-                {
-                    return not_queued(0x55);
-                }
-                InstructionBox::from(instruction.clone())
-            }
-        };
-        let transaction = match TransactionBuilder::new(
-            request.chain_id.clone(),
-            request.authority.clone(),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction])
-        .try_sign(signer.private_key())
-        {
-            Ok(transaction) => transaction,
-            Err(_) => return not_queued(0x56),
-        };
-        let view = self.state.view();
-        let parameters = view.world().parameters();
-        let accepted = AcceptedTransaction::accept(
-            transaction,
-            self.chain_id.as_ref(),
-            parameters.sumeragi().max_clock_drift(),
-            parameters.transaction(),
-            self.state.crypto().as_ref(),
-        );
-        drop(view);
-        let accepted = match accepted {
-            Ok(accepted) => accepted,
-            Err(_) => return not_queued(0x57),
-        };
-        match self
-            .queue
-            .push_with_lane_with_state(accepted, self.state.as_ref())
-        {
-            Ok(_) => ReputationJournalTransactionSubmitOutcomeV1::Queued {
-                receipt: reputation_submission_receipt(request.idempotency_key, 0x58),
-            },
-            Err(failure)
-                if matches!(
-                    failure.err,
-                    QueueError::InBlockchain
-                        | QueueError::IsInQueue
-                        | QueueError::PlanJournalDurabilityIndeterminate { .. }
-                ) =>
-            {
-                ReputationJournalTransactionSubmitOutcomeV1::Ambiguous {
-                    receipt: reputation_submission_receipt(request.idempotency_key, 0x59),
-                }
-            }
-            Err(_) => not_queued(0x5A),
-        }
-    }
-}
-
-fn reputation_submission_receipt(mut idempotency_key: [u8; 32], marker: u8) -> [u8; 32] {
-    idempotency_key[0] ^= marker;
-    if idempotency_key == [0; 32] {
-        idempotency_key[31] = marker.max(1);
-    }
-    idempotency_key
-}
 
 /// Runtime-only dependencies for the committed reputation worker.
 #[derive(Clone)]
@@ -264,6 +65,7 @@ pub(crate) struct ReputationRuntimeDependenciesV1 {
     pub(crate) journal_transaction_submitter: Arc<dyn ReputationJournalTransactionSubmitterV1>,
     pub(crate) threshold_signer: Arc<dyn ReputationThresholdSignerClientV1>,
     pub(crate) governance_dag: Arc<dyn ReputationGovernanceDagClientV1>,
+    pub(crate) retention_control: Option<Arc<dyn ReputationFinalizedArchiveRetentionControlV1>>,
 }
 
 impl ReputationRuntimeDependenciesV1 {
@@ -273,6 +75,7 @@ impl ReputationRuntimeDependenciesV1 {
         journal_transaction_submitter: Option<Arc<dyn ReputationJournalTransactionSubmitterV1>>,
         threshold_signer: Option<Arc<dyn ReputationThresholdSignerClientV1>>,
         governance_dag: Option<Arc<dyn ReputationGovernanceDagClientV1>>,
+        retention_control: Option<Arc<dyn ReputationFinalizedArchiveRetentionControlV1>>,
     ) -> Result<Self> {
         let finalized_query = finalized_query.ok_or_else(|| {
             eyre::eyre!("missing immutable historical exact-anchor finalized-query adapter")
@@ -290,6 +93,7 @@ impl ReputationRuntimeDependenciesV1 {
             journal_transaction_submitter,
             threshold_signer,
             governance_dag,
+            retention_control,
         })
     }
 }
@@ -301,19 +105,27 @@ pub struct ReputationDaemonStatusV1 {
     pub runtime: ReputationRuntimeStatusV1,
     /// Detailed committed projector status.
     pub ingest: ReputationIngestStatusV1,
-    /// Whether all four runtime-bound external adapters passed the latest
-    /// completed supervised tick. This is false before the first tick.
+    /// Monotonic supervised-worker liveness state.
+    pub liveness: ReputationDaemonLivenessStatusV1,
+    /// Whether the supervised native journal worker is fully caught up with
+    /// no pending or dead-lettered rows.
+    pub journal_transaction_submitter_ready: bool,
+    /// Overall daemon readiness, including the native journal producer path.
+    pub ready: bool,
+}
+
+/// Payload-free monotonic liveness state for the supervised reputation worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReputationDaemonLivenessStatusV1 {
+    /// Whether every runtime-bound external adapter and the configured
+    /// retention control passed the latest completed supervised tick. This is
+    /// false before the first tick.
     pub external_dependencies_healthy: bool,
     /// Whether a reconciliation tick completed within the monotonic freshness
     /// bound. This is false before the first completed tick.
     pub last_tick_fresh: bool,
     /// Whether one bounded reconciliation attempt is currently running.
     pub tick_in_flight: bool,
-    /// Whether the supervised native journal worker is fully caught up with
-    /// no pending or dead-lettered rows.
-    pub journal_transaction_submitter_ready: bool,
-    /// Overall daemon readiness, including the native journal producer path.
-    pub ready: bool,
 }
 
 /// Payload-free supervised-worker counters.
@@ -336,10 +148,10 @@ pub struct ReputationDaemonMetricsV1 {
 
 #[derive(Debug, Default)]
 struct ReputationDaemonCounters {
-    successful_ticks: AtomicU64,
-    failed_ticks: AtomicU64,
-    panicked_ticks: AtomicU64,
-    timed_out_ticks: AtomicU64,
+    successful: AtomicU64,
+    failed: AtomicU64,
+    panicked: AtomicU64,
+    timed_out: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -439,28 +251,97 @@ impl ReputationDaemonLiveness {
 /// Cloneable status/metrics handle retained by `irohad`.
 #[derive(Debug, Clone)]
 pub struct ReputationRuntimeHandleV1 {
+    active: Arc<Mutex<Option<ActiveReputationRuntimeV1>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveReputationRuntimeV1 {
     runtime: Arc<ReputationRuntimeSupervisorV1>,
+    retention_control: Option<Arc<dyn ReputationFinalizedArchiveRetentionControlV1>>,
     counters: Arc<ReputationDaemonCounters>,
     liveness: Arc<ReputationDaemonLiveness>,
 }
 
 impl ReputationRuntimeHandleV1 {
+    fn from_active(active: ActiveReputationRuntimeV1) -> Self {
+        Self {
+            active: Arc::new(Mutex::new(Some(active))),
+        }
+    }
+
+    fn deferred() -> Self {
+        Self {
+            active: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn active(&self) -> Result<ActiveReputationRuntimeV1, ReputationRuntimeError> {
+        self.active
+            .lock()
+            .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?
+            .clone()
+            .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)
+    }
+
+    /// Return whether deferred runtime assembly has installed the active
+    /// deployment-owned dependencies.
+    pub fn activation_state(
+        &self,
+    ) -> Result<
+        sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1,
+        ReputationRuntimeError,
+    > {
+        let slot = self
+            .active
+            .lock()
+            .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+        let Some(active) = slot.clone() else {
+            return Ok(
+                sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Deferred,
+            );
+        };
+        drop(slot);
+        active.runtime.check_external_bindings()?;
+        Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
+    }
+
+    fn install_active(
+        &self,
+        active: ActiveReputationRuntimeV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        let mut slot = self
+            .active
+            .lock()
+            .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+        if slot.is_some() {
+            return Err(ReputationRuntimeError::RuntimeBindingMismatch);
+        }
+        *slot = Some(active);
+        Ok(())
+    }
+
     /// Return payload-free health and readiness without performing work.
     ///
+    /// # Errors
+    ///
+    /// Returns a runtime-state or liveness-lock error.
     pub fn status(&self) -> Result<ReputationDaemonStatusV1, ReputationRuntimeError> {
-        let runtime = self.runtime.status()?;
-        let ingest = self.runtime.ingest_status()?;
+        let active = self.active()?;
+        let runtime = active.runtime.status()?;
+        let ingest = active.runtime.ingest_status()?;
         let (external_dependencies_healthy, last_tick_fresh, tick_in_flight) =
-            self.liveness.status()?;
+            active.liveness.status()?;
         let journal_transaction_submitter_ready =
             runtime.journal_delivery.is_some_and(|status| status.ready);
         let ready = runtime.ready && external_dependencies_healthy && last_tick_fresh;
         Ok(ReputationDaemonStatusV1 {
             runtime,
             ingest,
-            external_dependencies_healthy,
-            last_tick_fresh,
-            tick_in_flight,
+            liveness: ReputationDaemonLivenessStatusV1 {
+                external_dependencies_healthy,
+                last_tick_fresh,
+                tick_in_flight,
+            },
             journal_transaction_submitter_ready,
             ready,
         })
@@ -469,13 +350,23 @@ impl ReputationRuntimeHandleV1 {
     /// Return payload-free supervised and deterministic counters.
     #[must_use]
     pub fn metrics(&self) -> ReputationDaemonMetricsV1 {
+        let Ok(active) = self.active() else {
+            return ReputationDaemonMetricsV1 {
+                successful_ticks: 0,
+                failed_ticks: 0,
+                panicked_ticks: 0,
+                timed_out_ticks: 0,
+                ingest: ReputationIngestMetricsSnapshot::default(),
+                journal_delivery: None,
+            };
+        };
         ReputationDaemonMetricsV1 {
-            successful_ticks: self.counters.successful_ticks.load(Ordering::Relaxed),
-            failed_ticks: self.counters.failed_ticks.load(Ordering::Relaxed),
-            panicked_ticks: self.counters.panicked_ticks.load(Ordering::Relaxed),
-            timed_out_ticks: self.counters.timed_out_ticks.load(Ordering::Relaxed),
-            ingest: self.runtime.ingest_metrics(),
-            journal_delivery: self.runtime.journal_delivery_metrics().ok().flatten(),
+            successful_ticks: active.counters.successful.load(Ordering::Relaxed),
+            failed_ticks: active.counters.failed.load(Ordering::Relaxed),
+            panicked_ticks: active.counters.panicked.load(Ordering::Relaxed),
+            timed_out_ticks: active.counters.timed_out.load(Ordering::Relaxed),
+            ingest: active.runtime.ingest_metrics(),
+            journal_delivery: active.runtime.journal_delivery_metrics().ok().flatten(),
         }
     }
 
@@ -491,30 +382,45 @@ impl ReputationRuntimeHandleV1 {
     pub fn committed_read_projection(
         &self,
     ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
-        self.runtime.committed_read_projection()
+        self.active()?.runtime.committed_read_projection()
     }
 
     /// Return one exact retained authoritative snapshot by its identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durable-state or runtime-lock error.
     pub fn committed_snapshot_by_id(
         &self,
         snapshot_id: [u8; 16],
     ) -> Result<Option<sorafs_manifest::ReputationSnapshotV1>, ReputationRuntimeError> {
-        self.runtime.committed_snapshot_by_id(snapshot_id)
+        self.active()?.runtime.committed_snapshot_by_id(snapshot_id)
     }
 
     /// Return only the retained committed-event suffix after `sequence`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durable-state or runtime-lock error.
     pub fn committed_events_after(
         &self,
         sequence: u64,
     ) -> Result<Vec<sorafs_manifest::ReputationSnapshotEventV1>, ReputationRuntimeError> {
-        self.runtime.committed_events_after(sequence)
+        self.active()?.runtime.committed_events_after(sequence)
     }
 
-    /// Durably enqueue one actual native PoR terminal callback.
+    /// Durably enqueue one actual native `PoR` terminal callback.
     ///
-    /// This is a fail-closed injection point for a PoR terminal owner and
+    /// This is a fail-closed injection point for a `PoR` terminal owner and
     /// returns only after the producer checkpoint is durable. The daemon does
-    /// not automatically discover or attach that owner.
+    /// not automatically discover or attach that owner. Every call revalidates
+    /// all active external bindings before and after the durable enqueue; a
+    /// post-enqueue drift fails the call while an exact retry replays the
+    /// retained admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime-binding or durable producer error.
     pub fn record_por_terminal(
         &self,
         provider_id: ProviderId,
@@ -523,10 +429,15 @@ impl ReputationRuntimeHandleV1 {
         sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1,
         ReputationRuntimeError,
     > {
-        self.runtime
+        let active = self.active()?;
+        active.runtime.check_external_bindings()?;
+        let result = active
+            .runtime
             .por_journal_producer()
             .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)?
-            .enqueue_terminal(provider_id, outcome)
+            .enqueue_terminal(provider_id, outcome);
+        active.runtime.check_external_bindings()?;
+        result
     }
 
     /// Durably enqueue one provider-attributable stream-token callback.
@@ -534,6 +445,12 @@ impl ReputationRuntimeHandleV1 {
     /// Unattributable valid outcomes return `NotCounted`; malformed material
     /// or unavailable durable state fails closed. The stream-token owner must
     /// be explicitly constructed with this callback by deployment wiring.
+    /// Every call revalidates all active external bindings before and after the
+    /// durable admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime-binding or durable producer error.
     pub fn record_stream_token_outcome(
         &self,
         provider_id: ProviderId,
@@ -542,10 +459,15 @@ impl ReputationRuntimeHandleV1 {
         sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1,
         ReputationRuntimeError,
     > {
-        self.runtime
+        let active = self.active()?;
+        active.runtime.check_external_bindings()?;
+        let result = active
+            .runtime
             .counted_stream_token_journal_producer()
             .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)?
-            .enqueue_counted(provider_id, outcome)
+            .enqueue_counted(provider_id, outcome);
+        active.runtime.check_external_bindings()?;
+        result
     }
 }
 
@@ -553,132 +475,301 @@ impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
     fn committed_read_projection(
         &self,
     ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
-        self.runtime.committed_read_projection()
+        ReputationRuntimeHandleV1::committed_read_projection(self)
     }
 
     fn committed_snapshot_by_id(
         &self,
         snapshot_id: [u8; 16],
     ) -> Result<Option<sorafs_manifest::ReputationSnapshotV1>, ReputationRuntimeError> {
-        self.runtime.committed_snapshot_by_id(snapshot_id)
+        ReputationRuntimeHandleV1::committed_snapshot_by_id(self, snapshot_id)
     }
 
     fn committed_events_after(
         &self,
         sequence: u64,
     ) -> Result<Vec<sorafs_manifest::ReputationSnapshotEventV1>, ReputationRuntimeError> {
-        self.runtime.committed_events_after(sequence)
+        ReputationRuntimeHandleV1::committed_events_after(self, sequence)
+    }
+}
+
+impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
+    fn activation_state(
+        &self,
+    ) -> Result<
+        sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1,
+        ReputationRuntimeError,
+    > {
+        ReputationRuntimeHandleV1::activation_state(self)
+    }
+
+    fn record_por_terminal(
+        &self,
+        provider_id: ProviderId,
+        outcome: PorTerminalOutcomeV1,
+    ) -> Result<
+        sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1,
+        ReputationRuntimeError,
+    > {
+        ReputationRuntimeHandleV1::record_por_terminal(self, provider_id, outcome)
+    }
+
+    fn record_stream_token_outcome(
+        &self,
+        provider_id: ProviderId,
+        outcome: StreamTokenValidationOutcomeV1,
+    ) -> Result<
+        sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1,
+        ReputationRuntimeError,
+    > {
+        ReputationRuntimeHandleV1::record_stream_token_outcome(self, provider_id, outcome)
     }
 }
 
 /// Assemble and start the committed reputation runtime.
 ///
-/// Missing, null/test-marked, or identity-mismatched adapters fail startup
-/// before any worker is spawned.
+/// Missing, test-marked, stale, or identity/revision/policy-mismatched adapters
+/// fail startup before durable state is opened or any worker is spawned.
 pub(crate) fn start(
-    config: SorafsReputationRuntime,
-    chain_id: ChainId,
-    trust_policy: Arc<ReputationSnapshotTrustPolicyV1>,
+    config: &SorafsReputationRuntime,
+    chain_id: &ChainId,
+    trust_policy: &ReputationSnapshotTrustPolicyV1,
     dependencies: ReputationRuntimeDependenciesV1,
     shutdown_signal: ShutdownSignal,
 ) -> Result<(ReputationRuntimeHandleV1, Child)> {
     let poll_interval = config.poll_interval;
     let handle = assemble(config, chain_id, trust_policy, dependencies)?;
+    let active = handle
+        .active()
+        .wrap_err("access assembled committed reputation runtime")?;
     record_status_metrics(&handle);
 
-    let worker = handle.clone();
+    let status_handle = handle.clone();
     let task = tokio::task::spawn(async move {
-        let _shutdown_guard = ReputationDaemonShutdownGuard {
-            liveness: Arc::clone(&worker.liveness),
-        };
+        run_active_worker(active, status_handle, poll_interval, shutdown_signal).await;
+    });
+    Ok((handle, Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT))))
+}
+
+/// Nonblocking finalized-archive activation probe.
+pub(crate) type ReputationRuntimeActivationProbeV1 =
+    Arc<dyn Fn() -> Result<bool> + Send + Sync + 'static>;
+
+/// Validate runtime-only identities immediately, then defer durable reputation
+/// assembly until the finalized archive has its first live exact anchor.
+///
+/// The returned handle stays fail-closed while deferred. The supervised
+/// activator revalidates every adapter and policy during final assembly; an
+/// invalidated archive boundary or substituted dependency triggers daemon
+/// shutdown instead of installing a partial runtime.
+pub(crate) fn start_deferred(
+    config: &SorafsReputationRuntime,
+    chain_id: &ChainId,
+    trust_policy: &ReputationSnapshotTrustPolicyV1,
+    dependencies: ReputationRuntimeDependenciesV1,
+    activation_probe: ReputationRuntimeActivationProbeV1,
+    shutdown_signal: ShutdownSignal,
+) -> Result<(ReputationRuntimeHandleV1, Child)> {
+    validate_actual_config(config)?;
+    let policies =
+        build_and_qualify_runtime_policies(config, chain_id, trust_policy, &dependencies)?;
+    validate_retention_control(config, &dependencies)?;
+    revalidate_before_durable_state(&policies, &dependencies)?;
+
+    let poll_interval = config.poll_interval;
+    let config = config.clone();
+    let chain_id = chain_id.clone();
+    let trust_policy = trust_policy.clone();
+    let handle = ReputationRuntimeHandleV1::deferred();
+    record_status_metrics(&handle);
+    let activation_handle = handle.clone();
+    let mut dependencies = Some(dependencies);
+    let task = tokio::task::spawn(async move {
         let mut interval = tokio::time::interval(poll_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        'worker: loop {
+        loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let runtime = Arc::clone(&worker.runtime);
-                    worker.liveness.begin_tick();
-                    let mut reconciliation =
-                        tokio::task::spawn_blocking(move || runtime.reconcile_once());
-                    let timely_result = tokio::select! {
-                        result = &mut reconciliation => Some(result),
-                        _ = tokio::time::sleep(worker.liveness.tick_timeout) => None,
-                        () = shutdown_signal.receive() => {
-                            worker.liveness.mark_shutdown();
-                            reconciliation.abort();
-                            record_status_metrics(&worker);
+                    match activation_probe() {
+                        Ok(false) => {
                             iroha_logger::debug!(
-                                "committed SoraFS reputation runtime shut down during reconciliation"
+                                "committed SoraFS reputation runtime is awaiting finalized archive activation"
                             );
-                            break 'worker;
+                            continue;
                         }
-                    };
-                    if let Some(result) = timely_result {
-                        record_reputation_tick_result(&worker, result);
-                        record_status_metrics(&worker);
-                        continue;
+                        Err(error) => {
+                            iroha_logger::error!(
+                                ?error,
+                                "committed SoraFS reputation archive activation failed closed"
+                            );
+                            shutdown_signal.send();
+                            return;
+                        }
+                        Ok(true) => {}
                     }
-
-                    worker.liveness.mark_timeout();
-                    worker
-                        .counters
-                        .timed_out_ticks
-                        .fetch_add(1, Ordering::Relaxed);
-                    record_tick_metric("failure");
-                    record_status_metrics(&worker);
-                    iroha_logger::error!(
-                        timeout_ms = u64::try_from(worker.liveness.tick_timeout.as_millis())
-                            .unwrap_or(u64::MAX),
-                        "committed SoraFS reputation reconciliation exceeded its deadline"
-                    );
-
-                    let late_result = tokio::select! {
-                        result = &mut reconciliation => Some(result),
-                        () = shutdown_signal.receive() => {
-                            worker.liveness.mark_shutdown();
-                            reconciliation.abort();
-                            record_status_metrics(&worker);
-                            iroha_logger::warn!(
-                                "committed SoraFS reputation runtime shut down with a timed-out blocking reconciliation still outstanding"
-                            );
-                            break 'worker;
-                        }
-                    };
-                    worker.liveness.mark_late_tick_finished();
-                    if let Some(Err(error)) = late_result {
-                        worker
-                            .counters
-                            .panicked_ticks
-                            .fetch_add(1, Ordering::Relaxed);
+                    let Some(dependencies) = dependencies.take() else {
                         iroha_logger::error!(
-                            cancelled = error.is_cancelled(),
-                            panicked = error.is_panic(),
-                            "timed-out SoraFS reputation reconciliation later failed"
+                            "deferred committed SoraFS reputation dependencies were already consumed"
                         );
-                    } else {
-                        iroha_logger::warn!(
-                            "timed-out SoraFS reputation reconciliation finished late; its result was not used for readiness"
+                        shutdown_signal.send();
+                        return;
+                    };
+                    let active = match assemble_active(
+                        &config,
+                        &chain_id,
+                        &trust_policy,
+                        dependencies,
+                    ) {
+                        Ok(active) => active,
+                        Err(error) => {
+                            iroha_logger::error!(
+                                ?error,
+                                "deferred committed SoraFS reputation runtime assembly failed"
+                            );
+                            shutdown_signal.send();
+                            return;
+                        }
+                    };
+                    if let Err(error) = activation_handle.install_active(active.clone()) {
+                        iroha_logger::error!(
+                            %error,
+                            "deferred committed SoraFS reputation runtime activation was duplicated"
                         );
+                        shutdown_signal.send();
+                        return;
                     }
-                    record_status_metrics(&worker);
-                }
-                () = shutdown_signal.receive() => {
-                    worker.liveness.mark_shutdown();
-                    record_status_metrics(&worker);
-                    iroha_logger::debug!(
-                        "committed SoraFS reputation runtime is being shut down"
+                    record_status_metrics(&activation_handle);
+                    iroha_logger::info!(
+                        "activated committed SoraFS reputation runtime after finalized archive capture"
                     );
-                    break;
+                    run_active_worker(
+                        active,
+                        activation_handle,
+                        poll_interval,
+                        shutdown_signal.clone(),
+                    )
+                    .await;
+                    return;
                 }
-                else => break,
+                () = shutdown_signal.receive() => return,
+                else => return,
             }
         }
     });
     Ok((handle, Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT))))
 }
 
+async fn run_active_worker(
+    worker: ActiveReputationRuntimeV1,
+    status_handle: ReputationRuntimeHandleV1,
+    poll_interval: Duration,
+    shutdown_signal: ShutdownSignal,
+) {
+    let _shutdown_guard = ReputationDaemonShutdownGuard {
+        liveness: Arc::clone(&worker.liveness),
+    };
+    let mut interval = tokio::time::interval(poll_interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    'worker: loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let runtime = Arc::clone(&worker.runtime);
+                let retention_control = worker.retention_control.clone();
+                worker.liveness.begin_tick();
+                let mut reconciliation =
+                    tokio::task::spawn_blocking(move || {
+                        let outcome = runtime.reconcile_once().map_err(eyre::Report::new)?;
+                        reconcile_retention_control(retention_control.as_deref())?;
+                        Ok(outcome)
+                    });
+                let timely_result = tokio::select! {
+                    result = &mut reconciliation => Some(result),
+                    () = tokio::time::sleep(worker.liveness.tick_timeout) => None,
+                    () = shutdown_signal.receive() => {
+                        worker.liveness.mark_shutdown();
+                        reconciliation.abort();
+                        record_status_metrics(&status_handle);
+                        iroha_logger::debug!(
+                            "committed SoraFS reputation runtime shut down during reconciliation"
+                        );
+                        break 'worker;
+                    }
+                };
+                if let Some(result) = timely_result {
+                    record_reputation_tick_result(&worker, result);
+                    record_status_metrics(&status_handle);
+                    continue;
+                }
+
+                worker.liveness.mark_timeout();
+                worker
+                    .counters
+                    .timed_out
+                    .fetch_add(1, Ordering::Relaxed);
+                record_tick_metric("failure");
+                record_status_metrics(&status_handle);
+                iroha_logger::error!(
+                    timeout_ms = u64::try_from(worker.liveness.tick_timeout.as_millis())
+                        .unwrap_or(u64::MAX),
+                    "committed SoraFS reputation reconciliation exceeded its deadline"
+                );
+
+                let late_result = tokio::select! {
+                    result = &mut reconciliation => Some(result),
+                    () = shutdown_signal.receive() => {
+                        worker.liveness.mark_shutdown();
+                        reconciliation.abort();
+                        record_status_metrics(&status_handle);
+                        iroha_logger::warn!(
+                            "committed SoraFS reputation runtime shut down with a timed-out blocking reconciliation still outstanding"
+                        );
+                        break 'worker;
+                    }
+                };
+                worker.liveness.mark_late_tick_finished();
+                if let Some(Err(error)) = late_result {
+                    worker
+                        .counters
+                        .panicked
+                        .fetch_add(1, Ordering::Relaxed);
+                    iroha_logger::error!(
+                        cancelled = error.is_cancelled(),
+                        panicked = error.is_panic(),
+                        "timed-out SoraFS reputation reconciliation later failed"
+                    );
+                } else {
+                    iroha_logger::warn!(
+                        "timed-out SoraFS reputation reconciliation finished late; its result was not used for readiness"
+                    );
+                }
+                record_status_metrics(&status_handle);
+            }
+            () = shutdown_signal.receive() => {
+                worker.liveness.mark_shutdown();
+                record_status_metrics(&status_handle);
+                iroha_logger::debug!(
+                    "committed SoraFS reputation runtime is being shut down"
+                );
+                break;
+            }
+            else => break,
+        }
+    }
+}
+
+fn reconcile_retention_control(
+    retention_control: Option<&dyn ReputationFinalizedArchiveRetentionControlV1>,
+) -> Result<()> {
+    if let Some(retention_control) = retention_control {
+        let _ = retention_control
+            .reconcile_once()
+            .map_err(eyre::Report::new)?;
+    }
+    Ok(())
+}
+
 fn record_reputation_tick_result(
-    worker: &ReputationRuntimeHandleV1,
+    worker: &ActiveReputationRuntimeV1,
     result: ReputationJoinedReconciliationResult,
 ) {
     match result {
@@ -691,10 +782,7 @@ fn record_reputation_tick_result(
                 );
                 return;
             }
-            worker
-                .counters
-                .successful_ticks
-                .fetch_add(1, Ordering::Relaxed);
+            worker.counters.successful.fetch_add(1, Ordering::Relaxed);
             record_tick_metric("success");
         }
         Ok(Err(error)) => {
@@ -705,7 +793,7 @@ fn record_reputation_tick_result(
                     "committed SoraFS reputation liveness state is poisoned"
                 );
             }
-            worker.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
+            worker.counters.failed.fetch_add(1, Ordering::Relaxed);
             record_tick_metric("failure");
             iroha_logger::warn!(
                 error = %error,
@@ -720,10 +808,7 @@ fn record_reputation_tick_result(
                     "committed SoraFS reputation liveness state is poisoned"
                 );
             }
-            worker
-                .counters
-                .panicked_ticks
-                .fetch_add(1, Ordering::Relaxed);
+            worker.counters.panicked.fetch_add(1, Ordering::Relaxed);
             record_tick_metric("panic");
             iroha_logger::error!(
                 cancelled = error.is_cancelled(),
@@ -734,14 +819,166 @@ fn record_reputation_tick_result(
     }
 }
 
+struct ReputationRuntimePoliciesV1 {
+    ingest: ReputationIngestPolicyV1,
+    query: ReputationFinalizedQueryPolicyV1,
+    journal_delivery: ReputationJournalDeliveryPolicyV1,
+    publication: ReputationPublicationPolicyV1,
+}
+
 fn assemble(
-    config: SorafsReputationRuntime,
-    chain_id: ChainId,
-    trust_policy: Arc<ReputationSnapshotTrustPolicyV1>,
+    config: &SorafsReputationRuntime,
+    chain_id: &ChainId,
+    trust_policy: &ReputationSnapshotTrustPolicyV1,
     dependencies: ReputationRuntimeDependenciesV1,
 ) -> Result<ReputationRuntimeHandleV1> {
-    validate_actual_config(&config)?;
+    assemble_active(config, chain_id, trust_policy, dependencies)
+        .map(ReputationRuntimeHandleV1::from_active)
+}
+
+fn assemble_active(
+    config: &SorafsReputationRuntime,
+    chain_id: &ChainId,
+    trust_policy: &ReputationSnapshotTrustPolicyV1,
+    dependencies: ReputationRuntimeDependenciesV1,
+) -> Result<ActiveReputationRuntimeV1> {
+    validate_actual_config(config)?;
     let poll_interval = config.poll_interval;
+    let policies =
+        build_and_qualify_runtime_policies(config, chain_id, trust_policy, &dependencies)?;
+    validate_retention_control(config, &dependencies)?;
+    let bootstrap_delivery_view = read_bootstrap_delivery_view(
+        chain_id,
+        &policies.query,
+        &policies.journal_delivery,
+        &dependencies,
+    )?;
+    revalidate_before_durable_state(&policies, &dependencies)?;
+    let ReputationRuntimePoliciesV1 {
+        ingest,
+        query,
+        journal_delivery,
+        publication,
+    } = policies;
+
+    let projector = Arc::new(
+        ReputationIngestService::open(&config.state_dir, ingest.clone())
+            .wrap_err("open committed reputation projector")?,
+    );
+    let finalized = ReputationCommittedProjectorRuntimeV1::new(
+        Arc::clone(&projector),
+        &ingest,
+        query,
+        Arc::clone(&dependencies.finalized_query),
+    )
+    .wrap_err("bind committed reputation finalized-query runtime")?;
+    let producer_policy = ReputationJournalProducerPolicyV1::strict_v1(
+        chain_id.clone(),
+        bootstrap_delivery_view.authority_policy.policy.clone(),
+    )
+    .wrap_err("construct reputation journal producer policy")?;
+    let journal_outbox = ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
+        &config.state_dir,
+        producer_policy,
+        &bootstrap_delivery_view.authority_policy_history,
+        bootstrap_delivery_view.journal_page.finalized_cursor,
+    )
+    .wrap_err("open and recover durable reputation journal producer outbox")?;
+    let journal_outbox = Arc::new(journal_outbox);
+    let journal_delivery = ReputationJournalDeliveryWorkerV1::new(
+        journal_outbox,
+        journal_delivery,
+        Arc::clone(&dependencies.finalized_query),
+        Arc::clone(&dependencies.journal_transaction_submitter),
+    )
+    .wrap_err("bind reputation journal delivery worker")?;
+    let publication = ReputationPublicationReconcilerV1::open(
+        &config.state_dir,
+        Arc::clone(&projector),
+        trust_policy.clone(),
+        publication,
+        dependencies.threshold_signer,
+        dependencies.governance_dag,
+    )
+    .wrap_err("open committed reputation publication reconciler")?;
+    let runtime = Arc::new(
+        ReputationRuntimeSupervisorV1::new(projector, finalized, publication)
+            .and_then(|runtime| runtime.with_journal_delivery(journal_delivery))
+            .wrap_err("assemble committed reputation runtime")?,
+    );
+    Ok(ActiveReputationRuntimeV1 {
+        runtime,
+        retention_control: dependencies.retention_control,
+        counters: Arc::new(ReputationDaemonCounters::default()),
+        liveness: Arc::new(ReputationDaemonLiveness::new(poll_interval)),
+    })
+}
+
+fn validate_retention_control(
+    config: &SorafsReputationRuntime,
+    dependencies: &ReputationRuntimeDependenciesV1,
+) -> Result<()> {
+    match (
+        config.finalized_archive_retention_authority.is_some(),
+        dependencies.retention_control.as_ref(),
+    ) {
+        (true, None) => {
+            bail!(
+                "configured finalized reputation archive retention requires its explicit committed-request control"
+            )
+        }
+        (false, Some(_)) => {
+            bail!(
+                "manual finalized reputation archive mode rejects an unexpected retention control"
+            )
+        }
+        (false, None) => Ok(()),
+        (true, Some(control)) => control
+            .revalidate()
+            .map_err(eyre::Report::new)
+            .wrap_err("revalidate explicit finalized reputation archive retention control"),
+    }
+}
+
+fn build_and_qualify_runtime_policies(
+    config: &SorafsReputationRuntime,
+    chain_id: &ChainId,
+    trust_policy: &ReputationSnapshotTrustPolicyV1,
+    dependencies: &ReputationRuntimeDependenciesV1,
+) -> Result<ReputationRuntimePoliciesV1> {
+    let ingest = build_reputation_ingest_policy(config, chain_id, trust_policy)?;
+    let query = build_reputation_finalized_query_policy(config, &ingest)?;
+    let journal_delivery_policy = ReputationJournalDeliveryPolicyV1::strict_v1(
+        chain_id.clone(),
+        config.finalized_query_handle.clone(),
+        query.query_qualification(),
+        config.journal_transaction_submitter_handle.clone(),
+    )
+    .wrap_err("construct reputation journal delivery policy")?;
+    let publication_policy = ReputationPublicationPolicyV1::try_new(
+        trust_policy,
+        config.threshold_signer_handle.clone(),
+        config.governance_dag_handle.clone(),
+        config.governance_publisher_peer_id.clone(),
+        config.governance_publisher_public_key,
+        config.publication_checkpoint_max_bytes.0,
+    )
+    .wrap_err("construct committed reputation publication policy")?;
+    let journal_submitter_qualification = ReputationRuntimeProviderQualificationV1::new(
+        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+        reputation_journal_submitter_policy_digest_v1(
+            chain_id,
+            &config.journal_transaction_submitter_handle,
+        )
+        .wrap_err("derive reputation journal transaction-submitter qualification")?,
+    );
+    validate_configured_runtime_provider_qualifications(
+        config,
+        journal_submitter_qualification,
+        publication_policy.threshold_signer_qualification(),
+        publication_policy.governance_dag_qualification(),
+    )?;
+
     validate_dependency_handle(
         "finalized query",
         &config.finalized_query_handle,
@@ -762,47 +999,90 @@ fn assemble(
         &config.governance_dag_handle,
         dependencies.governance_dag.handle(),
     )?;
-    dependencies
-        .finalized_query
-        .check_readiness()
-        .wrap_err("committed reputation finalized-query adapter is not ready")?;
-    dependencies
-        .journal_transaction_submitter
-        .check_readiness()
-        .wrap_err("reputation journal transaction submitter is not ready")?;
-    dependencies
-        .threshold_signer
-        .check_readiness()
-        .wrap_err("committed reputation threshold-signer adapter is not ready")?;
-    dependencies
-        .governance_dag
-        .check_readiness()
-        .wrap_err("committed reputation Governance DAG adapter is not ready")?;
+    query
+        .revalidate_provider(dependencies.finalized_query.as_ref())
+        .wrap_err("committed reputation finalized-query adapter is not qualified")?;
+    journal_delivery_policy
+        .revalidate_query_provider(dependencies.finalized_query.as_ref())
+        .wrap_err("reputation journal finalized-query adapter is not qualified")?;
+    journal_delivery_policy
+        .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
+        .wrap_err("reputation journal transaction submitter is not qualified")?;
+    publication_policy
+        .revalidate_threshold_signer(dependencies.threshold_signer.as_ref())
+        .wrap_err("committed reputation threshold-signer adapter is not qualified")?;
+    publication_policy
+        .revalidate_governance_dag(dependencies.governance_dag.as_ref())
+        .wrap_err("committed reputation Governance DAG adapter is not qualified")?;
+    Ok(ReputationRuntimePoliciesV1 {
+        ingest,
+        query,
+        journal_delivery: journal_delivery_policy,
+        publication: publication_policy,
+    })
+}
 
-    let bootstrap_delivery_view = dependencies
+fn validate_configured_runtime_provider_qualifications(
+    config: &SorafsReputationRuntime,
+    journal_submitter: ReputationRuntimeProviderQualificationV1,
+    threshold_signer: ReputationRuntimeProviderQualificationV1,
+    governance_dag: ReputationRuntimeProviderQualificationV1,
+) -> Result<()> {
+    if config.journal_transaction_submitter_revision
+        != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
+    {
+        bail!("configured reputation journal transaction-submitter revision is not V1");
+    }
+    if config.journal_transaction_submitter_policy_digest != journal_submitter.policy_digest() {
+        bail!(
+            "configured reputation journal transaction-submitter policy digest does not match the derived V1 policy"
+        );
+    }
+    if config.threshold_signer_revision != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 {
+        bail!("configured reputation threshold-signer revision is not V1");
+    }
+    if config.threshold_signer_policy_digest != threshold_signer.policy_digest() {
+        bail!(
+            "configured reputation threshold-signer policy digest does not match the derived V1 policy"
+        );
+    }
+    if config.governance_dag_revision != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 {
+        bail!("configured reputation Governance DAG revision is not V1");
+    }
+    if config.governance_dag_policy_digest != governance_dag.policy_digest() {
+        bail!(
+            "configured reputation Governance DAG policy digest does not match the derived V1 policy"
+        );
+    }
+    Ok(())
+}
+
+fn read_bootstrap_delivery_view(
+    chain_id: &ChainId,
+    query_policy: &ReputationFinalizedQueryPolicyV1,
+    journal_delivery_policy: &ReputationJournalDeliveryPolicyV1,
+    dependencies: &ReputationRuntimeDependenciesV1,
+) -> Result<ReputationJournalDeliveryFinalizedViewV1> {
+    query_policy
+        .revalidate_provider(dependencies.finalized_query.as_ref())
+        .wrap_err("revalidate exact finalized reputation query before bootstrap read")?;
+    let bootstrap_delivery_view_result = dependencies
         .finalized_query
         .reputation_journal_delivery_view(
-            &chain_id,
+            chain_id,
             u64::MAX,
             FindSorafsReputationJournalAuthorityPolicy,
             None,
             1,
-        )
+        );
+    query_policy
+        .revalidate_provider(dependencies.finalized_query.as_ref())
+        .wrap_err("revalidate exact finalized reputation query after bootstrap read")?;
+    let bootstrap_delivery_view = bootstrap_delivery_view_result
         .wrap_err("read exact finalized reputation journal authority policy")?;
     bootstrap_delivery_view
-        .authority_policy
-        .validate()
-        .wrap_err("validate exact finalized reputation journal authority policy")?;
-    if bootstrap_delivery_view.anchor.chain_id != chain_id
-        || bootstrap_delivery_view
-            .authority_policy
-            .activated_at_unix_ms
-            > bootstrap_delivery_view.anchor.finalized_at_unix_ms
-        || bootstrap_delivery_view.journal_page.finalized_cursor
-            != journal_cursor(&bootstrap_delivery_view.anchor)
-    {
-        bail!("exact finalized reputation journal bootstrap view is inconsistent");
-    }
+        .validate_for_request(chain_id, None, 1, u64::MAX)
+        .wrap_err("validate exact finalized reputation journal bootstrap view")?;
     for authority in [
         &bootstrap_delivery_view
             .authority_policy
@@ -813,14 +1093,56 @@ fn assemble(
             .policy
             .token_recorder_authority,
     ] {
-        if !dependencies
+        journal_delivery_policy
+            .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
+            .wrap_err("revalidate reputation journal submitter before authority check")?;
+        let supports_authority = dependencies
             .journal_transaction_submitter
-            .supports_authority(authority)
-        {
+            .supports_authority(authority);
+        journal_delivery_policy
+            .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
+            .wrap_err("revalidate reputation journal submitter after authority check")?;
+        if !supports_authority {
             bail!("reputation journal submitter does not own a governed recorder identity");
         }
     }
+    Ok(bootstrap_delivery_view)
+}
 
+fn revalidate_before_durable_state(
+    policies: &ReputationRuntimePoliciesV1,
+    dependencies: &ReputationRuntimeDependenciesV1,
+) -> Result<()> {
+    policies
+        .query
+        .revalidate_provider(dependencies.finalized_query.as_ref())
+        .wrap_err("finalized-query qualification changed before durable state")?;
+    policies
+        .journal_delivery
+        .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
+        .wrap_err("journal-submitter qualification changed before durable state")?;
+    policies
+        .publication
+        .revalidate_threshold_signer(dependencies.threshold_signer.as_ref())
+        .wrap_err("threshold-signer qualification changed before durable state")?;
+    policies
+        .publication
+        .revalidate_governance_dag(dependencies.governance_dag.as_ref())
+        .wrap_err("Governance DAG qualification changed before durable state")?;
+    if let Some(retention_control) = &dependencies.retention_control {
+        retention_control
+            .revalidate()
+            .map_err(eyre::Report::new)
+            .wrap_err("retention-control qualification changed before durable state")?;
+    }
+    Ok(())
+}
+
+fn build_reputation_ingest_policy(
+    config: &SorafsReputationRuntime,
+    chain_id: &ChainId,
+    trust_policy: &ReputationSnapshotTrustPolicyV1,
+) -> Result<ReputationIngestPolicyV1> {
     let trust_policy_digest = trust_policy
         .canonical_digest()
         .wrap_err("derive configured reputation trust-policy digest")?;
@@ -853,76 +1175,32 @@ fn assemble(
     ingest_policy
         .validate()
         .wrap_err("validate configured committed reputation ingest policy")?;
+    Ok(ingest_policy)
+}
 
-    let query_policy = ReputationFinalizedQueryPolicyV1::try_new(
-        &ingest_policy,
+fn build_reputation_finalized_query_policy(
+    config: &SorafsReputationRuntime,
+    ingest_policy: &ReputationIngestPolicyV1,
+) -> Result<ReputationFinalizedQueryPolicyV1> {
+    ReputationFinalizedQueryPolicyV1::try_new(
+        ingest_policy,
         config.finalized_query_handle.clone(),
         config.page_items,
         config.max_pages_per_batch,
     )
-    .wrap_err("construct committed reputation finalized-query policy")?;
-    let projector = Arc::new(
-        ReputationIngestService::open(&config.state_dir, ingest_policy.clone())
-            .wrap_err("open committed reputation projector")?,
-    );
-    let finalized = ReputationCommittedProjectorRuntimeV1::new(
-        Arc::clone(&projector),
-        &ingest_policy,
-        query_policy,
-        Arc::clone(&dependencies.finalized_query),
-    )
-    .wrap_err("bind committed reputation finalized-query runtime")?;
-    let producer_policy = ReputationJournalProducerPolicyV1::strict_v1(
-        chain_id.clone(),
-        bootstrap_delivery_view.authority_policy.policy,
-    )
-    .wrap_err("construct reputation journal producer policy")?;
-    let journal_outbox = Arc::new(
-        ReputationJournalProducerOutboxV1::open(&config.state_dir, producer_policy)
-            .wrap_err("open durable reputation journal producer outbox")?,
-    );
-    let journal_delivery_policy = ReputationJournalDeliveryPolicyV1::strict_v1(
-        chain_id,
-        dependencies.finalized_query.handle().to_owned(),
-        config.journal_transaction_submitter_handle,
-    )
-    .wrap_err("construct reputation journal delivery policy")?;
-    let journal_delivery = ReputationJournalDeliveryWorkerV1::new(
-        journal_outbox,
-        journal_delivery_policy,
-        Arc::clone(&dependencies.finalized_query),
-        Arc::clone(&dependencies.journal_transaction_submitter),
-    )
-    .wrap_err("bind reputation journal delivery worker")?;
-    let publication_policy = ReputationPublicationPolicyV1::try_new(
-        trust_policy.as_ref(),
-        config.threshold_signer_handle,
-        config.governance_dag_handle,
-        config.governance_publisher_peer_id,
-        config.governance_publisher_public_key,
-        config.publication_checkpoint_max_bytes.0,
-    )
-    .wrap_err("construct committed reputation publication policy")?;
-    let publication = ReputationPublicationReconcilerV1::open(
-        &config.state_dir,
-        Arc::clone(&projector),
-        trust_policy.as_ref().clone(),
-        publication_policy,
-        dependencies.threshold_signer,
-        dependencies.governance_dag,
-    )
-    .wrap_err("open committed reputation publication reconciler")?;
-    let runtime = Arc::new(
-        ReputationRuntimeSupervisorV1::new(projector, finalized, publication)
-            .and_then(|runtime| runtime.with_journal_delivery(journal_delivery))
-            .wrap_err("assemble committed reputation runtime")?,
-    );
-    let handle = ReputationRuntimeHandleV1 {
-        runtime,
-        counters: Arc::new(ReputationDaemonCounters::default()),
-        liveness: Arc::new(ReputationDaemonLiveness::new(poll_interval)),
-    };
-    Ok(handle)
+    .wrap_err("construct committed reputation finalized-query policy")
+}
+
+/// Derive the exact provider qualification for the daemon-owned archive
+/// adapter from the same committed ingest policy used by worker assembly.
+pub(crate) fn finalized_query_qualification_v1(
+    config: &SorafsReputationRuntime,
+    chain_id: &ChainId,
+    trust_policy: &ReputationSnapshotTrustPolicyV1,
+) -> Result<ReputationRuntimeProviderQualificationV1> {
+    validate_actual_config(config)?;
+    let ingest_policy = build_reputation_ingest_policy(config, chain_id, trust_policy)?;
+    Ok(build_reputation_finalized_query_policy(config, &ingest_policy)?.query_qualification())
 }
 
 fn validate_actual_config(config: &SorafsReputationRuntime) -> Result<()> {
@@ -936,6 +1214,12 @@ fn validate_actual_config(config: &SorafsReputationRuntime) -> Result<()> {
         })
         || config.window_start_height == 0
         || config.window_end_height < config.window_start_height
+        || config.journal_transaction_submitter_revision == 0
+        || config.journal_transaction_submitter_policy_digest == [0; 32]
+        || config.threshold_signer_revision == 0
+        || config.threshold_signer_policy_digest == [0; 32]
+        || config.governance_dag_revision == 0
+        || config.governance_dag_policy_digest == [0; 32]
         || config.poll_interval < Duration::from_millis(100)
         || config.poll_interval > Duration::from_secs(60)
     {
@@ -947,7 +1231,7 @@ fn validate_actual_config(config: &SorafsReputationRuntime) -> Result<()> {
         &config.threshold_signer_handle,
         &config.governance_dag_handle,
     ] {
-        if !is_production_handle(handle) {
+        if !is_production_runtime_handle(handle) {
             bail!("committed reputation runtime dependency handle is not production-safe");
         }
     }
@@ -955,31 +1239,10 @@ fn validate_actual_config(config: &SorafsReputationRuntime) -> Result<()> {
 }
 
 fn validate_dependency_handle(label: &str, expected: &str, actual: &str) -> Result<()> {
-    if !is_production_handle(actual) || actual != expected {
+    if !is_production_runtime_handle(actual) || actual != expected {
         bail!("{label} adapter identity does not match committed reputation configuration");
     }
     Ok(())
-}
-
-fn is_production_handle(handle: &str) -> bool {
-    if handle.is_empty()
-        || handle.len() > 256
-        || !handle.is_ascii()
-        || handle
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return false;
-    }
-    let lowercase = handle.to_ascii_lowercase();
-    !lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
-            )
-        })
 }
 
 #[cfg(feature = "telemetry")]
@@ -989,20 +1252,40 @@ fn record_status_metrics(handle: &ReputationRuntimeHandleV1) {
     };
     match handle.status() {
         Ok(status) => metrics.record_sorafs_reputation_runtime_status(
-            status.runtime.finalized.live,
-            status.ready,
-            status.external_dependencies_healthy,
-            status.journal_transaction_submitter_ready,
-            status
-                .ingest
-                .latest_finalized
-                .map_or(0, |identity| identity.height),
-            status.runtime.finalized.consecutive_failures,
-            status.runtime.material_acknowledged,
-            status.ingest.providers,
+            iroha_telemetry::metrics::SorafsReputationRuntimeMetricSnapshot {
+                runtime: iroha_telemetry::metrics::SorafsRuntimeHealthMetricSnapshot {
+                    live: status.runtime.finalized.live,
+                    ready: status.ready,
+                    external_dependencies_ready: status.liveness.external_dependencies_healthy,
+                },
+                publication: iroha_telemetry::metrics::SorafsReputationPublicationMetricSnapshot {
+                    journal_transaction_submitter_ready: status.journal_transaction_submitter_ready,
+                    material_acknowledged: status.runtime.material_acknowledged,
+                },
+                latest_finalized_height: status
+                    .ingest
+                    .latest_finalized
+                    .map_or(0, |identity| identity.height),
+                consecutive_failures: status.runtime.finalized.consecutive_failures,
+                provider_count: status.ingest.providers,
+            },
         ),
-        Err(_) => metrics
-            .record_sorafs_reputation_runtime_status(false, false, false, false, 0, 1, false, 0),
+        Err(_) => metrics.record_sorafs_reputation_runtime_status(
+            iroha_telemetry::metrics::SorafsReputationRuntimeMetricSnapshot {
+                runtime: iroha_telemetry::metrics::SorafsRuntimeHealthMetricSnapshot {
+                    live: false,
+                    ready: false,
+                    external_dependencies_ready: false,
+                },
+                publication: iroha_telemetry::metrics::SorafsReputationPublicationMetricSnapshot {
+                    journal_transaction_submitter_ready: false,
+                    material_acknowledged: false,
+                },
+                latest_finalized_height: 0,
+                consecutive_failures: 1,
+                provider_count: 0,
+            },
+        ),
     }
 }
 
@@ -1025,63 +1308,193 @@ mod tests {
 
     use iroha_config::base::util::Bytes;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::sorafs::{
-        capacity::ProviderId,
-        moderation_ledger::{RepairFinalizedEventCursorV1, RepairFinalizedEventPageV1},
-        orderbook::{OrderbookFinalizedEventCursorV1, OrderbookFinalizedEventPageV1},
-        proof_ledger::{ProofOutcomeFinalizedEventCursorV1, ProofOutcomeFinalizedEventPageV1},
-        reputation::{
-            REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
-            ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
-            ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
-            ReputationJournalFinalizedEventPageV1,
-        },
-        reserve::{
-            ReserveFinalizedEventCursorV1, ReserveFinalizedEventPageV1,
-            ReserveProviderAccountPageV1,
+    use iroha_data_model::{
+        account::AccountId,
+        sorafs::{
+            capacity::ProviderId,
+            moderation_ledger::{RepairFinalizedEventCursorV1, RepairFinalizedEventPageV1},
+            orderbook::{OrderbookFinalizedEventCursorV1, OrderbookFinalizedEventPageV1},
+            proof_ledger::{ProofOutcomeFinalizedEventCursorV1, ProofOutcomeFinalizedEventPageV1},
+            reputation::{
+                PorTerminalOutcomeV1, PorTerminalStatusV1,
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+                ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
+                ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
+                ReputationJournalFinalizedEventPageV1, StreamTokenValidationBindingV1,
+                StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
+            },
+            reserve::{
+                ReserveFinalizedEventCursorV1, ReserveFinalizedEventPageV1,
+                ReserveProviderAccountPageV1,
+            },
         },
     };
     use sorafs_manifest::{
-        GovernanceDagBlockV1, SignedReputationSnapshotV1,
+        SignedReputationSnapshotV1,
         reputation::signed::{
             REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
             ReputationTrustedSignerV1,
         },
     };
     use sorafs_node::reputation::runtime::{
-        ReputationExternalFailureV1, ReputationFinalizedAnchorV1,
-        ReputationGovernanceDagPublicationRequestV1, ReputationJournalDeliveryFinalizedViewV1,
-        ReputationThresholdSigningRequestV1,
+        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
+        ReputationFinalizedAnchorV1, ReputationGovernanceDagPublicationRequestV1,
+        ReputationGovernanceDagReadbackV1, ReputationJournalDeliveryFinalizedViewV1,
+        ReputationJournalTransactionRequestV1, ReputationJournalTransactionSubmitOutcomeV1,
+        ReputationRuntimeProviderV1, ReputationThresholdSigningRequestV1,
+        reputation_governance_dag_policy_digest_v1, reputation_journal_submitter_policy_digest_v1,
     };
     use tempfile::TempDir;
 
     use super::*;
 
     #[derive(Debug)]
+    struct CountingRetentionControl {
+        reconciliations: AtomicU64,
+        ready: AtomicBool,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
+    }
+
+    impl CountingRetentionControl {
+        fn new(ready: bool) -> Self {
+            Self {
+                reconciliations: AtomicU64::new(0),
+                ready: AtomicBool::new(ready),
+                external_calls: None,
+            }
+        }
+
+        fn with_external_calls(
+            ready: bool,
+            external_calls: Arc<ExternalProviderCallCounters>,
+        ) -> Self {
+            Self {
+                reconciliations: AtomicU64::new(0),
+                ready: AtomicBool::new(ready),
+                external_calls: Some(external_calls),
+            }
+        }
+    }
+
+    impl ReputationFinalizedArchiveRetentionControlV1 for CountingRetentionControl {
+        fn revalidate(
+            &self,
+        ) -> std::result::Result<
+            (),
+            crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlErrorV1,
+        >{
+            ExternalProviderCallCounters::record_readiness(&self.external_calls);
+            if self.ready.load(Ordering::Acquire) {
+                Ok(())
+            } else {
+                Err(
+                    crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlErrorV1::Boundary {
+                        reason: "test retention authority is stale",
+                    },
+                )
+            }
+        }
+
+        fn reconcile_once(
+            &self,
+        ) -> std::result::Result<
+            crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlOutcomeV1,
+            crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlErrorV1,
+        >{
+            self.revalidate()?;
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
+            self.reconciliations.fetch_add(1, Ordering::AcqRel);
+            Ok(
+                crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlOutcomeV1::NoRequest,
+            )
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct ExternalProviderCallCounters {
+        handles: AtomicU64,
+        qualifications: AtomicU64,
+        readiness: AtomicU64,
+        operations: AtomicU64,
+    }
+
+    impl ExternalProviderCallCounters {
+        fn assert_zero(&self, case: &str) {
+            assert_eq!(
+                [
+                    self.handles.load(Ordering::Acquire),
+                    self.qualifications.load(Ordering::Acquire),
+                    self.readiness.load(Ordering::Acquire),
+                    self.operations.load(Ordering::Acquire),
+                ],
+                [0; 4],
+                "{case}: configured qualification rejection must precede every external provider call"
+            );
+        }
+
+        fn record_handle(calls: &Option<Arc<Self>>) {
+            if let Some(calls) = calls {
+                calls.handles.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        fn record_qualification(calls: &Option<Arc<Self>>) {
+            if let Some(calls) = calls {
+                calls.qualifications.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        fn record_readiness(calls: &Option<Arc<Self>>) {
+            if let Some(calls) = calls {
+                calls.readiness.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        fn record_operation(calls: &Option<Arc<Self>>) {
+            if let Some(calls) = calls {
+                calls.operations.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+    }
+
+    #[derive(Debug)]
     struct UnavailableQuery {
         handle: String,
         ready: bool,
+        qualification: ReputationRuntimeProviderQualificationV1,
+        malformed_bootstrap_continuation: bool,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
 
-    impl ReputationFinalizedQueryV1 for UnavailableQuery {
+    impl ReputationRuntimeProviderV1 for UnavailableQuery {
         fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ReputationRuntimeProviderQualificationV1,
+            ReputationExternalFailureV1,
+        > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
             if self.ready {
-                Ok(())
+                Ok(self.qualification)
             } else {
                 Err(ReputationExternalFailureV1::try_new([0x91; 32])
                     .expect("non-zero readiness failure receipt"))
             }
         }
+    }
 
+    impl ReputationFinalizedQueryV1 for UnavailableQuery {
         fn finalized_at_or_before(
             &self,
             _chain_id: &ChainId,
             _maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1093,6 +1506,7 @@ mod tests {
             _after: Option<ReputationJournalFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             let anchor = ReputationFinalizedAnchorV1 {
                 chain_id: chain_id.clone(),
                 identity: sorafs_node::reputation::ReputationFinalizedIdentityV1 {
@@ -1110,13 +1524,15 @@ mod tests {
                 token_recorder_authority: account(3),
                 max_source_age_ms: 86_400_000,
             };
-            Ok(ReputationJournalDeliveryFinalizedViewV1 {
-                authority_policy: ReputationJournalAuthorityPolicyRecordV1::try_new(
-                    policy,
-                    account(4),
-                    anchor.finalized_at_unix_ms,
-                )
-                .expect("authority policy record"),
+            let authority_policy = ReputationJournalAuthorityPolicyRecordV1::try_new(
+                policy,
+                account(4),
+                anchor.finalized_at_unix_ms,
+            )
+            .expect("authority policy record");
+            let mut view = ReputationJournalDeliveryFinalizedViewV1 {
+                authority_policy_history: vec![authority_policy.clone()],
+                authority_policy,
                 journal_page: ReputationJournalFinalizedEventPageV1 {
                     finalized_cursor: ReputationJournalFinalizedCursorV1 {
                         height: anchor.identity.height,
@@ -1128,7 +1544,11 @@ mod tests {
                     next_after: None,
                 },
                 anchor,
-            })
+            };
+            if self.malformed_bootstrap_continuation {
+                view.journal_page.has_more = true;
+            }
+            Ok(view)
         }
 
         fn proof_outcome_page(
@@ -1137,6 +1557,7 @@ mod tests {
             _after: Option<ProofOutcomeFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<ProofOutcomeFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1146,6 +1567,7 @@ mod tests {
             _after: Option<ReputationJournalFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<ReputationJournalFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1155,6 +1577,7 @@ mod tests {
             _after: Option<RepairFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<RepairFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1164,6 +1587,7 @@ mod tests {
             _after: Option<OrderbookFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<OrderbookFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1173,6 +1597,7 @@ mod tests {
             _after: Option<ReserveFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<ReserveFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1182,6 +1607,7 @@ mod tests {
             _after_provider_id: Option<ProviderId>,
             _limit: u32,
         ) -> Result<ReserveProviderAccountPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
     }
@@ -1189,23 +1615,57 @@ mod tests {
     #[derive(Debug)]
     struct PendingThresholdSigner {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
+    }
+
+    #[derive(Debug)]
+    struct DriftingThresholdSigner {
+        handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
+        drift_armed: AtomicBool,
+        remaining_good_qualifications: AtomicU64,
+    }
+
+    impl DriftingThresholdSigner {
+        fn arm_after(&self, good_qualifications: u64) {
+            self.remaining_good_qualifications
+                .store(good_qualifications, Ordering::SeqCst);
+            self.drift_armed.store(true, Ordering::SeqCst);
+        }
+
+        fn restore(&self) {
+            self.drift_armed.store(false, Ordering::SeqCst);
+        }
     }
 
     #[derive(Debug)]
     struct PendingJournalSubmitter {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
 
-    impl ReputationJournalTransactionSubmitterV1 for PendingJournalSubmitter {
+    impl ReputationRuntimeProviderV1 for PendingJournalSubmitter {
         fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ReputationRuntimeProviderQualificationV1,
+            ReputationExternalFailureV1,
+        > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationJournalTransactionSubmitterV1 for PendingJournalSubmitter {
         fn supports_authority(&self, _authority: &AccountId) -> bool {
+            ExternalProviderCallCounters::record_readiness(&self.external_calls);
             true
         }
 
@@ -1213,21 +1673,69 @@ mod tests {
             &self,
             request: &ReputationJournalTransactionRequestV1,
         ) -> ReputationJournalTransactionSubmitOutcomeV1 {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             ReputationJournalTransactionSubmitOutcomeV1::Ambiguous {
                 receipt: request.idempotency_key,
             }
         }
     }
 
+    impl ReputationRuntimeProviderV1 for PendingThresholdSigner {
+        fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ReputationRuntimeProviderQualificationV1,
+            ReputationExternalFailureV1,
+        > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
+            Ok(self.qualification)
+        }
+    }
+
     impl ReputationThresholdSignerClientV1 for PendingThresholdSigner {
+        fn reconcile_signature(
+            &self,
+            _request: &ReputationThresholdSigningRequestV1,
+        ) -> Result<Option<SignedReputationSnapshotV1>, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
+            Ok(None)
+        }
+    }
+
+    impl ReputationRuntimeProviderV1 for DriftingThresholdSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ReputationRuntimeProviderQualificationV1,
+            ReputationExternalFailureV1,
+        > {
+            if self.drift_armed.load(Ordering::SeqCst)
+                && self
+                    .remaining_good_qualifications
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_err()
+            {
+                return Ok(ReputationRuntimeProviderQualificationV1::new(
+                    REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                    [0xE7; 32],
+                ));
+            }
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationThresholdSignerClientV1 for DriftingThresholdSigner {
         fn reconcile_signature(
             &self,
             _request: &ReputationThresholdSigningRequestV1,
@@ -1239,21 +1747,34 @@ mod tests {
     #[derive(Debug)]
     struct PendingGovernanceDag {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
 
-    impl ReputationGovernanceDagClientV1 for PendingGovernanceDag {
+    impl ReputationRuntimeProviderV1 for PendingGovernanceDag {
         fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ReputationRuntimeProviderQualificationV1,
+            ReputationExternalFailureV1,
+        > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationGovernanceDagClientV1 for PendingGovernanceDag {
         fn reconcile_publication(
             &self,
             _request: &ReputationGovernanceDagPublicationRequestV1,
-        ) -> Result<Option<GovernanceDagBlockV1>, ReputationExternalFailureV1> {
+        ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>
+        {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             Ok(None)
         }
     }
@@ -1292,17 +1813,61 @@ mod tests {
         })
     }
 
-    fn config(state_dir: PathBuf) -> SorafsReputationRuntime {
+    fn config(
+        state_dir: PathBuf,
+        chain_id: &ChainId,
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+    ) -> SorafsReputationRuntime {
+        let finalized_archive_root = state_dir.with_extension("finalized-archive");
+        let journal_transaction_submitter_handle = "queue.reputation.journal".to_owned();
+        let threshold_signer_handle = "hsm.reputation.threshold".to_owned();
+        let governance_dag_handle = "governance.dag.publisher".to_owned();
+        let governance_publisher_peer_id = b"12D3KooWProductionPublisher".to_vec();
+        let governance_publisher_public_key = public_key(0x73);
+        let journal_transaction_submitter_qualification =
+            ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                reputation_journal_submitter_policy_digest_v1(
+                    chain_id,
+                    &journal_transaction_submitter_handle,
+                )
+                .expect("journal transaction-submitter policy digest"),
+            );
+        let publication_policy = ReputationPublicationPolicyV1::try_new(
+            trust_policy,
+            threshold_signer_handle.clone(),
+            governance_dag_handle.clone(),
+            governance_publisher_peer_id.clone(),
+            governance_publisher_public_key,
+            32 * 1024 * 1024,
+        )
+        .expect("publication policy");
+        let threshold_signer_qualification = publication_policy.threshold_signer_qualification();
+        let governance_dag_qualification = publication_policy.governance_dag_qualification();
         SorafsReputationRuntime {
             state_dir,
+            finalized_archive_root,
+            finalized_archive_max_record_bytes: 4 * 1024 * 1024,
+            finalized_archive_max_entries: 4_096,
+            finalized_archive_max_total_bytes: 256 * 1024 * 1024,
+            finalized_archive_max_kura_tip_lag_blocks: 2,
+            finalized_archive_retention_authority: None,
             window_start_height: 1,
             window_end_height: 10,
             finalized_query_handle: "ledger.finalized.primary".to_owned(),
-            journal_transaction_submitter_handle: "queue.reputation.journal".to_owned(),
-            threshold_signer_handle: "hsm.reputation.threshold".to_owned(),
-            governance_dag_handle: "governance.dag.publisher".to_owned(),
-            governance_publisher_peer_id: b"12D3KooWProductionPublisher".to_vec(),
-            governance_publisher_public_key: public_key(0x73),
+            journal_transaction_submitter_handle,
+            journal_transaction_submitter_revision: journal_transaction_submitter_qualification
+                .revision(),
+            journal_transaction_submitter_policy_digest:
+                journal_transaction_submitter_qualification.policy_digest(),
+            threshold_signer_handle,
+            threshold_signer_revision: threshold_signer_qualification.revision(),
+            threshold_signer_policy_digest: threshold_signer_qualification.policy_digest(),
+            governance_dag_handle,
+            governance_dag_revision: governance_dag_qualification.revision(),
+            governance_dag_policy_digest: governance_dag_qualification.policy_digest(),
+            governance_publisher_peer_id,
+            governance_publisher_public_key,
             poll_interval: Duration::from_secs(1),
             page_items: 64,
             max_pages_per_batch: 4_096,
@@ -1322,32 +1887,441 @@ mod tests {
         }
     }
 
-    fn dependencies(query_handle: &str) -> ReputationRuntimeDependenciesV1 {
+    fn dependencies(
+        config: &SorafsReputationRuntime,
+        chain_id: &ChainId,
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+        query_handle: &str,
+    ) -> ReputationRuntimeDependenciesV1 {
+        dependencies_with_calls(config, chain_id, trust_policy, query_handle, None)
+    }
+
+    fn dependencies_with_calls(
+        config: &SorafsReputationRuntime,
+        chain_id: &ChainId,
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+        query_handle: &str,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
+    ) -> ReputationRuntimeDependenciesV1 {
+        let weights = ReputationWeightsV1 {
+            version: REPUTATION_WEIGHTS_VERSION_V1,
+            por_success_bps: config.por_success_bps,
+            pdp_success_bps: config.pdp_success_bps,
+            potr_success_bps: config.potr_success_bps,
+            latency_bps: config.latency_bps,
+            dispute_bps: config.dispute_bps,
+            token_violation_bps: config.token_violation_bps,
+            repair_breach_bps: config.repair_breach_bps,
+        };
+        let mut ingest_policy = ReputationIngestPolicyV1::strict_v1(
+            chain_id.clone(),
+            config.window_start_height,
+            config.window_end_height,
+            trust_policy
+                .canonical_digest()
+                .expect("trust-policy digest"),
+            weights,
+        );
+        ingest_policy.max_providers = config.max_providers;
+        ingest_policy.max_pending_events = config.max_pending_events;
+        ingest_policy.max_replay_receipts = config.max_replay_receipts;
+        ingest_policy.max_pages_per_batch = config.max_pages_per_batch;
+        ingest_policy.max_material_delivery_failures = config.max_material_delivery_failures;
+        ingest_policy.checkpoint_max_bytes = config.ingest_checkpoint_max_bytes.0;
+        let query_qualification = ReputationFinalizedQueryPolicyV1::try_new(
+            &ingest_policy,
+            &config.finalized_query_handle,
+            config.page_items,
+            config.max_pages_per_batch,
+        )
+        .expect("query policy")
+        .query_qualification();
+        let submitter_qualification = ReputationRuntimeProviderQualificationV1::new(
+            config.journal_transaction_submitter_revision,
+            config.journal_transaction_submitter_policy_digest,
+        );
         ReputationRuntimeDependenciesV1 {
             finalized_query: Arc::new(UnavailableQuery {
                 handle: query_handle.to_owned(),
                 ready: true,
+                qualification: query_qualification,
+                malformed_bootstrap_continuation: false,
+                external_calls: external_calls.clone(),
             }),
             journal_transaction_submitter: Arc::new(PendingJournalSubmitter {
-                handle: "queue.reputation.journal".to_owned(),
+                handle: config.journal_transaction_submitter_handle.clone(),
+                qualification: submitter_qualification,
+                external_calls: external_calls.clone(),
             }),
             threshold_signer: Arc::new(PendingThresholdSigner {
-                handle: "hsm.reputation.threshold".to_owned(),
+                handle: config.threshold_signer_handle.clone(),
+                qualification: ReputationRuntimeProviderQualificationV1::new(
+                    config.threshold_signer_revision,
+                    config.threshold_signer_policy_digest,
+                ),
+                external_calls: external_calls.clone(),
             }),
             governance_dag: Arc::new(PendingGovernanceDag {
-                handle: "governance.dag.publisher".to_owned(),
+                handle: config.governance_dag_handle.clone(),
+                qualification: ReputationRuntimeProviderQualificationV1::new(
+                    config.governance_dag_revision,
+                    config.governance_dag_policy_digest,
+                ),
+                external_calls,
             }),
+            retention_control: None,
         }
+    }
+
+    fn counting_dependencies(
+        config: &SorafsReputationRuntime,
+        chain_id: &ChainId,
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+    ) -> (
+        ReputationRuntimeDependenciesV1,
+        Arc<ExternalProviderCallCounters>,
+    ) {
+        let calls = Arc::new(ExternalProviderCallCounters::default());
+        let mut dependencies = dependencies_with_calls(
+            config,
+            chain_id,
+            trust_policy,
+            &config.finalized_query_handle,
+            Some(Arc::clone(&calls)),
+        );
+        dependencies.retention_control = Some(Arc::new(
+            CountingRetentionControl::with_external_calls(true, Arc::clone(&calls)),
+        ));
+        (dependencies, calls)
+    }
+
+    #[tokio::test]
+    async fn deferred_start_is_nonblocking_and_fail_closed_before_activation() {
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-deferred");
+        let trust_policy = trust_policy();
+        let mut config = config(
+            temp.path().join("deferred-state"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        config.poll_interval = Duration::from_millis(100);
+        let dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            &config.finalized_query_handle,
+        );
+        let shutdown = ShutdownSignal::new();
+        let activation_probe: ReputationRuntimeActivationProbeV1 = Arc::new(|| Ok(false));
+        let (handle, _child) = start_deferred(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            dependencies,
+            activation_probe,
+            shutdown.clone(),
+        )
+        .expect("deferred runtime identity preflight");
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            handle.activation_state(),
+            Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Deferred)
+        );
+        assert!(matches!(
+            handle.status(),
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        ));
+        assert_eq!(handle.metrics().successful_ticks, 0);
+        assert!(matches!(
+            handle.committed_read_projection(),
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        ));
+        shutdown.send();
+    }
+
+    #[test]
+    fn daemon_owned_query_qualification_matches_worker_policy() {
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+        let config = config(
+            temp.path().join("qualification-state"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        let expected = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            &config.finalized_query_handle,
+        )
+        .finalized_query
+        .qualification()
+        .expect("fixture query qualification");
+
+        let actual = finalized_query_qualification_v1(&config, &chain_id, trust_policy.as_ref())
+            .expect("derive daemon-owned query qualification");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn native_outcome_trait_is_object_safe_and_exactly_idempotent() {
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-native-admission");
+        let trust_policy = trust_policy();
+        let config = config(
+            temp.path().join("native-admission-state"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        let handle = assemble(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            dependencies(
+                &config,
+                &chain_id,
+                trust_policy.as_ref(),
+                &config.finalized_query_handle,
+            ),
+        )
+        .expect("assemble native admission runtime");
+        assert_eq!(
+            handle.activation_state(),
+            Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
+        );
+        let admission: &dyn ReputationNativeOutcomeAdmissionApiV1 = &handle;
+        let activation_unix_ms: u64 = 1_800_000_000_000;
+        let terminal_at = |challenge_id: u8, decided_at_unix_ms: u64| PorTerminalOutcomeV1 {
+            challenge_id: [challenge_id; 32],
+            manifest_digest: [0x21; 32],
+            epoch_id: 7,
+            drand_round: 11,
+            forced: false,
+            sample_count: 4,
+            failed_samples: 0,
+            issued_at_unix_ms: decided_at_unix_ms.saturating_sub(2_000),
+            deadline_at_unix_ms: decided_at_unix_ms.saturating_sub(500),
+            responded_at_unix_ms: Some(decided_at_unix_ms.saturating_sub(750)),
+            decided_at_unix_ms,
+            proof_digest: Some([0x22; 32]),
+            repair_task_id: None,
+            verifier_latency_ms: Some(250),
+            status: PorTerminalStatusV1::Verified,
+        };
+        assert!(matches!(
+            admission.record_por_terminal(
+                ProviderId::new([0x23; 32]),
+                terminal_at(0x24, activation_unix_ms.saturating_sub(1)),
+            ),
+            Err(ReputationRuntimeError::InvalidAuthorityPolicy)
+        ));
+        assert!(matches!(
+            admission
+                .record_por_terminal(
+                    ProviderId::new([0x25; 32]),
+                    terminal_at(0x26, activation_unix_ms),
+                )
+                .expect("activation-boundary callback"),
+            sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted { .. }
+        ));
+        let terminal = PorTerminalOutcomeV1 {
+            challenge_id: [0x31; 32],
+            manifest_digest: [0x32; 32],
+            epoch_id: 7,
+            drand_round: 11,
+            forced: false,
+            sample_count: 4,
+            failed_samples: 0,
+            issued_at_unix_ms: 1_800_000_000_000,
+            deadline_at_unix_ms: 1_800_000_001_000,
+            responded_at_unix_ms: Some(1_800_000_000_500),
+            decided_at_unix_ms: 1_800_000_001_500,
+            proof_digest: Some([0x33; 32]),
+            repair_task_id: None,
+            verifier_latency_ms: Some(1_000),
+            status: PorTerminalStatusV1::Verified,
+        };
+        let inserted = admission
+            .record_por_terminal(ProviderId::new([0x34; 32]), terminal)
+            .expect("durably insert native PoR terminal");
+        let replay = admission
+            .record_por_terminal(ProviderId::new([0x34; 32]), terminal)
+            .expect("exact PoR terminal replay");
+        assert!(matches!(
+            (inserted, replay),
+            (
+                sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted {
+                    event_id: inserted
+                },
+                sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                    event_id: replay
+                }
+            ) if inserted == replay
+        ));
+
+        let token = StreamTokenValidationOutcomeV1 {
+            binding: StreamTokenValidationBindingV1 {
+                gateway_id: [0x41; 32],
+                gateway_sequence: 1,
+                request_context_digest: [0x42; 32],
+            },
+            token_body_digest: Some([0x43; 32]),
+            token_key_version: Some(1),
+            validated_at_unix_ms: 1_800_000_001_500,
+            status: StreamTokenValidationStatusV1::Accepted,
+        };
+        assert!(matches!(
+            (
+                admission
+                    .record_stream_token_outcome(ProviderId::new([0x44; 32]), token)
+                    .expect("insert stream-token outcome"),
+                admission
+                    .record_stream_token_outcome(ProviderId::new([0x44; 32]), token)
+                    .expect("replay stream-token outcome"),
+            ),
+            (
+                sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1::Enqueued(
+                    sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted {
+                        event_id: inserted
+                    }
+                ),
+                sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1::Enqueued(
+                    sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                        event_id: replay
+                    }
+                )
+            ) if inserted == replay
+        ));
+        let mut substituted = token;
+        substituted.binding.request_context_digest[0] ^= 1;
+        assert!(matches!(
+            admission.record_stream_token_outcome(ProviderId::new([0x44; 32]), substituted),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+    }
+
+    #[test]
+    fn native_admission_revalidates_bindings_before_and_after_durable_enqueue() {
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-native-binding");
+        let trust_policy = trust_policy();
+        let config = config(
+            temp.path().join("native-admission-binding-state"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        let mut runtime_dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            &config.finalized_query_handle,
+        );
+        let signer = Arc::new(DriftingThresholdSigner {
+            handle: config.threshold_signer_handle.clone(),
+            qualification: runtime_dependencies
+                .threshold_signer
+                .qualification()
+                .expect("threshold-signer qualification"),
+            drift_armed: AtomicBool::new(false),
+            remaining_good_qualifications: AtomicU64::new(0),
+        });
+        runtime_dependencies.threshold_signer = signer.clone();
+        let handle = assemble(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            runtime_dependencies,
+        )
+        .expect("assemble native admission runtime");
+        let admission: &dyn ReputationNativeOutcomeAdmissionApiV1 = &handle;
+
+        let token = StreamTokenValidationOutcomeV1 {
+            binding: StreamTokenValidationBindingV1 {
+                gateway_id: [0x51; 32],
+                gateway_sequence: 1,
+                request_context_digest: [0x52; 32],
+            },
+            token_body_digest: Some([0x53; 32]),
+            token_key_version: Some(1),
+            validated_at_unix_ms: 1_800_000_001_500,
+            status: StreamTokenValidationStatusV1::Accepted,
+        };
+        signer.arm_after(0);
+        assert!(matches!(
+            admission.record_stream_token_outcome(ProviderId::new([0x54; 32]), token),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        ));
+        signer.restore();
+        assert!(matches!(
+            admission
+                .record_stream_token_outcome(ProviderId::new([0x54; 32]), token)
+                .expect("healthy direct stream-token admission"),
+            sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1::Enqueued(
+                sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted { .. }
+            )
+        ));
+
+        let terminal = PorTerminalOutcomeV1 {
+            challenge_id: [0x61; 32],
+            manifest_digest: [0x62; 32],
+            epoch_id: 7,
+            drand_round: 11,
+            forced: false,
+            sample_count: 4,
+            failed_samples: 0,
+            issued_at_unix_ms: 1_800_000_000_000,
+            deadline_at_unix_ms: 1_800_000_001_000,
+            responded_at_unix_ms: Some(1_800_000_000_500),
+            decided_at_unix_ms: 1_800_000_001_500,
+            proof_digest: Some([0x63; 32]),
+            repair_task_id: None,
+            verifier_latency_ms: Some(1_000),
+            status: PorTerminalStatusV1::Verified,
+        };
+        signer.arm_after(1);
+        assert!(matches!(
+            admission.record_por_terminal(ProviderId::new([0x64; 32]), terminal),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        ));
+        signer.restore();
+        assert!(matches!(
+            admission
+                .record_por_terminal(ProviderId::new([0x64; 32]), terminal)
+                .expect("exact retry after post-enqueue drift"),
+            sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay { .. }
+        ));
     }
 
     #[test]
     fn production_config_rejects_null_test_handles_and_unsafe_paths() {
         let temp = TempDir::new().expect("tempdir");
-        let mut invalid_handle_config = config(temp.path().to_path_buf());
-        invalid_handle_config.finalized_query_handle = "null-query.test".to_owned();
-        assert!(validate_actual_config(&invalid_handle_config).is_err());
+        let chain_id = ChainId::from("reputation-runtime-config-test");
+        let trust_policy = trust_policy();
+        for rejected in [
+            "null-query.test",
+            "https://operator:secret@reputation.example",
+            "https://reputation.example/query?token=secret",
+            "https://reputation.example/query#fragment",
+            "hsm://reputation/dummy/signer",
+        ] {
+            let mut invalid_handle_config =
+                config(temp.path().to_path_buf(), &chain_id, trust_policy.as_ref());
+            invalid_handle_config.finalized_query_handle = rejected.to_owned();
+            assert!(
+                validate_actual_config(&invalid_handle_config).is_err(),
+                "{rejected:?} must fail before runtime construction"
+            );
+        }
 
-        let mut unsafe_path_config = config(PathBuf::from("/var/lib/iroha/../reputation"));
+        let mut unsafe_path_config = config(
+            PathBuf::from("/var/lib/iroha/../reputation"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
         unsafe_path_config.finalized_query_handle = "ledger.finalized.primary".to_owned();
         assert!(validate_actual_config(&unsafe_path_config).is_err());
     }
@@ -1394,27 +2368,173 @@ mod tests {
     }
 
     #[test]
+    fn configured_provider_qualification_matrix_fails_before_external_calls_or_state_open() {
+        type ConfigMutation = fn(&mut SorafsReputationRuntime);
+
+        let cases: [(&str, ConfigMutation, &str); 6] = [
+            (
+                "journal-submitter-revision",
+                |config| {
+                    config.journal_transaction_submitter_revision =
+                        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+                },
+                "configured reputation journal transaction-submitter revision is not V1",
+            ),
+            (
+                "journal-submitter-policy-digest",
+                |config| {
+                    config.journal_transaction_submitter_policy_digest[0] ^= 1;
+                },
+                "configured reputation journal transaction-submitter policy digest does not match the derived V1 policy",
+            ),
+            (
+                "threshold-signer-revision",
+                |config| {
+                    config.threshold_signer_revision =
+                        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+                },
+                "configured reputation threshold-signer revision is not V1",
+            ),
+            (
+                "threshold-signer-policy-digest",
+                |config| {
+                    config.threshold_signer_policy_digest[0] ^= 1;
+                },
+                "configured reputation threshold-signer policy digest does not match the derived V1 policy",
+            ),
+            (
+                "governance-dag-revision",
+                |config| {
+                    config.governance_dag_revision =
+                        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+                },
+                "configured reputation Governance DAG revision is not V1",
+            ),
+            (
+                "governance-dag-policy-digest",
+                |config| {
+                    config.governance_dag_policy_digest[0] ^= 1;
+                },
+                "configured reputation Governance DAG policy digest does not match the derived V1 policy",
+            ),
+        ];
+
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-config-pins");
+        let trust_policy = trust_policy();
+        for (case, mutate, expected_error) in cases {
+            let state_dir = temp.path().join(case);
+            let mut config = config(state_dir.clone(), &chain_id, trust_policy.as_ref());
+            config.finalized_archive_retention_authority = Some(
+                iroha_config::parameters::actual::SorafsReputationFinalizedArchiveRetentionAuthority {
+                    handle: "sealed.reputation.archive.primary".to_owned(),
+                    revision: 7,
+                    policy_digest: [0xA7; 32],
+                },
+            );
+            let (dependencies, calls) =
+                counting_dependencies(&config, &chain_id, trust_policy.as_ref());
+            mutate(&mut config);
+
+            let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+                .expect_err("substituted configured qualification must fail startup");
+
+            assert_eq!(error.to_string(), expected_error, "{case}");
+            assert!(
+                !state_dir.exists(),
+                "{case}: configured qualification must fail before durable state"
+            );
+            calls.assert_zero(case);
+        }
+    }
+
+    #[test]
     fn assembly_rejects_adapter_identity_substitution_before_external_calls() {
         let temp = TempDir::new().expect("tempdir");
-        let error = assemble(
-            config(temp.path().to_path_buf()),
-            ChainId::from("reputation-runtime-test"),
-            trust_policy(),
-            dependencies("ledger.finalized.substituted"),
-        )
-        .expect_err("mismatched query identity must fail startup");
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+        let config = config(temp.path().to_path_buf(), &chain_id, trust_policy.as_ref());
+        let dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.substituted",
+        );
+        let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+            .expect_err("mismatched query identity must fail startup");
         assert!(error.to_string().contains("identity"));
     }
 
     #[test]
+    fn configured_retention_control_is_required_invoked_and_fail_closed() {
+        let chain_id = ChainId::from("reputation-retention-runtime-test");
+        let trust_policy = trust_policy();
+        let mut config = config(
+            PathBuf::from("/var/lib/iroha/reputation"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        config.finalized_archive_retention_authority = Some(
+            iroha_config::parameters::actual::SorafsReputationFinalizedArchiveRetentionAuthority {
+                handle: "sealed.reputation.archive.primary".to_owned(),
+                revision: 7,
+                policy_digest: [0xA7; 32],
+            },
+        );
+        let mut dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            &config.finalized_query_handle,
+        );
+        assert!(
+            validate_retention_control(&config, &dependencies).is_err(),
+            "configured retention must not start without its controller"
+        );
+
+        let control = Arc::new(CountingRetentionControl::new(true));
+        dependencies.retention_control = Some(control.clone());
+        validate_retention_control(&config, &dependencies)
+            .expect("qualified explicit retention control");
+        reconcile_retention_control(dependencies.retention_control.as_deref())
+            .expect("supervised tick invokes explicit retention");
+        assert_eq!(control.reconciliations.load(Ordering::Acquire), 1);
+
+        control.ready.store(false, Ordering::Release);
+        assert!(validate_retention_control(&config, &dependencies).is_err());
+        assert!(
+            reconcile_retention_control(dependencies.retention_control.as_deref()).is_err(),
+            "stale authority must fail supervised tick readiness"
+        );
+        assert_eq!(
+            control.reconciliations.load(Ordering::Acquire),
+            1,
+            "failed qualification must not claim work"
+        );
+    }
+
+    #[test]
     fn startup_rejects_each_missing_runtime_adapter() {
-        let complete = dependencies("ledger.finalized.primary");
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+        let config = config(
+            PathBuf::from("/var/lib/iroha/reputation"),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        let complete = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
         assert!(
             ReputationRuntimeDependenciesV1::require(
                 None,
                 Some(Arc::clone(&complete.journal_transaction_submitter)),
                 Some(Arc::clone(&complete.threshold_signer)),
                 Some(Arc::clone(&complete.governance_dag)),
+                None,
             )
             .is_err()
         );
@@ -1424,6 +2544,7 @@ mod tests {
                 None,
                 Some(Arc::clone(&complete.threshold_signer)),
                 Some(Arc::clone(&complete.governance_dag)),
+                None,
             )
             .is_err()
         );
@@ -1433,6 +2554,7 @@ mod tests {
                 Some(Arc::clone(&complete.journal_transaction_submitter)),
                 None,
                 Some(Arc::clone(&complete.governance_dag)),
+                None,
             )
             .is_err()
         );
@@ -1441,6 +2563,7 @@ mod tests {
                 Some(Arc::clone(&complete.finalized_query)),
                 Some(Arc::clone(&complete.journal_transaction_submitter)),
                 Some(Arc::clone(&complete.threshold_signer)),
+                None,
                 None,
             )
             .is_err()
@@ -1451,43 +2574,216 @@ mod tests {
     fn assembly_rejects_unready_adapter_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
         let state_dir = temp.path().join("must-not-exist");
-        let mut dependencies = dependencies("ledger.finalized.primary");
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+        let config = config(state_dir.clone(), &chain_id, trust_policy.as_ref());
+        let mut dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
+        let query_qualification = dependencies
+            .finalized_query
+            .qualification()
+            .expect("query qualification");
         dependencies.finalized_query = Arc::new(UnavailableQuery {
             handle: "ledger.finalized.primary".to_owned(),
             ready: false,
+            qualification: query_qualification,
+            malformed_bootstrap_continuation: false,
+            external_calls: None,
         });
 
-        let error = assemble(
-            config(state_dir.clone()),
-            ChainId::from("reputation-runtime-test"),
-            trust_policy(),
-            dependencies,
-        )
-        .expect_err("unready query adapter must fail startup");
+        let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+            .expect_err("unready query adapter must fail startup");
 
-        assert!(error.to_string().contains("not ready"));
+        assert!(error.to_string().contains("not qualified"));
         assert!(
             !state_dir.exists(),
-            "adapter readiness must be verified before state is opened"
+            "adapter qualification must be verified before state is opened"
+        );
+    }
+
+    #[test]
+    fn assembly_rejects_malformed_bootstrap_view_before_state_open() {
+        let temp = TempDir::new().expect("tempdir");
+        let state_dir = temp.path().join("malformed-bootstrap-must-not-exist");
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+        let config = config(state_dir.clone(), &chain_id, trust_policy.as_ref());
+        let mut dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
+        let query_qualification = dependencies
+            .finalized_query
+            .qualification()
+            .expect("query qualification");
+        dependencies.finalized_query = Arc::new(UnavailableQuery {
+            handle: "ledger.finalized.primary".to_owned(),
+            ready: true,
+            qualification: query_qualification,
+            malformed_bootstrap_continuation: true,
+            external_calls: None,
+        });
+
+        let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+            .expect_err("malformed exact bootstrap view must fail startup");
+
+        assert!(error.to_string().contains("bootstrap view"));
+        assert!(
+            !state_dir.exists(),
+            "bootstrap view must be validated before state is opened"
+        );
+    }
+
+    #[test]
+    fn assembly_rejects_same_key_different_governance_peer_before_state_open() {
+        let temp = TempDir::new().expect("tempdir");
+        let state_dir = temp.path().join("substituted-dag-peer-must-not-exist");
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+        let config = config(state_dir.clone(), &chain_id, trust_policy.as_ref());
+        let mut dependencies = dependencies(
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
+        dependencies.governance_dag = Arc::new(PendingGovernanceDag {
+            handle: config.governance_dag_handle.clone(),
+            qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                reputation_governance_dag_policy_digest_v1(
+                    b"12D3KooWSubstitutedPublisher",
+                    config.governance_publisher_public_key,
+                )
+                .expect("substituted publisher qualification"),
+            ),
+            external_calls: None,
+        });
+
+        let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
+            .expect_err("same-key different-peer DAG adapter must fail startup");
+
+        assert!(error.to_string().contains("not qualified"));
+        assert!(
+            !state_dir.exists(),
+            "DAG peer qualification must fail before durable state"
+        );
+    }
+
+    #[test]
+    fn assembly_rejects_policy_mismatched_and_test_marked_providers_before_state_open() {
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+
+        let mismatched_state_dir = temp.path().join("mismatched-must-not-exist");
+        let mismatched_config = config(
+            mismatched_state_dir.clone(),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        let mut mismatched_dependencies = dependencies(
+            &mismatched_config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
+        mismatched_dependencies.threshold_signer = Arc::new(PendingThresholdSigner {
+            handle: mismatched_config.threshold_signer_handle.clone(),
+            qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                [0xE1; 32],
+            ),
+            external_calls: None,
+        });
+        let mismatch = assemble(
+            &mismatched_config,
+            &chain_id,
+            trust_policy.as_ref(),
+            mismatched_dependencies,
+        )
+        .expect_err("policy-substituted signer must fail startup");
+        assert!(mismatch.to_string().contains("not qualified"));
+        assert!(
+            !mismatched_state_dir.exists(),
+            "qualification mismatch must fail before durable state"
+        );
+
+        let test_marked_state_dir = temp.path().join("test-marked-must-not-exist");
+        let test_marked_config = config(
+            test_marked_state_dir.clone(),
+            &chain_id,
+            trust_policy.as_ref(),
+        );
+        let mut test_marked_dependencies = dependencies(
+            &test_marked_config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
+        let query_qualification = test_marked_dependencies
+            .finalized_query
+            .qualification()
+            .expect("query qualification");
+        test_marked_dependencies.finalized_query = Arc::new(UnavailableQuery {
+            handle: "test:ledger-finalized".to_owned(),
+            ready: true,
+            qualification: query_qualification,
+            malformed_bootstrap_continuation: false,
+            external_calls: None,
+        });
+        let _ = assemble(
+            &test_marked_config,
+            &chain_id,
+            trust_policy.as_ref(),
+            test_marked_dependencies,
+        )
+        .expect_err("test-marked provider must fail startup");
+        assert!(
+            !test_marked_state_dir.exists(),
+            "test-marked provider must fail before durable state"
         );
     }
 
     #[test]
     fn checkpoint_runtime_reopens_without_claiming_journal_readiness() {
         let temp = TempDir::new().expect("tempdir");
-        let config = config(temp.path().to_path_buf());
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+        let config = config(temp.path().to_path_buf(), &chain_id, trust_policy.as_ref());
         let first = assemble(
-            config.clone(),
-            ChainId::from("reputation-runtime-test"),
-            trust_policy(),
-            dependencies("ledger.finalized.primary"),
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            dependencies(
+                &config,
+                &chain_id,
+                trust_policy.as_ref(),
+                "ledger.finalized.primary",
+            ),
         )
         .expect("first assembly");
         let first_status = first.status().expect("first status");
-        assert!(!first_status.ready);
-        assert!(!first_status.external_dependencies_healthy);
-        assert!(!first_status.last_tick_fresh);
-        assert!(!first_status.journal_transaction_submitter_ready);
+        let external_dependencies_ready = first_status.liveness.external_dependencies_healthy;
+        let last_tick_fresh = first_status.liveness.last_tick_fresh;
+        let tick_in_flight = first_status.liveness.tick_in_flight;
+        assert_eq!(
+            (
+                external_dependencies_ready,
+                first_status.journal_transaction_submitter_ready,
+                last_tick_fresh,
+                tick_in_flight,
+                first_status.ready,
+            ),
+            (false, false, false, false, false),
+            "internal liveness grouping must preserve every externally projected readiness value",
+        );
         let committed_reader: &dyn ReputationCommittedReadApiV1 = &first;
         assert!(
             committed_reader
@@ -1499,17 +2795,22 @@ mod tests {
         drop(first);
 
         let restarted = assemble(
-            config,
-            ChainId::from("reputation-runtime-test"),
-            trust_policy(),
-            dependencies("ledger.finalized.primary"),
+            &config,
+            &chain_id,
+            trust_policy.as_ref(),
+            dependencies(
+                &config,
+                &chain_id,
+                trust_policy.as_ref(),
+                "ledger.finalized.primary",
+            ),
         )
         .expect("restart assembly");
         let restarted_status = restarted.status().expect("restart status");
         assert_eq!(restarted_status.ingest.latest_finalized, None);
         assert!(!restarted_status.ready);
-        assert!(!restarted_status.external_dependencies_healthy);
-        assert!(!restarted_status.last_tick_fresh);
+        assert!(!restarted_status.liveness.external_dependencies_healthy);
+        assert!(!restarted_status.liveness.last_tick_fresh);
         assert!(!restarted_status.journal_transaction_submitter_ready);
         assert!(
             restarted

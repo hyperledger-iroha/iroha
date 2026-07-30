@@ -451,7 +451,7 @@ pub struct HeightContext {
 impl HeightContext {
     /// Return the typed hash that identifies every round in this context.
     ///
-    /// The identity commits to the parent CommitQC's semantic decision key
+    /// The identity commits to the parent `CommitQC`'s semantic decision key
     /// (parent context, height, phase, subject, and execution commitment),
     /// rather than its round, aggregate signature, or signer subset. Two nodes
     /// that decide the same immutable body before or after an unchanged
@@ -1162,7 +1162,7 @@ pub struct QuorumCertificateRef {
 impl QuorumCertificateRef {
     /// Return whether both references certify the same committed decision.
     ///
-    /// CommitQCs for one immutable body may be assembled before or after an
+    /// `CommitQC`s for one immutable body may be assembled before or after an
     /// unchanged re-proposal. Their stable decision identity excludes the
     /// round and signer evidence while retaining context, height, subject, and
     /// deterministic execution.
@@ -1536,7 +1536,7 @@ pub struct TimeoutJustification {
     ///
     /// When present, the proposal must re-propose this certificate's exact
     /// subject. The value is repeated outside the grouped timeout votes so a
-    /// proposal authenticates the complete PrepareQC used by its safe-value
+    /// proposal authenticates the complete `PrepareQC` used by its safe-value
     /// rule without requiring a receiver to reconstruct a signer subset.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -4423,6 +4423,133 @@ mod tests {
             .expect("valid canonical manifest")
     }
 
+    struct TimeoutProposalFixture {
+        context: HeightContext,
+        timeout_round: ConsensusRound,
+        proposal: Proposal,
+        highest_prepare: QuorumCertificate,
+    }
+
+    fn timeout_proposal_fixture() -> TimeoutProposalFixture {
+        let context = context(&[1, 1, 1, 1]);
+        let payload_manifest = manifest(&context);
+        let timeout_round = round(&context, 0);
+        let proposal = Proposal {
+            round: payload_manifest.round,
+            proposer: context.leader(payload_manifest.round.view),
+            subject: payload_manifest.subject,
+            manifest: payload_manifest,
+            justification: timeout_justification(timeout_round, None, None, 0x41),
+            signature: vec![0x42; 48],
+        };
+        let mut highest_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
+        highest_prepare.subject = proposal.subject;
+
+        TimeoutProposalFixture {
+            context,
+            timeout_round,
+            proposal,
+            highest_prepare,
+        }
+    }
+
+    fn timeout_justification(
+        timeout_round: ConsensusRound,
+        certificate_high: Option<QuorumCertificate>,
+        proposal_high: Option<QuorumCertificate>,
+        signature_seed: u8,
+    ) -> ProposalJustification {
+        ProposalJustification::Timeout(TimeoutJustification {
+            timeout_certificate: TimeoutCertificate {
+                round: timeout_round,
+                groups: vec![TimeoutVoteGroup {
+                    highest_prepare_qc: certificate_high,
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: vec![signature_seed; 48],
+                }],
+            },
+            highest_prepare_qc: proposal_high,
+        })
+    }
+
+    struct ParentReproposalFixture {
+        context: HeightContext,
+        parent_round: ConsensusRound,
+        proposal: Proposal,
+    }
+
+    fn parent_reproposal_fixture() -> ParentReproposalFixture {
+        let mut context = context(&[1, 1, 1, 1]);
+        context.height = 2;
+        let parent_subject = subject(0x70);
+        let parent_round = ConsensusRound {
+            context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"proposal parent context",
+            ))),
+            height: context.height - 1,
+            view: 2,
+        };
+        context.parent_commit_qc = Some(QuorumCertificate {
+            round: parent_round,
+            proposal_round: parent_round,
+            phase: GlobalPhase::Commit,
+            subject: parent_subject,
+            execution_commitment: execution_commitment(0x70),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x31; 48],
+        });
+        let proposal_round = round(&context, 0);
+        let mut payload_manifest = manifest(&context);
+        payload_manifest.round = proposal_round;
+        let carried = QuorumCertificate {
+            round: parent_round,
+            proposal_round: parent_round,
+            phase: GlobalPhase::Commit,
+            subject: parent_subject,
+            execution_commitment: execution_commitment(0x70),
+            signers: vec![0, 1, 3],
+            aggregate_signature: vec![0x32; 48],
+        };
+        let frozen_parent = context
+            .parent_commit_qc
+            .as_ref()
+            .expect("fixture parent certificate");
+        assert!(
+            carried
+                .as_ref()
+                .same_commit_decision(frozen_parent.as_ref())
+        );
+        let mut prepare_ref = carried.as_ref();
+        prepare_ref.phase = GlobalPhase::Prepare;
+        assert!(!prepare_ref.same_commit_decision(frozen_parent.as_ref()));
+        let proposal = Proposal {
+            round: proposal_round,
+            proposer: context.leader(0),
+            subject: payload_manifest.subject,
+            manifest: payload_manifest,
+            justification: ProposalJustification::ParentCommit(ParentCommitJustification {
+                certificate: Some(carried),
+            }),
+            signature: vec![0x33; 48],
+        };
+
+        ParentReproposalFixture {
+            context,
+            parent_round,
+            proposal,
+        }
+    }
+
+    fn carried_parent_certificate(proposal: &mut Proposal) -> &mut QuorumCertificate {
+        let ProposalJustification::ParentCommit(parent) = &mut proposal.justification else {
+            unreachable!("fixture uses a parent justification");
+        };
+        parent
+            .certificate
+            .as_mut()
+            .expect("carried parent certificate")
+    }
+
     #[test]
     fn dual_quorum_requires_count_and_power() {
         let context = context(&[70, 10, 10, 10]);
@@ -5156,59 +5283,28 @@ mod tests {
 
     #[test]
     fn timeout_proposal_accepts_only_the_selected_prepare_subject() {
-        let context = context(&[1, 1, 1, 1]);
-        let payload_manifest = manifest(&context);
-        let timeout_round = round(&context, 0);
-        let mut proposal = Proposal {
-            round: payload_manifest.round,
-            proposer: context.leader(payload_manifest.round.view),
-            subject: payload_manifest.subject,
-            manifest: payload_manifest,
-            justification: ProposalJustification::Timeout(TimeoutJustification {
-                timeout_certificate: TimeoutCertificate {
-                    round: timeout_round,
-                    groups: vec![TimeoutVoteGroup {
-                        highest_prepare_qc: None,
-                        signers: vec![0, 1, 2],
-                        aggregate_signature: vec![0x41; 48],
-                    }],
-                },
-                highest_prepare_qc: None,
-            }),
-            signature: vec![0x42; 48],
-        };
+        let TimeoutProposalFixture {
+            context,
+            timeout_round,
+            mut proposal,
+            highest_prepare,
+        } = timeout_proposal_fixture();
         assert_eq!(proposal.validate(&context), Ok(()));
 
-        let mut highest_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
-        highest_prepare.subject = proposal.subject;
-        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
-            timeout_certificate: TimeoutCertificate {
-                round: timeout_round,
-                groups: vec![TimeoutVoteGroup {
-                    highest_prepare_qc: None,
-                    signers: vec![0, 1, 2],
-                    aggregate_signature: vec![0x43; 48],
-                }],
-            },
-            highest_prepare_qc: Some(highest_prepare.clone()),
-        });
+        proposal.justification =
+            timeout_justification(timeout_round, None, Some(highest_prepare.clone()), 0x43);
         assert_eq!(
             proposal.validate(&context),
             Err(ValidationError::InvalidProposalJustification),
             "a proposal cannot invent a repeated high absent from its TC"
         );
 
-        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
-            timeout_certificate: TimeoutCertificate {
-                round: timeout_round,
-                groups: vec![TimeoutVoteGroup {
-                    highest_prepare_qc: Some(highest_prepare.clone()),
-                    signers: vec![0, 1, 2],
-                    aggregate_signature: vec![0x43; 48],
-                }],
-            },
-            highest_prepare_qc: Some(highest_prepare.clone()),
-        });
+        proposal.justification = timeout_justification(
+            timeout_round,
+            Some(highest_prepare.clone()),
+            Some(highest_prepare.clone()),
+            0x43,
+        );
         assert_eq!(proposal.validate(&context), Ok(()));
 
         let timeout_certificate = match &proposal.justification {
@@ -5243,17 +5339,12 @@ mod tests {
         );
 
         let mismatched_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
-        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
-            timeout_certificate: TimeoutCertificate {
-                round: timeout_round,
-                groups: vec![TimeoutVoteGroup {
-                    highest_prepare_qc: Some(mismatched_prepare.clone()),
-                    signers: vec![0, 1, 2],
-                    aggregate_signature: vec![0x44; 48],
-                }],
-            },
-            highest_prepare_qc: Some(mismatched_prepare),
-        });
+        proposal.justification = timeout_justification(
+            timeout_round,
+            Some(mismatched_prepare.clone()),
+            Some(mismatched_prepare),
+            0x44,
+        );
         assert_eq!(
             proposal.validate(&context),
             Err(ValidationError::InvalidProposalJustification)
@@ -5261,17 +5352,12 @@ mod tests {
 
         let mut altered_carried = highest_prepare;
         altered_carried.round.view = 1;
-        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
-            timeout_certificate: TimeoutCertificate {
-                round: timeout_round,
-                groups: vec![TimeoutVoteGroup {
-                    highest_prepare_qc: Some(qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2])),
-                    signers: vec![0, 1, 2],
-                    aggregate_signature: vec![0x45; 48],
-                }],
-            },
-            highest_prepare_qc: Some(altered_carried),
-        });
+        proposal.justification = timeout_justification(
+            timeout_round,
+            Some(qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2])),
+            Some(altered_carried),
+            0x45,
+        );
         assert_eq!(
             proposal.validate(&context),
             Err(ValidationError::InvalidProposalJustification)
@@ -5398,103 +5484,40 @@ mod tests {
 
     #[test]
     fn view_zero_proposal_accepts_equivalent_parent_decision_across_reproposal_rounds() {
-        let mut context = context(&[1, 1, 1, 1]);
-        context.height = 2;
-        let parent_subject = subject(0x70);
-        let parent_round = ConsensusRound {
-            context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"proposal parent context",
-            ))),
-            height: context.height - 1,
-            view: 2,
-        };
-        context.parent_commit_qc = Some(QuorumCertificate {
-            round: parent_round,
-            proposal_round: parent_round,
-            phase: GlobalPhase::Commit,
-            subject: parent_subject,
-            execution_commitment: execution_commitment(0x70),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x31; 48],
-        });
-        let proposal_round = round(&context, 0);
-        let mut payload_manifest = manifest(&context);
-        payload_manifest.round = proposal_round;
-        let carried = QuorumCertificate {
-            round: parent_round,
-            proposal_round: parent_round,
-            phase: GlobalPhase::Commit,
-            subject: parent_subject,
-            execution_commitment: execution_commitment(0x70),
-            signers: vec![0, 1, 3],
-            aggregate_signature: vec![0x32; 48],
-        };
-        let frozen_parent = context
-            .parent_commit_qc
-            .as_ref()
-            .expect("fixture parent certificate");
-        assert!(
-            carried
-                .as_ref()
-                .same_commit_decision(frozen_parent.as_ref())
-        );
-        let mut prepare_ref = carried.as_ref();
-        prepare_ref.phase = GlobalPhase::Prepare;
-        assert!(!prepare_ref.same_commit_decision(frozen_parent.as_ref()));
-        let mut proposal = Proposal {
-            round: proposal_round,
-            proposer: context.leader(0),
-            subject: payload_manifest.subject,
-            manifest: payload_manifest,
-            justification: ProposalJustification::ParentCommit(ParentCommitJustification {
-                certificate: Some(carried),
-            }),
-            signature: vec![0x33; 48],
-        };
+        let ParentReproposalFixture {
+            context,
+            parent_round,
+            mut proposal,
+        } = parent_reproposal_fixture();
 
         assert_eq!(proposal.validate(&context), Ok(()));
-        if let ProposalJustification::ParentCommit(parent) = &mut proposal.justification {
-            let certificate = parent
-                .certificate
-                .as_mut()
-                .expect("carried parent certificate");
+        {
+            let certificate = carried_parent_certificate(&mut proposal);
             certificate.round.view += 1;
             certificate.proposal_round = certificate.round;
-        } else {
-            unreachable!("fixture uses a parent justification")
         }
         assert_eq!(
             proposal.validate(&context),
             Ok(()),
             "an unchanged re-proposal may decide the same parent body in another round"
         );
-        if let ProposalJustification::ParentCommit(parent) = &mut proposal.justification {
-            let carried = parent
-                .certificate
-                .as_mut()
-                .expect("carried parent certificate");
+        {
+            let carried = carried_parent_certificate(&mut proposal);
             carried.round = parent_round;
             carried.round.context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                 b"different proposal parent context",
             )));
             carried.proposal_round = carried.round;
-        } else {
-            unreachable!("fixture uses a parent justification")
         }
         assert_eq!(
             proposal.validate(&context),
             Err(ValidationError::InvalidProposalJustification)
         );
-        if let ProposalJustification::ParentCommit(parent) = &mut proposal.justification {
-            let carried = parent
-                .certificate
-                .as_mut()
-                .expect("carried parent certificate");
+        {
+            let carried = carried_parent_certificate(&mut proposal);
             carried.round = parent_round;
             carried.proposal_round = parent_round;
             carried.subject = subject(0x71);
-        } else {
-            unreachable!("fixture uses a parent justification")
         }
         assert_eq!(
             proposal.validate(&context),

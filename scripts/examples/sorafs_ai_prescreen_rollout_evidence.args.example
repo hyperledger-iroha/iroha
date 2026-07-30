@@ -16,3 +16,4 @@ runner,committee,operator_workflow,notification_transport,commit_reveal_executor
 1800400000
 --max-evidence-age-secs
 604800
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

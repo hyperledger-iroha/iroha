@@ -134,6 +134,7 @@ Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
 - 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
+- 0x04 CONTRACT_ABORT — Args: `r10=code:u64` → Return: `u64=0` — Gas: G_abort (halts with a manifest-declared application error code)
 - 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=unix_time_ms` — Gas: G_sysvar
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish + bytes (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: G_hash + bytes
@@ -366,8 +367,9 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010027 SYSVAR_CONTRACT_SUBJECT — Args: none → `ptr (&AccountId(contract subject))` — Gas: G_sysvar + bytes. Calls outside a deployed-contract scope fail closed.
 - 0x010028 NORMALIZE_NORITO_BYTES — Args: `r10=&Blob or &NoritoBytes` in validated public memory → `ptr (&NoritoBytes(same payload))` — Gas: G_pointer + bytes
   - Compiler transport helper for strict Norito-consuming syscalls. It rejects null, malformed, disallowed, and non-bytes pointers, then allocates a fresh canonical V1 `NoritoBytes` envelope with an identical payload and recomputed hash. It performs no serialization and does not weaken the receiving syscall's exact pointer-type checks.
-- 0x010200 SET_ASSET_TRANSFER_FREEZE — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1` → 0 — Gas: G_sci + bytes
-- 0x010201 SET_ASSET_TRANSFER_DAILY_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0` → 0 — Gas: G_sci + bytes
+- 0x010200 SET_ASSET_TRANSFER_AVAILABILITY — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<String>` → 0 — Gas: G_sci + bytes
+- 0x010201 SET_ASSET_TRANSFER_DAILY_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity>` → 0 — Gas: G_sci + bytes
+- 0x010202 SET_ASSET_HOLDING_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity>` → 0 — Gas: G_sci + bytes
 - 0x010210 ACCOUNT_RECOVERY_PROPOSE — Args: `r10=&Blob(alias), r11=&AccountId(replacement)` → 0 — Gas: G_sci + bytes
 - 0x010211 ACCOUNT_RECOVERY_APPROVE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
 - 0x010212 ACCOUNT_RECOVERY_CANCEL — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
@@ -524,6 +526,7 @@ node enforces that policy unconditionally.
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
+| 0x04 | CONTRACT_ABORT | r10=code:u64 | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v2 |
 | 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v2 |
 | 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId(to) | u64=0 | asset:gas/G_transfer_domain@ivm.core/v2 |
@@ -757,8 +760,9 @@ node enforces that policy unconditionally.
 | 0x10163 | JSON_GET_INT_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Int> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10164 | JSON_GET_DECIMAL_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Decimal> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10165 | JSON_GET_QUANTITY_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Quantity> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
-| 0x10200 | SET_ASSET_TRANSFER_FREEZE | r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1 | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0 | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10200 | SET_ASSET_TRANSFER_AVAILABILITY | r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<string> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10202 | SET_ASSET_HOLDING_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |

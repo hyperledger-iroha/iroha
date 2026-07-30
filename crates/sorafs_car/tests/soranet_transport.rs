@@ -171,7 +171,7 @@ fn manifest_verification_produces_expected_snapshot() {
         manifest_bytes: fixture.manifest_bytes.clone(),
         manifest: fixture.manifest.clone(),
         manifest_digest: fixture.manifest_digest,
-        payload_digest: fixture.car_stats.car_payload_digest,
+        payload_digest: fixture.plan.payload_digest,
         content_length: fixture.plan.content_length,
         chunk_count: fixture.plan.chunks.len() as u64,
         chunk_profile_handle: fixture.chunker_handle.clone(),
@@ -183,6 +183,18 @@ fn manifest_verification_produces_expected_snapshot() {
         .verify_against_manifest(&fixture.plan, context)
         .expect("verification succeeds");
 
+    assert_ne!(
+        fixture.plan.payload_digest,
+        fixture.car_stats.car_payload_digest
+    );
+    assert_ne!(
+        fixture.plan.payload_digest,
+        fixture.car_stats.car_archive_digest
+    );
+    assert_ne!(
+        fixture.car_stats.car_payload_digest,
+        fixture.car_stats.car_archive_digest
+    );
     assert_eq!(
         hex::encode(verification.manifest_digest.as_bytes()),
         fixture.manifest_id_hex()
@@ -227,7 +239,7 @@ fn manifest_without_governance_rejects_verification() {
         manifest_bytes,
         manifest: manifest_without_governance,
         manifest_digest,
-        payload_digest: fixture.car_stats.car_payload_digest,
+        payload_digest: fixture.plan.payload_digest,
         content_length: fixture.plan.content_length,
         chunk_count: fixture.plan.chunks.len() as u64,
         chunk_profile_handle: fixture.chunker_handle.clone(),

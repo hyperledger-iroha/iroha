@@ -477,7 +477,7 @@ THEOREM ProducerAdmissionPreservesScheduledCandidateSet ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
-    /\ LocalAdmissionStep(node)
+    /\ SelectedLocalAdmissionAdvance(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     => ScheduledCandidateSet' = ScheduledCandidateSet
@@ -485,7 +485,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncStrongTypeInvariant,
                 AsyncProgressOwnershipInvariant,
-                LocalAdmissionStep(node),
+                SelectedLocalAdmissionAdvance(node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Producer"
          PROVE ScheduledCandidateSet' = ScheduledCandidateSet
@@ -503,7 +503,7 @@ PROOF
            /\ AdmitProducerCompletion(node)
            /\ LeaveCausalQueues
       BY <1>1, SelectedProducerCanAdmit
-         DEF LocalAdmissionStep
+         DEF SelectedLocalAdmissionAdvance
     <2>3. /\ Candidate \in asyncOutstandingWork[node]
            /\ Candidate \in TrackedWorkCandidates
            /\ DOMAIN asyncOutstandingWork = ValidatorIds
@@ -574,7 +574,7 @@ THEOREM CausalAdmissionPreservesScheduledCandidateSet ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
-    /\ LocalAdmissionStep(node)
+    /\ SelectedLocalAdmissionAdvance(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     => ScheduledCandidateSet' = ScheduledCandidateSet
@@ -582,7 +582,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncStrongTypeInvariant,
                 AsyncProgressOwnershipInvariant,
-                LocalAdmissionStep(node),
+                SelectedLocalAdmissionAdvance(node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Causal"
          PROVE ScheduledCandidateSet' = ScheduledCandidateSet
@@ -601,7 +601,7 @@ PROOF
       <3>2. CausalQueueNonempty(node)
         BY <3>1 DEF CausalHeadCanAdvance
       <3>3. AdmitCausalHead(node)
-        BY <1>1, <3>1, Isa DEF LocalAdmissionStep
+        BY <1>1, <3>1, Isa DEF SelectedLocalAdmissionAdvance
       <3> QED BY <3>1, <3>2, <3>3
     <2>3. /\ Candidate.node = node
            /\ Candidate \in SequenceSet(asyncCausalQueues[node])
@@ -672,7 +672,7 @@ PROOF
                <<asyncDeferredCompletionQueues,
                  asyncDeferredProgressQueues,
                  asyncDeferredNormalQueues>>
-        BY <1>1 DEF LocalAdmissionStep, AsyncDeferredVars
+        BY <1>1 DEF SelectedLocalAdmissionAdvance, AsyncDeferredVars
       <3> QED BY <3>1, <3>2
     <2>6. CausalCandidates' = CausalCandidates \ {Candidate}
       <3>1. /\ DOMAIN asyncCausalQueues = ValidatorIds
@@ -780,13 +780,42 @@ PROOF
          LocalPhaseAdvancePreservesScheduledCandidateSet
     <2>2. CASE LocalAdmissionCanAdvance(node)
                /\ SelectedLocalSource(node) = "Producer"
-      BY <1>1, <2>2,
-         ProducerAdmissionPreservesScheduledCandidateSet
+      <3>1. SelectedLocalAdmissionAdvance(node)
+        BY <1>1, <2>2, LocalAdmissionAdvanceSelectsAtomicWork
+      <3> QED BY <1>1, <2>2, <3>1,
+           ProducerAdmissionPreservesScheduledCandidateSet
     <2>3. CASE LocalAdmissionCanAdvance(node)
                /\ SelectedLocalSource(node) = "Causal"
-      BY <1>1, <2>3,
-         CausalAdmissionPreservesScheduledCandidateSet
+      <3>1. SelectedLocalAdmissionAdvance(node)
+        BY <1>1, <2>3, LocalAdmissionAdvanceSelectsAtomicWork
+      <3> QED BY <1>1, <2>3, <3>1,
+           CausalAdmissionPreservesScheduledCandidateSet
     <2> QED BY <2>1, <2>2, <2>3, Isa
+         DEF SelectedLocalSource, PreferredLocalSource,
+             OtherLocalSource, AsyncLocalSources
+  <1> QED BY <1>1
+
+THEOREM SelectedLocalAdmissionAdvancePreservesScheduledCandidateSet ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ SelectedLocalAdmissionAdvance(node)
+    => ScheduledCandidateSet' = ScheduledCandidateSet
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                SelectedLocalAdmissionAdvance(node)
+         PROVE ScheduledCandidateSet' = ScheduledCandidateSet
+    <2>1. LocalAdmissionCanAdvance(node)
+      BY <1>1 DEF SelectedLocalAdmissionAdvance
+    <2>2. CASE SelectedLocalSource(node) = "Producer"
+      BY <1>1, <2>1, <2>2,
+         ProducerAdmissionPreservesScheduledCandidateSet
+    <2>3. CASE SelectedLocalSource(node) = "Causal"
+      BY <1>1, <2>1, <2>3,
+         CausalAdmissionPreservesScheduledCandidateSet
+    <2> QED BY <2>2, <2>3, Isa
          DEF SelectedLocalSource, PreferredLocalSource,
              OtherLocalSource, AsyncLocalSources
   <1> QED BY <1>1
@@ -1286,6 +1315,10 @@ THEOREM RunNodeWorkCreatesValidationOnlyForRunner ==
 BY RuntimeStepCreatesValidationOnlyForRunner, IsaT(90)
    DEF NewValidationOwnedBy, RunNodeWork,
        LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
        AdmitProducerCompletion, AdmitCausalHead,
        DrainFairIngressSelected, vars
 
@@ -1472,7 +1505,8 @@ The three controller actions have different handoffs:
   * Crash makes the historical-Commit antecedent false by clearing the
     selected node's validation receipts, while durable Decision and locked
     Prepare sources acquire exact recovery authority.
-  * Restart advances both generation and recoveryGeneration together.  The
+  * Restart resets both generation and recoveryGeneration to the fresh
+    process value together.  The
     reachable clearing invariant prevents the framed old receipt set from
     becoming current merely because the generation changed.
   * Replay leaves the historical-Commit antecedent false.  A unique durable
@@ -1604,7 +1638,7 @@ THEOREM ResponsiveRestartPreservesDurableDecisionProgress ==
   /\ AsyncDurableDecisionProgressWitness
   /\ PreGstResponsiveRestart
   => AsyncDurableDecisionProgressWitness'
-BY ResponsiveRestartAdvancesExactDurableDecisionAuthority, IsaT(150)
+BY ResponsiveRestartRebindsExactDurableDecisionAuthority, IsaT(150)
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        AsyncDurableDecisionProgressWitness,

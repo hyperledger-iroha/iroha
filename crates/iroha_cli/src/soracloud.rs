@@ -1,15 +1,16 @@
 //! Soracloud deployment helpers (`init/deploy/status/upgrade/rollback/rollout`).
 //!
-//! `init` scaffolds Soracloud manifests and template artifacts offline. All
-//! other commands validate request inputs locally and then call the
-//! authoritative Soracloud control plane through Torii. Model-training,
-//! Hugging Face shared-lease, and weight-lifecycle helpers also execute
-//! through live Torii endpoints.
+//! Offline helpers scaffold manifests, plan workspaces, and produce canonical
+//! deployment artifacts. Mutation and status commands validate request inputs
+//! locally and then call the authoritative Soracloud control plane through
+//! Torii. Model-training, Hugging Face shared-lease, and weight-lifecycle
+//! helpers also execute through live Torii endpoints.
 
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
-    fs, io,
+    fs,
+    io::{self, Read as _, Seek as _, SeekFrom, Write as _},
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
@@ -90,13 +91,22 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize},
     to_bytes,
 };
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{
+    rand_core::{TryCryptoRng, TryRngCore as _},
+    rngs::OsRng,
+};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{self, HeaderValue},
 };
 use sha2::{Digest as _, Sha256};
-use sorafs_car::{CarBuildPlan, CarChunk, CarWriter, compute_por_root};
+use sorafs_car::{
+    CarBuildPlan, CarChunk, CarWriter,
+    bundle_archive::{
+        BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES, BundleArchiveFile, write_gzip_ustar,
+    },
+    compute_por_root,
+};
 use sorafs_manifest::{
     ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
@@ -132,6 +142,9 @@ const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
 const APP_STATIC_SITE_INDEX_DOCUMENT: &str = "index.html";
 const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
 const SORAFS_DEFAULT_PIN_RETENTION_EPOCHS: u64 = 86_400;
+const INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES: u64 = BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES;
+const INROU_BUNDLE_PACK_MAX_SOURCE_BYTES: u64 = INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES - 1024 * 1024;
+const INROU_BUNDLE_PACK_TEMP_ATTEMPTS: usize = 16;
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
 const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
@@ -179,6 +192,9 @@ impl Command {
 pub enum ServiceCommand {
     /// Scaffold baseline container/service manifests.
     Init(InitArgs),
+    /// Pack one regular file into a deterministic canonical Inrou bundle.
+    #[command(name = "bundle-pack")]
+    BundlePack(BundlePackArgs),
     /// Validate one service pair locally and print the local runtime/workspace plan.
     #[command(name = "plan")]
     LocalPlan(LocalPlanArgs),
@@ -432,6 +448,7 @@ impl ServiceCommand {
         matches!(
             self,
             Self::Init(_)
+                | Self::BundlePack(_)
                 | Self::LocalPlan(_)
                 | Self::LocalDev(_)
                 | Self::BuildAndSync(_)
@@ -447,6 +464,7 @@ impl ServiceCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
+            Self::BundlePack(args) => context.print_data(&args.run()?),
             Self::LocalPlan(args) => context.print_data(&args.run()?),
             Self::LocalDev(args) => context.print_data(&args.run()?),
             Self::BuildAndSync(args) => context.print_data(&args.run()?),
@@ -758,6 +776,71 @@ impl InitArgs {
             container_manifest_hash: bundle.container_manifest_hash(),
             service_manifest_hash: bundle.service_manifest_hash(),
             template_artifacts,
+        })
+    }
+}
+
+/// Arguments for `soracloud service bundle-pack`.
+#[derive(clap::Args, Debug)]
+pub struct BundlePackArgs {
+    /// Regular file, up to 511 MiB, whose bytes become the sole archive member.
+    #[arg(long, value_name = "PATH")]
+    source: PathBuf,
+    /// Canonical relative path assigned to the file inside the bundle.
+    #[arg(long, value_name = "ARCHIVE_PATH")]
+    archive_path: String,
+    /// Destination for the deterministic canonical gzip/USTAR archive (at most 512 MiB).
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+    /// Store the archive member with canonical executable mode 0755.
+    #[arg(long, default_value_t = false)]
+    executable: bool,
+}
+
+impl BundlePackArgs {
+    fn run(self) -> Result<BundlePackOutput> {
+        let source = read_stable_bundle_pack_source(&self.source)?;
+        reject_bundle_pack_source_output_alias(&self.source, &self.output, &source)?;
+
+        let archive_member_mode = if self.executable { 0o755 } else { 0o644 };
+        let archive_file = BundleArchiveFile::new(
+            self.archive_path.as_str(),
+            archive_member_mode,
+            &source.payload,
+        );
+        let mut staged = BundlePackAtomicOutput::create(&self.output)?;
+        let written_bytes = {
+            let archive_writer = BundlePackArchiveWriter::new(
+                staged.file_mut()?,
+                INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES,
+            );
+            let archive_writer =
+                write_gzip_ustar(archive_writer, &[archive_file]).wrap_err_with(|| {
+                    format!(
+                        "failed to encode canonical Inrou bundle member `{}`",
+                        self.archive_path
+                    )
+                })?;
+            archive_writer.written_bytes()
+        };
+        ensure_bundle_pack_archive_size_within_limit(written_bytes).wrap_err_with(|| {
+            format!(
+                "canonical Inrou bundle member `{}` exceeded the archive limit",
+                self.archive_path,
+            )
+        })?;
+        source.revalidate(&self.source)?;
+        let (bundle_hash, bundle_size_bytes) =
+            staged.finish_and_install(&self.output, &self.source, &source, written_bytes)?;
+
+        Ok(BundlePackOutput {
+            source_file: self.source.to_string_lossy().into_owned(),
+            source_size_bytes: source.snapshot.size(),
+            archive_member_path: self.archive_path,
+            archive_member_mode,
+            bundle_file: self.output.to_string_lossy().into_owned(),
+            bundle_size_bytes,
+            bundle_hash,
         })
     }
 }
@@ -7148,6 +7231,17 @@ struct InitOutput {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct BundlePackOutput {
+    source_file: String,
+    source_size_bytes: u64,
+    archive_member_path: String,
+    archive_member_mode: u32,
+    bundle_file: String,
+    bundle_size_bytes: u64,
+    bundle_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SyncManifestsOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -9646,8 +9740,7 @@ fn publish_public_service_discovery(
         .first()
         .cloned()
         .ok_or_else(|| eyre!("public discovery CAR planning produced no root CID"))?;
-    let mut car_payload_digest = [0u8; 32];
-    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
@@ -9660,7 +9753,7 @@ fn publish_public_service_discovery(
                 .wrap_err("failed to compute public discovery PoR root")?,
         )
         .content_length(plan.content_length)
-        .car_digest(car_payload_digest)
+        .car_digest(car_archive_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
@@ -9810,8 +9903,7 @@ fn publish_app_static_site(
         .first()
         .cloned()
         .ok_or_else(|| eyre!("site CAR planning produced no root CID"))?;
-    let mut car_payload_digest = [0u8; 32];
-    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
@@ -9824,7 +9916,7 @@ fn publish_app_static_site(
                 .wrap_err("failed to compute app static site PoR root")?,
         )
         .content_length(plan.content_length)
-        .car_digest(car_payload_digest)
+        .car_digest(car_archive_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
@@ -9941,8 +10033,7 @@ fn plan_app_static_site_publication(
         .first()
         .cloned()
         .ok_or_else(|| eyre!("site CAR planning produced no root CID"))?;
-    let mut car_payload_digest = [0u8; 32];
-    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let (_, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
@@ -9955,7 +10046,7 @@ fn plan_app_static_site_publication(
                 .wrap_err("failed to compute app static site PoR root")?,
         )
         .content_length(plan.content_length)
-        .car_digest(car_payload_digest)
+        .car_digest(car_archive_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
@@ -10025,8 +10116,7 @@ fn publish_sorafs_directory_artifact(
         .first()
         .cloned()
         .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
-    let mut car_payload_digest = [0u8; 32];
-    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
@@ -10039,7 +10129,7 @@ fn publish_sorafs_directory_artifact(
                 .wrap_err_with(|| format!("failed to compute {description} PoR root"))?,
         )
         .content_length(plan.content_length)
-        .car_digest(car_payload_digest)
+        .car_digest(car_archive_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
@@ -10125,8 +10215,7 @@ fn publish_sorafs_file_artifact(
         .first()
         .cloned()
         .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
-    let mut car_payload_digest = [0u8; 32];
-    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
@@ -10139,7 +10228,7 @@ fn publish_sorafs_file_artifact(
                 .wrap_err_with(|| format!("failed to compute {description} PoR root"))?,
         )
         .content_length(plan.content_length)
-        .car_digest(car_payload_digest)
+        .car_digest(car_archive_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
@@ -14008,6 +14097,984 @@ where
     fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
 }
 
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BundlePackFileSnapshot {
+    device: u64,
+    inode: u64,
+    links: u64,
+    size: u64,
+    is_file: bool,
+    is_directory: bool,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+#[cfg(unix)]
+impl BundlePackFileSnapshot {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt as _;
+
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            links: metadata.nlink(),
+            size: metadata.len(),
+            is_file: metadata.is_file(),
+            is_directory: metadata.is_dir(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
+        }
+    }
+
+    fn same_identity(self, other: Self) -> bool {
+        self.device == other.device && self.inode == other.inode
+    }
+
+    fn unchanged(self, other: Self) -> bool {
+        self == other
+    }
+
+    fn is_regular_single_file(self) -> bool {
+        self.is_file && self.links == 1
+    }
+
+    fn is_direct_directory(self) -> bool {
+        self.is_directory
+    }
+
+    const fn is_reparse_point(self) -> bool {
+        false
+    }
+
+    const fn size(self) -> u64 {
+        self.size
+    }
+}
+
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_SHARE_READ_WRITE_DELETE: u32 = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BundlePackWindowsFileTime {
+    low: u32,
+    high: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct BundlePackWindowsByHandleFileInformation {
+    file_attributes: u32,
+    creation_time: BundlePackWindowsFileTime,
+    _last_access_time: BundlePackWindowsFileTime,
+    last_write_time: BundlePackWindowsFileTime,
+    volume_serial_number: u32,
+    file_size_high: u32,
+    file_size_low: u32,
+    number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BundlePackFileSnapshot {
+    volume_serial_number: u32,
+    file_index: u64,
+    links: u32,
+    size: u64,
+    file_attributes: u32,
+    creation_time: u64,
+    last_write_time: u64,
+}
+
+#[cfg(windows)]
+impl BundlePackFileSnapshot {
+    fn same_identity(self, other: Self) -> bool {
+        self.volume_serial_number == other.volume_serial_number
+            && self.file_index == other.file_index
+    }
+
+    fn unchanged(self, other: Self) -> bool {
+        self == other
+    }
+
+    fn is_regular_single_file(self) -> bool {
+        self.links == 1
+            && self.file_attributes
+                & (WINDOWS_FILE_ATTRIBUTE_DIRECTORY | WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)
+                == 0
+    }
+
+    fn is_direct_directory(self) -> bool {
+        self.file_attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0
+            && self.file_attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT == 0
+    }
+
+    fn is_reparse_point(self) -> bool {
+        self.file_attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+
+    const fn size(self) -> u64 {
+        self.size
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BundlePackFileSnapshot;
+
+#[cfg(not(any(unix, windows)))]
+impl BundlePackFileSnapshot {
+    const fn same_identity(self, _other: Self) -> bool {
+        false
+    }
+
+    const fn unchanged(self, _other: Self) -> bool {
+        false
+    }
+
+    const fn is_regular_single_file(self) -> bool {
+        false
+    }
+
+    const fn is_direct_directory(self) -> bool {
+        false
+    }
+
+    const fn is_reparse_point(self) -> bool {
+        false
+    }
+
+    const fn size(self) -> u64 {
+        0
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+#[allow(unsafe_code)]
+unsafe extern "system" {
+    #[link_name = "GetFileInformationByHandle"]
+    fn bundle_pack_get_file_information_by_handle(
+        file: *mut std::ffi::c_void,
+        information: *mut BundlePackWindowsByHandleFileInformation,
+    ) -> i32;
+    #[link_name = "MoveFileExW"]
+    fn bundle_pack_move_file_ex(
+        existing_path: *const u16,
+        replacement_path: *const u16,
+        flags: u32,
+    ) -> i32;
+}
+
+#[cfg(unix)]
+fn snapshot_bundle_pack_handle(file: &fs::File) -> Result<BundlePackFileSnapshot> {
+    file.metadata()
+        .map(|metadata| BundlePackFileSnapshot::from_metadata(&metadata))
+        .wrap_err("failed to snapshot Inrou bundle file handle")
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn snapshot_bundle_pack_handle(file: &fs::File) -> Result<BundlePackFileSnapshot> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle as _};
+
+    let mut information = MaybeUninit::<BundlePackWindowsByHandleFileInformation>::uninit();
+    // SAFETY: `file` owns a valid kernel handle for the duration of the call,
+    // and `information` points to writable storage with the exact Win32 ABI
+    // layout required by `GetFileInformationByHandle`.
+    let succeeded = unsafe {
+        bundle_pack_get_file_information_by_handle(file.as_raw_handle(), information.as_mut_ptr())
+    };
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error())
+            .wrap_err("GetFileInformationByHandle failed for Inrou bundle path");
+    }
+    // SAFETY: a nonzero return initializes every field of
+    // BY_HANDLE_FILE_INFORMATION.
+    let information = unsafe { information.assume_init() };
+    let combine = |high: u32, low: u32| u64::from(high) << 32 | u64::from(low);
+    Ok(BundlePackFileSnapshot {
+        volume_serial_number: information.volume_serial_number,
+        file_index: combine(information.file_index_high, information.file_index_low),
+        links: information.number_of_links,
+        size: combine(information.file_size_high, information.file_size_low),
+        file_attributes: information.file_attributes,
+        creation_time: combine(
+            information.creation_time.high,
+            information.creation_time.low,
+        ),
+        last_write_time: combine(
+            information.last_write_time.high,
+            information.last_write_time.low,
+        ),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn snapshot_bundle_pack_handle(_file: &fs::File) -> Result<BundlePackFileSnapshot> {
+    Err(eyre!(
+        "this platform does not expose a stable direct-file identity for Inrou bundle packing"
+    ))
+}
+
+#[cfg(unix)]
+fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .wrap_err_with(|| {
+        format!(
+            "failed to securely open Inrou bundle path `{}`",
+            path.display()
+        )
+    })?;
+    Ok(fs::File::from(descriptor))
+}
+
+#[cfg(windows)]
+fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(WINDOWS_FILE_SHARE_READ_WRITE_DELETE)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path).wrap_err_with(|| {
+        format!(
+            "failed to securely open Inrou bundle path `{}`",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
+    Err(eyre!(
+        "Inrou bundle path `{}` cannot be opened because this platform does not expose a stable direct-file identity",
+        path.display()
+    ))
+}
+
+#[cfg(unix)]
+fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::DIRECTORY,
+        rustix::fs::Mode::empty(),
+    )
+    .wrap_err_with(|| {
+        format!(
+            "failed to securely open Inrou bundle output directory `{}`",
+            path.display()
+        )
+    })?;
+    Ok(fs::File::from(descriptor))
+}
+
+#[cfg(windows)]
+fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .access_mode(0)
+        .share_mode(WINDOWS_FILE_SHARE_READ_WRITE_DELETE)
+        .custom_flags(WINDOWS_FILE_FLAG_BACKUP_SEMANTICS | WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path).wrap_err_with(|| {
+        format!(
+            "failed to securely open Inrou bundle output directory `{}`",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
+    Err(eyre!(
+        "Inrou bundle output directory `{}` cannot be opened because this platform does not expose a stable direct-file identity",
+        path.display()
+    ))
+}
+
+struct BundlePackSource {
+    file: fs::File,
+    snapshot: BundlePackFileSnapshot,
+    payload: Vec<u8>,
+}
+
+impl BundlePackSource {
+    fn revalidate(&self, path: &Path) -> Result<()> {
+        let handle_snapshot = snapshot_bundle_pack_handle(&self.file)?;
+        if !self.snapshot.unchanged(handle_snapshot) {
+            return Err(eyre!(
+                "Inrou bundle source `{}` changed while it was retained",
+                path.display()
+            ));
+        }
+        let path_file = open_direct_bundle_pack_file(path)?;
+        let path_snapshot = snapshot_bundle_pack_handle(&path_file)?;
+        if !self.snapshot.unchanged(path_snapshot) {
+            return Err(eyre!(
+                "Inrou bundle source `{}` was substituted after it was read",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn read_stable_bundle_pack_source(path: &Path) -> Result<BundlePackSource> {
+    let path_metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect Inrou bundle source `{}`", path.display()))?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(eyre!(
+            "Inrou bundle source `{}` must be a regular non-reparse file with a stable single-link identity",
+            path.display()
+        ));
+    }
+    let mut file = open_direct_bundle_pack_file(path)?;
+    let snapshot = snapshot_bundle_pack_handle(&file)?;
+    if !snapshot.is_regular_single_file() {
+        return Err(eyre!(
+            "Inrou bundle source `{}` must be a regular non-reparse file with a stable single-link identity",
+            path.display()
+        ));
+    }
+    let source_size_bytes = snapshot.size();
+    if source_size_bytes > INROU_BUNDLE_PACK_MAX_SOURCE_BYTES {
+        return Err(eyre!(
+            "Inrou bundle source `{}` exceeds the {} byte packing limit",
+            path.display(),
+            INROU_BUNDLE_PACK_MAX_SOURCE_BYTES
+        ));
+    }
+    let expected_len = usize::try_from(source_size_bytes).map_err(|_| {
+        eyre!(
+            "Inrou bundle source `{}` size cannot be represented on this host",
+            path.display()
+        )
+    })?;
+    let mut payload = Vec::new();
+    payload.try_reserve_exact(expected_len).map_err(|error| {
+        eyre!(
+            "failed to reserve {} bytes for Inrou bundle source `{}`: {error}",
+            source_size_bytes,
+            path.display()
+        )
+    })?;
+    (&mut file)
+        .take(source_size_bytes.saturating_add(1))
+        .read_to_end(&mut payload)
+        .wrap_err_with(|| format!("failed to read Inrou bundle source `{}`", path.display()))?;
+    if payload.len() != expected_len {
+        return Err(eyre!(
+            "Inrou bundle source `{}` changed length while it was read",
+            path.display()
+        ));
+    }
+
+    let source = BundlePackSource {
+        file,
+        snapshot,
+        payload,
+    };
+    source.revalidate(path)?;
+    Ok(source)
+}
+
+fn bundle_pack_paths_lexically_equal(left: &Path, right: &Path) -> bool {
+    left.components().eq(right.components())
+}
+
+fn reject_bundle_pack_source_output_alias(
+    source_path: &Path,
+    output: &Path,
+    source: &BundlePackSource,
+) -> Result<()> {
+    if bundle_pack_paths_lexically_equal(source_path, output) {
+        return Err(eyre!(
+            "Inrou bundle output `{}` must not replace its source file",
+            output.display()
+        ));
+    }
+    source.revalidate(source_path)?;
+    let output_metadata = match fs::symlink_metadata(output) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "failed to inspect Inrou bundle output `{}`",
+                    output.display()
+                )
+            });
+        }
+    };
+    if output_metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if output_metadata.is_dir() {
+        return Err(eyre!(
+            "Inrou bundle output `{}` must not be an existing directory",
+            output.display()
+        ));
+    }
+    if !output_metadata.is_file() {
+        return Err(eyre!(
+            "Inrou bundle output `{}` must be a regular file or replaceable reparse path",
+            output.display()
+        ));
+    }
+
+    let output_file = open_direct_bundle_pack_file(output)?;
+    let output_snapshot = snapshot_bundle_pack_handle(&output_file)?;
+    if output_snapshot.is_reparse_point() {
+        return Ok(());
+    }
+    if !output_snapshot.is_regular_single_file() {
+        return Err(eyre!(
+            "Inrou bundle output `{}` must be a regular single-link file or replaceable reparse path",
+            output.display()
+        ));
+    }
+    if source.snapshot.same_identity(output_snapshot) {
+        return Err(eyre!(
+            "Inrou bundle output `{}` aliases its source file",
+            output.display()
+        ));
+    }
+    Ok(())
+}
+
+struct BundlePackParentGuard {
+    path: PathBuf,
+    file: fs::File,
+    snapshot: BundlePackFileSnapshot,
+}
+
+impl BundlePackParentGuard {
+    fn open(output: &Path) -> Result<Self> {
+        let path = output
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        fs::create_dir_all(&path).wrap_err_with(|| {
+            format!(
+                "failed to create Inrou bundle output directory `{}`",
+                path.display()
+            )
+        })?;
+        let path_metadata = fs::symlink_metadata(&path).wrap_err_with(|| {
+            format!(
+                "failed to inspect Inrou bundle output directory `{}`",
+                path.display()
+            )
+        })?;
+        if path_metadata.file_type().is_symlink() || !path_metadata.is_dir() {
+            return Err(eyre!(
+                "Inrou bundle output parent `{}` must be a direct directory",
+                path.display()
+            ));
+        }
+        let file = open_direct_bundle_pack_directory(&path)?;
+        let snapshot = snapshot_bundle_pack_handle(&file)?;
+        if !snapshot.is_direct_directory() {
+            return Err(eyre!(
+                "Inrou bundle output parent `{}` must be a direct non-reparse directory",
+                path.display()
+            ));
+        }
+        Ok(Self {
+            path,
+            file,
+            snapshot,
+        })
+    }
+
+    fn revalidate(&self) -> Result<()> {
+        let handle_snapshot = snapshot_bundle_pack_handle(&self.file)?;
+        if !self.snapshot.same_identity(handle_snapshot) || !handle_snapshot.is_direct_directory() {
+            return Err(eyre!(
+                "retained Inrou bundle output directory `{}` changed identity",
+                self.path.display()
+            ));
+        }
+        let path_file = open_direct_bundle_pack_directory(&self.path)?;
+        let path_snapshot = snapshot_bundle_pack_handle(&path_file)?;
+        if !self.snapshot.same_identity(path_snapshot) || !path_snapshot.is_direct_directory() {
+            return Err(eyre!(
+                "Inrou bundle output directory `{}` was substituted",
+                self.path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn sync(&self) -> Result<()> {
+        self.file.sync_all().wrap_err_with(|| {
+            format!(
+                "failed to synchronize Inrou bundle output directory `{}`",
+                self.path.display()
+            )
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn sync(&self) -> Result<()> {
+        let snapshot = snapshot_bundle_pack_handle(&self.file)?;
+        if !self.snapshot.same_identity(snapshot) || !snapshot.is_direct_directory() {
+            return Err(eyre!(
+                "Inrou bundle output directory `{}` changed before durability confirmation",
+                self.path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+struct BundlePackArchiveWriter<'a> {
+    inner: &'a mut fs::File,
+    written_bytes: u64,
+    max_bytes: u64,
+}
+
+impl<'a> BundlePackArchiveWriter<'a> {
+    const fn new(inner: &'a mut fs::File, max_bytes: u64) -> Self {
+        Self {
+            inner,
+            written_bytes: 0,
+            max_bytes,
+        }
+    }
+
+    const fn written_bytes(&self) -> u64 {
+        self.written_bytes
+    }
+}
+
+impl io::Write for BundlePackArchiveWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let requested = u64::try_from(bytes.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Inrou bundle archive write size does not fit u64",
+            )
+        })?;
+        let requested_total = self.written_bytes.checked_add(requested).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Inrou bundle archive byte counter overflow",
+            )
+        })?;
+        if requested_total > self.max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "canonical Inrou bundle archive exceeds the {} byte limit",
+                    self.max_bytes
+                ),
+            ));
+        }
+        let written = self.inner.write(bytes)?;
+        let written_u64 = u64::try_from(written).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Inrou bundle archive write length does not fit u64",
+            )
+        })?;
+        self.written_bytes = self.written_bytes.checked_add(written_u64).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Inrou bundle archive byte counter overflow",
+            )
+        })?;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn ensure_bundle_pack_archive_size_within_limit(size: u64) -> Result<()> {
+    if size > INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES {
+        return Err(eyre!(
+            "canonical Inrou bundle archive size {size} exceeds the {} byte limit",
+            INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn remove_bundle_pack_file_if_owned(path: &Path, identity: BundlePackFileSnapshot) {
+    let Ok(file) = open_direct_bundle_pack_file(path) else {
+        return;
+    };
+    let Ok(snapshot) = snapshot_bundle_pack_handle(&file) else {
+        return;
+    };
+    if snapshot.is_regular_single_file() && identity.same_identity(snapshot) {
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+}
+
+struct BundlePackAtomicOutput {
+    path: PathBuf,
+    snapshot: BundlePackFileSnapshot,
+    file: Option<fs::File>,
+    parent: BundlePackParentGuard,
+    installed: bool,
+}
+
+struct BundlePackStagingCreationGuard {
+    path: PathBuf,
+    file: Option<fs::File>,
+}
+
+impl BundlePackStagingCreationGuard {
+    fn file(&self) -> Result<&fs::File> {
+        self.file
+            .as_ref()
+            .ok_or_else(|| eyre!("staged Inrou bundle file is already closed"))
+    }
+
+    fn take_file(&mut self) -> Result<fs::File> {
+        self.file
+            .take()
+            .ok_or_else(|| eyre!("staged Inrou bundle file is already closed"))
+    }
+}
+
+impl Drop for BundlePackStagingCreationGuard {
+    fn drop(&mut self) {
+        let Some(file) = self.file.take() else {
+            return;
+        };
+        let Ok(snapshot) = snapshot_bundle_pack_handle(&file) else {
+            return;
+        };
+        drop(file);
+        remove_bundle_pack_file_if_owned(&self.path, snapshot);
+    }
+}
+
+impl BundlePackAtomicOutput {
+    fn create(output: &Path) -> Result<Self> {
+        if output.file_name().is_none() {
+            return Err(eyre!(
+                "Inrou bundle output `{}` must name a file",
+                output.display()
+            ));
+        }
+        let parent = BundlePackParentGuard::open(output)?;
+        let mut rng = OsRng;
+        for _ in 0..INROU_BUNDLE_PACK_TEMP_ATTEMPTS {
+            let mut suffix = [0_u8; 16];
+            rng.try_fill_bytes(&mut suffix)
+                .map_err(|error| eyre!("Inrou bundle staging-name OS RNG failed: {error}"))?;
+            let path = parent
+                .path
+                .join(format!(".inrou-bundle-pack-{}.tmp", hex::encode(suffix)));
+            let mut options = fs::OpenOptions::new();
+            options.read(true).write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+
+                options.mode(0o600);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+
+                options.share_mode(WINDOWS_FILE_SHARE_READ_WRITE_DELETE);
+            }
+            match options.open(&path) {
+                Ok(file) => {
+                    let mut staging = BundlePackStagingCreationGuard {
+                        path: path.clone(),
+                        file: Some(file),
+                    };
+                    let snapshot = snapshot_bundle_pack_handle(staging.file()?)?;
+                    if !snapshot.is_regular_single_file() {
+                        return Err(eyre!(
+                            "staged Inrou bundle `{}` lacks a stable single-file identity",
+                            path.display()
+                        ));
+                    }
+                    let path_file = open_direct_bundle_pack_file(&path)?;
+                    let path_snapshot = snapshot_bundle_pack_handle(&path_file)?;
+                    if !snapshot.same_identity(path_snapshot) {
+                        return Err(eyre!(
+                            "staged Inrou bundle `{}` was substituted after creation",
+                            path.display()
+                        ));
+                    }
+                    let file = staging.take_file()?;
+                    return Ok(Self {
+                        path,
+                        snapshot,
+                        file: Some(file),
+                        parent,
+                        installed: false,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error).wrap_err_with(|| {
+                        format!(
+                            "failed to create staged Inrou bundle in `{}`",
+                            parent.path.display()
+                        )
+                    });
+                }
+            }
+        }
+        Err(eyre!(
+            "failed to allocate an exclusive staged Inrou bundle in `{}`",
+            parent.path.display()
+        ))
+    }
+
+    fn file_mut(&mut self) -> Result<&mut fs::File> {
+        self.file
+            .as_mut()
+            .ok_or_else(|| eyre!("staged Inrou bundle file is already closed"))
+    }
+
+    fn finish_and_install(
+        mut self,
+        output: &Path,
+        source_path: &Path,
+        source: &BundlePackSource,
+        expected_archive_bytes: u64,
+    ) -> Result<(Hash, u64)> {
+        let staged_file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| eyre!("staged Inrou bundle file is already closed"))?;
+        staged_file
+            .flush()
+            .wrap_err("failed to flush staged Inrou bundle")?;
+        staged_file
+            .sync_all()
+            .wrap_err("failed to synchronize staged Inrou bundle")?;
+        let written_snapshot = snapshot_bundle_pack_handle(staged_file)?;
+        if !written_snapshot.is_regular_single_file()
+            || !self.snapshot.same_identity(written_snapshot)
+            || written_snapshot.size() != expected_archive_bytes
+        {
+            return Err(eyre!(
+                "staged Inrou bundle `{}` was substituted or changed size while it was encoded",
+                self.path.display()
+            ));
+        }
+        ensure_bundle_pack_archive_size_within_limit(written_snapshot.size())?;
+
+        let staged_path_file = open_direct_bundle_pack_file(&self.path)?;
+        let staged_path_snapshot = snapshot_bundle_pack_handle(&staged_path_file)?;
+        if !written_snapshot.unchanged(staged_path_snapshot) {
+            return Err(eyre!(
+                "staged Inrou bundle `{}` path no longer matches its retained handle",
+                self.path.display()
+            ));
+        }
+
+        staged_file
+            .seek(SeekFrom::Start(0))
+            .wrap_err("failed to rewind staged Inrou bundle")?;
+        let (bundle_hash, bundle_size_bytes) =
+            Hash::new_from_reader_bounded(&mut *staged_file, INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES)
+                .wrap_err("failed to hash staged Inrou bundle")?;
+        if bundle_size_bytes != written_snapshot.size() {
+            return Err(eyre!(
+                "staged Inrou bundle size changed while it was hashed"
+            ));
+        }
+        let hashed_snapshot = snapshot_bundle_pack_handle(staged_file)?;
+        let hashed_path_file = open_direct_bundle_pack_file(&self.path)?;
+        let hashed_path_snapshot = snapshot_bundle_pack_handle(&hashed_path_file)?;
+        if !written_snapshot.unchanged(hashed_snapshot)
+            || !written_snapshot.unchanged(hashed_path_snapshot)
+        {
+            return Err(eyre!(
+                "staged Inrou bundle `{}` changed while it was hashed",
+                self.path.display()
+            ));
+        }
+        source.revalidate(source_path)?;
+        self.parent.revalidate()?;
+
+        atomic_replace_bundle_pack_file(&self.path, output).wrap_err_with(|| {
+            format!(
+                "failed to atomically install Inrou bundle `{}`",
+                output.display()
+            )
+        })?;
+        self.installed = true;
+
+        let post_commit = (|| -> Result<()> {
+            let retained_snapshot = snapshot_bundle_pack_handle(
+                self.file
+                    .as_ref()
+                    .ok_or_else(|| eyre!("staged Inrou bundle handle was closed early"))?,
+            )?;
+            if !self.snapshot.same_identity(retained_snapshot)
+                || !retained_snapshot.is_regular_single_file()
+                || retained_snapshot.size() != bundle_size_bytes
+            {
+                return Err(eyre!(
+                    "retained staging handle no longer identifies the installed archive"
+                ));
+            }
+
+            let mut installed_file = open_direct_bundle_pack_file(output)?;
+            let installed_snapshot = snapshot_bundle_pack_handle(&installed_file)?;
+            if !retained_snapshot.same_identity(installed_snapshot)
+                || !installed_snapshot.is_regular_single_file()
+                || installed_snapshot.size() != bundle_size_bytes
+            {
+                return Err(eyre!(
+                    "installed path does not identify the promoted staging file"
+                ));
+            }
+            installed_file
+                .seek(SeekFrom::Start(0))
+                .wrap_err("failed to rewind installed Inrou bundle")?;
+            let (installed_hash, installed_size) = Hash::new_from_reader_bounded(
+                &mut installed_file,
+                INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES,
+            )
+            .wrap_err("failed to hash installed Inrou bundle")?;
+            if installed_size != bundle_size_bytes || installed_hash != bundle_hash {
+                return Err(eyre!(
+                    "installed Inrou bundle bytes do not match the staged hash and size"
+                ));
+            }
+            let installed_after_hash = snapshot_bundle_pack_handle(&installed_file)?;
+            let installed_path_file = open_direct_bundle_pack_file(output)?;
+            let installed_path_snapshot = snapshot_bundle_pack_handle(&installed_path_file)?;
+            if !installed_snapshot.unchanged(installed_after_hash)
+                || !installed_snapshot.unchanged(installed_path_snapshot)
+            {
+                return Err(eyre!(
+                    "installed Inrou bundle changed during post-commit verification"
+                ));
+            }
+            self.parent.revalidate()?;
+            self.parent.sync()?;
+            Ok(())
+        })();
+        if let Err(error) = post_commit {
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "Inrou bundle archive was installed at `{}`, but post-commit verification or durability failed",
+                    output.display()
+                )
+            });
+        }
+        Ok((bundle_hash, bundle_size_bytes))
+    }
+}
+
+impl Drop for BundlePackAtomicOutput {
+    fn drop(&mut self) {
+        if self.installed {
+            return;
+        }
+        drop(self.file.take());
+        remove_bundle_pack_file_if_owned(&self.path, self.snapshot);
+    }
+}
+
+#[cfg(unix)]
+fn atomic_replace_bundle_pack_file(staged: &Path, output: &Path) -> Result<()> {
+    fs::rename(staged, output).wrap_err_with(|| {
+        format!(
+            "failed to replace `{}` with staged file `{}`",
+            output.display(),
+            staged.display()
+        )
+    })
+}
+
+#[cfg(windows)]
+fn windows_bundle_pack_wide_path(path: &Path) -> Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if wide.contains(&0) {
+        return Err(eyre!(
+            "Windows Inrou bundle path `{}` contains an interior NUL",
+            path.display()
+        ));
+    }
+    wide.push(0);
+    Ok(wide)
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn atomic_replace_bundle_pack_file(staged: &Path, output: &Path) -> Result<()> {
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+
+    let staged_wide = windows_bundle_pack_wide_path(staged)?;
+    let output_wide = windows_bundle_pack_wide_path(output)?;
+    // SAFETY: both path buffers are NUL-terminated and remain alive for the
+    // duration of the call. The flags request an atomic same-volume replace
+    // and synchronous metadata flush.
+    let succeeded = unsafe {
+        bundle_pack_move_file_ex(
+            staged_wide.as_ptr(),
+            output_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error()).wrap_err_with(|| {
+            format!(
+                "MoveFileExW failed to replace `{}` with `{}`",
+                output.display(),
+                staged.display()
+            )
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn atomic_replace_bundle_pack_file(_staged: &Path, _output: &Path) -> Result<()> {
+    Err(eyre!(
+        "atomic Inrou bundle replacement is unsupported on this platform"
+    ))
+}
+
 fn ensure_can_write(path: &Path, overwrite: bool) -> Result<()> {
     if !overwrite && path.exists() {
         return Err(eyre!(
@@ -17850,23 +18917,26 @@ echo "built $BYTECODE_FILE"
 }
 
 fn http_service_build_sh(bundle_name: &str) -> String {
+    let prelude = iroha_shell_command_prelude();
     format!(
         r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
-STAGING_DIR="$BUILD_DIR/staging"
 BUNDLE_PATH="$BUILD_DIR/{bundle_name}"
+{prelude}
 
-rm -rf "$STAGING_DIR"
-mkdir -p "$STAGING_DIR/app"
-cp "$SCRIPT_DIR/app/server.mjs" "$STAGING_DIR/app/server.mjs"
-chmod +x "$STAGING_DIR/app/server.mjs"
-tar -czf "$BUNDLE_PATH" -C "$STAGING_DIR" .
+mkdir -p "$BUILD_DIR"
+"${{IROHA_CMD[@]}}" soracloud service bundle-pack \
+  --source "$SCRIPT_DIR/app/server.mjs" \
+  --archive-path "app/server.mjs" \
+  --output "$BUNDLE_PATH" \
+  --executable
 
 echo "built $BUNDLE_PATH"
-"#
+"#,
+        prelude = prelude,
     )
 }
 
@@ -18485,11 +19555,11 @@ cd http-service
 ./build.sh
 ```
 
-The build emits `build/http-service.tgz`, a tarball containing `app/server.mjs`
-with the executable bit preserved. Guest images under `http-service/inrou/`
-are not copied into this tarball; `app release` publishes them as immutable
-SoraFS artifacts and records the artifact refs in the Inrou manifest submitted
-to the control plane.
+The build emits `build/http-service.tgz`, a deterministic canonical gzip/USTAR
+bundle containing only `app/server.mjs` with mode 0755. Guest images under
+`http-service/inrou/` are not copied into this bundle; `app release` publishes
+them as immutable SoraFS artifacts and records the artifact refs in the Inrou
+manifest submitted to the control plane.
 
 Before deploy, replace the placeholder `ssh_authorized_keys` entry in
 `container_manifest.json` and stage dual-ISA guest assets at:
@@ -19405,7 +20475,8 @@ Build:
 ./build.sh
 ```
 
-The build emits `build/live-api.tgz`.
+The build emits `build/live-api.tgz` as a deterministic canonical gzip/USTAR
+bundle containing only `app/server.mjs` with mode 0755.
 
 Stage these guest assets under `services/live/inrou/` before deploy:
 
@@ -20506,11 +21577,11 @@ mod tests {
         SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
     use iroha_crypto::Algorithm;
+    use norito::json::Value;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use std::{
         collections::{BTreeMap, BTreeSet},
         fmt,
-        io::Write as _,
         net::{TcpListener, TcpStream},
         path::Path,
         process::Command,
@@ -20560,6 +21631,336 @@ mod tests {
         let path = std::env::temp_dir().join(format!("iroha_soracloud_cli_{name}_{nanos}"));
         fs::create_dir_all(&path).expect("create temp dir");
         path
+    }
+
+    #[test]
+    fn bundle_pack_writes_deterministic_canonical_archive_and_reports_exact_bytes() {
+        let dir = temp_dir("bundle_pack_canonical");
+        let source = dir.join("server.mjs");
+        let output = dir.join("build/service.tgz");
+        let source_payload = b"#!/usr/bin/env node\nconsole.log('ready');\n";
+        fs::write(&source, source_payload).expect("write bundle source");
+        fs::create_dir_all(output.parent().expect("output parent")).expect("create output parent");
+        fs::write(&output, b"stale archive").expect("write stale output");
+
+        let first = BundlePackArgs {
+            source: source.clone(),
+            archive_path: "app/server.mjs".to_owned(),
+            output: output.clone(),
+            executable: true,
+        }
+        .run()
+        .expect("pack canonical Inrou bundle");
+        let expected = write_gzip_ustar(
+            Vec::new(),
+            &[BundleArchiveFile::new(
+                "app/server.mjs",
+                0o755,
+                source_payload,
+            )],
+        )
+        .expect("encode expected canonical archive");
+        let installed = fs::read(&output).expect("read installed bundle");
+
+        assert_eq!(installed, expected);
+        assert_eq!(first.source_file, source.to_string_lossy().into_owned());
+        assert_eq!(
+            first.source_size_bytes,
+            u64::try_from(source_payload.len()).expect("source length")
+        );
+        assert_eq!(first.archive_member_path, "app/server.mjs");
+        assert_eq!(first.archive_member_mode, 0o755);
+        assert_eq!(first.bundle_file, output.to_string_lossy().into_owned());
+        assert_eq!(
+            first.bundle_size_bytes,
+            u64::try_from(expected.len()).expect("archive length")
+        );
+        assert_eq!(first.bundle_hash, Hash::new(&expected));
+
+        let second = BundlePackArgs {
+            source,
+            archive_path: "app/server.mjs".to_owned(),
+            output: output.clone(),
+            executable: true,
+        }
+        .run()
+        .expect("replace bundle with identical canonical bytes");
+        assert_eq!(second.bundle_hash, first.bundle_hash);
+        assert_eq!(fs::read(&output).expect("read replaced bundle"), expected);
+        assert!(
+            fs::read_dir(output.parent().expect("output parent"))
+                .expect("list output parent")
+                .all(|entry| {
+                    !entry
+                        .expect("directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".inrou-bundle-pack-")
+                }),
+            "successful packing must not leave staging files"
+        );
+    }
+
+    #[test]
+    fn bundle_pack_preserves_existing_output_when_archive_member_is_invalid() {
+        let dir = temp_dir("bundle_pack_invalid_member");
+        let source = dir.join("server.mjs");
+        let output = dir.join("service.tgz");
+        fs::write(&source, b"source").expect("write source");
+        fs::write(&output, b"previous").expect("write previous output");
+
+        let error = BundlePackArgs {
+            source,
+            archive_path: "../escape".to_owned(),
+            output: output.clone(),
+            executable: false,
+        }
+        .run()
+        .expect_err("parent-traversing archive path must fail");
+
+        assert!(format!("{error:?}").contains("failed to encode canonical Inrou bundle member"));
+        assert_eq!(
+            fs::read(&output).expect("read preserved output"),
+            b"previous"
+        );
+        assert!(
+            fs::read_dir(&dir)
+                .expect("list test directory")
+                .all(|entry| {
+                    !entry
+                        .expect("directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".inrou-bundle-pack-")
+                }),
+            "failed packing must clean only its owned staging file"
+        );
+    }
+
+    #[test]
+    fn bundle_pack_rejects_source_as_output_without_changing_it() {
+        let dir = temp_dir("bundle_pack_source_output_alias");
+        let source = dir.join("server.mjs");
+        fs::write(&source, b"source must survive").expect("write source");
+
+        let error = BundlePackArgs {
+            source: source.clone(),
+            archive_path: "app/server.mjs".to_owned(),
+            output: source.clone(),
+            executable: true,
+        }
+        .run()
+        .expect_err("source and output must not be the same path");
+
+        assert!(format!("{error:?}").contains("must not replace its source file"));
+        assert_eq!(
+            fs::read(&source).expect("read preserved source"),
+            b"source must survive"
+        );
+    }
+
+    #[test]
+    fn bundle_pack_non_executable_member_uses_canonical_0644_mode() {
+        let dir = temp_dir("bundle_pack_non_executable");
+        let source = dir.join("config.txt");
+        let output = dir.join("config.tgz");
+        fs::write(&source, b"configuration\n").expect("write source");
+
+        let report = BundlePackArgs {
+            source,
+            archive_path: "app/config.txt".to_owned(),
+            output: output.clone(),
+            executable: false,
+        }
+        .run()
+        .expect("pack non-executable member");
+        let expected = write_gzip_ustar(
+            Vec::new(),
+            &[BundleArchiveFile::new(
+                "app/config.txt",
+                0o644,
+                b"configuration\n",
+            )],
+        )
+        .expect("encode expected non-executable archive");
+
+        assert_eq!(report.archive_member_mode, 0o644);
+        assert_eq!(fs::read(output).expect("read archive"), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundle_pack_rejects_symbolic_and_hard_link_sources() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("bundle_pack_indirect_source");
+        let source = dir.join("server.mjs");
+        let symbolic = dir.join("symbolic.mjs");
+        let hard = dir.join("hard.mjs");
+        fs::write(&source, b"source").expect("write source");
+        symlink(&source, &symbolic).expect("create symbolic link");
+
+        let symbolic_error = BundlePackArgs {
+            source: symbolic,
+            archive_path: "app/server.mjs".to_owned(),
+            output: dir.join("symbolic.tgz"),
+            executable: true,
+        }
+        .run()
+        .expect_err("symbolic-link source must fail");
+        assert!(format!("{symbolic_error:?}").contains("stable single-link identity"));
+
+        fs::hard_link(&source, &hard).expect("create hard link");
+        let hard_error = BundlePackArgs {
+            source,
+            archive_path: "app/server.mjs".to_owned(),
+            output: dir.join("hard.tgz"),
+            executable: true,
+        }
+        .run()
+        .expect_err("hard-linked source must fail");
+        assert!(format!("{hard_error:?}").contains("stable single-link identity"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundle_pack_replaces_output_symlink_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("bundle_pack_output_symlink");
+        let source = dir.join("server.mjs");
+        let target = dir.join("target.tgz");
+        let output = dir.join("service.tgz");
+        fs::write(&source, b"service").expect("write source");
+        fs::write(&target, b"target must survive").expect("write symlink target");
+        symlink(&target, &output).expect("create output symlink");
+
+        let report = BundlePackArgs {
+            source,
+            archive_path: "app/server.mjs".to_owned(),
+            output: output.clone(),
+            executable: true,
+        }
+        .run()
+        .expect("replace output symlink");
+
+        assert_eq!(
+            fs::read(&target).expect("read untouched target"),
+            b"target must survive"
+        );
+        assert!(
+            fs::symlink_metadata(&output)
+                .expect("inspect replaced output")
+                .is_file()
+        );
+        let output_bytes = fs::read(&output).expect("read installed archive");
+        assert_eq!(report.bundle_hash, Hash::new(&output_bytes));
+    }
+
+    #[test]
+    fn bundle_pack_archive_size_limit_accepts_boundary_and_rejects_overflow() {
+        ensure_bundle_pack_archive_size_within_limit(INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES)
+            .expect("archive size at limit");
+        let error =
+            ensure_bundle_pack_archive_size_within_limit(INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES + 1)
+                .expect_err("archive size above limit must fail");
+        assert!(format!("{error:?}").contains("exceeds the"));
+    }
+
+    #[test]
+    fn bundle_pack_archive_writer_stops_before_emitting_bytes_over_its_limit() {
+        let dir = temp_dir("bundle_pack_archive_writer_limit");
+        let path = dir.join("staged.tgz");
+        let mut file = fs::File::create(&path).expect("create staged archive");
+        {
+            let mut writer = BundlePackArchiveWriter::new(&mut file, 4);
+            writer.write_all(b"four").expect("write exact boundary");
+            let error = writer
+                .write_all(b"overflow")
+                .expect_err("write beyond archive boundary must fail");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(writer.written_bytes(), 4);
+        }
+        assert_eq!(fs::metadata(path).expect("inspect staged archive").len(), 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_bundle_pack_snapshots_handles_and_atomically_replaces_existing_output() {
+        let dir = temp_dir("bundle_pack_windows_replace");
+        let staged = dir.join("staged.tgz");
+        let output = dir.join("output.tgz");
+        fs::write(&staged, b"new archive").expect("write staged archive");
+        fs::write(&output, b"old archive").expect("write old archive");
+
+        let staged_handle = open_direct_bundle_pack_file(&staged).expect("open staged archive");
+        let staged_snapshot =
+            snapshot_bundle_pack_handle(&staged_handle).expect("snapshot staged archive");
+        assert!(staged_snapshot.is_regular_single_file());
+        assert_eq!(
+            staged_snapshot.size(),
+            u64::try_from(b"new archive".len()).expect("test payload length")
+        );
+
+        atomic_replace_bundle_pack_file(&staged, &output)
+            .expect("atomically replace existing output");
+        let output_handle = open_direct_bundle_pack_file(&output).expect("open replaced output");
+        let output_snapshot =
+            snapshot_bundle_pack_handle(&output_handle).expect("snapshot replaced output");
+        assert!(staged_snapshot.same_identity(output_snapshot));
+        assert_eq!(
+            fs::read(output).expect("read replaced output"),
+            b"new archive"
+        );
+    }
+
+    #[test]
+    fn generated_http_service_build_uses_offline_canonical_bundle_packer() {
+        let script = http_service_build_sh("service.tgz");
+
+        assert!(script.contains("IROHA_CARGO=(cargo)"));
+        assert!(script.contains("IROHA_BIN"));
+        assert!(script.contains("IROHA_MANIFEST_PATH"));
+        assert!(script.contains("\"${IROHA_CMD[@]}\" soracloud service bundle-pack"));
+        assert!(script.contains("--source \"$SCRIPT_DIR/app/server.mjs\""));
+        assert!(script.contains("--archive-path \"app/server.mjs\""));
+        assert!(script.contains("--output \"$BUNDLE_PATH\""));
+        assert!(script.contains("--executable"));
+        assert!(!script.contains("tar -czf"));
+        assert!(!script.contains("STAGING_DIR"));
+        assert!(!script.contains("rm -rf"));
+    }
+
+    #[test]
+    fn bundle_pack_parses_as_offline_service_command() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser)]
+        struct ServiceParser {
+            #[command(subcommand)]
+            command: ServiceCommand,
+        }
+
+        let parsed = ServiceParser::try_parse_from([
+            "service",
+            "bundle-pack",
+            "--source",
+            "server.mjs",
+            "--archive-path",
+            "app/server.mjs",
+            "--output",
+            "service.tgz",
+            "--executable",
+        ])
+        .expect("parse bundle-pack command");
+        let ServiceCommand::BundlePack(args) = &parsed.command else {
+            panic!("expected bundle-pack service command");
+        };
+        assert_eq!(args.source, PathBuf::from("server.mjs"));
+        assert_eq!(args.archive_path, "app/server.mjs");
+        assert_eq!(args.output, PathBuf::from("service.tgz"));
+        assert!(args.executable);
+        assert!(parsed.command.allows_fallback_config());
     }
 
     #[test]
@@ -20884,6 +22285,48 @@ mod tests {
             )
         );
         assert_eq!(publication.manifest_id_hex, None);
+
+        let register_request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/sorafs/pin/register")
+            .expect("captured pin registration");
+        let register_body: Value =
+            json::from_slice(&register_request.body).expect("decode pin registration");
+        let manifest_payload = register_body
+            .get("manifest_payload")
+            .and_then(Value::as_str)
+            .expect("pin registration manifest payload");
+        let manifest_bytes = base64::engine::general_purpose::STANDARD
+            .decode(manifest_payload)
+            .expect("decode registered manifest payload");
+        let published_manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
+            .expect("decode registered manifest");
+
+        let descriptor = chunker_registry::default_descriptor();
+        let (plan, payload) =
+            CarBuildPlan::from_directory_with_profile(&dist_dir, descriptor.profile)
+                .expect("rebuild published static-site plan");
+        let mut car_bytes = Vec::new();
+        let car_stats = CarWriter::new(&plan, &payload)
+            .expect("prepare published static-site CAR")
+            .write_to(&mut car_bytes)
+            .expect("write published static-site CAR");
+        let archive_digest = *blake3::hash(&car_bytes).as_bytes();
+
+        assert_eq!(
+            published_manifest.car_digest, archive_digest,
+            "published manifest must bind every byte of the canonical CARv2 archive"
+        );
+        assert_eq!(
+            published_manifest.car_digest,
+            *car_stats.car_archive_digest.as_bytes()
+        );
+        assert_ne!(
+            published_manifest.car_digest,
+            *car_stats.car_payload_digest.as_bytes(),
+            "CARv1 payload-section digest must not be published as ManifestV1.car_digest"
+        );
     }
 
     fn write_test_inrou_guest_images(inrou_dir: &Path, label: &str) {
@@ -28728,8 +30171,10 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             .expect("x86_64 guest image")
             .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
             manifest_digest_hex: "a".repeat(64),
-            content_cid: "bafytravelopsx8664".to_owned(),
-            manifest_id_hex: Some("b".repeat(64)),
+            content_cid: encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid(
+                [0xAA; 32],
+            )),
+            manifest_id_hex: Some("a".repeat(64)),
             distribution: SoraArtifactDistributionPolicyV1::default(),
         });
         inrou
@@ -28738,8 +30183,10 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             .expect("aarch64 guest image")
             .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
             manifest_digest_hex: "c".repeat(64),
-            content_cid: "bafytravelopsaarch64".to_owned(),
-            manifest_id_hex: Some("d".repeat(64)),
+            content_cid: encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid(
+                [0xCC; 32],
+            )),
+            manifest_id_hex: Some("c".repeat(64)),
             distribution: SoraArtifactDistributionPolicyV1::default(),
         });
         write_json(&live_container_path, &live_container).expect("write live container manifest");

@@ -41,7 +41,7 @@ SoraFS 架構 RFC 中概述了剩餘工作
 ## 入學流程
 
 1. **提案創建**
-   - CLI：添加 `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …`
+   - CLI：添加 `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …`
      生成 `ProviderAdmissionProposalV1` + 證明包。
    - 驗證：確保必填字段、權益 > 0、`profile_id` 中的規範分塊器句柄。
 2. **治理認可**
@@ -70,7 +70,7 @@ CLI 流程現在接受中間證書包 (`--endpoint-attestation-intermediate`)，
 
 ### CLI 參考
 
-通過 `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` 運行每個命令。
+通過 `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …` 運行每個命令。
 
 - `proposal`
   - 所需標誌：`--provider-id=<hex32>`、`--chunker-profile=<namespace.name@semver>`、
@@ -117,7 +117,7 @@ CLI 流程現在接受中間證書包 (`--endpoint-attestation-intermediate`)，
 1. 使用 `provider-admission proposal` 和 `provider-admission sign` 構建後續提案/廣告對，增加 `--retention-epoch` 並根據需要更新權益/端點。
 2. 執行  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ CLI 流程現在接受中間證書包 (`--endpoint-attestation-intermediate`)，
 #### 緊急撤銷
 1. 識別受損的信封並發出撤銷：
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

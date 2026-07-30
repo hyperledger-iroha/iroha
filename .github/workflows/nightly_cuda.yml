@@ -11,6 +11,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  IVM_CUDA_PTX_MODE: generate
   IVM_CUDA_GENCODE: arch=compute_86,code=sm_86
   GPUZSTD_CUDA_ARCH: -arch=sm_86
   JSONSTAGE1_CUDA_ARCH: -arch=sm_86
@@ -37,6 +38,7 @@ jobs:
             echo "# CUDA Nightly Hardware"
             echo
             echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- IVM_CUDA_PTX_MODE: ${IVM_CUDA_PTX_MODE}"
             echo "- IVM_CUDA_GENCODE: ${IVM_CUDA_GENCODE}"
             echo "- GPUZSTD_CUDA_ARCH: ${GPUZSTD_CUDA_ARCH}"
             echo "- JSONSTAGE1_CUDA_ARCH: ${JSONSTAGE1_CUDA_ARCH}"

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1e741cb21e3206949cee7e9e1d5746846c4b516924fa33b27dea61f0db12e742
+source_hash: b06d2871dd67815ed2b93a4089e4757e3af652f7095a1523ddcec4617fda6a38
 source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -62,7 +62,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - قدّم PR يحتوي على fixtures والمقترح وتقرير الحتمية وتحديثات السجل.

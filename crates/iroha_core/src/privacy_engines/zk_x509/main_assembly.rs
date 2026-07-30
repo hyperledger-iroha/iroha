@@ -326,11 +326,13 @@ fn rfc_statement_with_crl_number_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     crl_number: u64,
 ) -> ZkX509Rfc5280StatementV1 {
-    let key_usage = u16::from(statement.key_usage.digital_signature)
+    let key_usage = u16::from(statement.key_usage.digital_signature.is_required())
         * KEY_USAGE_DIGITAL_SIGNATURE_V1
-        | u16::from(statement.key_usage.content_commitment) * KEY_USAGE_CONTENT_COMMITMENT_V1
-        | u16::from(statement.key_usage.key_encipherment) * KEY_USAGE_KEY_ENCIPHERMENT_V1
-        | u16::from(statement.key_usage.key_agreement) * KEY_USAGE_KEY_AGREEMENT_V1;
+        | u16::from(statement.key_usage.content_commitment.is_required())
+            * KEY_USAGE_CONTENT_COMMITMENT_V1
+        | u16::from(statement.key_usage.key_encipherment.is_required())
+            * KEY_USAGE_KEY_ENCIPHERMENT_V1
+        | u16::from(statement.key_usage.key_agreement.is_required()) * KEY_USAGE_KEY_AGREEMENT_V1;
     let extended_key_usages = statement
         .extended_key_usages
         .iter()

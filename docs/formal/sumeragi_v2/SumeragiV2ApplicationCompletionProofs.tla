@@ -23,10 +23,11 @@ Two temporal facts are not present in those imported layers.  There is no
 theorem taking one exact active certified request through retransmission,
 packet admission, an applied archive server, and the route-neutral
 authenticated response into its exact FetchCertifiedBody owner.  There is
-also no Decision-local Stage-2 theorem on `AsyncSpecAt`: the generic Stage-2
-closure is intentionally stated only on `AsyncLiveSpecAt`, because an
-unrelated exhausted InstallTC owner can violate the global
-`AsyncInstallGenerationBudget`.
+also no unconditional global Stage-2 theorem which may erase checked InstallTC
+generation exhaustion.  `AsyncLiveSpecAt` is exactly `AsyncSpecAt`;
+`AsyncInstallGenerationBudget` is diagnostic only and supplies no temporal
+premise.  The Decision-local theorem instead excludes exhaustion for its exact
+node from the durable Decision source itself.
 
 `ExactDecisionStageServiceProperty` below is therefore the smallest exact
 missing temporal lemma.  It starts only after the already-proved source

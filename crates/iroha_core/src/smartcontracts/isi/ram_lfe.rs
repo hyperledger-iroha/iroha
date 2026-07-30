@@ -188,20 +188,16 @@ pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<()
                     .into(),
                 ));
             }
-            let archived = norito::from_bytes::<BfvIdentifierPublicParameters>(
-                &policy.commitment.public_parameters,
-            )
-            .map_err(|err| {
-                Error::InvariantViolation(
-                    format!(
-                        "RAM-LFE program policy {} has invalid BFV public parameters: {err}",
-                        policy.program_id
-                    )
-                    .into(),
-                )
-            })?;
             let public_parameters: BfvIdentifierPublicParameters =
-                norito::core::NoritoDeserialize::deserialize(archived);
+                norito::decode_from_bytes(&policy.commitment.public_parameters).map_err(|err| {
+                    Error::InvariantViolation(
+                        format!(
+                            "RAM-LFE program policy {} has invalid BFV public parameters: {err}",
+                            policy.program_id
+                        )
+                        .into(),
+                    )
+                })?;
             public_parameters.validate().map_err(|err| {
                 Error::InvariantViolation(
                     format!(

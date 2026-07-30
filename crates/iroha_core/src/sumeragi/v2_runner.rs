@@ -46,7 +46,7 @@ use super::{
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2::{
         AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, LocalProposalDirective,
-        SignRequest, SumeragiV2Adapter,
+        ServicedCandidateCapacityGeometry, SignRequest, SumeragiV2Adapter,
     },
     v2_apply::{V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
     v2_block_sync::{
@@ -789,6 +789,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         state,
         queue,
         kura,
+        provider_ingest_finalized_archive,
+        reputation_finalized_archive,
         startup_replay_plan,
         mut startup_replay_inventory_guard,
         network,
@@ -921,6 +923,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         validate_deadline_duration(CANDIDATE_WORK_RECHECK)?;
         let runtime_queue = runtime_queue_config(&shared_config)?;
         let effect_queue = effect_queue_config(&shared_config)?;
+        let serviced_candidate_capacity_geometry = ServicedCandidateCapacityGeometry::new(
+            usize::try_from(shared_config.limits.runtime_command_capacity)?,
+            effect_work_capacity,
+        );
         let lane_work_limits = lane_work_limits(
             &shared_config,
             network.reply_route_source_capacity(),
@@ -944,7 +950,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let wal_path = storage_root
             .join("wal")
             .join(format!("{:020}.wal", context.height));
-
         // Complete every pure or validation-only height preflight before any
         // WAL, body-store, chunk-store, or lane-work constructor can mutate
         // durable state. Publish the newly validated in-memory server only
@@ -952,6 +957,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         if let Some(server) = new_block_sync_server {
             block_sync_server = Some(server);
         }
+        let lifecycle_ordinals = ProductionV2Services::restore_lifecycle_ordinal_source(
+            &context,
+            storage_root.join("chunks"),
+            network.reply_route_source_capacity().max(1),
+            certified_request_capacity,
+        )
+        .map_err(V2RunnerError::Service)?;
         let adapter_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
@@ -959,23 +971,25 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // Preserve the finalized predecessor's Running handoff until the
             // complete successor stack is live. No reducer status from this
             // adapter may escape the construction boundary early.
-            SumeragiV2Adapter::open_deferred_status(
+            SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(
                 wal_path,
                 verified_context,
                 local_validator,
-                Generation::new(context.height),
+                Generation::INITIAL,
                 consensus_key_hash,
                 fingerprints,
+                serviced_candidate_capacity_geometry,
                 deferred_admission_ordinals.clone(),
             )
         } else {
-            SumeragiV2Adapter::open(
+            SumeragiV2Adapter::open_with_capacity_geometry(
                 wal_path,
                 verified_context,
                 local_validator,
-                Generation::new(context.height),
+                Generation::INITIAL,
                 consensus_key_hash,
                 fingerprints,
+                serviced_candidate_capacity_geometry,
                 deferred_admission_ordinals.clone(),
             )
         };
@@ -984,12 +998,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let runtime_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
-        let (runtime, mut startup_effects) = SerializedV2Runtime::new(
+        let (runtime, mut startup_effects) = SerializedV2Runtime::new_with_lifecycle_ordinals(
             adapter,
             startup_effects,
             Instant::now(),
             round_timeout,
             runtime_queue,
+            lifecycle_ordinals.clone(),
         )?;
         runtime_construction.complete();
         let (mut executor, body_store) = V2EffectExecutor::open(
@@ -1050,12 +1065,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&state),
             Arc::clone(&queue),
             Arc::clone(&kura),
+            provider_ingest_finalized_archive.clone(),
+            reputation_finalized_archive.clone(),
             block_cadence,
             genesis_account.clone(),
             events_sender.clone(),
             effect_work_capacity,
             certified_request_capacity,
             chunk_queue_capacity,
+            lifecycle_ordinals,
             Arc::clone(&output_guard),
             exact_output_service_owner,
         )
@@ -1187,6 +1205,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             startup_directive.locked_subject(),
             startup_directive.decided_subject(),
         )?;
+        if startup_directive.decided_subject().is_none()
+            && let Some((locked_round, locked)) = startup_directive.locked_body()
+        {
+            let _ = lane_work.mark_global_body_locked(locked_round, locked)?;
+        }
         dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
         // Startup recovery and durable constructor work must not consume the
         // live height cadence. Constructor repair already emitted the first
@@ -1252,41 +1275,95 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // dedicated runner turn before completions, runtime work, lock
             // reconciliation, or any other local producer can acquire a later
             // I/O position.
-            if services
-                .certified_serve_barrier_request_hash()
+            if let Some(serve_barrier) = services
+                .certified_serve_barrier()
                 .map_err(V2RunnerError::Service)?
-                .is_some()
             {
-                // A full prefix may include an earlier Serve lifecycle whose
-                // auxiliary unit is released only after its sealed response is
-                // posted and acknowledged. Service at most one I/O completion
-                // from the prefix frozen by this target; the barrier prevents
-                // later I/O replenishment and the source-only turn excludes
-                // unrelated local completions.
-                services.drain_certified_serve_predecessor_completion(&mut executor)?;
-                if recovering_interrupted_tip {
-                    drain_decided_lane_recovery_ingress(
-                        &block_rx,
-                        &mut lane_work,
-                        executor.current_tag().view(),
-                    )?;
-                } else {
-                    drain_v2_ingress(
-                        &block_rx,
+                // One exact ticket closes its finite older-owner prefix through
+                // bounded turns. Each turn atomically selects at most one
+                // completed causal lifecycle whose immutable ordinal is
+                // strictly older than the ticket, publishes/freezes resulting
+                // runtime ownership, and executes at most one serialized
+                // transition. The ticket reaches target-only ingress only once
+                // re-evaluation finds no older owner. Later producers cannot
+                // enter the frozen prefix, and exact carrier retry retains the
+                // same episode state and ticket identity.
+                let mut older_predecessor_remains = false;
+                if services
+                    .claim_certified_serve_runtime_episode(serve_barrier)
+                    .map_err(V2RunnerError::Service)?
+                {
+                    services.drain_exact_serve_runtime_predecessor(
                         &mut executor,
-                        &mut services,
-                        &mut lane_work,
-                        output_guard.as_ref(),
-                        kura.as_ref(),
-                        &context_store,
-                        &common_config.key_pair,
-                        block_sync_server
-                            .as_mut()
-                            .expect("block-sync server initialized before ingress"),
-                        &mut block_sync,
-                        &mut block_sync_request,
-                        1,
+                        serve_barrier.lifecycle_ordinal(),
                     )?;
+                    // A frozen Control/Serve prefix may still own every
+                    // physical I/O unit. Yield this turn until one unit drains
+                    // instead of dispatching a retained causal effect into
+                    // backpressure. Once capacity exists, the queue admits
+                    // only this turn's strict older lifecycle and keeps the
+                    // exact target barrier installed.
+                    if executor.older_runtime_lifecycle_predates_exact_serve(
+                        Instant::now(),
+                        serve_barrier.lifecycle_ordinal(),
+                    )? && services
+                        .certified_serve_runtime_predecessor_capacity_available(serve_barrier)
+                        .map_err(V2RunnerError::Service)?
+                    {
+                        if recovering_interrupted_tip {
+                            let _ = advance_pending_tip_recovery_executor(
+                                &mut executor,
+                                &mut services,
+                                1,
+                            )?;
+                        } else {
+                            advance_executor_once_before_exact_serve(&mut executor, &mut services)?;
+                        }
+                    }
+                    older_predecessor_remains = executor
+                        .older_runtime_lifecycle_predates_exact_serve(
+                            Instant::now(),
+                            serve_barrier.lifecycle_ordinal(),
+                        )?;
+                    services
+                        .finish_certified_serve_runtime_episode_turn(
+                            serve_barrier,
+                            older_predecessor_remains,
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                }
+                if !older_predecessor_remains {
+                    // A full prefix may include an earlier Serve lifecycle whose
+                    // auxiliary unit is released only after its sealed response is
+                    // posted and acknowledged. Service at most one I/O completion
+                    // from the prefix frozen by this target; the barrier prevents
+                    // later I/O replenishment and the source-only turn excludes
+                    // unrelated local completions.
+                    services.drain_certified_serve_predecessor_completion(&mut executor)?;
+                    if recovering_interrupted_tip {
+                        drain_decided_lane_recovery_ingress(
+                            &block_rx,
+                            &mut lane_work,
+                            executor.current_tag().view(),
+                        )?;
+                    } else {
+                        drain_v2_ingress(
+                            &block_rx,
+                            &mut executor,
+                            &mut services,
+                            &mut lane_work,
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &context_store,
+                            &common_config.key_pair,
+                            block_sync_server
+                                .as_mut()
+                                .expect("block-sync server initialized before ingress"),
+                            &mut block_sync,
+                            &mut block_sync_request,
+                            1,
+                        )?;
+                    }
                 }
                 // Popping an ordinary frozen predecessor materializes the
                 // barrier inside the worker queue lock. A Serve predecessor
@@ -1544,6 +1621,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 .to_owned(),
                         )
                     })?;
+                let _ = lane_work
+                    .recover_decided_canonical_lane_body(&durable_receipt, &durable_artifact)?;
                 lane_work.persist_anchored_sessions()?;
                 let Some(durable_lane_authority) =
                     lane_work.durable_lane_rollover_authority(&durable_artifact)?
@@ -1774,6 +1853,34 @@ fn replayed_proposal_sign(effects: &[AdapterEffect]) -> Option<ReplayedProposalS
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LockedBodyRecoveryPlan {
+    request: Option<(EventTag, wire::ConsensusRound, wire::BlockSubject)>,
+    may_repropose: bool,
+}
+
+fn locked_body_recovery_plan(
+    directive: LocalProposalDirective,
+    local_validator: wire::ValidatorIndex,
+    attempted: Option<LocalProposalOwner>,
+    can_admit_local_proposal: bool,
+) -> LockedBodyRecoveryPlan {
+    let owner = LocalProposalOwner::from(directive);
+    let request = directive
+        .decided_subject()
+        .is_none()
+        .then(|| directive.locked_body())
+        .flatten()
+        .map(|(round, subject)| (directive.tag(), round, subject));
+    LockedBodyRecoveryPlan {
+        request,
+        may_repropose: request.is_some()
+            && directive.leader() == local_validator
+            && attempted != Some(owner)
+            && can_admit_local_proposal,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn schedule_local_proposal(
     candidate_limits: CandidateLimits,
@@ -1798,36 +1905,20 @@ fn schedule_local_proposal(
     };
     let directive = executor.local_proposal_directive()?;
     let owner = proposal_state.reconcile(LocalProposalOwner::from(directive));
-    if directive.decided_subject().is_some() {
-        return Ok(());
-    }
-    // Every validator drives its independently selected lane-author slots.
-    // Once a global lock exists, this height instead waits for the exact
-    // immutable body so its current leader can re-propose it unchanged.
-    if directive.locked_body().is_none() {
-        lane_work.schedule_autonomous_lane_production(directive.tag().view(), candidate_limits)?;
-    }
-    if directive.leader() != local_validator
-        || proposal_state.attempted == Some(owner)
-        || (directive.tag().view() == 0
-            && height_started_at.elapsed() < block_cadence
-            && context.height > 1)
-    {
-        return Ok(());
-    }
-    // Do not consume a fresh or retained candidate until the executor can
-    // reserve its local StoreBody owner. Timers, retransmission, and
-    // completions continue while this producer waits.
-    if !executor.can_admit_local_proposal() {
-        return Ok(());
-    }
+    let recovery_plan = locked_body_recovery_plan(
+        directive,
+        local_validator,
+        proposal_state.attempted,
+        executor.can_admit_local_proposal(),
+    );
     // Bind immutable locked-body acquisition to the current reducer
-    // incarnation before observing readiness. A TC may advance the view after
-    // the worker completes its one exact-subject load; the current leader may
-    // re-propose only bytes which still match the exact durable lock.
-    if let Some((locked_round, locked)) = directive.locked_body() {
+    // incarnation before observing proposal eligibility. Every validator must
+    // authenticate and bind the exact carrier even when it is not the current
+    // global leader or has already attempted that proposal; only the later
+    // unchanged reproposal remains leader-gated.
+    if let Some((tag, locked_round, locked)) = recovery_plan.request {
         services
-            .request_locked_candidate(directive.tag(), locked_round, locked)
+            .request_locked_candidate(tag, locked_round, locked)
             .map_err(V2RunnerError::Service)?;
     }
     while let Some(loaded) = services.take_loaded_candidate() {
@@ -1848,13 +1939,6 @@ fn schedule_local_proposal(
             );
             continue;
         }
-        let current_owner = proposal_state.reconcile(LocalProposalOwner::from(current));
-        if current.leader() != local_validator
-            || proposal_state.attempted == Some(current_owner)
-            || !executor.can_admit_local_proposal()
-        {
-            continue;
-        }
         let canonical_wire = loaded.into_canonical_wire();
         let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
@@ -1869,6 +1953,16 @@ fn schedule_local_proposal(
         };
         if lane_binding == V2LaneIngressOutcome::Rejected {
             return Err(V2RunnerError::LaneCandidateBinding);
+        }
+        let current_owner = proposal_state.reconcile(LocalProposalOwner::from(current));
+        let current_recovery_plan = locked_body_recovery_plan(
+            current,
+            local_validator,
+            proposal_state.attempted,
+            executor.can_admit_local_proposal(),
+        );
+        if !current_recovery_plan.may_repropose {
+            continue;
         }
         // Keep the immutable bytes available under the PrepareQC round before
         // minting the later-round proposal. This preserves both admissible
@@ -1899,6 +1993,29 @@ fn schedule_local_proposal(
             local_validator,
             "submitted exact locked body for local Sumeragi v2 reproposal"
         );
+        return Ok(());
+    }
+    if directive.decided_subject().is_some() {
+        return Ok(());
+    }
+    // Every validator drives its independently selected lane-author slots.
+    // Once a global lock exists, this height instead waits for the exact
+    // immutable body so its current leader can re-propose it unchanged.
+    if directive.locked_body().is_none() {
+        lane_work.schedule_autonomous_lane_production(directive.tag().view(), candidate_limits)?;
+    }
+    if directive.leader() != local_validator
+        || proposal_state.attempted == Some(owner)
+        || (directive.tag().view() == 0
+            && height_started_at.elapsed() < block_cadence
+            && context.height > 1)
+    {
+        return Ok(());
+    }
+    // Do not consume a fresh or retained candidate until the executor can
+    // reserve its local StoreBody owner. Timers, retransmission, and
+    // completions continue while this producer waits.
+    if !executor.can_admit_local_proposal() {
         return Ok(());
     }
     // A locked directive can only consume its exact retained body. It must
@@ -2192,6 +2309,23 @@ fn drain_v2_ingress(
     limit: usize,
 ) -> Result<(), V2RunnerError> {
     for turn in outer_ingress_turns(limit) {
+        if turn == OuterIngressTurn::Completion {
+            if services
+                .certified_serve_barrier_request_hash()
+                .map_err(V2RunnerError::Service)?
+                .is_some()
+            {
+                // A provisional or prepared exact target owns this turn. The
+                // outer runner services it before any queued completion.
+                continue;
+            }
+            // I/O completion is a separate producer from the serialized
+            // reducer. Service it before every ingress occurrence so a
+            // completed durable store cannot remain hidden for the duration
+            // of a large authenticated ingress batch.
+            services.drain_completions(executor)?;
+            continue;
+        }
         if turn == OuterIngressTurn::Runtime {
             if services
                 .certified_serve_barrier_request_hash()
@@ -2203,9 +2337,9 @@ fn drain_v2_ingress(
                 continue;
             }
             // A whole authenticated ingress batch can be expensive. Give the
-            // serialized runtime one service turn before every outer
-            // occurrence so trusted completions and timers cannot remain
-            // hidden behind that batch.
+            // serialized runtime one service turn after completions and before
+            // every outer occurrence so trusted timers and reducer work cannot
+            // remain hidden behind that batch.
             let was_terminal = executor
                 .local_proposal_directive()?
                 .decided_subject()
@@ -2632,12 +2766,19 @@ fn drain_decided_lane_recovery_ingress(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OuterIngressTurn {
+    Completion,
     Runtime,
     Ingress,
 }
 
 fn outer_ingress_turns(limit: usize) -> impl Iterator<Item = OuterIngressTurn> {
-    (0..limit.max(1)).flat_map(|_| [OuterIngressTurn::Runtime, OuterIngressTurn::Ingress])
+    (0..limit.max(1)).flat_map(|_| {
+        [
+            OuterIngressTurn::Completion,
+            OuterIngressTurn::Runtime,
+            OuterIngressTurn::Ingress,
+        ]
+    })
 }
 
 fn v2_ingress_head_can_drain(
@@ -2819,6 +2960,20 @@ fn advance_executor(
             }
         }
     }
+    Ok(())
+}
+
+/// Execute at most one serialized transition from an older lifecycle before
+/// an exact Serve target turn.
+///
+/// Lock reconciliation and every other local producer stay behind the target;
+/// the ordinary runner path performs them after the barrier drains. This is
+/// deliberately not a loop, even when the older causal episode remains live.
+fn advance_executor_once_before_exact_serve(
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+) -> Result<(), V2RunnerError> {
+    let _ = executor.step(Instant::now(), services)?;
     Ok(())
 }
 
@@ -5592,6 +5747,56 @@ mod tests {
     }
 
     #[test]
+    fn locked_body_recovery_is_independent_of_reproposal_gates() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(18));
+        let subject = proposal_subject(b"nonleader locked-body recovery");
+        let locked_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 3,
+        };
+        let leader = context.leader(tag.view());
+        let nonleader = if leader == 0 { 1 } else { 0 };
+        let directive =
+            LocalProposalDirective::for_test(tag, leader, Some(locked_round), Some(subject), None);
+        let owner = LocalProposalOwner::from(directive);
+        let expected_request = Some((tag, locked_round, subject));
+
+        for (local_validator, attempted, can_admit) in [
+            (nonleader, None, true),
+            (leader, Some(owner), true),
+            (leader, None, false),
+        ] {
+            let plan = locked_body_recovery_plan(directive, local_validator, attempted, can_admit);
+            assert_eq!(plan.request, expected_request);
+            assert!(
+                !plan.may_repropose,
+                "body recovery must survive every local reproposal gate"
+            );
+        }
+
+        let eligible = locked_body_recovery_plan(directive, leader, None, true);
+        assert_eq!(eligible.request, expected_request);
+        assert!(eligible.may_repropose);
+
+        let decided = LocalProposalDirective::for_test(
+            tag,
+            leader,
+            Some(locked_round),
+            Some(subject),
+            Some(subject),
+        );
+        assert_eq!(
+            locked_body_recovery_plan(decided, leader, None, true),
+            LockedBodyRecoveryPlan {
+                request: None,
+                may_repropose: false,
+            }
+        );
+    }
+
+    #[test]
     fn same_tag_higher_lock_retires_all_local_proposal_owners() {
         let (context, _) = context();
         let tag = EventTag::new(context.height, 5, Generation::new(11));
@@ -6016,22 +6221,29 @@ mod tests {
     }
 
     #[test]
-    fn outer_ingress_batch_gives_runtime_every_preceding_turn() {
+    fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
         assert_eq!(
             outer_ingress_turns(3).collect::<Vec<_>>(),
             vec![
+                OuterIngressTurn::Completion,
                 OuterIngressTurn::Runtime,
                 OuterIngressTurn::Ingress,
+                OuterIngressTurn::Completion,
                 OuterIngressTurn::Runtime,
                 OuterIngressTurn::Ingress,
+                OuterIngressTurn::Completion,
                 OuterIngressTurn::Runtime,
                 OuterIngressTurn::Ingress,
             ]
         );
         assert_eq!(
             outer_ingress_turns(0).collect::<Vec<_>>(),
-            vec![OuterIngressTurn::Runtime, OuterIngressTurn::Ingress],
-            "a zero-sized batch still owes one runtime service opportunity"
+            vec![
+                OuterIngressTurn::Completion,
+                OuterIngressTurn::Runtime,
+                OuterIngressTurn::Ingress,
+            ],
+            "a zero-sized batch still owes completion and runtime service opportunities"
         );
     }
 

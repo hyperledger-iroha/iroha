@@ -2908,7 +2908,7 @@ THEOREM ProducerAdmissionPreservesProgressOwnership ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
-    /\ LocalAdmissionStep(node)
+    /\ SelectedLocalAdmissionAdvance(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     => AsyncProgressOwnershipInvariant'
@@ -2916,7 +2916,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncStrongTypeInvariant,
                 AsyncProgressOwnershipInvariant,
-                LocalAdmissionStep(node),
+                SelectedLocalAdmissionAdvance(node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Producer"
          PROVE AsyncProgressOwnershipInvariant'
@@ -2935,7 +2935,7 @@ PROOF
            /\ AdmitProducerCompletion(node)
            /\ LeaveCausalQueues
       BY <1>1, SelectedProducerCanAdmit
-         DEF LocalAdmissionStep
+         DEF SelectedLocalAdmissionAdvance
     <2>3. /\ SelectedCompletionSource(node) \in {"Io", "Local"}
            /\ AsyncCompletionSequenceTyped(Selected)
            /\ Len(Selected) = Cardinality(SequenceSet(Selected))
@@ -3224,7 +3224,7 @@ PROOF
             /\ ActiveBusyCompletionCarrier' =
                  ActiveBusyCompletionCarrier
       BY <2>2, <2>4, <2>7, Isa
-         DEF LocalAdmissionStep, AdmitProducerCompletion,
+         DEF SelectedLocalAdmissionAdvance, AdmitProducerCompletion,
              AsyncProgressOwnershipCoreVars,
              AsyncBusyConsumerVars,
              ActiveBusyCompletionCarrier, vars
@@ -3323,7 +3323,7 @@ THEOREM CausalAdmissionPreservesProgressOwnership ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
-    /\ LocalAdmissionStep(node)
+    /\ SelectedLocalAdmissionAdvance(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     => AsyncProgressOwnershipInvariant'
@@ -3331,7 +3331,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncStrongTypeInvariant,
                 AsyncProgressOwnershipInvariant,
-                LocalAdmissionStep(node),
+                SelectedLocalAdmissionAdvance(node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Causal"
          PROVE AsyncProgressOwnershipInvariant'
@@ -3353,7 +3353,7 @@ PROOF
       <3>2. CausalQueueNonempty(node)
         BY <3>1 DEF CausalHeadCanAdvance
       <3>3. AdmitCausalHead(node)
-        BY <1>1, <3>1, Isa DEF LocalAdmissionStep
+        BY <1>1, <3>1, Isa DEF SelectedLocalAdmissionAdvance
       <3> QED BY <3>1, <3>2, <3>3
     <2>3. /\ AsyncCandidateTyped(Candidate)
            /\ Candidate.node = node
@@ -3433,7 +3433,7 @@ PROOF
                <<asyncDeferredCompletionQueues,
                  asyncDeferredProgressQueues,
                  asyncDeferredNormalQueues>>
-        BY <1>1 DEF LocalAdmissionStep, AsyncDeferredVars
+        BY <1>1 DEF SelectedLocalAdmissionAdvance, AsyncDeferredVars
       <3> QED BY <3>1, <3>2, <3>3
     <2>6. /\ CausalCandidates' = CausalCandidates \ {Candidate}
            /\ \A other \in ValidatorIds:
@@ -3828,13 +3828,46 @@ PROOF
          LocalPhaseAdvancePreservesProgressOwnership
     <2>2. CASE LocalAdmissionCanAdvance(node)
                /\ SelectedLocalSource(node) = "Producer"
-      BY <1>1, <2>2,
-         ProducerAdmissionPreservesProgressOwnership
+      <3>1. SelectedLocalAdmissionAdvance(node)
+        BY <1>1, <2>2, LocalAdmissionAdvanceSelectsAtomicWork
+      <3> QED BY <1>1, <2>2, <3>1,
+           ProducerAdmissionPreservesProgressOwnership
     <2>3. CASE LocalAdmissionCanAdvance(node)
                /\ SelectedLocalSource(node) = "Causal"
-      BY <1>1, <2>3,
-         CausalAdmissionPreservesProgressOwnership
+      <3>1. SelectedLocalAdmissionAdvance(node)
+        BY <1>1, <2>3, LocalAdmissionAdvanceSelectsAtomicWork
+      <3> QED BY <1>1, <2>3, <3>1,
+           CausalAdmissionPreservesProgressOwnership
     <2> QED BY <2>1, <2>2, <2>3, Isa
+         DEF SelectedLocalSource, PreferredLocalSource,
+             OtherLocalSource, AsyncLocalSources
+  <1> QED BY <1>1
+
+THEOREM SerializedLocalPredecessorPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ SerializedLocalPrecedesServeIngressStep(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                SerializedLocalPrecedesServeIngressStep(node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. /\ SelectedLocalAdmissionAdvance(node)
+           /\ LocalAdmissionCanAdvance(node)
+      BY <1>1
+         DEF SerializedLocalPrecedesServeIngressStep,
+             SelectedLocalAdmissionAdvance,
+             AsyncOlderLocalLifecyclePrecedesServeIngress
+    <2>2. CASE SelectedLocalSource(node) = "Producer"
+      BY <1>1, <2>1, <2>2,
+         ProducerAdmissionPreservesProgressOwnership
+    <2>3. CASE SelectedLocalSource(node) = "Causal"
+      BY <1>1, <2>1, <2>3,
+         CausalAdmissionPreservesProgressOwnership
+    <2> QED BY <1>1, <2>2, <2>3, SMT
          DEF SelectedLocalSource, PreferredLocalSource,
              OtherLocalSource, AsyncLocalSources
   <1> QED BY <1>1
@@ -4787,7 +4820,6 @@ THEOREM PersistInstallBusyArmEnabled ==
     /\ command.node = request.node
     /\ command.view = request.tc.view
     /\ request.tc.view >= nodeView[request.node]
-    /\ generation[request.node] < MaxGeneration
     => ENABLED ExecutePersistInstall(command)
 BY ExpandENABLED, Isa
    DEF ExecutePersistInstall, PersistInstallTC,
@@ -4924,13 +4956,40 @@ THEOREM EnabledBusyArmImpliesCommandExecutionReady ==
       => CommandExecutionReady(command)
 BY Isa DEF CommandExecutionReady
 
-THEOREM InstallGenerationBudgetExcludesExhaustion ==
+THEOREM InstallRankInvariantExcludesGenerationExhaustion ==
   \A node \in ValidatorIds:
-    AsyncInstallGenerationBudget
+    AsyncStrongTypeInvariant
       => ~InstallGenerationExhausted(node)
-BY Isa
-   DEF AsyncInstallGenerationBudget, InstallGenerationExhausted,
-       TypeInvariant, Generations
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant
+         PROVE ~InstallGenerationExhausted(node)
+    <2>1. StrongInductiveInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2. TypeInvariant
+      BY <2>1 DEF StrongInductiveInvariant, Safety
+    <2>3. ASSUME InstallGenerationExhausted(node)
+           PROVE FALSE
+      <3>1. PICK request \in pendingInstallTC:
+               /\ request.node = node
+               /\ StrictSameRoundTcUpgrade(node, request.tc)
+               /\ ~GenerationCanIncrement(generation[node])
+        BY <2>3 DEF InstallGenerationExhausted
+      <3>2. /\ TcHighRank(request.tc) \in Ranks
+             /\ TcHighRank(request.tc) <= request.tc.view
+        BY <2>1, <3>1,
+           ValidInstallSelectedRankDoesNotExceedTcView
+      <3>3. FALSE
+        BY <2>1, <2>2, <3>1, <3>2, SMT
+           DEF StrongInductiveInvariant, Safety,
+               ReducerProvenanceInvariant,
+               PendingCertificateWritesAuthorized,
+               StrictSameRoundTcUpgrade, GenerationCanIncrement,
+               TypeInvariant, ModelConfiguration, Generations,
+               Ranks, Views, NoRank
+      <3> QED BY <3>3
+    <2> QED BY <2>3
+  <1> QED BY <1>1
 
 THEOREM BusyCompletionCandidateExecutionIsEnabled ==
   \A node \in ValidatorIds:
@@ -4960,15 +5019,13 @@ THEOREM BusyCompletionCandidateIsDispatchable ==
     \A candidate:
       /\ AsyncStrongTypeInvariant
       /\ candidate \in BusyCompletionCandidates(node)
-      => \/ CommandDispatchable(candidate)
-         \/ InstallGenerationExhausted(node)
+      => CommandDispatchable(candidate)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW candidate,
                 AsyncStrongTypeInvariant,
                 candidate \in BusyCompletionCandidates(node)
-         PROVE \/ CommandDispatchable(candidate)
-               \/ InstallGenerationExhausted(node)
+         PROVE CommandDispatchable(candidate)
     <2>1. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
     <2>2. AsyncSchedulerTypeInvariant
@@ -4990,7 +5047,8 @@ PROOF
     <2>7. CASE CommandExecutionReady(candidate)
       BY <2>4, <2>5, <2>7 DEF CommandDispatchable
     <2>8. CASE InstallGenerationExhausted(node)
-      BY <2>8
+      BY <1>1, <2>8,
+         InstallRankInvariantExcludesGenerationExhaustion
     <2> QED BY <2>6, <2>7, <2>8
   <1> QED BY <1>1
 
@@ -5093,13 +5151,15 @@ THEOREM SerializedRuntimePreservesProgressOwnership ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ (SerializedRuntimeStep(node)
+          \/ SerializedRuntimePrecedesServeIngressStep(node))
     => AsyncProgressOwnershipInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncStrongTypeInvariant,
                 AsyncProgressOwnershipInvariant,
                 SerializedRuntimeStep(node)
+                  \/ SerializedRuntimePrecedesServeIngressStep(node)
          PROVE AsyncProgressOwnershipInvariant'
     <2>1. \/ DeferredDrainStep(node)
            \/ DeferredTagStep(node)
@@ -5107,9 +5167,13 @@ PROOF
            \/ FifoRuntimeStep(node)
            \/ DirectRetransmitStep(node)
            \/ IdleRuntimeStep(node)
-      BY <1>1 DEF SerializedRuntimeStep, RuntimeStep
+      BY <1>1, Isa
+         DEF SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep, RuntimeStep
     <2>1a. UNCHANGED AsyncIoVars
-      BY <1>1 DEF SerializedRuntimeStep
+      BY <1>1, Isa
+         DEF SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep
     <2>2. CASE DirectRetransmitStep(node)
                    \/ IdleRuntimeStep(node)
       BY <1>1, <2>1a, <2>2,
@@ -5146,9 +5210,24 @@ PROOF
     <2>2. CASE IngressDrainStep(node)
       BY <1>1, <2>2, IngressDrainPreservesProgressOwnership
     <2>3. CASE SerializedRuntimeStep(node)
+                  \/ SerializedRuntimePrecedesServeIngressStep(node)
       BY <1>1, <2>3,
          SerializedRuntimePreservesProgressOwnership
-    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNodeWork
+    <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+      <3>1. UNCHANGED AsyncProgressOwnershipVars
+        BY <2>4, Isa
+           DEF AsyncServeIngressTargetOnlyTurn,
+               AsyncProgressOwnershipVars,
+               AsyncProgressOwnershipCoreVars,
+               AsyncBusyConsumerVars,
+               AsyncProgressOwnershipSchedulerVars,
+               AsyncIoVars, AsyncDeferredVars, vars
+      <3> QED BY <1>1, <3>1, AsyncProgressOwnershipStutter
+    <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
+      BY <1>1, <2>5,
+         SerializedLocalPredecessorPreservesProgressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+         DEF RunNodeWork
   <1> QED BY <1>1
 
 THEOREM AsyncFaultPreservesProgressOwnership ==

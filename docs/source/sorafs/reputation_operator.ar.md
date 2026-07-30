@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs/reputation_operator.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 39cc916a0dc5c04d20d81cc643a7b97948376242e03b59d345629fabd4698df2
-source_last_modified: "2026-07-26T10:47:17.078326+00:00"
+source_hash: 6e5d836d66967d3c4a69b5d4b0a7132e552a25099008e8333283d4f1b2669f12
+source_last_modified: "2026-07-27T06:40:17.167345+00:00"
 translation_last_reviewed: null
 ---
 

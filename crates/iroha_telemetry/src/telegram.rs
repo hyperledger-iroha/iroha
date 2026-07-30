@@ -1,8 +1,9 @@
 //! Telegram alerts delivery (feature-gated).
 
-#![cfg(feature = "telegram")]
+use std::fmt::Write as _;
 
 use eyre::{Result, eyre};
+use futures::StreamExt;
 use iroha_config::parameters::actual::Telemetry as Config;
 use iroha_logger::telemetry::Event as Telemetry;
 use reqwest::Client;
@@ -15,6 +16,11 @@ use url::Url;
 ///
 /// Behavior: sends human-readable messages for events that include a `msg` field
 /// and a textual `text`/`error`/`warning` field. Extend as needed.
+///
+/// # Errors
+///
+/// Returns an error when the Telegram credentials are missing or the HTTP
+/// client cannot be constructed.
 pub async fn start(
     config: Config,
     telemetry: broadcast::Receiver<Telemetry>,
@@ -23,11 +29,18 @@ pub async fn start(
 }
 
 /// Start Telegram alerts with optional chain id context.
+///
+/// # Errors
+///
+/// Returns an error when the Telegram credentials are missing or the HTTP
+/// client cannot be constructed.
 pub async fn start_with_context(
     config: Config,
     chain_id: Option<String>,
     telemetry: broadcast::Receiver<Telemetry>,
 ) -> Result<JoinHandle<()>> {
+    // Keep the established async API without introducing a scheduler yield.
+    std::future::ready(()).await;
     let (bot_key, chat_id) = match (
         config.telegram_bot_key.as_deref(),
         config.telegram_chat_id.as_deref(),
@@ -37,17 +50,17 @@ pub async fn start_with_context(
     };
     let client = Client::builder().build()?;
     let settings = AlertSettings::from_config(&config);
-    let handle = tokio::spawn(run(
+    let worker = TelegramWorker {
         client,
         bot_key,
         chat_id,
-        config.name.clone(),
+        node_name: config.name.clone(),
         chain_id,
         settings,
-        config.telegram_metrics_url.clone(),
-        config.telegram_metrics_period,
-        telemetry,
-    ));
+        metrics_url: config.telegram_metrics_url.clone(),
+        metrics_period: config.telegram_metrics_period,
+    };
+    let handle = tokio::spawn(worker.run(telemetry));
     Ok(handle)
 }
 
@@ -63,28 +76,31 @@ struct AlertSettings {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
-    TRACE,
-    DEBUG,
-    INFO,
-    WARN,
-    ERROR,
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl Level {
+    fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_uppercase().as_str() {
+            "TRACE" => Some(Self::Trace),
+            "DEBUG" => Some(Self::Debug),
+            "INFO" => Some(Self::Info),
+            "WARN" | "WARNING" => Some(Self::Warn),
+            "ERROR" => Some(Self::Error),
+            _ => None,
+        }
+    }
 }
 
 impl AlertSettings {
     fn from_config(c: &Config) -> Self {
-        let min_level =
-            c.telegram_min_level
-                .as_deref()
-                .and_then(|s| match s.to_ascii_uppercase().as_str() {
-                    "TRACE" => Some(Level::TRACE),
-                    "DEBUG" => Some(Level::DEBUG),
-                    "INFO" => Some(Level::INFO),
-                    "WARN" | "WARNING" => Some(Level::WARN),
-                    "ERROR" => Some(Level::ERROR),
-                    _ => None,
-                });
+        let min_level = c.telegram_min_level.as_deref().and_then(Level::parse);
         let targets = c.telegram_targets.clone();
-        let rate_per_minute = c.telegram_rate_per_minute.map(|n| n.get());
+        let rate_per_minute = c.telegram_rate_per_minute.map(std::num::NonZeroU32::get);
         Self {
             min_level,
             targets,
@@ -103,17 +119,7 @@ fn parse_level(event: &Telemetry) -> Option<Level> {
         .iter()
         .find(|(k, _)| *k == "level")
         .map(|(_, v)| v);
-    match level_val
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_ascii_uppercase())
-    {
-        Some(s) if s == "TRACE" => Some(Level::TRACE),
-        Some(s) if s == "DEBUG" => Some(Level::DEBUG),
-        Some(s) if s == "INFO" => Some(Level::INFO),
-        Some(s) if s == "WARN" || s == "WARNING" => Some(Level::WARN),
-        Some(s) if s == "ERROR" => Some(Level::ERROR),
-        _ => None,
-    }
+    level_val.and_then(|v| v.as_str()).and_then(Level::parse)
 }
 
 fn target_allowed(event: &Telemetry, settings: &AlertSettings) -> bool {
@@ -136,8 +142,12 @@ impl RateLimiter {
             sent: std::collections::VecDeque::new(),
         }
     }
+
     fn allow(&mut self) -> bool {
-        let now = tokio::time::Instant::now();
+        self.allow_at(tokio::time::Instant::now())
+    }
+
+    fn allow_at(&mut self, now: tokio::time::Instant) -> bool {
         while let Some(&t) = self.sent.front() {
             if now.duration_since(t).as_secs() >= 60 {
                 self.sent.pop_front();
@@ -145,7 +155,10 @@ impl RateLimiter {
                 break;
             }
         }
-        if (self.sent.len() as u32) < self.limit {
+        let Ok(sent) = u32::try_from(self.sent.len()) else {
+            return false;
+        };
+        if sent < self.limit {
             self.sent.push_back(now);
             true
         } else {
@@ -154,7 +167,7 @@ impl RateLimiter {
     }
 }
 
-async fn run(
+struct TelegramWorker {
     client: Client,
     bot_key: String,
     chat_id: String,
@@ -163,68 +176,84 @@ async fn run(
     settings: AlertSettings,
     metrics_url: Option<Url>,
     metrics_period: Option<std::time::Duration>,
-    receiver: broadcast::Receiver<Telemetry>,
-) {
-    let mut stream = BroadcastStream::new(receiver).fuse();
-    let mut limiter = settings.rate_per_minute.map(RateLimiter::new);
-    // Optional metrics sampler
-    let snapshot: std::sync::Arc<tokio::sync::Mutex<Option<Snapshot>>> =
-        std::sync::Arc::new(tokio::sync::Mutex::new(None));
-    if settings.include_metrics {
-        if let (Some(url), Some(period)) = (metrics_url, metrics_period) {
+}
+
+impl TelegramWorker {
+    async fn run(self, receiver: broadcast::Receiver<Telemetry>) {
+        let Self {
+            client,
+            bot_key,
+            chat_id,
+            node_name,
+            chain_id,
+            settings,
+            metrics_url,
+            metrics_period,
+        } = self;
+        let mut stream = BroadcastStream::new(receiver).fuse();
+        let mut limiter = settings.rate_per_minute.map(RateLimiter::new);
+        // Optional metrics sampler
+        let snapshot: std::sync::Arc<tokio::sync::Mutex<Option<Snapshot>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        if settings.include_metrics
+            && let (Some(url), Some(period)) = (metrics_url, metrics_period)
+        {
             let client = client.clone();
             let snap = snapshot.clone();
             tokio::spawn(async move {
                 sample_metrics_loop(client, url, period, snap).await;
             });
         }
-    }
-    while let Some(item) = stream.next().await {
-        let Ok(event) = item else {
-            continue;
-        };
-        // Filter by target prefix and minimum level
-        if !target_allowed(&event, &settings) {
-            continue;
-        }
-        if let Some(min) = settings.min_level {
-            if let Some(lvl) = parse_level(&event) {
-                if lvl < min {
-                    continue;
-                }
-            }
-        }
-        // Allow/deny lists by message kind
-        let kind = event
-            .fields
-            .0
-            .iter()
-            .find(|(k, _)| *k == "msg")
-            .and_then(|(_, v)| v.as_str());
-        if let Some(k) = kind {
-            if let Some(deny) = &settings.deny_kinds {
-                if deny.iter().any(|d| d == k) {
-                    continue;
-                }
-            }
-            if let Some(allow) = &settings.allow_kinds {
-                if !allow.is_empty() && !allow.iter().any(|a| a == k) {
-                    continue;
-                }
-            }
-        }
-        // Rate limit
-        if let Some(lim) = limiter.as_mut() {
-            if !lim.allow() {
+        while let Some(item) = stream.next().await {
+            let Ok(event) = item else {
+                continue;
+            };
+            // Filter by target prefix and minimum level
+            if !target_allowed(&event, &settings) {
                 continue;
             }
-        }
-        // Include latest sampled snapshot if any
-        let snap_opt = snapshot.lock().await.clone();
-        if let Some(text) = format_alert(&node_name, chain_id.as_deref(), snap_opt.as_ref(), &event)
-        {
-            if let Err(e) = send_message(&client, &bot_key, &chat_id, &text).await {
-                iroha_logger::warn!(%e, "Failed to send Telegram alert");
+            if settings
+                .min_level
+                .zip(parse_level(&event))
+                .is_some_and(|(minimum, level)| level < minimum)
+            {
+                continue;
+            }
+            // Allow/deny lists by message kind
+            let kind = event
+                .fields
+                .0
+                .iter()
+                .find(|(k, _)| *k == "msg")
+                .and_then(|(_, v)| v.as_str());
+            if let Some(kind) = kind {
+                let denied = settings
+                    .deny_kinds
+                    .as_ref()
+                    .is_some_and(|deny| deny.iter().any(|candidate| candidate == kind));
+                if denied {
+                    continue;
+                }
+                let excluded = settings.allow_kinds.as_ref().is_some_and(|allow| {
+                    !allow.is_empty() && !allow.iter().any(|candidate| candidate == kind)
+                });
+                if excluded {
+                    continue;
+                }
+            }
+            // Rate limit
+            if limiter.as_mut().is_some_and(|limiter| !limiter.allow()) {
+                continue;
+            }
+            // Include latest sampled snapshot if any
+            let snap_opt = snapshot.lock().await.clone();
+            let Some(text) =
+                format_alert(&node_name, chain_id.as_deref(), snap_opt.as_ref(), &event)
+            else {
+                continue;
+            };
+            if let Err(error) = send_message(&client, &bot_key, &chat_id, &text).await {
+                iroha_logger::warn!(%error, "Failed to send Telegram alert");
             }
         }
     }
@@ -258,37 +287,47 @@ fn format_alert(
     }
     let kind = kind?;
     let text = text.unwrap_or_else(|| "event".to_string());
-    let mut prefix = format!("[{}] [node:{}]", kind, node_name);
-    if let Some(c) = chain {
-        prefix.push_str(&format!(" [chain:{}]", c));
+    let mut prefix = format!("[{kind}] [node:{node_name}]");
+    if let Some(chain) = chain {
+        write!(&mut prefix, " [chain:{chain}]").expect("writing to a String cannot fail");
     }
     if !extra.is_empty() {
-        let sn = extra
-            .into_iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<_>>()
-            .join(" ");
-        prefix.push_str(&format!(" [{}]", sn));
+        prefix.push_str(" [");
+        for (index, (key, value)) in extra.into_iter().enumerate() {
+            if index != 0 {
+                prefix.push(' ');
+            }
+            prefix.push_str(&key);
+            prefix.push('=');
+            prefix.push_str(&value);
+        }
+        prefix.push(']');
     }
-    if let Some(s) = snap {
-        let mut parts = vec![];
-        if let Some(p) = s.connected_peers {
-            parts.push(format!("connected_peers={}", p));
+    if let Some(snapshot) = snap {
+        let metrics = [
+            ("connected_peers", snapshot.connected_peers),
+            ("queue_size", snapshot.queue_size),
+            ("block_height", snapshot.block_height),
+            ("last_commit_time_ms", snapshot.last_commit_time_ms),
+        ];
+        let mut emitted = false;
+        for (name, value) in metrics {
+            let Some(value) = value else {
+                continue;
+            };
+            if emitted {
+                prefix.push(' ');
+            } else {
+                prefix.push_str(" [");
+                emitted = true;
+            }
+            write!(&mut prefix, "{name}={value}").expect("writing to a String cannot fail");
         }
-        if let Some(q) = s.queue_size {
-            parts.push(format!("queue_size={}", q));
-        }
-        if let Some(bh) = s.block_height {
-            parts.push(format!("block_height={}", bh));
-        }
-        if let Some(ct) = s.last_commit_time_ms {
-            parts.push(format!("last_commit_time_ms={}", ct));
-        }
-        if !parts.is_empty() {
-            prefix.push_str(&format!(" [{}]", parts.join(" ")));
+        if emitted {
+            prefix.push(']');
         }
     }
-    Some(format!("{} {}", prefix, text))
+    Some(format!("{prefix} {text}"))
 }
 
 fn render_json_value(value: &norito::json::Value) -> String {
@@ -323,31 +362,101 @@ async fn sample_metrics_loop(
 
 async fn fetch_metrics(client: &Client, url: Url) -> Result<Snapshot> {
     let txt = client.get(url).send().await?.text().await?;
+    Ok(parse_metrics(&txt))
+}
+
+fn parse_metrics(text: &str) -> Snapshot {
     let mut snap = Snapshot::default();
-    for line in txt.lines() {
-        if line.starts_with("connected_peers ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                snap.connected_peers = val.parse::<f64>().ok().map(|f| f as u64);
-            }
-        } else if line.starts_with("queue_size ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                snap.queue_size = val.parse::<f64>().ok().map(|f| f as u64);
-            }
-        } else if line.starts_with("block_height ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                snap.block_height = val.parse::<f64>().ok().map(|f| f as u64);
-            }
-        } else if line.starts_with("last_commit_time_ms ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                snap.last_commit_time_ms = val.parse::<f64>().ok().map(|f| f as u64);
-            }
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(name), Some(raw_value)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let Some(value) = parse_metric_u64(raw_value) else {
+            continue;
+        };
+        match name {
+            "connected_peers" => snap.connected_peers = Some(value),
+            "queue_size" => snap.queue_size = Some(value),
+            "block_height" => snap.block_height = Some(value),
+            "last_commit_time_ms" => snap.last_commit_time_ms = Some(value),
+            _ => {}
         }
     }
-    Ok(snap)
+    snap
+}
+
+fn parse_metric_u64(raw: &str) -> Option<u64> {
+    if let Ok(value) = raw.parse::<u64>() {
+        return Some(value);
+    }
+
+    let unsigned = raw.strip_prefix('+').unwrap_or(raw);
+    if unsigned.starts_with('-') {
+        return None;
+    }
+    let exponent_marker = unsigned
+        .char_indices()
+        .find_map(|(index, character)| matches!(character, 'e' | 'E').then_some(index));
+    let (mantissa, exponent) = if let Some(index) = exponent_marker {
+        let (mantissa, exponent_with_marker) = unsigned.split_at(index);
+        let exponent = exponent_with_marker.get(1..)?.parse::<i64>().ok()?;
+        if mantissa.contains(['e', 'E']) || exponent_with_marker[1..].contains(['e', 'E']) {
+            return None;
+        }
+        (mantissa, exponent)
+    } else {
+        (unsigned, 0)
+    };
+    let (whole, fraction) = if let Some((whole, fraction)) = mantissa.split_once('.') {
+        if fraction.contains('.') {
+            return None;
+        }
+        (whole, fraction)
+    } else {
+        (mantissa, "")
+    };
+    if whole.is_empty() && fraction.is_empty() {
+        return None;
+    }
+    if !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let mut digits = String::with_capacity(mantissa.len());
+    digits.push_str(whole);
+    digits.push_str(fraction);
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some(0);
+    }
+
+    let fraction_len = i64::try_from(fraction.len()).ok()?;
+    let scale = exponent.checked_sub(fraction_len)?;
+    if scale < 0 {
+        let fractional_digits = usize::try_from(scale.unsigned_abs()).ok()?;
+        if fractional_digits > digits.len() {
+            return None;
+        }
+        let integer_len = digits.len() - fractional_digits;
+        if !digits.as_bytes()[integer_len..]
+            .iter()
+            .all(|byte| *byte == b'0')
+        {
+            return None;
+        }
+        digits[..integer_len].parse::<u64>().ok()
+    } else {
+        let value = digits.parse::<u64>().ok()?;
+        let scale = u32::try_from(scale).ok()?;
+        value.checked_mul(10_u64.checked_pow(scale)?)
+    }
 }
 
 async fn send_message(client: &Client, bot_key: &str, chat_id: &str, text: &str) -> Result<()> {
-    let url = format!("https://api.telegram.org/bot{}/sendMessage", bot_key);
+    let url = format!("https://api.telegram.org/bot{bot_key}/sendMessage");
     let body = norito::json!({
         "chat_id": chat_id,
         "text": text,
@@ -366,4 +475,86 @@ async fn send_message(client: &Client, bot_key: &str, chat_id: &str, text: &str)
     Ok(())
 }
 
-use futures::StreamExt;
+#[cfg(test)]
+mod tests {
+    use iroha_logger::telemetry::Fields;
+    use norito::json::Value;
+
+    use super::*;
+
+    fn event_with_level(level: &str) -> Telemetry {
+        Telemetry {
+            target: "telegram::tests",
+            fields: Fields(vec![("level", Value::String(level.to_owned()))]),
+        }
+    }
+
+    #[test]
+    fn level_parsing_is_case_insensitive_and_accepts_warning_alias() {
+        assert_eq!(Level::parse("trace"), Some(Level::Trace));
+        assert_eq!(Level::parse("DeBuG"), Some(Level::Debug));
+        assert_eq!(Level::parse("INFO"), Some(Level::Info));
+        assert_eq!(Level::parse("warning"), Some(Level::Warn));
+        assert_eq!(Level::parse("ERROR"), Some(Level::Error));
+        assert_eq!(Level::parse("critical"), None);
+        assert_eq!(parse_level(&event_with_level("warn")), Some(Level::Warn));
+    }
+
+    #[test]
+    fn rate_limiter_enforces_the_sliding_minute_window() {
+        let origin = tokio::time::Instant::now();
+        let mut limiter = RateLimiter::new(2);
+
+        assert!(limiter.allow_at(origin));
+        assert!(limiter.allow_at(origin + std::time::Duration::from_secs(30)));
+        assert!(!limiter.allow_at(origin + std::time::Duration::from_secs(59)));
+        assert!(limiter.allow_at(origin + std::time::Duration::from_secs(60)));
+        assert!(!limiter.allow_at(origin + std::time::Duration::from_secs(60)));
+        assert!(limiter.allow_at(origin + std::time::Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn metric_integer_parser_accepts_only_exact_u64_values() {
+        for (sample, expected) in [
+            ("0", 0),
+            ("42", 42),
+            ("42.0", 42),
+            ("4.2e1", 42),
+            ("420e-1", 42),
+            ("+42", 42),
+            ("18446744073709551615.0", u64::MAX),
+        ] {
+            assert_eq!(parse_metric_u64(sample), Some(expected), "{sample}");
+        }
+
+        for sample in [
+            "",
+            "-1",
+            "1.5",
+            "1e-1",
+            "NaN",
+            "+Inf",
+            "18446744073709551616",
+            "1e100",
+            "1.0.0",
+        ] {
+            assert_eq!(parse_metric_u64(sample), None, "{sample}");
+        }
+    }
+
+    #[test]
+    fn metrics_snapshot_ignores_invalid_and_unknown_samples() {
+        let snapshot = parse_metrics(
+            "connected_peers 4\n\
+             queue_size 5.0\n\
+             block_height 9e1\n\
+             last_commit_time_ms -2\n\
+             unrelated_metric 12\n",
+        );
+
+        assert_eq!(snapshot.connected_peers, Some(4));
+        assert_eq!(snapshot.queue_size, Some(5));
+        assert_eq!(snapshot.block_height, Some(90));
+        assert_eq!(snapshot.last_commit_time_ms, None);
+    }
+}

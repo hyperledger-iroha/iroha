@@ -41,6 +41,68 @@ RELEASE_SEQUENCE = 1
 PREDECESSOR_SHA256 = "00" * 32
 
 
+def topology_qualification_path(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> Path:
+    """Write one exact non-promotable four-validator qualification summary."""
+
+    path = tmp_path / "l1-topology-qualification.json"
+    payload = {
+        "schema": "sorafs.l1.deployment_qualification.summary.v1",
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": hashlib.sha256(b"exact-manifest").hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"canonical-manifest"
+        ).hexdigest(),
+        "deployment": {
+            "deployment_id": deployment_id,
+            "environment": environment,
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(CHECKER.DEFAULT_REQUIRED_GATES),
+        "recognized_lane_slot_count": 17,
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def topology_binding(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> dict[str, str]:
+    """Return the exact binding derived from the test qualification bytes."""
+
+    path = topology_qualification_path(
+        tmp_path,
+        deployment_id=deployment_id,
+        environment=environment,
+    )
+    return {
+        "qualification_summary_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "manifest_sha256": hashlib.sha256(b"exact-manifest").hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"canonical-manifest"
+        ).hexdigest(),
+        "deployment_id": deployment_id,
+        "environment": environment,
+    }
+
+
 def public_key_from_seed(seed: bytes) -> bytes:
     """Derive a temporary Ed25519 public key for one test invocation."""
 
@@ -109,7 +171,12 @@ def prerequisite_specs(
     ]
 
 
-def lane_summary_paths(tmp_path: Path) -> list[tuple[str, Path]]:
+def lane_summary_paths(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> list[tuple[str, Path]]:
     """Create exact temporary lane-summary bytes for the signing fixture."""
 
     rows: list[tuple[str, Path]] = []
@@ -117,11 +184,20 @@ def lane_summary_paths(tmp_path: Path) -> list[tuple[str, Path]]:
         path = tmp_path / f"reviewed-{gate_name}.json"
         if not path.exists():
             payload = (
-                gateway_load_summary()
+                gateway_load_summary(
+                    tmp_path,
+                    deployment_id=deployment_id,
+                    environment=environment,
+                )
                 if gate_name == "gateway_load"
                 else {
                     "schema": CHECKER.GATE_BY_NAME[gate_name].schema,
                     "status": "ready",
+                    "topology_qualification": topology_binding(
+                        tmp_path,
+                        deployment_id=deployment_id,
+                        environment=environment,
+                    ),
                 }
             )
             path.write_text(
@@ -150,6 +226,14 @@ def prepare_args(
 
     values = [
         "prepare",
+        "--topology-qualification-summary",
+        str(
+            topology_qualification_path(
+                tmp_path,
+                deployment_id=deployment_id,
+                environment=environment,
+            )
+        ),
         "--deployment-id",
         deployment_id,
         "--environment",
@@ -175,7 +259,11 @@ def prepare_args(
         )
     for spec in prerequisite_specs() if specs is None else specs:
         values.extend(["--prerequisite", spec])
-    for gate_name, path in lane_summary_paths(tmp_path):
+    for gate_name, path in lane_summary_paths(
+        tmp_path,
+        deployment_id=deployment_id,
+        environment=environment,
+    ):
         values.extend(["--lane-summary", f"{gate_name}={path}"])
     return values
 
@@ -198,6 +286,8 @@ def finalize_args(
 
     values = [
         "finalize",
+        "--topology-qualification-summary",
+        str(topology_qualification_path(tmp_path)),
         "--signing-payload",
         str(tmp_path / payload_name),
         "--signature-file",
@@ -256,7 +346,12 @@ def write_signing_payload(path: Path, unsigned: dict) -> bytes:
     return payload
 
 
-def gateway_load_summary() -> dict:
+def gateway_load_summary(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> dict:
     """Build one temporary ready lane summary for direct aggregate acceptance."""
 
     gate = CHECKER.GATE_BY_NAME["gateway_load"]
@@ -265,8 +360,8 @@ def gateway_load_summary() -> dict:
         kind_schema = CHECKER.GATE_REQUIRED_KIND_SCHEMAS["gateway_load"][kind_name]
         fingerprint = {
             "generated_at_unix": GENERATED_AT_UNIX,
-            "deployment_id": DEPLOYMENT_ID,
-            "environment": ENVIRONMENT,
+            "deployment_id": deployment_id,
+            "environment": environment,
             "deployment_context_reviewed": True,
             "metric_count": len(CHECKER.GATEWAY_LOAD_REQUIRED_METRICS),
             "metrics": list(CHECKER.GATEWAY_LOAD_REQUIRED_METRICS),
@@ -300,6 +395,11 @@ def gateway_load_summary() -> dict:
     return {
         "schema": gate.schema,
         "status": "ready",
+        "topology_qualification": topology_binding(
+            tmp_path,
+            deployment_id=deployment_id,
+            environment=environment,
+        ),
         "required_kinds": list(gate.required_kinds),
         "thresholds": {"max_evidence_bytes": 2_097_152},
         "evidence_file_count": len(gate.required_kinds),
@@ -364,6 +464,39 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     )
     assert errors == []
     assert context == (DEPLOYMENT_ID, ENVIRONMENT)
+
+
+def test_prepare_and_finalize_reject_substituted_topology_summary(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+) -> None:
+    """Reject a valid-looking qualification whose exact binding was not reviewed."""
+
+    seed, public_key = signer
+    original = topology_qualification_path(tmp_path)
+    substitute = tmp_path / "substituted-topology-qualification.json"
+    substituted_payload = json.loads(original.read_text(encoding="utf-8"))
+    substituted_payload["manifest_sha256"] = hashlib.sha256(
+        b"substituted-exact-manifest"
+    ).hexdigest()
+    substitute.write_text(
+        json.dumps(substituted_payload, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    prepare = prepare_args(tmp_path, public_key)
+    prepare[prepare.index("--topology-qualification-summary") + 1] = str(substitute)
+    assert MODULE.main(prepare) == 2
+    assert "must match the reviewed topology" in capsys.readouterr().err
+
+    prepare_and_sign(tmp_path, seed, public_key)
+    finalize = finalize_args(tmp_path, public_key)
+    finalize[finalize.index("--topology-qualification-summary") + 1] = str(
+        substitute
+    )
+    assert MODULE.main(finalize) == 2
+    assert "must match the reviewed topology" in capsys.readouterr().err
 
 
 def test_prepare_rejects_missing_and_reordered_lane_summary_inventory(
@@ -533,8 +666,10 @@ def test_finalized_envelope_is_accepted_by_direct_aggregate_gate(
     aggregate_out = tmp_path / "aggregate-summary.json"
     assert (
         CHECKER.main(
-            [
-                "--evidence-dir",
+                [
+                    "--topology-qualification-summary",
+                    str(topology_qualification_path(tmp_path)),
+                    "--evidence-dir",
                 str(evidence_dir),
                 "--require-gate",
                 "gateway_load",
@@ -559,7 +694,7 @@ def test_finalized_envelope_is_accepted_by_direct_aggregate_gate(
         == 0
     )
     aggregate = json.loads(aggregate_out.read_text(encoding="utf-8"))
-    assert aggregate["status"] == "ready"
+    assert aggregate["status"] == CHECKER.NON_PROMOTABLE_STATUS
     assert aggregate["recognized_summary_count"] == 1
     assert aggregate["foundational_prerequisites"]["valid"] is True
 
@@ -704,7 +839,7 @@ def test_prepare_rejects_missing_duplicate_reordered_or_bad_anchors(
         ),
         (
             {"deployment_id": "bearer_token=runtime-only-value"},
-            "must not contain secret-looking values",
+            "topology qualification deployment_id must be",
         ),
         (
             {"environment": "development"},

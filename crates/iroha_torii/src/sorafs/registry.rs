@@ -905,6 +905,7 @@ pub(crate) struct RegistryReplicationOrder {
     deadline_epoch: u64,
     status: ReplicationOrderStatusProjection,
     canonical_order_b64: String,
+    assignment_revision: u64,
     order_json: Value,
     providers: Vec<String>,
     provider_completions: Vec<RegistryReplicationCompletion>,
@@ -915,6 +916,14 @@ struct RegistryReplicationCompletion {
     provider_hex: String,
     completed_by: String,
     completion_epoch: u64,
+    assignment_revision: u64,
+    provider_owner: String,
+    signer_policy_id_hex: String,
+    signer_policy_revision: u64,
+    signer_policy_predecessor_digest_hex: Option<String>,
+    signer_policy_digest_hex: String,
+    finalized_height: u64,
+    finalized_block_hash_hex: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1671,6 +1680,12 @@ impl RegistryReplicationOrder {
             });
         }
         let target_replicas = usize::from(order.target_replicas);
+        if record.assignment_revision == 0 {
+            return Err(PinRegistryError::InvalidReplicationOrder {
+                order_id_hex,
+                reason: "assignment revision must be non-zero".to_owned(),
+            });
+        }
         if record.provider_completions.len() > target_replicas {
             return Err(PinRegistryError::InvalidReplicationOrder {
                 order_id_hex,
@@ -1686,10 +1701,14 @@ impl RegistryReplicationOrder {
                 || !completed_providers.insert(*completion.provider_id.as_bytes())
                 || completion.completion_epoch < record.issued_epoch
                 || completion.completion_epoch > record.deadline_epoch
+                || completion.assignment_revision != record.assignment_revision
+                || !completion.completion_authority.is_valid()
+                || completion.completed_by != completion.completion_authority.provider_owner
+                || !completion.finalized_anchor.is_valid()
             {
                 return Err(PinRegistryError::InvalidReplicationOrder {
                     order_id_hex,
-                    reason: "provider completion state is duplicate, unassigned, or outside the ledger epoch window".to_owned(),
+                    reason: "provider completion state is duplicate, unassigned, outside the ledger epoch window, or not bound to the exact assignment, authority, and finalized anchor".to_owned(),
                 });
             }
         }
@@ -1730,6 +1749,22 @@ impl RegistryReplicationOrder {
                 provider_hex: hex::encode(completion.provider_id.as_bytes()),
                 completed_by: completion.completed_by.to_string(),
                 completion_epoch: completion.completion_epoch,
+                assignment_revision: completion.assignment_revision,
+                provider_owner: completion.completion_authority.provider_owner.to_string(),
+                signer_policy_id_hex: hex::encode(
+                    completion.completion_authority.signer_policy.policy_id,
+                ),
+                signer_policy_revision: completion.completion_authority.signer_policy.revision,
+                signer_policy_predecessor_digest_hex: completion
+                    .completion_authority
+                    .signer_policy
+                    .predecessor_digest
+                    .map(hex::encode),
+                signer_policy_digest_hex: hex::encode(
+                    completion.completion_authority.signer_policy.policy_digest,
+                ),
+                finalized_height: completion.finalized_anchor.height,
+                finalized_block_hash_hex: hex::encode(completion.finalized_anchor.block_hash),
             })
             .collect();
 
@@ -1752,6 +1787,7 @@ impl RegistryReplicationOrder {
             deadline_epoch: record.deadline_epoch,
             status,
             canonical_order_b64: BASE64_STD.encode(&record.canonical_order),
+            assignment_revision: record.assignment_revision,
             order_json,
             providers,
             provider_completions,
@@ -1821,6 +1857,10 @@ impl RegistryReplicationOrder {
             "canonical_order_b64".into(),
             Value::String(self.canonical_order_b64.clone()),
         );
+        map.insert(
+            "assignment_revision".into(),
+            json::to_value(&self.assignment_revision)?,
+        );
         map.insert("order".into(), self.order_json.clone());
         let provider_completions = self
             .provider_completions
@@ -1856,6 +1896,46 @@ impl RegistryReplicationCompletion {
             "completion_epoch".into(),
             json::to_value(&self.completion_epoch)?,
         );
+        map.insert(
+            "assignment_revision".into(),
+            json::to_value(&self.assignment_revision)?,
+        );
+        let mut signer_policy = Map::new();
+        signer_policy.insert(
+            "policy_id_hex".into(),
+            Value::String(self.signer_policy_id_hex.clone()),
+        );
+        signer_policy.insert(
+            "revision".into(),
+            json::to_value(&self.signer_policy_revision)?,
+        );
+        signer_policy.insert(
+            "predecessor_digest_hex".into(),
+            self.signer_policy_predecessor_digest_hex
+                .as_ref()
+                .map_or(Value::Null, |digest| Value::String(digest.clone())),
+        );
+        signer_policy.insert(
+            "policy_digest_hex".into(),
+            Value::String(self.signer_policy_digest_hex.clone()),
+        );
+        let mut completion_authority = Map::new();
+        completion_authority.insert(
+            "provider_owner".into(),
+            Value::String(self.provider_owner.clone()),
+        );
+        completion_authority.insert("signer_policy".into(), Value::Object(signer_policy));
+        map.insert(
+            "completion_authority".into(),
+            Value::Object(completion_authority),
+        );
+        let mut finalized_anchor = Map::new();
+        finalized_anchor.insert("height".into(), json::to_value(&self.finalized_height)?);
+        finalized_anchor.insert(
+            "block_hash_hex".into(),
+            Value::String(self.finalized_block_hash_hex.clone()),
+        );
+        map.insert("finalized_anchor".into(), Value::Object(finalized_anchor));
         Ok(Value::Object(map))
     }
 }
@@ -1984,8 +2064,10 @@ mod tests {
             capacity::{CapacityDeclarationRecord, CapacityFeeLedgerEntry},
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, ManifestRootCid,
-                PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderCompletionRecord,
-                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+                PinManifestRecord, PinPolicy, PinStatus, ProviderIngestCompletionAuthorityV1,
+                ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
+                ReplicationOrderCompletionRecord, ReplicationOrderId, ReplicationOrderRecord,
+                ReplicationOrderStatus, StorageClass,
             },
             pricing::ProviderCreditRecord,
         },
@@ -2375,10 +2457,25 @@ mod tests {
             issued_epoch: 10,
             deadline_epoch: 20,
             canonical_order: canonical.clone(),
+            assignment_revision: 1,
             provider_completions: vec![ReplicationOrderCompletionRecord {
                 provider_id: ProviderId::new(order_payload.assignments[0].provider_id),
-                completed_by: issuer,
+                completed_by: issuer.clone(),
                 completion_epoch: 15,
+                assignment_revision: 1,
+                completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    issuer,
+                    ProviderIngestCompletionSignerPolicyV1 {
+                        policy_id: [0xA1; 32],
+                        revision: 1,
+                        predecessor_digest: None,
+                        policy_digest: [0xA2; 32],
+                    },
+                ),
+                finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                    height: 15,
+                    block_hash: [0xA3; 32],
+                },
             }],
             status: ReplicationOrderStatus::Completed(15),
         };
@@ -2402,11 +2499,68 @@ mod tests {
             .expect("provider completions array");
         assert_eq!(completions.len(), 1);
         assert_eq!(
+            object.get("assignment_revision").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
             completions[0]
                 .as_object()
                 .and_then(|completion| completion.get("provider_hex"))
                 .and_then(Value::as_str),
             Some(expected0.as_str())
+        );
+        let completion = completions[0]
+            .as_object()
+            .expect("provider completion object");
+        assert_eq!(
+            completion
+                .get("assignment_revision")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let authority = completion
+            .get("completion_authority")
+            .and_then(Value::as_object)
+            .expect("completion authority");
+        let expected_owner = record.provider_completions[0].completed_by.to_string();
+        assert_eq!(
+            authority.get("provider_owner").and_then(Value::as_str),
+            Some(expected_owner.as_str())
+        );
+        let signer_policy = authority
+            .get("signer_policy")
+            .and_then(Value::as_object)
+            .expect("completion signer policy");
+        let expected_policy_id = hex::encode([0xA1; 32]);
+        assert_eq!(
+            signer_policy.get("policy_id_hex").and_then(Value::as_str),
+            Some(expected_policy_id.as_str())
+        );
+        assert_eq!(
+            signer_policy.get("revision").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert!(
+            signer_policy
+                .get("predecessor_digest_hex")
+                .is_some_and(Value::is_null)
+        );
+        let expected_policy_digest = hex::encode([0xA2; 32]);
+        assert_eq!(
+            signer_policy
+                .get("policy_digest_hex")
+                .and_then(Value::as_str),
+            Some(expected_policy_digest.as_str())
+        );
+        let anchor = completion
+            .get("finalized_anchor")
+            .and_then(Value::as_object)
+            .expect("finalized anchor");
+        assert_eq!(anchor.get("height").and_then(Value::as_u64), Some(15));
+        let expected_block_hash = hex::encode([0xA3; 32]);
+        assert_eq!(
+            anchor.get("block_hash_hex").and_then(Value::as_str),
+            Some(expected_block_hash.as_str())
         );
         assert_eq!(
             object
@@ -2415,5 +2569,30 @@ mod tests {
                 .map(|s| BASE64_STD.decode(s.as_bytes()).expect("decode base64")),
             Some(canonical)
         );
+
+        let mut invalid_records = Vec::new();
+        let mut zero_assignment_revision = record.clone();
+        zero_assignment_revision.assignment_revision = 0;
+        invalid_records.push(zero_assignment_revision);
+        let mut substituted_assignment_revision = record.clone();
+        substituted_assignment_revision.provider_completions[0].assignment_revision = 2;
+        invalid_records.push(substituted_assignment_revision);
+        let mut invalid_policy = record.clone();
+        invalid_policy.provider_completions[0]
+            .completion_authority
+            .signer_policy
+            .policy_digest = [0; 32];
+        invalid_records.push(invalid_policy);
+        let mut invalid_anchor = record.clone();
+        invalid_anchor.provider_completions[0]
+            .finalized_anchor
+            .block_hash = [0; 32];
+        invalid_records.push(invalid_anchor);
+        for invalid in invalid_records {
+            assert!(
+                RegistryReplicationOrder::from_store(&invalid.order_id, &invalid).is_err(),
+                "invalid assignment, authority, or finalized-anchor binding must fail closed"
+            );
+        }
     }
 }

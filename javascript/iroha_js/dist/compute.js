@@ -145,6 +145,7 @@ function executeEntrypoint(entrypoint, payload, call) {
   let response;
   switch (entrypoint) {
     case "echo":
+    case "quote_entry":
       response = Buffer.from(payload);
       break;
     case "uppercase":

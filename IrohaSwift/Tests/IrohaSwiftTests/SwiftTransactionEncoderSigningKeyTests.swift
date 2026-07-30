@@ -7,10 +7,12 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 
     func testEd25519TransferWithSponsorProgramEncodes() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Ed25519 transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Ed25519 transaction encoder unavailable"
+        )
         guard let privateKeyBytes = Data(hexString: Self.fixturePrivateKeyHex) else {
-            throw XCTSkip("Invalid fixture private key")
+            try failRequiredNativeTestCapability("Invalid fixture private key")
         }
         let signingKey = try SigningKey.fromMultihashPrivateKey(privateKeyBytes)
         let authority = AccountId.make(publicKey: try signingKey.publicKey())
@@ -38,8 +40,10 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
     }
 
     func testSm2SigningKeyEncodesTransfer() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .sm2),
-                      "SM2 transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .sm2),
+            "SM2 transaction encoder unavailable"
+        )
         let seed = Data(repeating: 0x24, count: Sm2Keypair.privateKeyLength)
         let sm2Keypair = try Sm2Keypair.deriveFromSeed(seed: seed)
         let signingKey = SigningKey.sm2(sm2Keypair)
@@ -49,7 +53,9 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
             algorithm: "sm2",
             distid: sm2Keypair.distid
         ) else {
-            throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
+            try failRequiredNativeTestCapability(
+                "SM2 account-id encoding is unavailable in this build."
+            )
         }
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
@@ -67,8 +73,10 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
     }
 
     func testSm2SigningKeyEncodesMint() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .sm2),
-                      "SM2 transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .sm2),
+            "SM2 transaction encoder unavailable"
+        )
         let seed = Data(repeating: 0x33, count: Sm2Keypair.privateKeyLength)
         let sm2Keypair = try Sm2Keypair.deriveFromSeed(seed: seed)
         let signingKey = SigningKey.sm2(sm2Keypair)
@@ -78,7 +86,9 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
             algorithm: "sm2",
             distid: sm2Keypair.distid
         ) else {
-            throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
+            try failRequiredNativeTestCapability(
+                "SM2 account-id encoding is unavailable in this build."
+            )
         }
         let request = MintRequest(chainId: chainId,
                                   authority: authority,
@@ -95,8 +105,10 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
     }
 
     func testSecp256k1SigningKeyEncodesTransfer() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .secp256k1),
-                      "secp256k1 transaction encoder is unavailable on this platform.")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .secp256k1),
+            "secp256k1 transaction encoder is unavailable on this platform."
+        )
         let privateKey = Data((1...Secp256k1Keypair.privateKeyLength).map(UInt8.init))
         let keypair = try Secp256k1Keypair(privateKey: privateKey)
         let signingKey = SigningKey.secp256k1(keypair)

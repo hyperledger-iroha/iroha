@@ -11712,7 +11712,7 @@ fileprivate enum ToriiVerifyingKeyRequestValidation {
         guard trimmed == value else {
             throw ToriiClientError.invalidPayload("\(field) must not contain surrounding whitespace.")
         }
-        guard VerifierBackendRegistryLabels.isSupported(value) else {
+        guard VerifyingKeyBackendTag.isProductionVerifyBackendLabel(value) else {
             throw ToriiClientError.invalidPayload(
                 "\(field) is not an exact supported verifier-registry label: \(value)."
             )

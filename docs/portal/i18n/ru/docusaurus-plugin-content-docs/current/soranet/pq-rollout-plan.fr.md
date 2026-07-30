@@ -98,11 +98,11 @@ rollout_phase = "default"
 
 | Площадь | Канарейка (Этап А) | Рампа (Этап B) | По умолчанию (этап C) |
 |---------|-----------------|----------------|------------------|
-| `sorafs_cli` выборка | `--anonymity-policy stage-a` или отдых на фазе | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` выборка | `--anonymity-policy anon-guard-pq` или отдых на фазе | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Конфигурация Оркестратора JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Конфигурация клиента Rust (`iroha.toml`) | `rollout_phase = "canary"` (по умолчанию) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` подписанные команды | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, опционально `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, опционально `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, опционально `.ANON_STRICT_PQ` |
+| `iroha_cli` подписанные команды | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, опционально `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, опционально `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, опционально `.ANON_STRICT_PQ` |
 | Помощники оркестратора JavaScript | `rolloutPhase: "canary"` или `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Питон `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Свифт `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -125,7 +125,7 @@ rollout_phase = "default"
 
 3. **Canary-клиент/SDK (Т плюс 1 неделя)**
 
-   - Переключите `rollout_phase = "ramp"` в конфигурациях клиента или передайте переопределения `stage-b` для назначенных когорт SDK.
+   - Переключите `rollout_phase = "ramp"` в конфигурациях клиента или передайте переопределения `anon-majority-pq` для назначенных когорт SDK.
    - Запишите различия телеметрии (группа `sorafs_orchestrator_policy_events_total` по `client_id` и `region`) и прикрепите их к журналу инцидентов развертывания.4. **Акция по умолчанию (Т плюс 3 недели)**
 
    - После проверки управления переключите конфигурации оркестратора и клиента на `rollout_phase = "default"` и запустите подписанный контрольный список готовности в артефактах выпуска.
@@ -156,7 +156,7 @@ rollout_phase = "default"
 ### Рампа -> Канарейка (Этап B -> Этап A)
 
 1. Импортируйте снимок защитного каталога, полученный перед повышением уровня с помощью `sorafs_cli guard-directory import --guard-directory guards.json`, и повторно запустите `sorafs_cli guard-directory verify`, чтобы пакет понижения включал хэши.
-2. Установите `rollout_phase = "canary"` (или переопределите с помощью `anonymity_policy stage-a`) в конфигурациях оркестратора и клиента, а затем воспроизведите детализацию PQ Ratchet из [Ratchet Runbook PQ] (./pq-ratchet-runbook.md), чтобы подтвердить переход на более раннюю версию конвейера.
+2. Установите `rollout_phase = "canary"` (или переопределите с помощью `anonymity_policy anon-guard-pq`) в конфигурациях оркестратора и клиента, а затем воспроизведите детализацию PQ Ratchet из [Ratchet Runbook PQ] (./pq-ratchet-runbook.md), чтобы подтвердить переход на более раннюю версию конвейера.
 3. Перед уведомлением управления прикрепите обновленные снимки экрана телеметрии PQ Ratchet и SN16, а также результаты оповещений к журналу инцидентов.
 
 ### напоминания о ограждениях

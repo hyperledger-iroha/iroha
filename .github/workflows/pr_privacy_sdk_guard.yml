@@ -34,6 +34,7 @@ on:
       - "ci/verify_privacy_python_wheel.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "crates/connect_norito_bridge/Cargo.toml"
       - "crates/connect_norito_bridge/include/connect_norito_bridge.h"
       - "crates/connect_norito_bridge/include/NoritoBridge.h"
@@ -316,6 +317,13 @@ jobs:
         with:
           python-version: "3.12"
           update-environment: false
+      - name: Bind the canonical mobile Python
+        env:
+          SETUP_PYTHON_PATH: ${{ steps.privacy-python.outputs.python-path }}
+        run: |
+          mobile_python="$("$SETUP_PYTHON_PATH" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - name: Provision private privacy SDK Cargo lock
         shell: bash
         run: |
@@ -364,6 +372,9 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-rust-toolchain-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-manifest-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-exact12-bridge-test-fixtures
+          ci/check_privacy_sdk_guard.sh --negative-control-exact12-conformance-rand-edge
+          ci/check_privacy_sdk_guard.sh --negative-control-exact12-release-evidence-test-fixtures
           ci/check_privacy_sdk_guard.sh --negative-control-vendor-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-rust-toolchain-install-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-fetch-workflow

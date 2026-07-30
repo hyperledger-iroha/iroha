@@ -27,8 +27,8 @@ translator: machine-google-reviewed
 2. **`PolicyJuryBallotCommitV1`** – 投票前写下的密封承诺
    被揭露。  它存储回合/提案/陪审员标识符、
    Blake2b-256 陪审员 ID + 投票选择 + 随机数元组摘要，捕获
-   时间戳和选票模式（`plaintext` 或 `zk-envelope`
-   `zk-ballot` 功能已激活）。  `PolicyJuryBallotCommitV1::verify_reveal`
+   时间戳和选票模式（`plaintext` 或 `zk-envelope`).
+   `PolicyJuryBallotCommitV1::verify_reveal`
    确保存储的摘要与显示有效负载匹配。
 3. **`PolicyJuryBallotRevealV1`** – 包含以下内容的公共揭示对象
    投票选择、提交时使用的随机数以及可选的 ZK 证明 URI。
@@ -56,7 +56,7 @@ translator: machine-google-reviewed
 - 在揭晓阶段，陪审员发出 `PolicyJuryBallotRevealV1`。  运营商
   之前将有效负载馈送到 `PolicyJuryBallotCommitV1::verify_reveal`
   接受投票，确保信息不被交换或篡改。
-- 当启用 `zk-ballot` 功能时，陪审员可以附加确定性
+- V1 `zk-envelope` 选票允许陪审员附加确定性
   证明 URI（例如，`sorafs://proofs/pj-2026-02/juror-5`），以便下游
   审计员可以检索引用的零知识见证包
   承诺。所有三个结构都派生出 `Encode`、`Decode` 和 `IntoSchema`，这意味着它们

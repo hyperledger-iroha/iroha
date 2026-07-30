@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/migration-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 28236e0c61448e68d1853112f348505c57ffbb1b41e64047130d1fcee0bdb91d
+source_hash: 906f40c502b0c701495fe7c56eab1661ae2b7fed8e9f3fb16664b242f39c6bcc
 source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -55,12 +55,12 @@ Milestone status `docs/source/sorafs/migration_ledger.md` میں ٹریک ہوت
 #### Canonical publishing command
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
   --chunk-fetch-plan-out artifacts/docs/book/2025-11-01/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=429391872 \
   --root-cid=f40101... \
   --dag-codec=0x71

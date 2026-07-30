@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { verifyNativeBinding } from "../src/native.js";
+import { probeNativeBindingExports } from "./copy-native.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,26 @@ const collectNativeEvidence = async (repoRoot) => {
       `Native release evidence failed checksum verification (${verification.status})`,
     );
   }
+  const sourceRevision = (
+    await runCommand("git", ["rev-parse", "--verify", "HEAD"], { cwd: repoRoot })
+  ).stdout.trim();
+  const sourceStatus = (
+    await runCommand(
+      "git",
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      { cwd: repoRoot },
+    )
+  ).stdout.trim();
+  if (
+    sourceStatus.length !== 0 ||
+    verification.sourceTreeClean !== true ||
+    verification.sourceGitRevision !== sourceRevision
+  ) {
+    throw new Error(
+      "Native release evidence must match the exact clean release source revision",
+    );
+  }
+  const bridgeAbiVersion = probeNativeBindingExports(nativePath);
   const sha256 = verification.sha256;
   const sha512 = await hashFile(nativePath, "sha512");
   const platformKey = `${process.platform}-${process.arch}`;
@@ -45,6 +66,9 @@ const collectNativeEvidence = async (repoRoot) => {
     sha256,
     sha512,
     expectedSha256: verification.expectedSha256,
+    bridgeAbiVersion,
+    sourceGitRevision: verification.sourceGitRevision,
+    sourceTreeClean: verification.sourceTreeClean,
     platform: platformKey,
     manifestPresent: await exists(manifestPath),
   };

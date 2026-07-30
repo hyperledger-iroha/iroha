@@ -3,6 +3,13 @@ name = "connect_norito_bridge"
 version.workspace = true
 edition = "2024"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+] }
+
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
@@ -12,9 +19,6 @@ path = "src/bin/kagemusha_candidate_scenario_validator.rs"
 required-features = ["kagemusha-candidate-evidence-lab"]
 
 [features]
-compact-len = []
-packed-struct = []
-schema-structural = []
 # Enable real halo2/ipa proving and verification for confidential-transfer-v2 and unshield.
 # OFF by default; flip on only when all production gates have passed.
 privacy-production-enabled = ["iroha_data_model/kagemusha-production-enabled"]
@@ -28,13 +32,15 @@ norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = fals
 # Keep the bridge feature closure explicit so it does not silently inherit a
 # daemon consensus mode. Core currently requires BLS and unconditionally uses
 # its JSON/FAST-DSL surfaces; the production bridge additionally needs the
-# complete Halo2/IPA circuit-parameter path.
-iroha_core = { path = "../iroha_core", default-features = false, features = ["json", "bls", "fast_dsl", "zk-stark", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
+# complete Halo2/IPA circuit-parameter and STARK/FRI verifier paths.
+iroha_core = { path = "../iroha_core", default-features = false, features = ["json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "zk-stark", "circuit-params"] }
 iroha_zkp_halo2 = { workspace = true }
 iroha_torii_shared = { workspace = true }
 fastpq_prover = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["std", "bls", "gost", "sm"] }
-iroha_data_model = { workspace = true, features = ["sm", "test-fixtures"] }
+# The bridge ships the exact-12 KAT generator/validator, but must not expose the
+# data model's general fixture constructors or block-tampering helpers.
+iroha_data_model = { workspace = true, features = ["sm", "privacy-exact12-conformance"] }
 iroha_executor_data_model = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_version = { workspace = true }
@@ -56,7 +62,7 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 tempfile = { workspace = true }
 
 [dev-dependencies]
-iroha_core = { path = "../iroha_core", default-features = false, features = ["iroha-core-tests", "json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
+iroha_core = { path = "../iroha_core", default-features = false, features = ["iroha-core-tests", "json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "zk-stark", "circuit-params"] }
 sorafs_chunker = { workspace = true }
 
 [build-dependencies]

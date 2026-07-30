@@ -254,32 +254,33 @@ public final class ExplicitChainContextTests {
                 new byte[] {1},
                 feePayment));
 
-    if (NativeSignerBridge.isNativeAvailable()) {
-      final NativeSignerBridge.KeypairBytes keypair =
-          NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ED25519, fill(0x21, 32));
-      final String tairaAuthority;
-      try {
-        tairaAuthority =
-            AccountAddress.fromAccount(keypair.publicKey(), "ed25519").toI105(TAIRA);
-      } catch (final AccountAddress.AccountAddressException exception) {
-        throw new AssertionError("failed to create Taira native signer authority", exception);
-      }
-      final RegisterZkAssetInstruction register =
-          RegisterZkAssetInstruction.builder()
-              .setAsset(TestAssetDefinitionIds.PRIMARY)
-              .build();
-      expectIllegalArgument(
-          () ->
-              NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
-                  SigningAlgorithm.ED25519,
-                  "00000042",
-                  OTHER,
-                  tairaAuthority,
-                  1_736_000_000_000L,
-                  register,
-                  keypair.privateKey(),
-                  feePayment));
+    if (!NativeSignerBridge.isNativeAvailable()) {
+      throw new AssertionError("connect_norito_bridge ABI 21 is required");
     }
+    final NativeSignerBridge.KeypairBytes keypair =
+        NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ED25519, fill(0x21, 32));
+    final String tairaAuthority;
+    try {
+      tairaAuthority =
+          AccountAddress.fromAccount(keypair.publicKey(), "ed25519").toI105(TAIRA);
+    } catch (final AccountAddress.AccountAddressException exception) {
+      throw new AssertionError("failed to create Taira native signer authority", exception);
+    }
+    final RegisterZkAssetInstruction register =
+        RegisterZkAssetInstruction.builder()
+            .setAsset(TestAssetDefinitionIds.PRIMARY)
+            .build();
+    expectIllegalArgument(
+        () ->
+            NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+                SigningAlgorithm.ED25519,
+                "00000042",
+                OTHER,
+                tairaAuthority,
+                1_736_000_000_000L,
+                register,
+                keypair.privateKey(),
+                feePayment));
   }
 
   private static TransactionPayload payload(final String authority) {

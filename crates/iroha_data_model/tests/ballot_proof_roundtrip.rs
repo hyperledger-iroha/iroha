@@ -1,5 +1,4 @@
-//! Norito roundtrip for `BallotProof` (feature `zk-ballot`).
-#![cfg(feature = "zk-ballot")]
+//! Norito roundtrip for the canonical V1 `BallotProof`.
 
 #[test]
 fn ballot_proof_roundtrip() {

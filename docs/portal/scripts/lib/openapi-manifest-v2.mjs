@@ -23,6 +23,7 @@ const COMMON_MANIFEST_FIELDS = Object.freeze([
   'generated_unix_ms',
   'generator_commit',
   'generator_dirty',
+  'generator_source_sha256_hex',
   'artifact',
 ]);
 const ARTIFACT_FIELDS = Object.freeze([
@@ -93,10 +94,7 @@ export function validateOpenApiManifestV2({
   if (!isObject(manifest)) {
     throw new Error(`${label} must be a JSON object`);
   }
-  const manifestFields = manifest.generator_dirty === true
-    ? [...COMMON_MANIFEST_FIELDS, 'generator_source_sha256_hex']
-    : COMMON_MANIFEST_FIELDS;
-  assertExactFields(manifest, manifestFields, label);
+  assertExactFields(manifest, COMMON_MANIFEST_FIELDS, label);
   if (manifest.version !== OPENAPI_MANIFEST_VERSION) {
     throw new Error(
       `${label} has unsupported version ${String(manifest.version)}; expected exactly ${OPENAPI_MANIFEST_VERSION}`,

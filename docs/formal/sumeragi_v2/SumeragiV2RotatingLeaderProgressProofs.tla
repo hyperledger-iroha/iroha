@@ -103,19 +103,28 @@ adequate-window convergence, not another FIFO/cursor starvation theorem.
 
 THEOREM AsyncLiveNormalProposalPrepareRanksProgress ==
   \A initialContext:
-    NormalProposalPrepareRankProgressProperty(
-      AsyncLiveSpecAt(initialContext))
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => NormalProposalPrepareRankProgressProperty(
+           AsyncLiveSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE NormalProposalPrepareRankProgressProperty(
                  AsyncLiveSpecAt(initialContext))
     <2>1. ProtectedServiceRanksProgressProperty(
-             AsyncLiveSpecAt(initialContext))
+             AsyncSpecAt(initialContext))
       BY ProtectedServiceRankProgressObligation
-    <2>2. ProtectedServiceRankProgressProperty(
+    <2>2. AsyncLiveSpecAt(initialContext)
+             => AsyncSpecAt(initialContext)
+      BY AsyncLiveSpecProjectsAsyncSpec
+    <2>3. ProtectedServiceRankProgressProperty(
              AsyncLiveSpecAt(initialContext))
-      BY <2>1 DEF ProtectedServiceRanksProgressProperty
-    <2>3. ASSUME AsyncLiveSpecAt(initialContext)
+      BY <2>1, <2>2, PTL
+         DEF ProtectedServiceRanksProgressProperty,
+             ProtectedServiceRankProgressProperty
+    <2>4. ASSUME AsyncLiveSpecAt(initialContext)
            PROVE \A candidate \in AsyncCandidateSet,
                      stage \in 2..6, position \in Nat:
               (gst
@@ -143,10 +152,10 @@ PROOF
                 ~> (~ResponsiveProtectedCandidateOwned(candidate)
                      \/ ServiceRankLess(CandidateServiceRank(candidate),
                           <<stage, position>>))
-          BY <2>2, <2>3 DEF ProtectedServiceRankProgressProperty
+          BY <2>3, <2>4 DEF ProtectedServiceRankProgressProperty
         <4> QED BY <4>1, PTL
       <3> QED BY <3>1
-    <2> QED BY <2>3
+    <2> QED BY <2>4
          DEF NormalProposalPrepareRankProgressProperty
   <1> QED BY <1>1
 

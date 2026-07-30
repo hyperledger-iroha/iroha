@@ -517,7 +517,6 @@ fn reject_zk_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Re
     Ok(())
 }
 
-#[cfg(feature = "zk-ballot")]
 fn reject_zk_v1_aliases_from_raw(raw: &[u8]) -> Result<(), String> {
     let Ok(value) = json::from_slice::<json::Value>(raw) else {
         return Ok(());
@@ -529,7 +528,6 @@ fn reject_zk_v1_aliases_from_raw(raw: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(feature = "zk-ballot")]
 fn reject_zk_v1_ballotproof_aliases_from_raw(raw: &[u8]) -> Result<(), String> {
     let Ok(value) = json::from_slice::<json::Value>(raw) else {
         return Ok(());
@@ -602,9 +600,8 @@ fn parse_canonical_u64_decimal(field: &str, value: &str) -> Result<u64, String> 
         .map_err(|_| format!("{field} is outside the unsigned 64-bit integer range"))
 }
 
-// -------- ZK Ballot V1 DTO (feature-gated) --------
-#[cfg(feature = "zk-ballot")]
-#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+// -------- ZK Ballot V1 DTO --------
+#[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Request body for submitting a ZK ballot using BallotProof-style fields.
 pub struct ZkBallotV1Dto {
     /// Authority submitting the ballot (AccountId string)
@@ -639,8 +636,7 @@ pub struct ZkBallotV1Dto {
     pub private_key: Option<String>,
 }
 
-#[cfg(feature = "zk-ballot")]
-#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Request body that carries a BallotProof directly along with transaction context.
 pub struct ZkBallotV1BallotProofDto {
     pub authority: String,
@@ -651,7 +647,6 @@ pub struct ZkBallotV1BallotProofDto {
     pub private_key: Option<String>,
 }
 
-#[cfg(feature = "zk-ballot")]
 /// POST /v1/gov/ballots/zk-v1 — accept BallotProof-like DTO and build an instruction skeleton.
 ///
 /// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
@@ -774,7 +769,6 @@ pub async fn handle_gov_ballot_zk_v1(
     }))
 }
 
-#[cfg(feature = "zk-ballot")]
 /// POST /v1/gov/ballots/zk-v1/ballot-proof — accept BallotProof JSON and build instruction skeleton.
 ///
 /// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
@@ -3560,8 +3554,7 @@ pub async fn handle_gov_council_audit(
 mod tests {
     use std::sync::Arc;
 
-    #[cfg(feature = "zk-ballot")]
-    use bytes::Bytes;
+    use axum::body::Bytes;
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_core::{
         block::BlockBuilder,
@@ -5900,7 +5893,6 @@ seiyaku GovernanceFlowFixture {
         assert!(!body.chain_id.is_empty());
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_builds_instruction_skeleton() {
         use axum::{Router, routing::post};
@@ -5919,10 +5911,8 @@ seiyaku GovernanceFlowFixture {
                 move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1Dto>| {
                     let telemetry = MaybeTelemetry::disabled();
                     async move {
-                        super::handle_gov_ballot_zk_v1(
-                            chain_id, queue, state, telemetry, false, body,
-                        )
-                        .await
+                        super::handle_gov_ballot_zk_v1(chain_id, queue, state, telemetry, body)
+                            .await
                     }
                 }
             }),
@@ -5971,7 +5961,6 @@ seiyaku GovernanceFlowFixture {
         );
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_rejects_invalid_root_hint() {
         let (state, queue, chain_id) = mk_basic_context();
@@ -6010,7 +5999,6 @@ seiyaku GovernanceFlowFixture {
         );
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_rejects_partial_lock_hints() {
         let (state, queue, chain_id) = mk_basic_context();
@@ -6049,7 +6037,6 @@ seiyaku GovernanceFlowFixture {
         );
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
         let (state, queue, chain_id) = mk_basic_context();
@@ -6070,6 +6057,7 @@ seiyaku GovernanceFlowFixture {
             nullifier: None,
             private_key: None,
         };
+        let root_hint_alias = root_hint.clone();
         let raw = Bytes::from(
             norito::json::to_vec(&norito::json!({
                 "authority": ACCOUNT_AUTHORITY,
@@ -6077,7 +6065,7 @@ seiyaku GovernanceFlowFixture {
                 "election_id": "ref-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": envelope_b64,
-                "root_hint": root_hint.clone(),
+                "root_hint": root_hint_alias,
                 "rootHintHex": root_hint,
             }))
             .unwrap(),
@@ -6100,7 +6088,6 @@ seiyaku GovernanceFlowFixture {
         );
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
         let (state, queue, chain_id) = mk_basic_context();
@@ -6140,7 +6127,6 @@ seiyaku GovernanceFlowFixture {
         );
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
         use axum::{Router, routing::post};
@@ -6161,7 +6147,7 @@ seiyaku GovernanceFlowFixture {
                     let telemetry = MaybeTelemetry::disabled();
                     async move {
                         super::handle_gov_ballot_zk_v1_ballotproof(
-                            chain_id, queue, state, telemetry, false, body,
+                            chain_id, queue, state, telemetry, body,
                         )
                         .await
                     }
@@ -6175,7 +6161,11 @@ seiyaku GovernanceFlowFixture {
             backend: "halo2/ipa".into(),
             envelope_bytes: vec![1u8, 2, 3, 4],
             root_hint: Some([0xAA; 32]),
-            owner: Some(owner.parse().expect("valid account id")),
+            owner: Some(
+                AccountId::parse_encoded(&owner)
+                    .expect("valid account id")
+                    .into_account_id(),
+            ),
             nullifier: Some([0x11; 32]),
             amount: Some(200_u64.into()),
             duration_blocks: Some(256),
@@ -6215,7 +6205,6 @@ seiyaku GovernanceFlowFixture {
         );
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
         use iroha_data_model::isi::governance::BallotProof;
@@ -6241,6 +6230,7 @@ seiyaku GovernanceFlowFixture {
             ballot,
             private_key: None,
         };
+        let root_hint_alias = root_hint.clone();
         let raw = Bytes::from(
             norito::json::to_vec(&norito::json!({
                 "authority": ACCOUNT_AUTHORITY,
@@ -6249,7 +6239,7 @@ seiyaku GovernanceFlowFixture {
                 "ballot": {
                     "backend": "halo2/ipa",
                     "envelope_bytes": envelope_b64,
-                    "root_hint": root_hint.clone(),
+                    "root_hint": root_hint_alias,
                     "rootHintHex": root_hint,
                 },
             }))
@@ -6273,7 +6263,6 @@ seiyaku GovernanceFlowFixture {
         );
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_ballotproof_rejects_noncanonical_owner_hint_in_raw_json() {
         use iroha_data_model::isi::governance::BallotProof;
@@ -6287,7 +6276,11 @@ seiyaku GovernanceFlowFixture {
             backend: "halo2/ipa".into(),
             envelope_bytes: vec![1u8, 2, 3, 4],
             root_hint: None,
-            owner: Some(owner_canonical.parse().expect("valid account id")),
+            owner: Some(
+                AccountId::parse_encoded(&owner_canonical)
+                    .expect("valid account id")
+                    .into_account_id(),
+            ),
             nullifier: None,
             amount: Some(200_u64.into()),
             duration_blocks: Some(256),
@@ -6333,7 +6326,6 @@ seiyaku GovernanceFlowFixture {
         );
     }
 
-    #[cfg(feature = "zk-ballot")]
     #[tokio::test]
     async fn ballot_zk_v1_ballotproof_rejects_partial_lock_hints() {
         use iroha_data_model::isi::governance::BallotProof;

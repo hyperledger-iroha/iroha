@@ -87,6 +87,11 @@ from sorafs_response_args import (  # noqa: E402
 )
 
 
+from sorafs_topology_qualification import (  # noqa: E402
+    add_topology_qualification_argument,
+    bind_lane_summary_to_topology,
+)
+
 SUMMARY_SCHEMA = "sorafs.moderation_panel.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_CANARY_AGE_SECS = 24 * 60 * 60
@@ -1953,6 +1958,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = EvidenceArgumentParser(
         description="Validate SoraFS SFM-4b moderation panel rollout evidence artifacts."
     )
+    add_topology_qualification_argument(parser)
     parser.add_argument(
         "--evidence-dir",
         action="append",
@@ -2034,6 +2040,12 @@ def main(argv: list[str] | None = None) -> int:
     summary, errors = build_summary(
         args.evidence_dir, args.evidence, required_kinds, options, args.summary_out
     )
+    errors.extend(
+        bind_lane_summary_to_topology(
+            summary, args.topology_qualification_summary
+        )
+    )
+    summary["status"] = evidence_gate_status(errors)
     rendered_summary, summary_errors = render_and_write_checker_summary(
         args.summary_out, summary
     )

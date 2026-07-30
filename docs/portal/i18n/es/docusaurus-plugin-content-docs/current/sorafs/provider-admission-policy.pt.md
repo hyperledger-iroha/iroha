@@ -33,7 +33,7 @@ tarefas de engenharia rastreaveis.
 | Atestacao de endpoint | Cada punto final anunciado debe ser respaldado por un informe de certificado mTLS o QUIC. | Definir la carga útil Norito `EndpointAttestationV1` y armazena-lo por endpoint dentro del paquete de admisión. |
 
 ## Flujo de admisión1. **Criaçao da proposta**
-   - CLI: agregar `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: agregar `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      produzindo `ProviderAdmissionProposalV1` + paquete de atestacao.
    - Validacao: garantizar campos requeridos, participación > 0, manejar canonico de fragmentador en `profile_id`.
 2. **Endosso de gobierno**
@@ -60,7 +60,7 @@ fornecidos ao combine `--council-signature-public-key` com `--council-signature-
 
 ### Referencia de CLI
 
-Ejecute cada comando a través de `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+Ejecute cada comando a través de `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Banderas requeridas: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, y pelo menos um `--endpoint=<kind:host>`.
@@ -102,7 +102,7 @@ Ejecute cada comando a través de `cargo run -p sorafs_manifest --bin sorafs_man
    aumentando `--retention-epoch` y actualizando la participación/puntos finales conforme sea necesario.
 2. Ejecutar
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -120,7 +120,7 @@ Ejecute cada comando a través de `cargo run -p sorafs_manifest --bin sorafs_man
    CI (`ci/check_sorafs_fixtures.sh`) valida que como dijo Norito permanecem estaveis.#### Revogaçao de emergencia
 1. Identifique el sobre comprometido y emita una revogaçao:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

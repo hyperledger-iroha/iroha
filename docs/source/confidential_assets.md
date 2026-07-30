@@ -167,19 +167,21 @@ New networks that start with confidentiality enabled encode the desired policy d
 
 ### V1 public-amount proof scalars
 
-The public economic fields on `Shield`, `Unshield`, and
-`SubmitZkAceAuthorizedTransfer` use the canonical non-negative `Quantity` type.
-The V1 unshield and ZK-ACE circuits, however, bind their public amount as a
-whole-unit unsigned 128-bit scalar. This scalar is the numeric value itself,
-not an asset-scale atomic-unit mantissa. Before any proof verification,
-nullifier accounting, policy transition, or balance mutation, runtime admission
-therefore requires the submitted `Quantity` to have canonical scale `0` and a
-mantissa in `0..=2^128-1`, then converts it exactly. Fractional quantities and
-values above `u128::MAX` fail without rounding, truncation, or state effects.
-The asset's `NumericSpec` is checked independently before effects. Supporting
-fractional public amounts in a future circuit requires an explicitly versioned
-public-input schema that defines its governed asset-scale conversion; V1 must
-not infer that conversion.
+The public economic fields on `Shield` and `Unshield` use the canonical
+non-negative `Quantity` type. The direct
+`SubmitZkAceAuthorizedTransfer` instruction is retired. ZK-ACE callers instead
+select an active governed `PrivacyZkAcePolicyRecordV1`; the canonical native
+builder binds an atomic `u128` amount into
+`ZkAcePqAuthorizationStatementV1`, wraps the statement and proof in exactly one
+`SubmitPrivacyProofV1`, and signs that complete transaction.
+
+The signed path rejects zero, fractional, noncanonical, and over-`u128` input
+before proof construction. Runtime admission then revalidates the signed
+transaction intent, compiled protocol profile, governed policy and
+authorization epoch, statement amount, proof, and replay nullifier before any
+balance mutation. Supporting fractional or wider public amounts in a future
+ZK-ACE circuit requires an explicitly versioned statement schema and migration
+plan.
 
 ## Ledger Flow
 1. **MintConfidential { asset_id, amount, recipient_hint }**

@@ -16,6 +16,9 @@ use super::{
 
 pub(super) static FIGURE9_LAYOUT: Lazy<Figure9Layout> = Lazy::new(Figure9Layout::build);
 
+/// Canonical byte range of the per-element random salt in the birth record.
+pub(super) const FIGURE9_BIRTH_RANDOM_RANGE: Range<usize> = 13..29;
+
 #[derive(Clone, Debug)]
 pub(super) struct Figure9Layout {
     pub(super) issuer_template: Vec<u8>,
@@ -119,6 +122,10 @@ impl Figure9Layout {
         let issuer_valid_from_datetime = find_exact(&issuer_template, VALID_FROM);
         let issuer_valid_until_datetime = find_exact(&issuer_template, VALID_UNTIL);
         let birth_random = find_exact(&birth_template, &RANDOM);
+        assert_eq!(
+            birth_random, FIGURE9_BIRTH_RANDOM_RANGE,
+            "Figure 9 birth random offset drifted"
+        );
         let birth_date = find_exact(&birth_template, BIRTH_DATE);
 
         let mut issuer_fixed = vec![true; issuer_template.len()];
@@ -257,7 +264,6 @@ mod tests {
         assert_eq!(layout.issuer_signed_datetime, 91..111);
         assert_eq!(layout.issuer_valid_from_datetime, 123..143);
         assert_eq!(layout.issuer_valid_until_datetime, 156..176);
-        assert_eq!(layout.birth_random, 13..29);
         assert_eq!(layout.birth_date, 53..63);
         assert_eq!(
             layout.issuer_signed_datetime.len(),
@@ -275,6 +281,15 @@ mod tests {
         assert_eq!(layout.birth_date.len(), VEGA_MDL_FULL_DATE_TEXT_BYTES_V1);
         assert_eq!(layout.issuer_fixed.len(), layout.issuer_template.len());
         assert_eq!(layout.birth_fixed.len(), layout.birth_template.len());
+        assert_eq!(
+            layout
+                .birth_fixed
+                .iter()
+                .enumerate()
+                .filter_map(|(offset, fixed)| (!fixed).then_some(offset))
+                .collect::<Vec<_>>(),
+            (13..29).chain(53..63).collect::<Vec<_>>()
+        );
         assert_eq!(
             (layout.issuer_template.len() + 9).div_ceil(64),
             6,

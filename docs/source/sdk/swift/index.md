@@ -222,6 +222,13 @@ Torii HTTP discovery is limited to the Offline readiness endpoint.
 Peer transfers exchange a nonce-bound payment request, one constant-size recursive
 spend bundle, and a signed durable acknowledgement over QR or NFC with networking disabled.
 
+The non-shipping
+[physical-iPhone candidate evidence lab](readiness/kagemusha_candidate_ios_lab.md)
+exercises the complete Taira-testnet lifecycle in two fresh XCTest processes
+while a real network-path monitor remains offline. Its signed raw evidence is a
+testnet policy input; it is not a production wallet binary or an Android-parity
+claim.
+
 ### Kagemusha Torii API
 
 Torii exposes `GET /v1/offline/readiness?asset_definition_id=...`,

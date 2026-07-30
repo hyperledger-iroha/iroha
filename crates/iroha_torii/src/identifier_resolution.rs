@@ -476,18 +476,18 @@ pub(crate) fn decode_bfv_public_parameters(
         )
         .map_err(|err| IdentifierResolutionError::InvalidFheParameters(err.to_string()))?
         .encryption),
-        RamLfeBackend::HkdfSha3_512PrfV1 | RamLfeBackend::BfvAffineSha3_256V1 => {
-            let archived = norito::from_bytes::<BfvIdentifierPublicParameters>(
-                &program_policy.commitment.public_parameters,
-            )
-            .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?;
+        RamLfeBackend::BfvAffineSha3_256V1 => {
             let public_parameters: BfvIdentifierPublicParameters =
-                norito::core::NoritoDeserialize::deserialize(archived);
+                norito::decode_from_bytes(&program_policy.commitment.public_parameters)
+                    .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?;
             public_parameters
                 .validate()
                 .map_err(|err| IdentifierResolutionError::InvalidFheParameters(err.to_string()))?;
             Ok(public_parameters)
         }
+        RamLfeBackend::HkdfSha3_512PrfV1 => Err(
+            IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::HkdfSha3_512PrfV1),
+        ),
     }
 }
 

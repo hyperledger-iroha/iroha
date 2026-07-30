@@ -38,7 +38,8 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
 
     /// <summary>
     /// Creates a cancellation by deriving the native escrow identifier from an
-    /// exact application lock identifier with Blake2b-256.
+    /// exact, well-formed UTF-16 application lock identifier with Blake2b-256.
+    /// Ill-formed surrogate sequences are rejected before UTF-8 hashing.
     /// </summary>
     public CancelAssetLockInstruction(
         string lockId,
@@ -53,7 +54,8 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
 
     /// <summary>
     /// Creates a cancellation by deriving the native escrow identifier from an
-    /// exact application lock identifier with Blake2b-256.
+    /// exact, well-formed UTF-16 application lock identifier with Blake2b-256.
+    /// Ill-formed surrogate sequences are rejected before UTF-8 hashing.
     /// </summary>
     public CancelAssetLockInstruction(
         string lockId,
@@ -433,6 +435,7 @@ internal static class AssetLockInstructionValidation
                 "Lock id must be an exact non-empty string without surrounding whitespace.",
                 parameterName);
         }
+        RequireWellFormedUtf16(lockId, parameterName);
         var byteLength = Encoding.UTF8.GetByteCount(lockId);
         if (byteLength > CancelAssetLockInstruction.MaximumLockIdUtf8BytesV1)
         {
@@ -446,6 +449,33 @@ internal static class AssetLockInstructionValidation
     private static bool IsBoundaryWhitespace(char value)
     {
         return char.IsWhiteSpace(value) || value == '\uFEFF';
+    }
+
+    private static void RequireWellFormedUtf16(
+        string value,
+        string parameterName)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            var current = value[index];
+            if (char.IsHighSurrogate(current))
+            {
+                if (index + 1 >= value.Length
+                    || !char.IsLowSurrogate(value[index + 1]))
+                {
+                    throw new ArgumentException(
+                        "Lock id must not contain unpaired UTF-16 surrogates.",
+                        parameterName);
+                }
+                index++;
+            }
+            else if (char.IsLowSurrogate(current))
+            {
+                throw new ArgumentException(
+                    "Lock id must not contain unpaired UTF-16 surrogates.",
+                    parameterName);
+            }
+        }
     }
 
     internal static byte[] RequireEscrowId(

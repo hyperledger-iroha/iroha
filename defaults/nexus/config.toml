@@ -27,6 +27,15 @@ address = "addr:0.0.0.0:8080#B922"
 [sorafs.storage]
 enabled = true
 
+# Public identity only; the deployment launcher must inject the matching HSM provider.
+[sorafs.storage.native_transaction_signers.proof_outcome]
+handle = "hsm://sorafs/proof-outcome/primary"
+authority = "sorauﾛ1Pb72ﾍzV4oiPXRｸｶhQﾙnﾖRaEHｾnPBAｴHWUqﾙﾇｴﾒﾅQTEYGF"
+algorithm = "ed25519"
+public_key_hex = "8ba62848cf767d72e7f7f4b9d2d7ba07fee33760f79abe5597a51520e292a0cb"
+revision = 1
+policy_digest_hex = "9191919191919191919191919191919191919191919191919191919191919191"
+
 [sorafs.discovery]
 discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch"]

@@ -22,8 +22,12 @@ use super::{
         ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
         decode_zk_x509_credential_envelope_v1,
     },
+    der_air::ZkX509Rfc5280StatementV1,
     io_air::ZK_X509_IO_AIR_DESCRIPTOR_V1,
-    main_assembly::ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1,
+    main_assembly::{
+        ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1,
+        compile_zk_x509_rfc_statement_from_authoritative_state_v1,
+    },
     main_io::ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
     merkle::hash_frame_v1,
     preprocessed_fixed::{
@@ -141,6 +145,30 @@ impl PreparedZkX509ProverInputV1 {
     }
 }
 
+/// Complete verifier-owned public input compiled before aggregate verification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ZkX509ConsensusPublicInputsV1 {
+    /// Canonical `X5S1` header binding derived from statement plus genesis.
+    credential_binding: ZkX509CredentialPublicBindingV1,
+    /// RFC predicates with the CRL number selected only from trusted state.
+    rfc_statement: ZkX509Rfc5280StatementV1,
+}
+
+fn compile_zk_x509_consensus_public_inputs_v1(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
+    genesis_hash: [u8; 32],
+) -> Result<ZkX509ConsensusPublicInputsV1, ZkX509EngineErrorV1> {
+    let credential_binding =
+        ZkX509CredentialPublicBindingV1::from_consensus_context_v1(statement, genesis_hash)?;
+    let rfc_statement =
+        compile_zk_x509_rfc_statement_from_authoritative_state_v1(statement, authoritative_state);
+    Ok(ZkX509ConsensusPublicInputsV1 {
+        credential_binding,
+        rfc_statement,
+    })
+}
+
 /// Native prover preparation or release-gate failure.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509EngineErrorV1 {
@@ -180,18 +208,22 @@ pub(crate) enum ZkX509EngineErrorV1 {
 ///
 /// This is the sole consensus entry point for `X5S1`. It already performs
 /// strict envelope decoding and binds the complete typed statement to the
-/// committed genesis hash before inspecting any aggregate. It deliberately
-/// cannot succeed while either the explicit gap inventory is non-empty or the
-/// complete main-plus-compact-CA verifier is unavailable.
+/// committed genesis hash before inspecting any aggregate. The caller must
+/// supply the same authoritative snapshot it already validated against trusted
+/// block time and consensus limits; the engine compiles the RFC public input
+/// from that snapshot rather than from proof metadata. It deliberately cannot
+/// succeed while either the explicit gap inventory is non-empty or the complete
+/// main-plus-compact-CA verifier is unavailable.
 pub(crate) fn verify_zk_x509_credential_proof_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
+    authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
     genesis_hash: [u8; 32],
     encoded_proof: &[u8],
 ) -> Result<(), ZkX509EngineErrorV1> {
-    let expected_public =
-        ZkX509CredentialPublicBindingV1::from_consensus_context_v1(statement, genesis_hash)?;
+    let consensus_public =
+        compile_zk_x509_consensus_public_inputs_v1(statement, authoritative_state, genesis_hash)?;
     let envelope = decode_zk_x509_credential_envelope_v1(encoded_proof)?;
-    if envelope.public != expected_public {
+    if envelope.public != consensus_public.credential_binding {
         return Err(ZkX509CredentialProofErrorV1::PublicBindingMismatch.into());
     }
 
@@ -203,6 +235,7 @@ pub(crate) fn verify_zk_x509_credential_proof_v1(
     // terminal and the root-SPKI I/O products through
     // `verify_zk_x509_credential_envelope_with_v1`. Never replace this with a
     // reference-relation check or an independently accepted CA proof.
+    let _rfc_statement = consensus_public.rfc_statement;
     let _main_aggregate = envelope.main_aggregate;
     let _ca_subproof = envelope.ca_subproof;
     Err(ZkX509EngineErrorV1::ConsensusVerifierUnavailable)
@@ -562,23 +595,57 @@ mod tests {
 
     #[test]
     fn consensus_entry_point_decodes_and_binds_context_before_the_air_gate() {
-        let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
+        let (statement, authoritative_state) =
+            crate::privacy_verifier::zk_x509_dispatch_fixture_for_test();
         let genesis_hash = [0x91; 32];
         let public =
             ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis_hash)
                 .expect("canonical public binding");
+        let consensus_public = compile_zk_x509_consensus_public_inputs_v1(
+            &statement,
+            &authoritative_state,
+            genesis_hash,
+        )
+        .expect("verifier-owned consensus public input");
+        assert_eq!(consensus_public.credential_binding, public);
+        assert_eq!(
+            consensus_public.rfc_statement.crl_number,
+            authoritative_state.crl_record().crl_number
+        );
+        assert_eq!(
+            consensus_public
+                .rfc_statement
+                .presentation_not_before_unix_seconds,
+            statement.presentation_not_before_unix_seconds
+        );
+        assert_eq!(
+            consensus_public
+                .rfc_statement
+                .presentation_not_after_unix_seconds,
+            statement.presentation_not_after_unix_seconds
+        );
         let encoded = encode_zk_x509_credential_envelope_v1(public, b"X5M1main", b"X5C1ca")
             .expect("canonical credential envelope");
 
         assert_eq!(
-            verify_zk_x509_credential_proof_v1(&statement, genesis_hash, &encoded),
+            verify_zk_x509_credential_proof_v1(
+                &statement,
+                &authoritative_state,
+                genesis_hash,
+                &encoded,
+            ),
             Err(ZkX509EngineErrorV1::AirIncomplete)
         );
 
         let mut malformed = encoded.clone();
         malformed.push(0);
         assert_eq!(
-            verify_zk_x509_credential_proof_v1(&statement, genesis_hash, &malformed),
+            verify_zk_x509_credential_proof_v1(
+                &statement,
+                &authoritative_state,
+                genesis_hash,
+                &malformed,
+            ),
             Err(ZkX509EngineErrorV1::CredentialProof(
                 ZkX509CredentialProofErrorV1::MalformedEnvelope
             ))
@@ -588,7 +655,12 @@ mod tests {
         wrong_intent.context.transaction_intent_digest =
             iroha_data_model::privacy::PrivacyTransactionIntentDigestV1::new([0xA1; 32]);
         assert_eq!(
-            verify_zk_x509_credential_proof_v1(&wrong_intent, genesis_hash, &encoded),
+            verify_zk_x509_credential_proof_v1(
+                &wrong_intent,
+                &authoritative_state,
+                genesis_hash,
+                &encoded,
+            ),
             Err(ZkX509EngineErrorV1::CredentialProof(
                 ZkX509CredentialProofErrorV1::PublicBindingMismatch
             ))
@@ -598,20 +670,30 @@ mod tests {
         wrong_profile.context.verifier_digest =
             iroha_data_model::privacy::PrivacyVerifierDigestV1::new([0xA2; 32]);
         assert_eq!(
-            verify_zk_x509_credential_proof_v1(&wrong_profile, genesis_hash, &encoded),
+            verify_zk_x509_credential_proof_v1(
+                &wrong_profile,
+                &authoritative_state,
+                genesis_hash,
+                &encoded,
+            ),
             Err(ZkX509EngineErrorV1::CredentialProof(
                 ZkX509CredentialProofErrorV1::PublicBindingMismatch
             ))
         );
 
         assert_eq!(
-            verify_zk_x509_credential_proof_v1(&statement, [0x92; 32], &encoded),
+            verify_zk_x509_credential_proof_v1(
+                &statement,
+                &authoritative_state,
+                [0x92; 32],
+                &encoded,
+            ),
             Err(ZkX509EngineErrorV1::CredentialProof(
                 ZkX509CredentialProofErrorV1::PublicBindingMismatch
             ))
         );
         assert_eq!(
-            verify_zk_x509_credential_proof_v1(&statement, [0; 32], &encoded),
+            verify_zk_x509_credential_proof_v1(&statement, &authoritative_state, [0; 32], &encoded,),
             Err(ZkX509EngineErrorV1::CredentialProof(
                 ZkX509CredentialProofErrorV1::InvalidStatement
             ))

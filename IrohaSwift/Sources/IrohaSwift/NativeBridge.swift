@@ -103,6 +103,7 @@ enum NoritoBridgeLoader {
         "connect_norito_canonical_json_blake3_v1",
         "connect_norito_encode_account_onboarding_plan_body_v1",
         "connect_norito_alias_instruction_round_trip_v1",
+        "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
         "connect_norito_sorafs_reference_validate_bundle_json",
         "connect_norito_sorafs_reference_validate_governance_json",
         "connect_norito_sorafs_reference_validate_governance_dag_block_json",
@@ -731,7 +732,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         defer {
             free(pointer)
         }
-        guard length <= CUnsignedLong(KagemushaRecursiveSpend.artifactMaximumFileBytes) else {
+        guard length <= CUnsignedLong(
+            KagemushaRecursiveSpend.artifactMaximumInMemoryArchiveBytes
+        ) else {
             throw NativeBridgeError.kagemushaProve
         }
         return Data(bytes: pointer, count: Int(length))
@@ -1776,6 +1779,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias SorafsReferenceSinglePayloadFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias SorafsReferenceFixtureBundleFn = @convention(c) (
         UnsafeRawPointer?, CUnsignedLong,
         UInt64, UInt64,
@@ -2047,6 +2056,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsReferenceBuildOrderbookSettlementReceiptFn: SorafsReferenceOrderbookSettlementReceiptBuilderFn? = nil
     private var sorafsReferenceValidatePopPayloadFn: SorafsReferencePayloadFn? = nil
     private var sorafsReferenceValidateHedgingPayloadFn: SorafsReferencePayloadFn? = nil
+    private var sorafsReferenceValidateAppealFinanceCancelAssetLockFn: SorafsReferenceSinglePayloadFn? = nil
     private var sorafsReferenceValidateFixtureBundleFn: SorafsReferenceFixtureBundleFn? = nil
     private var sorafsReferenceValidateGovernanceLogNodeFn: SorafsReferenceGovernanceLogNodeFn? = nil
     private var sorafsReferenceValidateGovernanceDagBlockFn: SorafsReferenceGovernanceDagBlockFn? = nil
@@ -2178,6 +2188,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let sorafsReferenceBuildOrderbookSettlementReceiptFn: Any? = nil
     private let sorafsReferenceValidatePopPayloadFn: Any? = nil
     private let sorafsReferenceValidateHedgingPayloadFn: Any? = nil
+    private let sorafsReferenceValidateAppealFinanceCancelAssetLockFn: Any? = nil
     private let sorafsReferenceValidateFixtureBundleFn: Any? = nil
     private let sorafsReferenceValidateGovernanceLogNodeFn: Any? = nil
     private let sorafsReferenceValidatePdpPayloadFn: Any? = nil
@@ -2960,6 +2971,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.sorafsReferenceValidateHedgingPayloadFn = nil
             }
+            if let symbol = dlsym(
+                handle,
+                "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json"
+            ) {
+                self.sorafsReferenceValidateAppealFinanceCancelAssetLockFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceSinglePayloadFn.self
+                )
+            } else {
+                self.sorafsReferenceValidateAppealFinanceCancelAssetLockFn = nil
+            }
             if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_bundle_json") {
                 self.sorafsReferenceValidateFixtureBundleFn = unsafeBitCast(
                     symbol,
@@ -3199,6 +3221,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.sorafsReferenceBuildOrderbookSettlementReceiptFn = nil
             self.sorafsReferenceValidatePopPayloadFn = nil
             self.sorafsReferenceValidateHedgingPayloadFn = nil
+            self.sorafsReferenceValidateAppealFinanceCancelAssetLockFn = nil
             self.sorafsReferenceValidateFixtureBundleFn = nil
             self.sorafsReferenceValidateGovernanceLogNodeFn = nil
             self.sorafsReferenceValidatePdpPayloadFn = nil
@@ -3416,6 +3439,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return sorafsReferenceValidateOrderbookFn != nil
             && sorafsReferenceValidatePopPayloadFn != nil
             && sorafsReferenceValidateHedgingPayloadFn != nil
+            && sorafsReferenceValidateAppealFinanceCancelAssetLockFn != nil
             && sorafsReferenceValidateFixtureBundleFn != nil
             && sorafsReferenceValidateGovernanceLogNodeFn != nil
             && sorafsReferenceValidatePdpPayloadFn != nil
@@ -3441,6 +3465,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return sorafsReferenceValidateHedgingPayloadFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isSorafsReferenceAppealFinanceValidationAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceValidateAppealFinanceCancelAssetLockFn != nil && freeFn != nil
         #else
         return false
         #endif
@@ -7734,6 +7767,41 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let status = withDataPointer(payload) { payloadPtr, payloadLen in
             withDataPointer(labelData) { labelPtr, labelLen in
                 function(kind, payloadPtr, payloadLen, labelPtr, labelLen, generatedAtUnix, &outPtr, &outLen)
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidateAppealFinanceCancelAssetLock(
+        payload: Data,
+        label: String,
+        generatedAtUnix: UInt64
+    ) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidateAppealFinanceCancelAssetLockFn,
+              let labelData = label.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(payload) { payloadPtr, payloadLen in
+            withDataPointer(labelData) { labelPtr, labelLen in
+                function(
+                    payloadPtr,
+                    payloadLen,
+                    labelPtr,
+                    labelLen,
+                    generatedAtUnix,
+                    &outPtr,
+                    &outLen
+                )
             }
         }
         guard status == 0 else {

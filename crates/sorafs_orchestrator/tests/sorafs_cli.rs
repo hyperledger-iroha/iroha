@@ -9,7 +9,7 @@ use std::{
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 #[cfg(feature = "local-quic-proxy")]
@@ -355,7 +355,7 @@ fn por_status_outputs_table() {
         proof_digest: None,
         repair_task_id: None,
         failure_reason: None,
-        verifier_latency_ms: Some(950),
+        verifier_latency_ms: None,
     };
     let body = to_bytes(&vec![status]).expect("encode status list");
     let manifest_hex = hex_encode([0x22; 32]);
@@ -2196,6 +2196,31 @@ fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
     .expect("reputation snapshot")
 }
 
+fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 2] {
+    let keypair = KeyPair::try_from_seed(
+        b"sorafs-cli-reputation-read-auth".to_vec(),
+        Algorithm::Ed25519,
+    )
+    .expect("derive reputation read fixture key");
+    let account = AccountId::new(keypair.public_key().clone())
+        .to_i105_for_discriminant(369)
+        .expect("encode reputation read fixture account");
+    let key_path = directory.path().join("reputation-read.key");
+    let exposed = ExposedPrivateKey(keypair.private_key().clone()).to_string();
+    fs::write(&key_path, format!("{exposed}\n")).expect("write reputation read fixture key");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+            .expect("secure reputation read fixture key");
+    }
+    [
+        format!("--auth-account={account}"),
+        format!("--auth-private-key-file={}", key_path.display()),
+    ]
+}
+
 fn reputation_snapshot_summary_value(snapshot: &ReputationSnapshotV1) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -2379,6 +2404,59 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
 }
 
 #[test]
+fn reputation_verify_missing_provider_diagnostic_is_payload_free() {
+    let tempdir = tempdir().expect("tempdir");
+    let snapshot = reputation_snapshot_fixture();
+    let snapshot_path = tempdir.path().join("reputation-snapshot.to");
+    fs::write(
+        &snapshot_path,
+        to_bytes(&snapshot).expect("encode reputation snapshot"),
+    )
+    .expect("write reputation snapshot");
+    let provider_id = "provider-private-key-missing";
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("verify")
+        .arg(format!("--snapshot={}", snapshot_path.display()))
+        .arg(format!("--provider-id={provider_id}"))
+        .arg("--proof=/runtime/missing-proof.to")
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stderr.contains("requested provider was not found"));
+    assert!(!stderr.contains(provider_id));
+    assert!(!stderr.contains("private-key"));
+}
+
+#[test]
+fn reputation_verify_invalid_snapshot_diagnostic_is_payload_free() {
+    let tempdir = tempdir().expect("tempdir");
+    let mut snapshot = reputation_snapshot_fixture();
+    let provider_id = "provider-private-key-corrupt";
+    snapshot.providers[0].provider_id = provider_id.to_owned();
+    let snapshot_path = tempdir.path().join("invalid-reputation-snapshot.to");
+    fs::write(
+        &snapshot_path,
+        to_bytes(&snapshot).expect("encode invalid reputation snapshot"),
+    )
+    .expect("write invalid reputation snapshot");
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("verify")
+        .arg(format!("--snapshot={}", snapshot_path.display()))
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stderr.contains("invalid reputation snapshot"));
+    assert!(!stderr.contains(provider_id));
+    assert!(!stderr.contains("private-key"));
+}
+
+#[test]
 fn reputation_publish_command_is_retired() {
     let assert = sorafs_cli_cmd()
         .arg("reputation")
@@ -2411,6 +2489,7 @@ fn reputation_snapshot_fetches_latest_and_writes_output() {
         .arg("snapshot")
         .arg(format!("--torii-url={}", server.base_url()))
         .arg(format!("--output={}", output_path.display()))
+        .args(reputation_auth_args(&tempdir))
         .assert()
         .success();
     mock.assert();
@@ -2450,6 +2529,7 @@ fn reputation_fetch_outputs_provider_table_and_writes_summary() {
         .arg(format!("--torii-url={}", server.base_url()))
         .arg("--provider-id=provider-a")
         .arg(format!("--summary-out={}", summary_path.display()))
+        .args(reputation_auth_args(&tempdir))
         .assert()
         .success();
     mock.assert();
@@ -2471,6 +2551,7 @@ fn reputation_fetch_outputs_provider_table_and_writes_summary() {
 
 #[test]
 fn reputation_fetch_outputs_provider_json() {
+    let tempdir = tempdir().expect("tempdir");
     let snapshot = reputation_snapshot_fixture();
     let response_value = reputation_provider_response_value(&snapshot, "provider-a");
     let response_body = to_vec(&response_value).expect("encode response");
@@ -2490,6 +2571,7 @@ fn reputation_fetch_outputs_provider_json() {
         .arg(format!("--torii-url={}", server.base_url()))
         .arg("--provider-id=provider-a")
         .arg("--format=json")
+        .args(reputation_auth_args(&tempdir))
         .assert()
         .success();
     mock.assert();
@@ -2533,6 +2615,7 @@ fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
         .arg("--limit=10")
         .arg("--max-polls=1")
         .arg(format!("--summary-out={}", summary_path.display()))
+        .args(reputation_auth_args(&tempdir))
         .assert()
         .success();
     mock.assert();
@@ -2611,6 +2694,40 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
             .and_then(Value::as_u64),
         Some(specs.len() as u64)
     );
+}
+
+fn governance_fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("fixtures/sorafs_manifest/governance")
+}
+
+fn parse_cli_json_stdout(output: &[u8]) -> Value {
+    from_slice(output).expect("CLI stdout should be JSON")
+}
+
+fn governance_dag_build_key_hex() -> String {
+    "cd".repeat(32)
+}
+
+fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&Path>) -> Value {
+    let root = governance_fixture_root();
+    let key_hex = governance_dag_build_key_hex();
+    let mut command = sorafs_cli_cmd();
+    command
+        .arg("governance")
+        .arg("dag")
+        .arg("build")
+        .arg(format!("--root={}", root.display()))
+        .arg(format!("--out={}", build_dir.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={key_hex}"))
+        .arg("--generated-at=1700000999");
+    if let Some(path) = summary_path {
+        command.arg(format!("--summary-out={}", path.display()));
+    }
+    let build_assert = command.assert().success();
+    parse_cli_json_stdout(&build_assert.get_output().stdout)
 }
 
 #[test]
@@ -3933,22 +4050,23 @@ fn compute_chunk_digest_hex(plan_path: &Path) -> String {
 
 fn write_proof_stream_manifest(dir: &Path, file_name: &str) -> PathBuf {
     let payload = canonical_por_payload();
-    let digest = blake3_hash(&payload);
     let plan = CarBuildPlan::single_file(&payload).expect("proof-stream manifest plan");
+    let car_stats = CarWriter::new(&plan, &payload)
+        .expect("proof-stream manifest CAR writer")
+        .write_to(std::io::sink())
+        .expect("derive proof-stream manifest CAR archive stats");
     let manifest = ManifestBuilder::new()
-        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
-            *digest.as_bytes(),
-        ))
-        .dag_codec(DagCodecId(0x71))
+        .root_cid(car_stats.root_cids[0].clone())
+        .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .por_root(compute_por_root(&payload, &plan).expect("derive canonical fixture PoR root"))
-        .content_length(payload.len() as u64)
-        .car_digest(digest.into())
-        .car_size(payload.len() as u64)
+        .content_length(plan.content_length)
+        .car_digest(car_stats.car_archive_digest.into())
+        .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
@@ -3966,15 +4084,6 @@ fn canonical_por_payload() -> Vec<u8> {
     (0..1024)
         .map(|value| (value as u8).wrapping_mul(29))
         .collect()
-}
-
-fn manifest_digest_hex(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let bytes = fs::read(path)?;
-    let manifest: ManifestV1 = decode_from_bytes(&bytes)?;
-    let digest = manifest
-        .digest()
-        .map_err(|err| format!("manifest digest error: {err}"))?;
-    Ok(hex_encode(digest.as_bytes()))
 }
 
 #[test]

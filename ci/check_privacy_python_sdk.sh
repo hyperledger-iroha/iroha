@@ -27,7 +27,13 @@ resolve_python_312_bin() {
   fi
 
   local candidate
-  for candidate in python3.12 /opt/homebrew/bin/python3.12 /usr/local/bin/python3.12 python3; do
+  for candidate in \
+    python3.12 \
+    /opt/homebrew/bin/python3.12 \
+    /opt/homebrew/opt/python@3.12/bin/python3.12 \
+    /usr/local/bin/python3.12 \
+    /usr/local/opt/python@3.12/bin/python3.12 \
+    python3; do
     if command -v "${candidate}" >/dev/null 2>&1; then
       command -v "${candidate}"
       return 0

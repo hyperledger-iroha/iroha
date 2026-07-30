@@ -362,6 +362,7 @@ pub enum ZkAmsAdmissionRelationErrorV1 {
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 struct ZkAmsAdmissionProofWireV1 {
     version: u8,
@@ -767,12 +768,12 @@ fn public_digest_bytes(
     builder: &mut CircuitBuilder,
     start: usize,
 ) -> Result<[ByteVar; 32], CircuitError> {
-    Ok(public_digest_words(builder, start)?
+    public_digest_words(builder, start)?
         .into_iter()
         .flat_map(WordVar::to_be_bytes)
         .collect::<Vec<_>>()
         .try_into()
-        .map_err(|_| CircuitError::InvalidDimension)?)
+        .map_err(|_| CircuitError::InvalidDimension)
 }
 
 fn public_u64_bytes(
@@ -782,13 +783,12 @@ fn public_u64_bytes(
 ) -> Result<[ByteVar; 8], CircuitError> {
     let high = public_word(builder, high_index)?;
     let low = public_word(builder, low_index)?;
-    Ok(high
-        .to_be_bytes()
+    high.to_be_bytes()
         .into_iter()
         .chain(low.to_be_bytes())
         .collect::<Vec<_>>()
         .try_into()
-        .map_err(|_| CircuitError::InvalidDimension)?)
+        .map_err(|_| CircuitError::InvalidDimension)
 }
 
 fn bind_digest_words(

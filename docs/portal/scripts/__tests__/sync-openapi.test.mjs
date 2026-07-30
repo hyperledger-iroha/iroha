@@ -187,6 +187,7 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
     generated_unix_ms: 123,
     generator_commit: 'ab'.repeat(20),
     generator_dirty: false,
+    generator_source_sha256_hex: 'cd'.repeat(32),
     artifact: {
       path: 'torii.json',
       bytes: specBytes.length,
@@ -776,6 +777,7 @@ async function writeCanonicalManifest(outputDir, spec, {signature}) {
     generated_unix_ms: 123,
     generator_commit: 'ab'.repeat(20),
     generator_dirty: false,
+    generator_source_sha256_hex: 'cd'.repeat(32),
     artifact: {
       path: 'torii.json',
       bytes: specBytes.length,
@@ -799,6 +801,7 @@ async function writeManifestForSpec(target, spec, artifactPath) {
       generated_unix_ms: 123,
       generator_commit: 'ab'.repeat(20),
       generator_dirty: false,
+      generator_source_sha256_hex: 'cd'.repeat(32),
       artifact: {
         path: artifactPath,
         bytes: specBytes.length,
@@ -830,6 +833,7 @@ function signatureFor(spec, options) {
     generated_unix_ms: 123,
     generator_commit: 'ab'.repeat(20),
     generator_dirty: false,
+    generator_source_sha256_hex: 'cd'.repeat(32),
     artifact: {
       path: 'torii.json',
       bytes: specBytes.length,

@@ -238,7 +238,8 @@ const IVM_PRIVATE_NOTE_PROOF_WIRE_LABEL_V1: &[u8] =
     b"IPS1:u16-version:sha256-merkle+fri:strict-exact:v1";
 const IVM_PRIVATE_NOTE_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:first-release:private-note-vm+sha256-aggregate-stark:v1";
-const IVM_PRIVATE_NOTE_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"sha256:domain+chain-id-u64be-len+genesis-hash+action-index-u32be+statement-digest+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest";
+const PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1: &[u8] = b"norito:iroha.privacy.native-consensus-binding.v1|fields:chain-id+genesis-hash32+action-index-u32+transaction-intent-digest32+parameter-id32+parameter-digest32+verifier-digest32+statement-schema-digest32+engine-manifest-digest32|digest:blake3(iroha:privacy:native-consensus-binding:v1+canonical-length-u64le+canonical-norito)";
+const IVM_PRIVATE_NOTE_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"stark-public-input:sha256-frame(ivm-private-note-stark-public-input-with-consensus-binding-v1+canonical-statement+native-consensus-binding-digest32)";
 const IVM_PRIVATE_NOTE_FRONTIER_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|root-role:program-state|program-id:32|epoch:u64|root:sha256-depth32|tree-size:u64|frontier[ordered-option<node32>]";
 const IVM_PRIVATE_NOTE_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|asset-definition-id:norito|reserve-account:norito|program-id:32|anchor:32|anchor-epoch:u64|current-root:32|current-epoch:u64|validator-derived-successor-frontier|ordered-nullifiers[32]|ordered-output-commitments[32]|value-balance:direction+u128|expiry-height:u64";
 const IVM_PRIVATE_NOTE_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"IPNE|nonce24|xchacha20poly1305[IPW1+authority32+value-u128le+rho32+rseed32+program-state32+memo32]|x25519|sha256-domain-kdf|aad:pool-id+recipient-id+output-commitment";
@@ -249,9 +250,9 @@ const PQ_MASP_PROOF_WIRE_LABEL_V1: &[u8] =
     b"PQA1:u32be-inner-len:mldsa65-pk1952+signature3309+PQS1-inner-stark:strict-exact:v1";
 const PQ_MASP_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:first-release:pq-masp+mldsa65+mlkem768+xchacha20poly1305+sha256-aggregate-stark:v1";
-const PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"sha256:domain+chain-id-u64be-len+genesis-hash+action-index-u32be+statement-digest+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest";
+const PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"stark-public-input:sha256-frame(pq-masp-stark-public-input-with-consensus-binding-v1+canonical-statement+native-consensus-binding-digest32)";
 const PQ_MASP_FRONTIER_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|root-role:note-commitment-anchor|epoch:u64|root:sha256-depth32|tree-size:u64|frontier[ordered-option<node32>]";
-const PQ_MASP_AUTHORIZATION_SCHEMA_V1: &[u8] = b"authorization-context:pq-masp-stark-v0|message:domain+statement-digest+authorization-key-digest|mldsa65:canonical-pk1952+canonical-signature3309|outer-wire:PQA1+u32be-inner-len+pk+signature+PQS1";
+const PQ_MASP_AUTHORIZATION_SCHEMA_V1: &[u8] = b"authorization-context:pq-masp-stark-v0|message:sha256-domain+statement-digest32+native-consensus-binding-digest32+inner-length-u64be+inner-sha256|authorization-key-digest:statement-bound+derived-from-canonical-pk1952|mldsa65:canonical-pk1952+canonical-signature3309|outer-wire:PQA1+u32be-inner-len+pk+signature+PQS1";
 const PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"PQE1|mlkem768-ciphertext1088|nonce24|xchacha20poly1305[PQN1+value-u128le+rho32+rseed32+nullifier-key32+authorization-key-digest32+recipient-id32]|mlkem768-domain-kdf|aad:pool-id+recipient-id+output-commitment+encapsulation-digest";
 const PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|asset-definition-id:norito|anchor:32|anchor-epoch:u64|current-root:32|current-epoch:u64|authorization-key-digest:32|ordered-note-encryption-key-digest:32|validator-derived-successor-frontier|ordered-nullifiers[32]|ordered-output-commitments[32]|ordered-encrypted-outputs|value-balance:direction+u128|expiry-height:u64";
 const VEGA_PARAMETER_SET_LABEL_V1: &[u8] =
@@ -550,6 +551,7 @@ fn compiled_ivm_private_note_profile_v1()
             IVM_PRIVATE_NOTE_IMPLEMENTATION_PROVENANCE_V1,
             IVM_PRIVATE_NOTE_PARAMETER_SET_LABEL_V1,
             IVM_PRIVATE_NOTE_PROOF_WIRE_LABEL_V1,
+            PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
             IVM_PRIVATE_NOTE_RUNTIME_CONTEXT_SCHEMA_V1,
             IVM_PRIVATE_NOTE_FRONTIER_SCHEMA_V1,
             IVM_PRIVATE_NOTE_VERIFIED_EFFECT_SCHEMA_V1,
@@ -582,6 +584,7 @@ fn compiled_ivm_private_note_profile_v1()
             b"engine:native-goldilocks-stark-fri",
             IVM_PRIVATE_NOTE_PARAMETER_SET_LABEL_V1,
             IVM_PRIVATE_NOTE_PROOF_WIRE_LABEL_V1,
+            PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
             IVM_PRIVATE_NOTE_RUNTIME_CONTEXT_SCHEMA_V1,
             IVM_PRIVATE_NOTE_FRONTIER_SCHEMA_V1,
             IVM_PRIVATE_NOTE_VERIFIED_EFFECT_SCHEMA_V1,
@@ -746,6 +749,7 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             PQ_MASP_IMPLEMENTATION_PROVENANCE_V1,
             PQ_MASP_PARAMETER_SET_LABEL_V1,
             PQ_MASP_PROOF_WIRE_LABEL_V1,
+            PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
             PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1,
             PQ_MASP_FRONTIER_SCHEMA_V1,
             PQ_MASP_AUTHORIZATION_SCHEMA_V1,
@@ -782,6 +786,7 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             b"engine:native-goldilocks-stark-fri",
             PQ_MASP_PARAMETER_SET_LABEL_V1,
             PQ_MASP_PROOF_WIRE_LABEL_V1,
+            PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
             PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1,
             PQ_MASP_FRONTIER_SCHEMA_V1,
             PQ_MASP_AUTHORIZATION_SCHEMA_V1,
@@ -1126,6 +1131,7 @@ fn compiled_orchard_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             ORCHARD_PARAMETER_SET_LABEL_V1,
             ORCHARD_PROOF_WIRE_LABEL_V1,
             ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+            PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
             ORCHARD_FRONTIER_SCHEMA_V1,
             ORCHARD_VERIFIED_EFFECT_SCHEMA_V1,
             &statement_schema_digest,
@@ -1146,6 +1152,7 @@ fn compiled_orchard_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             ORCHARD_PARAMETER_SET_LABEL_V1,
             ORCHARD_PROOF_WIRE_LABEL_V1,
             ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+            PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
             ORCHARD_FRONTIER_SCHEMA_V1,
             ORCHARD_VERIFIED_EFFECT_SCHEMA_V1,
             &parameter_id,

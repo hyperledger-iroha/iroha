@@ -1,2 +1,4 @@
 bin/
 obj/
+artifacts/native-package/
+artifacts/packages/*.nupkg

@@ -923,6 +923,22 @@ def test_mcp_rollout_has_no_default_offline_asset_escape_hatch() -> None:
     assert "asset_scale is not exact Digital Shekel scale 2" in source
 
 
+def test_mcp_automatic_canary_threads_explicit_onboarding_token_file() -> None:
+    source = (TAIRA_DIR / "check_mcp_rollout.sh").read_text(encoding="utf-8")
+
+    assert "--onboarding-token-file)" in source
+    assert (
+        "automatic canary bootstrap requires --onboarding-token-file "
+        "ABSOLUTE_PATH" in source
+    )
+    assert (
+        '--onboarding-token-file "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE"'
+        in source
+    )
+    assert 'domain = account.get("domain", "universal")' in source
+    assert 'domain = f"{domain}.universal"' not in source
+
+
 def test_public_cutover_cannot_skip_fleet_or_exact_commit() -> None:
     source = (TAIRA_DIR / "check_mcp_rollout.sh").read_text(encoding="utf-8")
 

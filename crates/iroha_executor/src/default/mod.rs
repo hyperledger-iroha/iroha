@@ -11,7 +11,8 @@ pub use account::{
 /// Re-export asset visitor helpers used by the default executor.
 pub use asset::{
     visit_burn_asset_quantity, visit_mint_asset_quantity, visit_remove_asset_key_value,
-    visit_set_asset_key_value, visit_set_asset_transfer_control, visit_set_asset_transfer_freeze,
+    visit_set_asset_holding_limit, visit_set_asset_key_value,
+    visit_set_asset_transfer_availability, visit_set_asset_transfer_control,
     visit_transfer_asset_quantity,
 };
 /// Re-export asset-definition visitor helpers used by the default executor.
@@ -53,8 +54,9 @@ use iroha_smart_contract::data_model::{
         RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
         RegisterSorafsReserveAccount, RemoveAssetKeyValue, RepaySorafsReserveCredit,
         RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-        ResolveSorafsModerationChallenge, RetirePinManifest, SetAssetKeyValue,
-        SetLaneRelayEmergencyValidators, SetPricingSchedule, SetSorafsModerationPolicy,
+        ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+        RevokeProviderIngestCompletionAuthority, SetAssetKeyValue, SetLaneRelayEmergencyValidators,
+        SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
         SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
         SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
         SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
@@ -1022,12 +1024,16 @@ impl InstructionDispatch for InstructionBox {
             asset_definition::visit_set_asset_definition_balance_policy(executor, isi);
             return;
         }
-        if let Some(isi) = any.downcast_ref::<SetAssetTransferFreeze>() {
-            asset::visit_set_asset_transfer_freeze(executor, isi);
+        if let Some(isi) = any.downcast_ref::<SetAssetTransferAvailability>() {
+            asset::visit_set_asset_transfer_availability(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetAssetTransferControl>() {
             asset::visit_set_asset_transfer_control(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetAssetHoldingLimit>() {
+            asset::visit_set_asset_holding_limit(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<RemoveAssetKeyValue>() {
@@ -1163,6 +1169,10 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_complete_replication_order(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ReviseReplicationOrderAssignments>() {
+            sorafs::visit_revise_replication_order_assignments(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<ExpireReplicationOrder>() {
             sorafs::visit_expire_replication_order(executor, isi);
             return;
@@ -1213,6 +1223,14 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<UnregisterProviderOwner>() {
             sorafs::visit_unregister_provider_owner(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetProviderIngestCompletionAuthority>() {
+            sorafs::visit_set_provider_ingest_completion_authority(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RevokeProviderIngestCompletionAuthority>() {
+            sorafs::visit_revoke_provider_ingest_completion_authority(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetPricingSchedule>() {
@@ -2516,6 +2534,26 @@ pub mod sorafs {
         deny!(executor, "Can't complete SoraFS replication order");
     }
 
+    /// Revise a pending replication order's assignments when permitted.
+    pub fn visit_revise_replication_order_assignments<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ReviseReplicationOrderAssignments,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanIssueSorafsReplicationOrder
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't revise SoraFS replication order assignments"
+        );
+    }
+
     /// Expire a replication order when permitted.
     pub fn visit_expire_replication_order<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2565,6 +2603,46 @@ pub mod sorafs {
         }
 
         deny!(executor, "Can't unregister SoraFS provider owner binding");
+    }
+
+    /// Set a provider-ingest completion authority when permitted.
+    pub fn visit_set_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetProviderIngestCompletionAuthority,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanRegisterSorafsProviderOwner
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't set SoraFS provider-ingest completion authority"
+        );
+    }
+
+    /// Revoke a provider-ingest completion authority when permitted.
+    pub fn visit_revoke_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RevokeProviderIngestCompletionAuthority,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanUnregisterSorafsProviderOwner
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't revoke SoraFS provider-ingest completion authority"
+        );
     }
 
     /// Update the `SoraFS` pricing schedule when permitted.
@@ -3183,10 +3261,13 @@ pub mod domain {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 asset_definition_matches_domain(permission.asset.definition())
             }
-            AnyPermission::CanSetAssetTransferFreeze(permission) => {
+            AnyPermission::CanSetAssetTransferAvailability(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanSetAssetTransferDailyLimit(permission) => {
+                asset_definition_matches_domain(&permission.asset_definition)
+            }
+            AnyPermission::CanSetAssetHoldingLimit(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
@@ -3499,6 +3580,10 @@ pub mod account {
             AnyPermission::CanInvokeContractEntrypoint(permission) => {
                 permission.contract.subject_id() == *account_id
             }
+            AnyPermission::CanSetAssetTransferAvailability(permission) => {
+                permission.account == *account_id
+            }
+            AnyPermission::CanSetAssetHoldingLimit(permission) => permission.account == *account_id,
             AnyPermission::CanRegisterTrigger(permission) => permission.authority == *account_id,
             AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -3520,7 +3605,6 @@ pub mod account {
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
             | AnyPermission::CanModifyAssetMetadataWithDefinition(_)
-            | AnyPermission::CanSetAssetTransferFreeze(_)
             | AnyPermission::CanSetAssetTransferDailyLimit(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
@@ -3804,10 +3888,13 @@ pub mod asset_definition {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.definition() == asset_definition_id
             }
-            AnyPermission::CanSetAssetTransferFreeze(permission) => {
+            AnyPermission::CanSetAssetTransferAvailability(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanSetAssetTransferDailyLimit(permission) => {
+                &permission.asset_definition == asset_definition_id
+            }
+            AnyPermission::CanSetAssetHoldingLimit(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanUnregisterAccount(_)
@@ -3883,8 +3970,8 @@ pub mod asset_definition {
 pub mod asset {
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
-        CanSetAssetTransferDailyLimit, CanSetAssetTransferFreeze, CanTransferAsset,
+        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanSetAssetHoldingLimit,
+        CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit, CanTransferAsset,
         CanTransferAssetWithDefinition,
     };
     use iroha_smart_contract::data_model::isi::{
@@ -3931,10 +4018,10 @@ pub mod asset {
         ))
     }
 
-    /// Sets an account transfer freeze when genesis or the asset-definition owner invokes it.
-    pub fn visit_set_asset_transfer_freeze<V: Execute + Visit + ?Sized>(
+    /// Sets account transfer availability when genesis or the asset-definition owner invokes it.
+    pub fn visit_set_asset_transfer_availability<V: Execute + Visit + ?Sized>(
         executor: &mut V,
-        isi: &SetAssetTransferFreeze,
+        isi: &SetAssetTransferAvailability,
     ) {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
@@ -3949,22 +4036,16 @@ pub mod asset {
             Ok(false) => {}
         }
 
-        let (account_domain, account_dataspace) =
-            match target_account_scope(executor, isi.account_id()) {
-                Ok(scope) => scope,
-                Err(err) => deny!(executor, ValidationFail::NotPermitted(err)),
-            };
-        let permission = CanSetAssetTransferFreeze {
+        let permission = CanSetAssetTransferAvailability {
+            account: isi.account_id().clone(),
             asset_definition: isi.asset_definition_id().clone(),
-            account_domain,
-            account_dataspace,
         };
         if permission.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
         deny!(
             executor,
-            "transfer freeze requires an asset- and account-domain-scoped permission"
+            "transfer availability requires an exact account-and-asset permission"
         );
     }
 
@@ -4009,6 +4090,38 @@ pub mod asset {
         deny!(
             executor,
             "daily limit requires an asset- and account-domain-scoped permission"
+        );
+    }
+
+    /// Sets a native holding limit when invoked by genesis, the asset-definition
+    /// owner, or an explicitly provisioned exact account-and-asset authority.
+    pub fn visit_set_asset_holding_limit<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetAssetHoldingLimit,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_asset_definition_owner(
+            isi.asset_definition_id(),
+            &executor.context().authority,
+            executor.host(),
+        ) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+
+        let permission = CanSetAssetHoldingLimit {
+            account: isi.account_id().clone(),
+            asset_definition: isi.asset_definition_id().clone(),
+        };
+        if permission.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "holding limit requires an exact account-and-asset permission"
         );
     }
 
@@ -5304,8 +5417,9 @@ pub mod trigger {
             | AnyPermission::CanBurnAsset(_)
             | AnyPermission::CanModifyAssetMetadata(_)
             | AnyPermission::CanTransferAsset(_)
-            | AnyPermission::CanSetAssetTransferFreeze(_)
+            | AnyPermission::CanSetAssetTransferAvailability(_)
             | AnyPermission::CanSetAssetTransferDailyLimit(_)
+            | AnyPermission::CanSetAssetHoldingLimit(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
@@ -5689,10 +5803,12 @@ mod sorafs_permission_tests {
             IssueReplicationOrder, PublishSorafsPopRevocationList, RecordCapacityTelemetry,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
             RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsCapacityDispute, RetirePinManifest, SetPricingSchedule,
-            SetSorafsModerationPolicy, SetSorafsPopIssuerPolicy,
-            SetSorafsReputationJournalAuthorityPolicy, SubmitSorafsModerationAppeal,
-            SubmitSorafsModerationCommit, UnregisterProviderOwner, UpsertProviderCredit,
+            ResolveSorafsCapacityDispute, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            SetSorafsPopIssuerPolicy, SetSorafsReputationJournalAuthorityPolicy,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, UnregisterProviderOwner,
+            UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
@@ -5721,15 +5837,19 @@ mod sorafs_permission_tests {
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
                 ModerationAppealIntakeV1, ModerationFinalizedCursorV1, ModerationLedgerPolicyV1,
             },
-            pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
+            pin_registry::{
+                ManifestAliasBinding, ManifestDigest, ProviderIngestCompletionAuthorityV1,
+                ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
+                ReplicationOrderId,
+            },
             pop_registry::{POP_ISSUER_POLICY_VERSION_V1, PopIssuerPolicyV1},
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
             reputation::{
                 PorTerminalOutcomeV1, PorTerminalStatusV1,
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
                 ReputationJournalEntryV1, ReputationJournalFinalizedCursorV1,
-                ReputationJournalPayloadV1, StreamTokenValidationOutcomeV1,
-                StreamTokenValidationStatusV1,
+                ReputationJournalPayloadV1, StreamTokenValidationBindingV1,
+                StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
             },
             reserve::ReserveFinalizedCursorV1,
         },
@@ -5746,6 +5866,7 @@ mod sorafs_permission_tests {
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
     };
+    use sorafs_manifest::capacity::ReplicationAssignmentV1;
 
     use super::*;
     use crate::{Iroha, prelude, tests::with_mock_permissions};
@@ -6047,8 +6168,11 @@ mod sorafs_permission_tests {
             1_700_000_000_000,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
-                validation_id: [0x41; 32],
-                request_digest: [0x42; 32],
+                binding: StreamTokenValidationBindingV1 {
+                    gateway_id: [0x41; 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [0x42; 32],
+                },
                 token_body_digest: Some([0x43; 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: 1_700_000_000_000,
@@ -6074,11 +6198,57 @@ mod sorafs_permission_tests {
         IssueReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), vec![0x22], 1, 2)
     }
 
+    fn provider_ingest_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
+        ProviderIngestCompletionAuthorityV1::new(
+            owner_account_id(),
+            ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0x13; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0x14; 32],
+            },
+        )
+    }
+
     fn complete_replication_order() -> CompleteReplicationOrder {
         CompleteReplicationOrder::new(
             ReplicationOrderId::new([0x11; 32]),
             ProviderId::new([0x12; 32]),
             3,
+            provider_ingest_completion_authority(),
+            1,
+            ProviderIngestFinalizedAnchorV1 {
+                height: 2,
+                block_hash: [0x15; 32],
+            },
+        )
+    }
+
+    fn revise_replication_order_assignments() -> ReviseReplicationOrderAssignments {
+        ReviseReplicationOrderAssignments::new(
+            ReplicationOrderId::new([0x11; 32]),
+            1,
+            2,
+            vec![ReplicationAssignmentV1 {
+                provider_id: [0x12; 32],
+                slice_gib: 1,
+                lane: None,
+            }],
+        )
+    }
+
+    fn set_provider_ingest_completion_authority() -> SetProviderIngestCompletionAuthority {
+        SetProviderIngestCompletionAuthority::new(
+            ProviderId::new([0x12; 32]),
+            None,
+            provider_ingest_completion_authority(),
+        )
+    }
+
+    fn revoke_provider_ingest_completion_authority() -> RevokeProviderIngestCompletionAuthority {
+        RevokeProviderIngestCompletionAuthority::new(
+            ProviderId::new([0x12; 32]),
+            provider_ingest_completion_authority(),
         )
     }
 
@@ -6264,6 +6434,13 @@ mod sorafs_permission_tests {
     );
 
     sorafs_permission_case!(
+        revise_replication_order_assignments_requires_permission,
+        revise_replication_order_assignments(),
+        CanIssueSorafsReplicationOrder,
+        sorafs::visit_revise_replication_order_assignments
+    );
+
+    sorafs_permission_case!(
         expire_replication_order_requires_permission,
         expire_replication_order(),
         CanIssueSorafsReplicationOrder,
@@ -6282,6 +6459,20 @@ mod sorafs_permission_tests {
         unregister_provider_owner(),
         CanUnregisterSorafsProviderOwner,
         sorafs::visit_unregister_provider_owner
+    );
+
+    sorafs_permission_case!(
+        set_provider_ingest_completion_authority_requires_permission,
+        set_provider_ingest_completion_authority(),
+        CanRegisterSorafsProviderOwner,
+        sorafs::visit_set_provider_ingest_completion_authority
+    );
+
+    sorafs_permission_case!(
+        revoke_provider_ingest_completion_authority_requires_permission,
+        revoke_provider_ingest_completion_authority(),
+        CanUnregisterSorafsProviderOwner,
+        sorafs::visit_revoke_provider_ingest_completion_authority
     );
 
     sorafs_permission_case!(

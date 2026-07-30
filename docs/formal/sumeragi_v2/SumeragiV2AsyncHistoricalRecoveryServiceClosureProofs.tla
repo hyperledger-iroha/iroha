@@ -1091,10 +1091,11 @@ unique nonce-owned position in an I/O queue of length at most
 `AsyncIoCapacity`.  Candidate positions do not have a corresponding global
 configuration bound.  `ModelConfiguration` allows the explicit
 `ViewDomain = Nat` mode used by `AsyncInit`; moreover,
-`AsyncCausalTypeInvariant` types the causal queues without a length cap,
-`AsyncDeferredContentTypeInvariant` does not cap the deferred Completion
-queue, and `AsyncCompletionLoad` includes that unbounded-but-finite deferred
-count.  The proved candidate carrier is therefore exactly
+`AsyncCausalTypeInvariant` still types the causal queues without a length cap.
+The Busy-deferred Completion and Normal lanes now share the production-derived
+`AsyncDeferredNormalCapacity`, while Progress retains its roster-derived cap;
+those bounds do not manufacture a global causal-queue bound.  The proved
+candidate carrier is therefore exactly
 `(2..6) \X Nat`, not a finite interval suitable for a fixed-width histogram.
 
 Every concrete queue and outstanding-work owner set is nevertheless finite

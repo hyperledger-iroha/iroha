@@ -13,6 +13,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64"))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_recursive_spend_artifact_begin_v4"
         ))
@@ -242,9 +243,10 @@ final class NativeBridgeLoaderTests: XCTestCase {
             root: root.appendingPathComponent("dist/NoritoBridge.xcframework"),
             identifier: identifier
         )
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw XCTSkip("NoritoBridge.xcframework missing at \(url.path)")
-        }
+        try requireNativeTestCapability(
+            FileManager.default.fileExists(atPath: url.path),
+            "NoritoBridge.xcframework missing at \(url.path)"
+        )
         return (url, identifier)
     }
 

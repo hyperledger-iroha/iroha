@@ -2,9 +2,10 @@
 
 use std::path::PathBuf;
 
-use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
+use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::account::AccountId;
 
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
@@ -31,7 +32,29 @@ fn public_key_hex(seed: u8) -> String {
     hex::encode(key_pair.public_key().to_bytes().1)
 }
 
+fn native_proof_signer_binding() -> String {
+    let key_pair =
+        KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
+    let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
+    let authority = AccountId::new(key_pair.public_key().clone())
+        .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
+        .expect("test authority must encode as I105");
+    format!(
+        r#"
+[sorafs.storage.native_transaction_signers.proof_outcome]
+handle = "hsm://sorafs/proof-outcome/primary"
+authority = "{authority}"
+algorithm = "ed25519"
+public_key_hex = "{public_key_hex}"
+revision = 1
+policy_digest_hex = "{}"
+"#,
+        "52".repeat(32)
+    )
+}
+
 fn enabled_overlay(handle: &str, public_key_hex: &str) -> String {
+    let proof_signer = native_proof_signer_binding();
     format!(
         r#"
 [sorafs.storage]
@@ -41,6 +64,7 @@ enabled = true
 enabled = true
 signer_handle = "{handle}"
 signer_public_key_hex = "{public_key_hex}"
+{proof_signer}
 "#
     )
 }
@@ -204,7 +228,8 @@ signing_key_path = "{retired_path}"
     let diagnostic = format!("{error:?}");
 
     assert!(
-        diagnostic.contains("unknown parameter: `sorafs.storage.stream_tokens.signing_key_path`"),
+        diagnostic.contains("unknown parameter")
+            && diagnostic.contains("sorafs.storage.stream_tokens.signing_key_path"),
         "unexpected legacy field diagnostic: {diagnostic}"
     );
     assert!(

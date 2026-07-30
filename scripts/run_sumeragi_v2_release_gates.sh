@@ -1451,7 +1451,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::body_available_rebind_coalesces_exact_busy_deferred_destination_owner
   sumeragi::v2_runtime::tests::body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before_mutation
   sumeragi::v2_runtime::tests::duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation
-  sumeragi::v2_runtime::tests::unbound_direct_vote_authentication_is_recoverable_and_becomes_admissible_after_validation
+  sumeragi::v2_runtime::tests::unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation
   sumeragi::v2_runtime::tests::conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
   sumeragi::v2_runtime::tests::conflicting_local_and_validated_receipts_do_not_coalesce
   sumeragi::v2_runtime::tests::production_busy_transfer_retains_exact_validation_evidence_for_retry_and_cleanup

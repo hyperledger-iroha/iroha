@@ -64,7 +64,7 @@ SDK)。エルは、不変条件を別名とハンドルの検証に適用しま�
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - さまざまな PR コンテンツの備品、提案、決定主義などの関係

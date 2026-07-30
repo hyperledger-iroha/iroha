@@ -525,6 +525,58 @@ PROOF
     <2> QED BY <2>2, <2>4
   <1> QED BY <1>1
 
+THEOREM SerializedLocalPredecessorPreservesProgressCommitSlotInvariant ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ SerializedLocalPrecedesServeIngressStep(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+                SerializedLocalPrecedesServeIngressStep(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. /\ TypeInvariant
+           /\ N \in Nat \ {0}
+           /\ AsyncDeferredTypeInvariant
+      BY <1>1 DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                    TypeInvariant, ModelConfiguration,
+                    QuorumConfiguration
+    <2>2. SelectedLocalAdmissionAdvance(node)
+      BY <1>1 DEF SerializedLocalPrecedesServeIngressStep
+    <2>3. /\ QueuedProgressCommitHistoryInvariant'
+           /\ DeferredProgressCommitHistoryInvariant'
+           /\ CausalProgressCommitHistoryInvariant'
+      BY <1>1, <2>2,
+         SelectedLocalAdmissionAdvancePreservesProgressCommitHistories
+    <2>4. UNCHANGED asyncDeferredProgressQueues
+      BY <2>2 DEF SelectedLocalAdmissionAdvance, AsyncDeferredVars
+    <2>5. ProtectedDeferredProgressInvariant'
+      BY <1>1, <2>1, <2>4,
+         LockAdvancePreservesProtectedDeferredProgressInvariant
+         DEF ProgressFrontierAction
+    <2> QED BY <2>3, <2>5
+  <1> QED BY <1>1
+
 THEOREM IngressDrainPreservesProgressCommitSlotInvariant ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
@@ -609,20 +661,35 @@ PROOF
                /\ ProtectedDeferredProgressInvariant'
     <2>1. \/ LocalAdmissionStep(node)
            \/ IngressDrainStep(node)
-           \/ SerializedRuntimeStep(node)
-      BY <1>1 DEF RunNodeWork
+           \/ SerializedRunnerRuntimeStep(node)
+           \/ SerializedLocalPrecedesServeIngressStep(node)
+           \/ AsyncServeIngressTargetOnlyTurn(node)
+      BY <1>1, RunNodeWorkConcreteActionCaseSplit
     <2>2. CASE LocalAdmissionStep(node)
       BY <1>1, <2>2,
          LocalAdmissionPreservesProgressCommitSlotInvariant
     <2>3. CASE IngressDrainStep(node)
       BY <1>1, <2>3,
          IngressDrainPreservesProgressCommitSlotInvariant
-    <2>4. CASE SerializedRuntimeStep(node)
+    <2>4. CASE SerializedRunnerRuntimeStep(node)
       <3>1. RuntimeStep(node)
-        BY <2>4 DEF SerializedRuntimeStep
+        BY <2>4, Isa
+           DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep
       <3> QED BY <1>1, <3>1,
            RuntimeStepPreservesProgressCommitSlotInvariant
-    <2> QED BY <2>1, <2>2, <2>3, <2>4
+    <2>5. CASE AsyncServeIngressTargetOnlyTurn(node)
+      <3>1. UNCHANGED <<asyncCommandQueues,
+                        asyncDeferredProgressQueues,
+                        asyncCausalQueues>>
+        BY <2>5, Isa
+           DEF AsyncServeIngressTargetOnlyTurn, AsyncDeferredVars
+      <3> QED BY <1>1, <3>1,
+           UnchangedSchedulerCarriersPreserveProgressCommitSlots
+    <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
+      BY <1>1, <2>6,
+         SerializedLocalPredecessorPreservesProgressCommitSlotInvariant
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
   <1> QED BY <1>1
 
 THEOREM RunHistoricalServerLeavesProgressCarriers ==

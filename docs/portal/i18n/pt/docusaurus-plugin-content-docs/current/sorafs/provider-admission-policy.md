@@ -37,7 +37,7 @@ tarefas de engenharia rastreaveis.
 ## Fluxo de admissao
 
 1. **Criacao da proposta**
-   - CLI: adicionar `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: adicionar `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      produzindo `ProviderAdmissionProposalV1` + bundle de atestacao.
    - Validacao: garantir campos requeridos, stake > 0, handle canonico de chunker em `profile_id`.
 2. **Endosso de governanca**
@@ -66,7 +66,7 @@ fornecidos ao combinar `--council-signature-public-key` com `--council-signature
 
 ### Referencia de CLI
 
-Execute cada comando via `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
+Execute cada comando via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - Flags requeridas: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -114,7 +114,7 @@ Execute cada comando via `cargo run -p sorafs_manifest --bin sorafs_manifest_bui
    aumentando `--retention-epoch` e atualizando stake/endpoints conforme necessario.
 2. Execute
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -134,7 +134,7 @@ Execute cada comando via `cargo run -p sorafs_manifest --bin sorafs_manifest_bui
 #### Revogacao de emergencia
 1. Identifique o envelope comprometido e emita uma revogacao:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

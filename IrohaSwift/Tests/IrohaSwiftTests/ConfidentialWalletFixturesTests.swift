@@ -35,7 +35,9 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         do {
             envelope = try Self.buildShieldEnvelope(fixture: fixture)
         } catch SwiftTransactionEncoderError.nativeBridgeUnavailable {
-            throw XCTSkip("Shield fixture unavailable: native bridge unavailable")
+            try failRequiredNativeTestCapability(
+                "Shield fixture unavailable: native bridge unavailable"
+            )
         } catch {
             throw error
         }
@@ -51,7 +53,9 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         do {
             envelope = try Self.buildUnshieldEnvelope(fixture: fixture)
         } catch SwiftTransactionEncoderError.nativeBridgeUnavailable {
-            throw XCTSkip("Unshield fixture unavailable: native bridge unavailable")
+            try failRequiredNativeTestCapability(
+                "Unshield fixture unavailable: native bridge unavailable"
+            )
         } catch {
             throw error
         }
@@ -67,7 +71,9 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         do {
             envelope = try Self.buildZkTransferEnvelope(fixture: fixture)
         } catch SwiftTransactionEncoderError.nativeBridgeUnavailable {
-            throw XCTSkip("ZkTransfer fixture unavailable: native bridge unavailable")
+            try failRequiredNativeTestCapability(
+                "ZkTransfer fixture unavailable: native bridge unavailable"
+            )
         } catch {
             throw error
         }
@@ -167,9 +173,10 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         guard #available(macOS 10.15, iOS 13.0, *) else {
             throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
         }
-        guard let privateKeyBytes = Data(hexString: fixturePrivateKeyHex) else {
-            throw XCTSkip("invalid fixture private key hex")
-        }
+        let privateKeyBytes = try XCTUnwrap(
+            Data(hexString: fixturePrivateKeyHex),
+            "invalid fixture private key hex"
+        )
         return try SigningKey.fromMultihashPrivateKey(privateKeyBytes)
     }
 

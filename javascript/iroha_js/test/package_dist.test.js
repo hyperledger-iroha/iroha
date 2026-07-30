@@ -108,6 +108,32 @@ function slicedPrivacyView(
 }
 
 const PRIVACY_CAPABILITIES_ARCHIVE = privacyNoritoFrameWithPayload(0x50);
+const VALID_PRIVACY_CAPABILITIES_ARCHIVES = [
+  PRIVACY_CAPABILITIES_ARCHIVE,
+  privacyNoritoFrameWithPadding(0x50, 64),
+  privacyNoritoFrameWithFlags(0x50, 0x26),
+];
+
+function validatePrivacyCapabilitiesFixture(archive) {
+  const candidate = Buffer.from(archive);
+  if (candidate.length === 0) {
+    return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.EMPTY;
+  }
+  if (candidate.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
+    return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.ARCHIVE_TOO_LARGE;
+  }
+  if (
+    candidate.length >= 22 &&
+    candidate.subarray(6, 22).some((byte) => byte !== 0x50)
+  ) {
+    return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
+  }
+  return VALID_PRIVACY_CAPABILITIES_ARCHIVES.some((validArchive) =>
+    candidate.equals(validArchive),
+  )
+    ? PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID
+    : PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+}
 
 function malformedPrivacyNativeOutputArchives(schemaByte) {
   const archive = privacyNoritoFrameWithPayload(schemaByte);
@@ -162,8 +188,8 @@ function completePrivacyCapabilitiesBinding(overrides = {}) {
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
-    privacyValidateCapabilitiesV1() {
-      return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID;
+    privacyValidateCapabilitiesV1(archive) {
+      return validatePrivacyCapabilitiesFixture(archive);
     },
     ...overrides,
   };
@@ -213,7 +239,11 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "ToriiBrowserClient",
     "buildTransaction",
     "buildCancelAssetLockInstruction",
+    "buildSetAssetTransferAvailabilityInstruction",
     "CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1",
+    "encodeCancelAssetLockV1",
+    "decodeCancelAssetLockV1",
+    "validateAppealFinanceCancelAssetLock",
     "computeValidationFeePayoutLifecycleProposalFingerprintV1",
     "computeValidationFeePolicyProposalFingerprintV1",
     "noritoEncodeInstruction",
@@ -607,6 +637,12 @@ test("package dist entrypoint exports only the canonical privacy capability brid
     "privacyProofRequestV1",
     "privacyBuildProofV1",
     "privacyVerifyProofV1",
+    "buildZkAceTransferAuthorizationV1",
+    "buildRegisterZkAceIdentityCommitmentInstruction",
+    "buildRotateZkAceIdentityCommitmentInstruction",
+    "buildRevokeZkAceIdentityCommitmentInstruction",
+    "buildZkAceAuthorizationProofV1",
+    "buildZkAceAuthorizedTransferInstruction",
   ]) {
     assert.equal(retired in packageExports, false, `${retired} must be retired`);
   }
@@ -651,20 +687,14 @@ test("package dist privacy native availability clears probed capability output",
   );
 });
 
-test("package dist privacy availability admits the capabilities-only first-release bridge", () => {
+test("package dist privacy availability admits the capability-snapshot first-release bridge", () => {
   let capabilityCalls = 0;
-  const binding = {
-    connectNoritoBridgeAbiVersion() {
-      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
-    },
+  const binding = completePrivacyCapabilitiesBinding({
     privacyCapabilitiesV1() {
       capabilityCalls += 1;
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
-    privacyValidateCapabilitiesV1() {
-      return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID;
-    },
-  };
+  });
 
   withNativeBinding(binding, () => {
     assert.equal(isPrivacyNativeAvailable(), true);
@@ -833,6 +863,8 @@ test("package declarations expose readonly snapshot metadata without retired pri
     /\bexport function buildRetirePrivacyVerifierKeyInstruction\s*\(/u,
     /\bexport function noritoEncodePrivacyProofEnvelope\s*\(/u,
     /\bexport function noritoDecodePrivacyProofEnvelope\s*\(/u,
+    /\bexport interface (?:ZkAce(?:TransferAuthorizationV1(?:Options)?|PublicInputsV1Input|AuthorizationProofV1(?:Input)?|WitnessV1Input|AuthorizedTransferInstructionInput)|(?:Register|Rotate|Revoke)ZkAceIdentityCommitmentInstructionInput)\b/u,
+    /\bexport function (?:buildZkAceTransferAuthorizationV1|build(?:Register|Rotate|Revoke)ZkAceIdentityCommitmentInstruction|buildZkAceAuthorizationProofV1|buildZkAceAuthorizedTransferInstruction)\s*\(/u,
   ]) {
     assert.doesNotMatch(rootDeclarations, retiredPattern);
     assert.doesNotMatch(optionalDeclarations, retiredPattern);

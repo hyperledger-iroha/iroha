@@ -35,3 +35,4 @@ artifacts/sorafs/repair/staged/governance-handoff.json
 artifacts/sorafs/repair/staged/observability.json
 --governance-approval-evidence
 artifacts/sorafs/repair/staged/governance-approval.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
+import stat
 import sys
 
 import pytest
@@ -28,55 +30,82 @@ def _admit_test_output_filesystem(monkeypatch) -> None:
     monkeypatch.setattr(MODULE, "_filesystem_type", lambda _path: "ext4")
 
 
-def _fake_prebuilt_generator(tmp_path: Path, body: str = "") -> Path:
+def _fake_prebuilt_generator(tmp_path: Path, mode: str = "success") -> Path:
+    """Create a loader-stable shell double for the admitted native generator.
+
+    These integration-style tests exercise the Python supervisor itself. A
+    second Homebrew Python process is not part of that contract and can spend
+    minutes blocked in dyld on a loaded macOS builder, so the child double uses
+    the OS shell and shell builtins instead.
+    """
+
+    if mode not in {"success", "fail_with_residue", "replace_original"}:
+        raise ValueError(f"unsupported fake generator mode: {mode}")
     executable = tmp_path / "kagemusha_recursive_spend_v4_bundle"
+    helper = tmp_path / f"fake-kagemusha-generator-{mode}.sh"
+    helper.write_text(
+        f"""#!/bin/sh
+set -eu
+mode={mode!r}
+execution_path=$1
+shift
+operation=$1
+shift
+out_dir=
+staging_id=
+staging_name=
+parent_fd=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --out-dir) out_dir=$2; shift 2 ;;
+        --staging-id) staging_id=$2; shift 2 ;;
+        --staging-name) staging_name=$2; shift 2 ;;
+        --output-parent-fd) parent_fd=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+case "$parent_fd" in
+    ''|*[!0-9]*) exit 92 ;;
+esac
+[ "$staging_name" = ".kagemusha-v4-staging-${{staging_id}}-work" ] || exit 93
+parent_path=/dev/fd/$parent_fd
+[ -d "$parent_path" ] || exit 94
+output_parent=${{out_dir%/*}}
+staging_path="$output_parent/$staging_name"
+[ -d "$staging_path" ] || exit 94
+auth_fd=${{IROHA_RESOURCE_GUARD_AUTH_FD-}}
+case "$auth_fd" in
+    ''|*[!0-9]*) exit 91 ;;
+esac
+eval "IFS= read -r auth_record <&$auth_fd"
+expected_auth="IROHA_RESOURCE_GUARD_AUTH_V1:${{IROHA_RESOURCE_GUARD_AUTH_TOKEN-}}"
+[ "$auth_record" = "$expected_auth" ] || exit 91
+parent_observation=$output_parent
+printf '%s\t%s\t%s\n' "$operation" "$parent_observation" "$execution_path" \
+    >> "$staging_path/fd-observations"
+if [ "$mode" = fail_with_residue ] && [ "$operation" = generate-candidate ]; then
+    printf residue > "$staging_path/large-key.part"
+    exit 9
+fi
+if [ "$mode" = replace_original ] && [ "$operation" = generate-candidate ]; then
+    execution_dir=${{execution_path%/*}}
+    original_parent=${{execution_dir%/*}}
+    original="$original_parent/kagemusha_recursive_spend_v4_bundle"
+    /bin/mv "$original" "$original_parent/admitted-original"
+    printf '#!/bin/sh\nexit 0\n' > "$original"
+    chmod 700 "$original"
+    printf yes > "$original_parent/admitted-copy-ran"
+fi
+if [ "$operation" = publish-staged-candidate ]; then
+    /bin/mv "$staging_path" "$out_dir"
+fi
+""",
+        encoding="utf-8",
+    )
+    helper.chmod(0o600)
     executable.write_text(
-        f"#!{sys.executable}\n"
-        + """
-import os
-from pathlib import Path
-import sys
-if len(sys.argv) > 1 and sys.argv[1] in {"generate-candidate", "publish-staged-candidate"}:
-    arguments = sys.argv[2:]
-    out_dir = Path(arguments[arguments.index("--out-dir") + 1])
-    staging_id = arguments[arguments.index("--staging-id") + 1]
-    staging_name = arguments[arguments.index("--staging-name") + 1]
-    parent_fd_text = arguments[arguments.index("--output-parent-fd") + 1]
-    if not parent_fd_text.isascii() or not parent_fd_text.isdigit():
-        raise SystemExit(92)
-    parent_fd = int(parent_fd_text)
-    parent_stat = os.fstat(parent_fd)
-    executable_stat = os.stat(sys.argv[0])
-    if staging_name != f".kagemusha-v4-staging-{staging_id}-work":
-        raise SystemExit(93)
-    staging_stat = os.stat(staging_name, dir_fd=parent_fd, follow_symlinks=False)
-    if not Path(f"/dev/fd/{parent_fd}").is_dir() or not staging_stat.st_mode:
-        raise SystemExit(94)
-    observation_name = f"{staging_name}/fd-observations"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
-    observation = os.open(observation_name, flags, 0o600, dir_fd=parent_fd)
-    try:
-        os.write(
-            observation,
-            (
-                f"{sys.argv[1]} {parent_stat.st_dev} {parent_stat.st_ino} "
-                f"{executable_stat.st_dev} {executable_stat.st_ino} {sys.argv[0]}\\n"
-            ).encode("ascii"),
-        )
-        os.fsync(observation)
-    finally:
-        os.close(observation)
-    if sys.argv[1] == "publish-staged-candidate":
-        os.rename(
-            staging_name,
-            out_dir.name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-        )
-        raise SystemExit(0)
-"""
-        + body
-        + "",
+        "#!/bin/sh\n"
+        f"exec /bin/sh {shlex.quote(str(helper))} \"$0\" \"$@\"\n",
         encoding="utf-8",
     )
     executable.chmod(0o700)
@@ -102,12 +131,20 @@ def _guarded_args(tmp_path: Path, executable: Path) -> list[str]:
 def test_effective_limit_is_half_physical_and_cannot_be_raised(monkeypatch) -> None:
     monkeypatch.setattr(MODULE, "_physical_memory_bytes", lambda: 12 * MODULE.BYTES_PER_GIB)
 
-    assert MODULE._effective_memory_limit_bytes(None) == 256 * 1024 * 1024
+    assert MODULE._effective_memory_limit_bytes(None) == 6 * MODULE.BYTES_PER_GIB
     assert MODULE._effective_memory_limit_bytes(0.125) == 128 * 1024 * 1024
     with pytest.raises(MODULE.resource_guard.GuardError, match="cannot raise"):
-        MODULE._effective_memory_limit_bytes(0.5)
+        MODULE._effective_memory_limit_bytes(7)
     with pytest.raises(MODULE.resource_guard.GuardError, match="greater than zero"):
         MODULE._effective_memory_limit_bytes(float("nan"))
+
+    monkeypatch.setattr(MODULE, "_physical_memory_bytes", lambda: 64 * MODULE.BYTES_PER_GIB)
+    assert (
+        MODULE._effective_memory_limit_bytes(None)
+        == 16 * MODULE.BYTES_PER_GIB
+    )
+    with pytest.raises(MODULE.resource_guard.GuardError, match="cannot raise"):
+        MODULE._effective_memory_limit_bytes(16.01)
 
 
 def test_runner_executes_small_owned_group_and_writes_reports(
@@ -119,16 +156,7 @@ def test_runner_executes_small_owned_group_and_writes_reports(
     monkeypatch.setattr(MODULE, "LOCK_PATH", tmp_path / "kagemusha.lock")
     report_root = tmp_path / "resource-report"
 
-    consume_capability = """
-import os
-fd = int(os.environ["IROHA_RESOURCE_GUARD_AUTH_FD"])
-token = os.environ["IROHA_RESOURCE_GUARD_AUTH_TOKEN"]
-record = os.read(fd, 256)
-expected = f"IROHA_RESOURCE_GUARD_AUTH_V1:{token}\\n".encode("ascii")
-if record != expected:
-    raise SystemExit(91)
-"""
-    executable = _fake_prebuilt_generator(tmp_path, consume_capability)
+    executable = _fake_prebuilt_generator(tmp_path)
     assert (
         MODULE.main(_guarded_args(tmp_path, executable))
         == 0
@@ -147,7 +175,6 @@ if record != expected:
     assert summary["report_context"]["output_parent"]["canonical_path"] == str(
         tmp_path.resolve()
     )
-    expected_parent = summary["report_context"]["output_parent"]
     executable_identity = summary["report_context"]["executable_identity"]
     observations = (tmp_path / "candidate" / "fd-observations").read_text(
         encoding="ascii"
@@ -157,16 +184,13 @@ if record != expected:
     for operation, observation in zip(
         ("generate-candidate", "publish-staged-candidate"), observations
     ):
-        fields = observation.split()
-        assert fields[:5] == [
+        fields = observation.split("\t")
+        assert fields[:2] == [
             operation,
-            str(expected_parent["device"]),
-            str(expected_parent["inode"]),
-            str(executable_identity["execution"]["file_device"]),
-            str(executable_identity["execution"]["file_inode"]),
+            summary["report_context"]["output_parent"]["canonical_path"],
         ]
-        assert len(fields) == 6
-        execution_paths.append(fields[5])
+        assert len(fields) == 3
+        execution_paths.append(fields[2])
     assert execution_paths[0] == execution_paths[1]
     assert execution_paths[0] == executable_identity["execution"]["canonical_path"]
     assert executable_identity["execution"]["method"] == "darwin_private_fd_copy"
@@ -186,8 +210,8 @@ def test_runner_does_not_use_the_retired_boolean_supervision_marker() -> None:
 
     assert "IROHA_KAGEMUSHA_V4_RESOURCE_SUPERVISED" not in source
     assert "held_lock_descriptors=(heavy_lock, kagemusha_lock)" in source
-    assert MODULE.ABSOLUTE_MAX_MEMORY_BYTES == 256 * 1024 * 1024
-    assert MODULE.SAMPLE_INTERVAL_SECONDS == 0.05
+    assert MODULE.ABSOLUTE_MAX_MEMORY_BYTES == 16 * MODULE.BYTES_PER_GIB
+    assert MODULE.SAMPLE_INTERVAL_SECONDS == 0.25
     assert "sample_interval_seconds=SAMPLE_INTERVAL_SECONDS" in source
 
 
@@ -242,24 +266,7 @@ def test_runner_injects_private_staging_id_and_removes_failure_residue(
         MODULE.resource_guard, "HEAVY_JOB_LOCK_PATH", tmp_path / "heavy.lock"
     )
     monkeypatch.setattr(MODULE, "LOCK_PATH", tmp_path / "kagemusha.lock")
-    body = """
-import os
-from pathlib import Path
-import sys
-arguments = sys.argv[1:]
-staging_id = arguments[arguments.index("--staging-id") + 1]
-out_dir = Path(arguments[arguments.index("--out-dir") + 1])
-residue = out_dir.parent / f".kagemusha-v4-staging-{staging_id}-work"
-(residue / "large-key.part").write_bytes(b"residue")
-fd = int(os.environ["IROHA_RESOURCE_GUARD_AUTH_FD"])
-token = os.environ["IROHA_RESOURCE_GUARD_AUTH_TOKEN"]
-record = os.read(fd, 256)
-expected = f"IROHA_RESOURCE_GUARD_AUTH_V1:{token}\\n".encode("ascii")
-if record != expected:
-    raise SystemExit(91)
-raise SystemExit(9)
-"""
-    executable = _fake_prebuilt_generator(tmp_path, body)
+    executable = _fake_prebuilt_generator(tmp_path, "fail_with_residue")
 
     assert MODULE.main(_guarded_args(tmp_path, executable)) == 9
     assert not list(tmp_path.glob(".kagemusha-v4-staging-*-work"))
@@ -272,6 +279,87 @@ raise SystemExit(9)
     assert summary["post_run_cleanup"] == "completed"
     assert summary["post_run_cleanup_removed"] == 2
     assert summary["post_success_finalize"] == "skipped"
+
+
+def test_cleanup_staging_is_fd_relative_and_does_not_follow_symlinks(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "retain"
+    sentinel.write_bytes(b"outside")
+    output_parent = tmp_path / "output"
+    output_parent.mkdir()
+    command = [
+        str(_fake_prebuilt_generator(tmp_path)),
+        "generate-candidate",
+        "--out-dir",
+        str(output_parent / "candidate"),
+    ]
+    _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
+    residue_name = f"{MODULE.STAGING_PREFIX}{staging_id}-work"
+    residue = output_parent / residue_name
+    try:
+        residue.mkdir(mode=0o700)
+        nested = residue / "nested"
+        nested.mkdir(mode=0o700)
+        (nested / "partial").write_bytes(b"partial")
+        (residue / "outside-link").symlink_to(outside, target_is_directory=True)
+        nested.chmod(0o500)
+        residue.chmod(0o500)
+        moved_parent = tmp_path / "moved-output"
+        output_parent.rename(moved_parent)
+        output_parent.mkdir()
+        decoy = output_parent / residue_name
+        decoy.mkdir(mode=0o700)
+
+        assert MODULE._cleanup_staging(parent, staging_id) == 1
+        assert not (moved_parent / residue_name).exists()
+        assert decoy.is_dir()
+        assert sentinel.read_bytes() == b"outside"
+    finally:
+        parent.close()
+
+
+def test_cleanup_never_path_chmods_a_swappable_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o755)
+    outside.chmod(0o755)
+    output_parent = tmp_path / "output"
+    output_parent.mkdir()
+    command = [
+        str(_fake_prebuilt_generator(tmp_path)),
+        "generate-candidate",
+        "--out-dir",
+        str(output_parent / "candidate"),
+    ]
+    _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
+    residue_name = f"{MODULE.STAGING_PREFIX}{staging_id}-work"
+    residue = output_parent / residue_name
+    residue.mkdir(mode=0o700)
+    (residue / "partial").write_bytes(b"partial")
+    displaced = output_parent / "attacker-displaced-residue"
+    real_chmod = os.chmod
+    path_chmod_called = False
+
+    def swap_entry_before_chmod(
+        path: str, mode: int, *, dir_fd: int | None = None
+    ) -> None:
+        nonlocal path_chmod_called
+        path_chmod_called = True
+        residue.rename(displaced)
+        residue.symlink_to(outside, target_is_directory=True)
+        real_chmod(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(MODULE.os, "chmod", swap_entry_before_chmod)
+    try:
+        assert MODULE._cleanup_staging(parent, staging_id) == 1
+        assert not path_chmod_called
+        assert stat.S_IMODE(outside.stat().st_mode) == 0o755
+    finally:
+        parent.close()
 
 
 def test_runner_rejects_caller_supplied_staging_id(tmp_path: Path) -> None:
@@ -305,20 +393,7 @@ def test_runner_fails_if_executable_changes_during_run(
         MODULE.resource_guard, "HEAVY_JOB_LOCK_PATH", tmp_path / "heavy.lock"
     )
     monkeypatch.setattr(MODULE, "LOCK_PATH", tmp_path / "kagemusha.lock")
-    executable = _fake_prebuilt_generator(
-        tmp_path,
-        """
-from pathlib import Path
-import sys
-original = Path(sys.argv[0]).parents[1] / "kagemusha_recursive_spend_v4_bundle"
-original.rename(original.with_name("admitted-original"))
-original.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
-original.chmod(0o700)
-(Path(sys.argv[0]).parents[1] / "admitted-copy-ran").write_text(
-    "yes", encoding="ascii"
-)
-""",
-    )
+    executable = _fake_prebuilt_generator(tmp_path, "replace_original")
 
     assert MODULE.main(_guarded_args(tmp_path, executable)) == 1
     summary = json.loads(
@@ -553,7 +628,7 @@ def test_output_parent_requires_disk_backing_and_free_space(
         f_frsize = 4096
 
     monkeypatch.setattr(MODULE.os, "fstatvfs", lambda _descriptor: LowSpace())
-    with pytest.raises(MODULE.resource_guard.GuardError, match="512 MiB"):
+    with pytest.raises(MODULE.resource_guard.GuardError, match="16 GiB"):
         MODULE._prepare_guarded_command(command)
     monkeypatch.setattr(MODULE.os, "fstatvfs", actual_fstatvfs)
 
@@ -564,12 +639,9 @@ def test_publisher_session_lifeline_prevents_orphaned_completion(
     executable = tmp_path / MODULE.BUNDLE_EXECUTABLE
     marker = tmp_path / "publisher-completed"
     executable.write_text(
-        f"#!{sys.executable}\n"
-        "from pathlib import Path\n"
-        "import sys\n"
-        "import time\n"
-        "time.sleep(10)\n"
-        "Path(sys.argv[1]).write_text('published', encoding='ascii')\n",
+        "#!/bin/sh\n"
+        "/bin/sleep 10\n"
+        "printf published > \"$1\"\n",
         encoding="utf-8",
     )
     executable.chmod(0o700)

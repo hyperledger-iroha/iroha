@@ -109,13 +109,26 @@ use sorafs_manifest::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+#[cfg(all(
+    feature = "kagemusha-candidate-evidence-lab",
+    target_os = "ios",
+    not(target_abi = "sim")
+))]
+mod kagemusha_candidate_apple;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 mod kagemusha_candidate_scenario;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
+// Increment whenever any NativeSignerBridge JNI method descriptor changes.
+// The bridge-wide ABI number alone cannot distinguish two ABI-21 artifacts
+// whose JVM calling conventions differ.
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 1;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
+const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
+const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
+const KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH: usize = 64;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DETACHED_TRANSACTION_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
@@ -409,6 +422,10 @@ pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
     CONNECT_NORITO_BRIDGE_ABI_VERSION
 }
 
+fn native_signer_jni_contract_revision() -> u32 {
+    NATIVE_SIGNER_JNI_CONTRACT_REVISION
+}
+
 fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
     use AccountAddressError::*;
 
@@ -594,6 +611,24 @@ trait KagemushaSensitiveArchive {
     fn zeroize_sensitive(&mut self);
 }
 
+fn kagemusha_canonical_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
+    // Every variable-length member must be represented in the exact
+    // uncompressed canonical frame. These limits therefore scale from the
+    // already capped archive instead of inheriting Norito's generic 32-fold
+    // allocation allowance. One fixed 64 KiB allowance covers decoded enum,
+    // collection, and string bookkeeping whose size does not shrink in direct
+    // proportion to a small payload.
+    norito::DecodeLimits::new(
+        encoded_len,
+        encoded_len,
+        encoded_len.saturating_mul(2),
+        encoded_len
+            .saturating_mul(KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER)
+            .saturating_add(KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE),
+        KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH,
+    )
+}
+
 fn decode_canonical_kagemusha_archive_with_cleanup<T, F>(
     bytes: &[u8],
     mut cleanup: F,
@@ -603,26 +638,30 @@ where
     for<'de> T: NoritoDeserialize<'de>,
     F: FnMut(&mut T),
 {
-    let flags = *bytes
-        .get(norito::core::Header::SIZE - 1)
-        .ok_or(BridgeError::KagemushaProve)?;
-    // The header minor byte is the decoder's layout hint. The full header is
-    // validated by `decode_from_bytes` below before either byte is trusted.
-    let flags_hint = *bytes.get(5).ok_or(BridgeError::KagemushaProve)?;
-    let mut value: T = norito::decode_from_bytes(bytes).map_err(|_| BridgeError::KagemushaProve)?;
-    // Some local-only canonical archives contain transient note openings. Wipe
-    // the re-encoded comparison buffer for every archive so future secret
-    // request types cannot accidentally leave an unwiped heap copy here.
-    // Re-encode under the archive's advertised layout. Using ambient Norito
-    // decode state here would make canonicality depend on whichever protocol
-    // was decoded previously on this thread (for example, Connect uses layout
-    // flags 0 while Kagemusha archives use packed layouts).
-    let canonical_result = {
-        let _layout = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
-        norito::to_bytes(&value)
-    };
-    let canonical = match canonical_result {
-        Ok(bytes) => Zeroizing::new(bytes),
+    if kagemusha_archive_out_of_bounds(bytes.len()) {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let header = norito::core::Header::read(std::io::Cursor::new(bytes))
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    if header.compression != norito::Compression::None
+        || header.flags != norito::core::default_encode_flags()
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let _payload_context = norito::core::PayloadCtxGuard::enter(bytes);
+    let mut value: T = norito::decode_from_bytes_with_limits(
+        bytes,
+        kagemusha_canonical_decode_limits(bytes.len()),
+    )
+    .map_err(|_| BridgeError::KagemushaProve)?;
+    // Local-only archives can contain transient note openings. Always wipe the
+    // byte-for-byte comparison copy, and clean a fully decoded sensitive value
+    // before returning any post-decode canonicality error.
+    let canonical = match norito::encode_canonical(&value) {
+        Ok(canonical) => Zeroizing::new(canonical),
         Err(_) => {
             cleanup(&mut value);
             return Err(BridgeError::KagemushaProve);
@@ -5946,7 +5985,7 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
             || self.accepted_identity.candidate_record_sha256 != self.candidate_sha256
             || self.accepted_identity.candidate_manifest_sha256 != self.manifest_sha256
             || self.accepted_identity.production_capability_observed
-            || self.accepted_identity.source_repo_dirty
+            || !self.accepted_identity.source_repo_dirty
             || iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE
         {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
@@ -6085,10 +6124,9 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
 
     fn parsed_verifier(
         &self,
-    ) -> BridgeResult<Arc<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>> {
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4> {
         self.validate_live_inventory()?;
-        Ok(Arc::new(
-            iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_candidate_artifact_loader(
+        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_candidate_artifact_loader(
                 &self.candidate,
                 self.candidate_sha256,
                 self.manifest_sha256,
@@ -6098,8 +6136,7 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
                     })
                 },
             )
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?,
-        ))
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
     fn parsed_prover(
@@ -6154,21 +6191,13 @@ impl KagemushaRecursiveSpendArtifactSetViewV4
     fn runtime_verifier(
         &self,
     ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4> {
-        let artifacts = self.candidate_verifier_artifacts()?;
-        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(
-            &artifacts,
-        )
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
+        self.parsed_verifier()
     }
 
     fn runtime_prover(
         &self,
     ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
-        let artifacts = self.candidate_prover_artifacts()?;
-        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(
-            &artifacts,
-        )
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
+        self.parsed_prover()
     }
 
     fn verify_topup_roster_binding(
@@ -12963,9 +12992,7 @@ fn validate_kagemusha_candidate_evidence_lab_ordered_inventory_v4(
         || handles
             .iter()
             .any(|handle| !is_kagemusha_candidate_evidence_lab_artifact_handle_v4(*handle))
-        || expected_descriptor_sha256
-            .iter()
-            .any(|digest| *digest == [0; 32])
+        || expected_descriptor_sha256.contains(&[0; 32])
         || expected_descriptor_sha256
             .iter()
             .copied()
@@ -13320,8 +13347,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
                         drop(installed.candidate_payload(profile.parity, descriptor.kind)?);
                     }
                 }
-                drop(installed.candidate_verifier_artifacts()?);
-                drop(installed.candidate_prover_artifacts()?);
+                drop(installed.parsed_verifier()?);
+                drop(installed.parsed_prover()?);
                 let mut active = kagemusha_candidate_evidence_lab_installed_registry_v4()
                     .lock()
                     .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
@@ -13391,6 +13418,99 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
         unsafe { write_kagemusha_archive_bridge(out_identity_ptr, out_identity_len, &archive) }
     })();
     bridge_result_to_code(result)
+}
+
+/// Execute the candidate-only proof phase on a physical iOS process.
+///
+/// Simulator and non-iOS feature builds retain an explicit rejecting symbol so
+/// a candidate harness cannot silently fall back to another execution target.
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_apple_proof_phase_v1(
+    candidate_path_ptr: *const c_uchar,
+    candidate_path_len: c_ulong,
+    roster_path_ptr: *const c_uchar,
+    roster_path_len: c_ulong,
+    artifact_root_path_ptr: *const c_uchar,
+    artifact_root_path_len: c_ulong,
+    scenario_path_ptr: *const c_uchar,
+    scenario_path_len: c_ulong,
+    launch_nonce_ptr: *const c_uchar,
+    launch_nonce_len: c_ulong,
+    out_checkpoint_ptr: *mut *mut c_uchar,
+    out_checkpoint_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_checkpoint_ptr, out_checkpoint_len);
+    #[cfg(all(target_os = "ios", not(target_abi = "sim")))]
+    {
+        return unsafe {
+            kagemusha_candidate_apple::proof_phase_bridge_v1(
+                candidate_path_ptr,
+                candidate_path_len,
+                roster_path_ptr,
+                roster_path_len,
+                artifact_root_path_ptr,
+                artifact_root_path_len,
+                scenario_path_ptr,
+                scenario_path_len,
+                launch_nonce_ptr,
+                launch_nonce_len,
+                out_checkpoint_ptr,
+                out_checkpoint_len,
+            )
+        };
+    }
+    #[cfg(not(all(target_os = "ios", not(target_abi = "sim"))))]
+    {
+        ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE
+    }
+}
+
+/// Execute the candidate-only restart phase on a distinct physical iOS process.
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_apple_restart_phase_v1(
+    candidate_path_ptr: *const c_uchar,
+    candidate_path_len: c_ulong,
+    roster_path_ptr: *const c_uchar,
+    roster_path_len: c_ulong,
+    artifact_root_path_ptr: *const c_uchar,
+    artifact_root_path_len: c_ulong,
+    scenario_path_ptr: *const c_uchar,
+    scenario_path_len: c_ulong,
+    checkpoint_ptr: *const c_uchar,
+    checkpoint_len: c_ulong,
+    launch_nonce_ptr: *const c_uchar,
+    launch_nonce_len: c_ulong,
+    out_transcript_ptr: *mut *mut c_uchar,
+    out_transcript_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_transcript_ptr, out_transcript_len);
+    #[cfg(all(target_os = "ios", not(target_abi = "sim")))]
+    {
+        return unsafe {
+            kagemusha_candidate_apple::restart_phase_bridge_v1(
+                candidate_path_ptr,
+                candidate_path_len,
+                roster_path_ptr,
+                roster_path_len,
+                artifact_root_path_ptr,
+                artifact_root_path_len,
+                scenario_path_ptr,
+                scenario_path_len,
+                checkpoint_ptr,
+                checkpoint_len,
+                launch_nonce_ptr,
+                launch_nonce_len,
+                out_transcript_ptr,
+                out_transcript_len,
+            )
+        };
+    }
+    #[cfg(not(all(target_os = "ios", not(target_abi = "sim"))))]
+    {
+        ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE
+    }
 }
 
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
@@ -15327,7 +15447,10 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
             KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+            KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
+            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
+            KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4, KagemushaAuthenticatedReleaseV4,
@@ -15358,8 +15481,9 @@ mod kagemusha_bridge_tests {
             let circuit_params = KagemushaStepCircuitParamsV4 {
                 version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
                 k,
-                num_advice_per_phase: vec![1],
-                num_lookup_advice_per_phase: vec![1],
+                num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+                num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4
+                    .to_vec(),
                 num_fixed: 1,
                 lookup_bits: k - 1,
                 num_instance_columns: 1,
@@ -17673,6 +17797,40 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
+    fn candidate_lab_runtime_uses_the_bounded_candidate_parsers() {
+        let source = include_str!("lib.rs");
+        let installed_view = source
+            .split_once(
+                "impl KagemushaRecursiveSpendArtifactSetViewV4\n    for KagemushaCandidateEvidenceLabInstalledArtifactSetV4",
+            )
+            .expect("candidate-lab installed artifact view")
+            .1
+            .split_once(
+                "static KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_INSTALLED_ARTIFACT_SET_V4",
+            )
+            .expect("end of candidate-lab installed artifact view")
+            .0;
+        assert!(installed_view.contains("self.parsed_verifier()"));
+        assert!(installed_view.contains("self.parsed_prover()"));
+        assert!(!installed_view.contains("candidate_verifier_artifacts"));
+        assert!(!installed_view.contains("candidate_prover_artifacts"));
+
+        let install = source
+            .split_once(
+                "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_install_v4",
+            )
+            .expect("candidate-lab artifact-set installer")
+            .1
+            .split_once(
+                "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_is_installed_v4",
+            )
+            .expect("end of candidate-lab artifact-set installer")
+            .0;
+        assert!(install.contains("drop(installed.parsed_verifier()?)"));
+        assert!(install.contains("drop(installed.parsed_prover()?)"));
+    }
+
+    #[test]
     fn kagemusha_artifact_jni_management_bounds_every_array_before_copy() {
         let source = include_str!("lib.rs");
         for (symbol, bounded_copies, limits) in [
@@ -18050,7 +18208,9 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     #[test]
     fn recursive_spend_v4_production_feature_opens_only_the_authenticated_release_gate() {
-        assert!(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE);
+        const {
+            assert!(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE);
+        }
         require_kagemusha_recursive_spend_production_promotion_v4()
             .expect("production feature promotes the compiled proof backend");
 
@@ -18139,6 +18299,91 @@ mod kagemusha_bridge_tests {
         fresh_recipient_opening: KagemushaNoteOpeningV2,
         framed_artifacts: Vec<ProductionReleaseFramedArtifactV4>,
         live_pair: Vec<u8>,
+        taira_release_catalog: bool,
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
+    const TAIRA_RELEASE_ROSTER_ENV_V4: &str = "IROHA_KAGEMUSHA_TAIRA_RELEASE_ROSTER";
+    #[cfg(feature = "privacy-production-enabled")]
+    const TAIRA_RELEASE_CATALOG_DIR_ENV_V4: &str = "IROHA_KAGEMUSHA_TAIRA_RELEASE_CATALOG_DIR";
+    #[cfg(feature = "privacy-production-enabled")]
+    const TAIRA_RELEASE_ACTIVATION_HEIGHT_V4: u64 = 2;
+    #[cfg(feature = "privacy-production-enabled")]
+    const TAIRA_RELEASE_MINIMUM_WITHDRAWAL_HEIGHT_V4: u64 = 1_000_000;
+
+    #[cfg(feature = "privacy-production-enabled")]
+    fn configured_taira_topup_finality_roster_v4(
+        chain_id: &ChainId,
+        generation: &str,
+    ) -> Option<iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2> {
+        use std::io::Read as _;
+
+        let path = std::env::var_os(TAIRA_RELEASE_ROSTER_ENV_V4).map(std::path::PathBuf::from)?;
+        assert!(
+            path.is_absolute(),
+            "{TAIRA_RELEASE_ROSTER_ENV_V4} must select an absolute canonical Norito roster"
+        );
+        let metadata = std::fs::symlink_metadata(&path)
+            .unwrap_or_else(|error| panic!("inspect configured Taira release roster: {error}"));
+        assert!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "configured Taira release roster must be a regular non-symlink file"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            assert_eq!(
+                metadata.nlink(),
+                1,
+                "configured Taira release roster must not be hard-linked"
+            );
+            assert_eq!(
+                metadata.mode() & 0o022,
+                0,
+                "configured Taira release roster must not be group/world writable"
+            );
+        }
+        assert!(
+            metadata.len()
+                <= iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+            "configured Taira release roster exceeds its canonical size bound"
+        );
+        let mut file = File::open(&path)
+            .unwrap_or_else(|error| panic!("open configured Taira release roster: {error}"));
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(metadata.len()).expect("bounded Taira roster size fits usize"),
+        );
+        file.read_to_end(&mut bytes)
+            .unwrap_or_else(|error| panic!("read configured Taira release roster: {error}"));
+        let roster = norito::decode_from_bytes::<
+            iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+        >(&bytes)
+        .expect("decode configured canonical Taira release roster");
+        assert_eq!(
+            norito::to_bytes(&roster).expect("re-encode configured Taira release roster"),
+            bytes,
+            "configured Taira release roster must use canonical Norito"
+        );
+        roster
+            .validate()
+            .expect("configured Taira release roster must have valid BLS PoPs");
+        assert_eq!(&roster.chain_id, chain_id);
+        assert_eq!(roster.artifact_generation, generation);
+        assert_eq!(roster.windows.len(), 1);
+        let window = &roster.windows[0];
+        assert_eq!(
+            window.activates_at_height,
+            TAIRA_RELEASE_ACTIVATION_HEIGHT_V4
+        );
+        assert!(
+            window.withdraws_at_height >= TAIRA_RELEASE_MINIMUM_WITHDRAWAL_HEIGHT_V4,
+            "configured Taira release roster window is too short for a deployed testnet"
+        );
+        assert_eq!(
+            window.consensus_mode,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+        );
+        Some(roster)
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -18234,7 +18479,8 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
             KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KagemushaPastaPublicLayoutV4,
+            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
+            KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4, KagemushaPastaPublicLayoutV4,
             KagemushaStepCircuitParamsV4,
         };
 
@@ -18251,7 +18497,7 @@ mod kagemusha_bridge_tests {
             num_instance_columns: 1,
             public_input_limbs: layout.instance_column_limbs,
             minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: 16_384,
+            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
         };
         params
             .validate_release_generation_profile()
@@ -18314,8 +18560,23 @@ mod kagemusha_bridge_tests {
         assert_eq!(chain_id.as_str(), CURRENT_TAIRA_CHAIN_ID);
         assert_eq!(asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
         assert_eq!(fresh_recipient_request.asset, asset);
-        let (topup_roster, topup_signing_keys) =
-            production_topup_finality_roster_v2(&chain_id, generation);
+        let configured_taira_roster =
+            configured_taira_topup_finality_roster_v4(&chain_id, generation);
+        let taira_release_catalog = configured_taira_roster.is_some();
+        let (topup_roster, topup_signing_keys) = configured_taira_roster.map_or_else(
+            || production_topup_finality_roster_v2(&chain_id, generation),
+            |roster| (roster, Vec::new()),
+        );
+        let activation_height = if taira_release_catalog {
+            TAIRA_RELEASE_ACTIVATION_HEIGHT_V4
+        } else {
+            1
+        };
+        let withdrawal_height = if taira_release_catalog {
+            topup_roster.windows[0].withdraws_at_height
+        } else {
+            1_000
+        };
         let topup_roster_bytes =
             norito::to_bytes(&topup_roster).expect("encode production top-up finality roster");
 
@@ -18429,8 +18690,8 @@ mod kagemusha_bridge_tests {
             chain_id,
             asset,
             asset_scale: 2,
-            activation_height: 1,
-            withdrawal_height: 1_000,
+            activation_height,
+            withdrawal_height,
             max_proof_bytes: u32::try_from(live_pair.len())
                 .expect("generated pair length fits release ceiling"),
             profiles: vec![step_eq, step_ep],
@@ -18573,12 +18834,15 @@ mod kagemusha_bridge_tests {
             fresh_recipient_opening,
             framed_artifacts,
             live_pair,
+            taira_release_catalog,
         }
     }
 
     #[cfg(feature = "privacy-production-enabled")]
     fn production_topup_finality_proof_v2(
-        fixture: &ProductionReleaseFixtureV4,
+        manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
+        topup_roster: &iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+        topup_signing_keys: &[KeyPair],
         anchor: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
     ) -> iroha_data_model::offline::KagemushaTopUpFinalityProofV2 {
         use iroha_crypto::{HashOf, Signature};
@@ -18598,8 +18862,7 @@ mod kagemusha_bridge_tests {
             },
         };
 
-        let window = fixture
-            .topup_roster
+        let window = topup_roster
             .windows
             .first()
             .expect("production top-up roster window");
@@ -18612,7 +18875,7 @@ mod kagemusha_bridge_tests {
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
-            epoch_end_height: fixture.manifest.withdrawal_height,
+            epoch_end_height: manifest.withdrawal_height,
             next_epoch_snapshot: None,
             snapshot_bootstrap: None,
             mode: window.consensus_mode,
@@ -18711,7 +18974,7 @@ mod kagemusha_bridge_tests {
             .iter()
             .map(|index| {
                 Signature::try_new(
-                    fixture.topup_signing_keys
+                    topup_signing_keys
                         [usize::try_from(*index).expect("validator index fits usize")]
                     .private_key(),
                     &preimage,
@@ -18761,6 +19024,364 @@ mod kagemusha_bridge_tests {
             .validate_structure()
             .expect("production SBD top-up finality proof structure");
         proof
+    }
+
+    /// Exercise a genuine step-1 -> step-2 recursion with the exact installed
+    /// release keys before a Taira catalog may be exported.
+    ///
+    /// This is deliberately a prover/key regression, not finality evidence:
+    /// Taira's public finality roster does not expose validator private keys to
+    /// the release builder. A separately generated, genuinely signed local
+    /// finality carrier supplies structurally valid public init fields, while
+    /// the installed production prover and verifier authenticate both recursive
+    /// proofs against the exact Taira manifest and PK/VK pair.
+    #[cfg(feature = "privacy-production-enabled")]
+    fn production_release_key_step_count_regression_v1(
+        fixture: &ProductionReleaseFixtureV4,
+        installed: &KagemushaRecursiveSpendInstalledArtifactSetV4,
+    ) {
+        use iroha_core::zk::{
+            ZK_BACKEND_HALO2_IPA,
+            confidential_v2::{
+                CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID, ConfidentialTransferInputV2,
+                ConfidentialTransferOutputV2, build_confidential_transfer_proof_v2_with_paths,
+                confidential_transfer_v2_vk_box, kagemusha_topup_shield_v2_vk_box,
+                parse_transfer_public_inputs,
+            },
+            hash_vk,
+            kagemusha_v2::{KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4},
+        };
+        use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
+            KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendBranchV2,
+            KagemushaRecursiveSpendInitRequestV4, KagemushaRecursiveSpendInputBranchV2,
+            KagemushaRecursiveSpendSplitIntentV4, KagemushaScaledAmountV2,
+        };
+
+        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: fixture.manifest.generation.clone(),
+            manifest_sha256: installed.manifest_sha256(),
+        };
+        artifact_binding
+            .validate()
+            .expect("release-key regression artifact binding");
+
+        let initial_zero_path = confidential_v2::compute_confidential_merkle_path_v2(&[], 0)
+            .expect("release-key regression empty next-zero path");
+        let (siblings, directions, _witness_nodes, root) = initial_zero_path.into_parts();
+        let topup_zero_frontier = KagemushaOutputMembershipFrontierV4 {
+            version: KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_VERSION_V4,
+            leaf_index: 0,
+            zero_path: KagemushaConfidentialMerklePathV2 {
+                siblings,
+                directions,
+                root,
+            },
+        };
+        topup_zero_frontier
+            .validate()
+            .expect("release-key regression top-up frontier");
+        let sender_opening = KagemushaNoteOpeningV2 {
+            spend_key: [0xA1; 32],
+            rho: [0xA2; 32],
+            diversifier: confidential_v2::derive_confidential_diversifier_v2(
+                b"taira-release-key-step-count-regression-v1",
+            ),
+        };
+        let payer = sample_account(0xA3);
+        let amount = KagemushaScaledAmountV2::new(1_000, 2).expect("release-key regression amount");
+        let current_note = derive_kagemusha_owned_note_v2(
+            &fixture.manifest.chain_id,
+            &fixture.manifest.asset,
+            amount,
+            &sender_opening,
+        )
+        .expect("release-key regression owned note");
+        let topup_output_membership = kagemusha_output_membership_paths_from_frontier_v4(
+            &topup_zero_frontier,
+            Some(current_note.note_commitment),
+            None,
+        )
+        .expect("release-key regression init membership paths");
+        let shield_verifier_id = VerifyingKeyId::new(
+            ZK_BACKEND_HALO2_IPA,
+            KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
+        );
+        let shield_verifier_commitment = hash_vk(
+            &kagemusha_topup_shield_v2_vk_box()
+                .expect("release-key regression top-up shield verifier"),
+        );
+        let topup_anchor = iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
+            chain_id: fixture.manifest.chain_id.clone(),
+            payer: payer.clone(),
+            asset: AssetId::new(fixture.manifest.asset.clone(), payer),
+            asset_scale: fixture.manifest.asset_scale,
+            amount,
+            initial_root: topup_output_membership.initial_root,
+            finalized_root: topup_output_membership.final_root,
+            shield_leaf_index: 0,
+            current_note,
+            topup_operation_id: [0xA4; 32],
+            shield_verifier_id,
+            shield_verifier_commitment,
+            artifact_binding: artifact_binding.clone(),
+            finalized_height: 42,
+            finalized_tx_hash: [0xA5; 32],
+            anchor_digest: [0; 32],
+        }
+        .finalize_digest()
+        .expect("release-key regression top-up anchor");
+        let (local_roster, local_signing_keys) = production_topup_finality_roster_v2(
+            &fixture.manifest.chain_id,
+            &fixture.manifest.generation,
+        );
+        let topup_finality_proof = production_topup_finality_proof_v2(
+            &fixture.manifest,
+            &local_roster,
+            &local_signing_keys,
+            &topup_anchor,
+        );
+        let init_request = KagemushaRecursiveSpendInitRequestV4 {
+            topup_anchor,
+            topup_finality_proof,
+            topup_finality_roster_artifact: local_roster,
+            artifact_binding: artifact_binding.clone(),
+        };
+        init_request
+            .validate_public_binding()
+            .expect("release-key regression structurally bound init request");
+        let init_membership = topup_output_membership
+            .for_init_v4(&init_request.topup_anchor)
+            .expect("release-key regression init output membership");
+        let insertion = topup_output_membership
+            .recipient
+            .as_ref()
+            .expect("release-key regression init insertion");
+        let init_zero_path = kagemusha_confidential_privacy_path_v2(&insertion.update_path)
+            .expect("release-key regression init privacy path");
+        let init_statement = kagemusha_recursive_spend_init_statement_v4(
+            &init_request,
+            init_membership.dummy_leaf_index,
+        )
+        .expect("release-key regression init statement");
+        assert_eq!(init_statement.proof_step_count, 1);
+        assert_eq!(init_statement.peer_hop_count, 0);
+        let init_operation = kagemusha_recursive_spend_init_operation_v4(
+            &init_request,
+            &init_statement,
+            &init_membership,
+        )
+        .expect("release-key regression init operation");
+
+        // Retain one parsed prover for both steps. The recursive append itself
+        // verifies the exact opaque init parent; terminal verification follows
+        // after the proving keys are released so the two large native views
+        // never overlap.
+        let prover = installed
+            .runtime_prover()
+            .expect("load the exact installed release prover once");
+        let init_pair = prover
+            .prove_init_v4(
+                &init_request,
+                &init_statement,
+                &sender_opening.spend_key,
+                sender_opening.rho,
+                sender_opening.diversifier,
+                &init_zero_path,
+                &init_membership,
+            )
+            .expect("prove the release-key regression initial step");
+        let init_bundle = build_kagemusha_recursive_spend_bundle_v4(
+            installed,
+            init_statement,
+            &init_operation,
+            init_pair,
+        )
+        .expect("build the release-key regression initial bundle");
+        let input_membership = topup_output_membership
+            .note_membership_witness(insertion)
+            .expect("release-key regression input membership witness");
+
+        let recipient_request = peer_split_recipient_request_for_asset_and_request_v4(
+            &fixture.manifest.chain_id,
+            &fixture.manifest.asset,
+            amount,
+            0xA6,
+            0xA7,
+            1_900_000_010_000,
+            1_900_000_310_000,
+        );
+        let recipient_digest = recipient_request
+            .digest()
+            .expect("release-key regression recipient digest");
+        let recipient_material: KagemushaRecipientOutputProverMaterialV2 =
+            decode_canonical_kagemusha_archive(&recipient_request.sender_output_prover_material)
+                .expect("release-key regression recipient prover material");
+        assert_eq!(recipient_material.amount, amount.atomic_units);
+        let recipient_commitment = confidential_v2::derive_confidential_note_v2(
+            &fixture.manifest.asset.to_string(),
+            recipient_material.amount,
+            recipient_material.rho,
+            recipient_material.owner_tag,
+        )
+        .expect("release-key regression recipient commitment");
+        assert_eq!(
+            recipient_commitment,
+            recipient_request.recipient_output.note_commitment
+        );
+
+        let append_frontier =
+            kagemusha_output_membership_frontier_from_witness_v4(&init_bundle, &input_membership)
+                .expect("release-key regression post-init frontier");
+        let append_paths = kagemusha_output_membership_paths_from_frontier_v4(
+            &append_frontier,
+            Some(recipient_commitment),
+            None,
+        )
+        .expect("release-key regression append membership paths");
+        let input_paths = vec![
+            kagemusha_confidential_privacy_path_v2(&input_membership.input_path)
+                .expect("release-key regression input path"),
+            kagemusha_confidential_privacy_path_v2(&input_membership.dummy_input_path)
+                .expect("release-key regression dummy input path"),
+        ];
+        let inputs = vec![ConfidentialTransferInputV2 {
+            amount: amount.atomic_units,
+            rho: sender_opening.rho,
+            diversifier: sender_opening.diversifier,
+            leaf_index: usize::try_from(input_membership.leaf_index)
+                .expect("release-key regression leaf index"),
+        }];
+        let outputs = vec![ConfidentialTransferOutputV2 {
+            amount: recipient_material.amount,
+            rho: recipient_material.rho,
+            owner_tag: recipient_material.owner_tag,
+        }];
+        let transfer_vk =
+            confidential_transfer_v2_vk_box().expect("release-key regression transfer verifier");
+        let transfer_proof = build_confidential_transfer_proof_v2_with_paths(
+            &fixture.manifest.chain_id,
+            &fixture.manifest.asset.to_string(),
+            &sender_opening.spend_key,
+            &input_paths,
+            &inputs,
+            &outputs,
+            init_bundle.statement.final_root,
+            CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            &transfer_vk,
+        )
+        .expect("release-key regression confidential transfer proof");
+        let (
+            input_commitments,
+            input_nullifiers,
+            output_commitments,
+            transfer_root,
+            asset_tag,
+            chain_tag,
+        ) = parse_transfer_public_inputs(&transfer_proof.proof.bytes)
+            .expect("release-key regression transfer public inputs");
+        assert_eq!(
+            transfer_proof.nullifiers,
+            vec![init_bundle.statement.current_note.spend_nullifier]
+        );
+        assert_eq!(
+            transfer_proof.output_commitments,
+            vec![recipient_commitment]
+        );
+        assert_eq!(transfer_proof.root, init_bundle.statement.final_root);
+        let transfer_public = KagemushaStepTransferPublicV4 {
+            input_commitments,
+            input_nullifiers,
+            output_commitments,
+            root: transfer_root,
+            asset_tag,
+            chain_tag,
+        };
+        let split = KagemushaRecursiveSpendSplitIntentV4 {
+            chain_id: fixture.manifest.chain_id.clone(),
+            asset: fixture.manifest.asset.clone(),
+            inputs: vec![KagemushaRecursiveSpendInputBranchV2 {
+                bundle_digest: init_bundle
+                    .digest()
+                    .expect("release-key regression parent digest"),
+                input_note: init_bundle.statement.current_note.clone(),
+                branch_claims: init_bundle.statement.branch_claims.clone(),
+                input_root: init_bundle.statement.final_root,
+                proof_step_count: init_bundle.statement.proof_step_count,
+                peer_hop_count: init_bundle.statement.peer_hop_count,
+            }],
+            topup_anchor_refs: init_bundle.statement.topup_anchor_refs.clone(),
+            asset_scale: fixture.manifest.asset_scale,
+            output_artifact_binding: artifact_binding,
+            transfer_amount: amount,
+            recipient_output: recipient_request.recipient_output.clone(),
+            change_output: None,
+            recipient_request_digest: recipient_digest,
+            operation_id: [0xA8; 32],
+        };
+        split
+            .validate_public_binding()
+            .expect("release-key regression split binding");
+        let append_membership = append_paths
+            .for_append_v4(&split)
+            .expect("release-key regression append output membership");
+        let append_statement = kagemusha_recursive_spend_append_statement_v4(
+            &split,
+            KagemushaRecursiveSpendBranchV2::Recipient,
+            append_membership.final_root,
+            append_membership.dummy_leaf_index,
+        )
+        .expect("release-key regression append statement");
+        assert_eq!(append_statement.proof_step_count, 2);
+        assert_eq!(append_statement.peer_hop_count, 1);
+        let append_operation = KagemushaStepOperationVectorV4::from_append_v4(
+            &split,
+            &append_statement,
+            &transfer_public,
+            &append_membership,
+        )
+        .expect("release-key regression append operation");
+        let parent_pair = kagemusha_recursive_spend_pair_bytes_v4(&init_bundle)
+            .expect("release-key regression parent pair");
+        let append_pair = prover
+            .prove_append_v4(
+                &split,
+                &append_statement,
+                &transfer_public,
+                &sender_opening.spend_key,
+                &input_paths,
+                &inputs,
+                &outputs,
+                &append_membership,
+                &[parent_pair],
+            )
+            .expect("prove the second step with the exact installed release key");
+        let append_bundle = build_kagemusha_recursive_spend_bundle_v4(
+            installed,
+            append_statement,
+            &append_operation,
+            append_pair,
+        )
+        .expect("build the release-key regression append bundle");
+        drop(prover);
+
+        let verifier = installed
+            .runtime_verifier()
+            .expect("load the exact installed release verifier once");
+        verifier
+            .verify_bundle_operation_v4(&init_bundle, &init_operation)
+            .expect("terminally verify the release-key regression initial bundle");
+        verifier
+            .verify_bundle_operation_v4(&append_bundle, &append_operation)
+            .expect("terminally verify the release-key regression second-step bundle");
+        assert_eq!(init_bundle.statement.proof_step_count, 1);
+        assert_eq!(init_bundle.statement.peer_hop_count, 0);
+        assert_eq!(append_bundle.statement.proof_step_count, 2);
+        assert_eq!(append_bundle.statement.peer_hop_count, 1);
+        eprintln!("KAGEMUSHA_TAIRA_RELEASE_STAGE_V4 release-key-step-count:verified");
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -19073,7 +19694,12 @@ mod kagemusha_bridge_tests {
         }
         .finalize_digest()
         .expect("finalize production SBD top-up anchor");
-        let topup_finality_proof = production_topup_finality_proof_v2(fixture, &topup_anchor);
+        let topup_finality_proof = production_topup_finality_proof_v2(
+            &fixture.manifest,
+            &fixture.topup_roster,
+            &fixture.topup_signing_keys,
+            &topup_anchor,
+        );
         installed
             .verify_topup_finality(&topup_finality_proof, &fixture.topup_roster, &topup_anchor)
             .expect("verify production SBD top-up against installed release");
@@ -19115,6 +19741,14 @@ mod kagemusha_bridge_tests {
         init_result
             .validate_for_request(&init_local.request)
             .expect("production SBD init result binding");
+        assert_eq!(
+            init_result.bundle.statement.proof_step_count, 1,
+            "the installed release key must prove the initial recursive step"
+        );
+        assert_eq!(
+            init_result.bundle.statement.peer_hop_count, 0,
+            "initialization must not consume an offline peer hop"
+        );
 
         let change_amount =
             KagemushaScaledAmountV2::new(300, 2).expect("production SBD acceptance change amount");
@@ -19216,6 +19850,14 @@ mod kagemusha_bridge_tests {
         split_result
             .validate_public_binding()
             .expect("production SBD split result binding");
+        assert_eq!(
+            split_result.recipient_bundle.statement.proof_step_count, 2,
+            "the same installed release key must prove a second recursive step"
+        );
+        assert_eq!(
+            split_result.recipient_bundle.statement.peer_hop_count, 1,
+            "the first recipient append must consume exactly one offline peer hop"
+        );
         assert_eq!(split_result.split.transfer_amount.atomic_units, 700);
         assert_eq!(
             split_result
@@ -19866,13 +20508,10 @@ mod kagemusha_bridge_tests {
             Ok(names)
         }
 
-        fn expected_inventory<'a>(
-            expected: &'a [ProductionSbdAcceptanceExpectedFileV1],
+        fn expected_inventory(
+            expected: &[ProductionSbdAcceptanceExpectedFileV1],
         ) -> std::io::Result<(
-            std::collections::BTreeMap<
-                std::path::PathBuf,
-                &'a ProductionSbdAcceptanceExpectedFileV1,
-            >,
+            std::collections::BTreeMap<std::path::PathBuf, &ProductionSbdAcceptanceExpectedFileV1>,
             std::collections::BTreeSet<std::path::PathBuf>,
         )> {
             let mut files = std::collections::BTreeMap::new();
@@ -20103,6 +20742,163 @@ mod kagemusha_bridge_tests {
         fn path(&self) -> &std::path::Path {
             &self.path
         }
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
+    fn export_taira_release_catalog_v4(fixture: &ProductionReleaseFixtureV4) -> std::path::PathBuf {
+        use std::{
+            io::{Read as _, Seek as _, SeekFrom, Write as _},
+            path::PathBuf,
+        };
+
+        assert!(fixture.taira_release_catalog);
+        assert!(fixture.topup_signing_keys.is_empty());
+        assert_eq!(
+            fixture.manifest.activation_height,
+            TAIRA_RELEASE_ACTIVATION_HEIGHT_V4
+        );
+        assert!(fixture.manifest.withdrawal_height >= TAIRA_RELEASE_MINIMUM_WITHDRAWAL_HEIGHT_V4);
+
+        let output_path = std::env::var_os(TAIRA_RELEASE_CATALOG_DIR_ENV_V4)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{TAIRA_RELEASE_CATALOG_DIR_ENV_V4} is required with {TAIRA_RELEASE_ROSTER_ENV_V4}"
+                )
+            });
+        assert!(
+            output_path.is_absolute(),
+            "{TAIRA_RELEASE_CATALOG_DIR_ENV_V4} must select an absolute owner-private directory"
+        );
+        let output = ProductionSbdAcceptanceBundleRootV1::create(output_path.clone())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{TAIRA_RELEASE_CATALOG_DIR_ENV_V4} must be normalized, symlink-free, and absent or empty: {error}"
+                )
+            });
+
+        let manifest_bytes = norito::to_bytes(&fixture.manifest).expect("encode Taira manifest");
+        let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
+        assert_eq!(fixture.promotion_record.manifest_sha256, manifest_sha256);
+        let digest = hex::encode(manifest_sha256);
+        let release_prefix = format!("catalog/{digest}");
+        let release_path = |file_name: &str| format!("{release_prefix}/{file_name}");
+        let mut expected = Vec::with_capacity(17);
+
+        let mut write_bytes = |relative: String, bytes: &[u8]| {
+            output
+                .write_private_file(&relative, bytes)
+                .unwrap_or_else(|error| panic!("write Taira release file `{relative}`: {error}"));
+            expected.push(ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+                &relative, bytes,
+            ));
+        };
+
+        write_bytes(
+            "release-policy-v1.norito".to_owned(),
+            &norito::to_bytes(&fixture.policy).expect("encode Taira release policy"),
+        );
+        write_bytes(release_path("manifest.norito"), &manifest_bytes);
+        let mut manifest_json =
+            norito::json::to_string_pretty(&fixture.manifest).expect("render Taira manifest JSON");
+        assert!(
+            manifest_json.contains("\"asset\""),
+            "Taira release JSON must expose the canonical `asset` field"
+        );
+        assert!(
+            !manifest_json.contains("\"asset_definition_id\""),
+            "Taira release JSON must not rename `asset` for deployment tooling"
+        );
+        manifest_json.push('\n');
+        write_bytes(release_path("manifest.json"), manifest_json.as_bytes());
+        write_bytes(
+            release_path("manifest.norito.sha256"),
+            format!("{digest}\n").as_bytes(),
+        );
+        write_bytes(
+            release_path(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
+            ),
+            &norito::to_bytes(&fixture.attestation).expect("encode Taira release attestation"),
+        );
+        write_bytes(
+            release_path(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+            ),
+            &fixture.benchmark_evidence,
+        );
+        write_bytes(
+            release_path(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+            ),
+            &fixture.cryptographic_review,
+        );
+        write_bytes(
+            release_path("promotion-record-v4.norito"),
+            &norito::to_bytes(&fixture.promotion_record)
+                .expect("encode Taira release promotion record"),
+        );
+        write_bytes(
+            release_path(&fixture.manifest.topup_finality_roster_artifact.file_name),
+            &norito::to_bytes(&fixture.topup_roster).expect("encode Taira top-up finality roster"),
+        );
+
+        let descriptors = fixture
+            .manifest
+            .profiles
+            .iter()
+            .flat_map(|profile| profile.artifacts.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(descriptors.len(), fixture.framed_artifacts.len());
+        drop(write_bytes);
+        for (descriptor, framed) in descriptors.iter().zip(&fixture.framed_artifacts) {
+            let relative = release_path(&descriptor.file_name);
+            let mut destination = output
+                .create_private_file(&relative)
+                .unwrap_or_else(|error| panic!("create Taira artifact `{relative}`: {error}"));
+            let mut source = framed.file.lock().expect("Taira artifact file lock");
+            assert!(kagemusha_recursive_spend_file_is_read_only_v4(&source));
+            assert_eq!(
+                source.metadata().expect("Taira artifact metadata").len(),
+                descriptor.size_bytes
+            );
+            source
+                .seek(SeekFrom::Start(0))
+                .expect("rewind Taira artifact");
+            let mut remaining = descriptor.size_bytes;
+            let mut digest_hasher = Sha256::new();
+            let mut chunk = [0_u8; 64 * 1024];
+            while remaining != 0 {
+                let take = usize::try_from(remaining.min(chunk.len() as u64))
+                    .expect("bounded Taira artifact chunk size");
+                source
+                    .read_exact(&mut chunk[..take])
+                    .expect("read Taira artifact");
+                destination
+                    .write_all(&chunk[..take])
+                    .expect("write Taira artifact");
+                digest_hasher.update(&chunk[..take]);
+                remaining -= take as u64;
+            }
+            assert_eq!(
+                <[u8; 32]>::from(digest_hasher.finalize()),
+                descriptor.sha256
+            );
+            source
+                .seek(SeekFrom::Start(0))
+                .expect("restore Taira artifact cursor");
+            destination.sync_all().expect("sync Taira artifact");
+            expected.push(ProductionSbdAcceptanceExpectedFileV1 {
+                path: relative,
+                size: descriptor.size_bytes,
+                sha256: descriptor.sha256,
+            });
+        }
+        output
+            .finish(&expected)
+            .expect("authenticate exact Taira release catalog export");
+        assert_eq!(output.path(), output_path);
+        output_path
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -20990,6 +21786,37 @@ mod kagemusha_bridge_tests {
         drop(verifier);
         eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 qualification-pair:verified");
 
+        if fixture.taira_release_catalog {
+            resource_guard
+                .write_phase("bridge.taira-release.release-key-step-count.begin")
+                .expect("write pre-regression resource-supervisor phase");
+            production_release_key_step_count_regression_v1(&fixture, installed.as_ref());
+            resource_guard
+                .write_phase("bridge.taira-release.release-key-step-count.complete")
+                .expect("write post-regression resource-supervisor phase");
+            let path = export_taira_release_catalog_v4(&fixture);
+            eprintln!(
+                "wrote exact authenticated Taira release catalog to {}",
+                path.display()
+            );
+            eprintln!("KAGEMUSHA_TAIRA_RELEASE_STAGE_V4 catalog:exported");
+            assert_eq!(
+                unsafe {
+                    connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4(
+                        manifest_sha256.as_ptr(),
+                        32,
+                    )
+                },
+                0
+            );
+            eprintln!("KAGEMUSHA_TAIRA_RELEASE_STAGE_V4 uninstall:complete");
+            eprintln!("KAGEMUSHA_TAIRA_RELEASE_V4_COMPLETED");
+            resource_guard
+                .write_phase("bridge.taira-release.complete")
+                .expect("write Taira release completion resource-supervisor phase");
+            return;
+        }
+
         let lifecycle = production_sbd_acceptance_lifecycle_v1(&fixture, installed.as_ref());
         eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 lifecycle:complete");
         assert!(lifecycle.verify_result.valid);
@@ -21047,6 +21874,69 @@ mod kagemusha_bridge_tests {
         run_large_stack_production_sbd_acceptance_test(move || {
             production_sbd_acceptance_test_body_v1(resource_guard);
         });
+    }
+
+    #[test]
+    fn taira_release_export_requires_same_key_step_one_to_step_two_regression() {
+        let source = include_str!("lib.rs");
+        let helper = source
+            .split_once("fn production_release_key_step_count_regression_v1(")
+            .expect("Taira release-key regression")
+            .1
+            .split_once("fn production_sbd_offline_readiness_v4(")
+            .expect("end of Taira release-key regression")
+            .0;
+        for required in [
+            ".runtime_prover()",
+            ".prove_init_v4(",
+            ".prove_append_v4(",
+            "drop(prover);",
+            ".runtime_verifier()",
+            ".verify_bundle_operation_v4(&init_bundle",
+            ".verify_bundle_operation_v4(&append_bundle",
+            "init_bundle.statement.proof_step_count, 1",
+            "append_bundle.statement.proof_step_count, 2",
+            "init_bundle.statement.peer_hop_count, 0",
+            "append_bundle.statement.peer_hop_count, 1",
+        ] {
+            assert!(
+                helper.contains(required),
+                "release-key regression omits `{required}`"
+            );
+        }
+        assert_eq!(
+            helper.matches(".runtime_prover()").count(),
+            1,
+            "both recursive steps must reuse one parsed installed prover"
+        );
+        assert_eq!(
+            helper.matches(".runtime_verifier()").count(),
+            1,
+            "both recursive bundles must reuse one parsed installed verifier"
+        );
+
+        let body = source
+            .split_once("fn production_sbd_acceptance_test_body_v1(")
+            .expect("production acceptance body")
+            .1
+            .split_once(
+                "fn recursive_spend_v4_production_feature_installs_and_executes_real_release()",
+            )
+            .expect("end of production acceptance body")
+            .0;
+        let qualification = body
+            .find("qualification-pair:verified")
+            .expect("qualification-pair gate");
+        let regression = body
+            .find("production_release_key_step_count_regression_v1(")
+            .expect("release-key step-count gate");
+        let export = body
+            .find("export_taira_release_catalog_v4(")
+            .expect("Taira catalog export");
+        assert!(
+            qualification < regression && regression < export,
+            "Taira export must follow both qualification and step-count gates"
+        );
     }
 
     #[test]
@@ -30603,6 +31493,50 @@ fn java_sorafs_reference_validate_hedging_payload_json(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+    env: &mut jni::JNIEnv<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let payload_bytes = read_java_byte_array(env, &payload, "noritoBytes")
+            .ok_or_else(|| "invalid appeal-finance CancelAssetLock payload bytes".to_owned())?;
+        let label_bytes = read_java_byte_array(env, &label, "label")
+            .ok_or_else(|| "invalid appeal-finance CancelAssetLock label bytes".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+                payload_bytes.as_ptr(),
+                payload_bytes.len(),
+                label_bytes.as_ptr(),
+                label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe {
+            java_sorafs_reference_buffer_to_array(
+                env,
+                buffer,
+                "SoraFS appeal-finance CancelAssetLock validation",
+            )
+        }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_reference_validate_governance_log_node_json(
     env: &mut jni::JNIEnv<'_>,
     payload: jni::objects::JByteArray<'_>,
@@ -33158,7 +34092,7 @@ fn java_native_kagemusha_candidate_lab_accepted_identity_v4(
         .map_err(|_| "candidate-lab identity failed revalidation".to_owned())?;
         if expected != installed.accepted_identity
             || expected.production_capability_observed
-            || expected.source_repo_dirty
+            || !expected.source_repo_dirty
             || expected.artifacts.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
         {
             return Err("candidate-lab identity changed after installation".to_owned());
@@ -38049,6 +38983,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignerContractRevision(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    native_signer_jni_contract_revision() as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -38278,6 +39227,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    native_signer_jni_contract_revision() as jni::sys::jint
 }
 
 #[cfg(any(
@@ -38711,6 +39675,24 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     target_os = "macos",
     target_os = "windows"
 ))]
+/// Reports that the Kotlin/JVM ABI contains appeal-finance validator symbols.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
@@ -38768,6 +39750,32 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     java_sorafs_reference_validate_hedging_payload_json(
         &mut env,
         kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+/// JNI entrypoint for Kotlin/JVM appeal-finance `CancelAssetLock` validation.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+        &mut env,
         payload,
         label,
         generated_at,
@@ -39200,6 +40208,24 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     target_os = "macos",
     target_os = "windows"
 ))]
+/// Reports that the Java Android ABI contains appeal-finance validator symbols.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
@@ -39257,6 +40283,32 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     java_sorafs_reference_validate_hedging_payload_json(
         &mut env,
         kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+/// JNI entrypoint for Java Android appeal-finance `CancelAssetLock` validation.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+        &mut env,
         payload,
         label,
         generated_at,
@@ -43894,6 +44946,36 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_hedging_json(
     unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
 }
 
+/// Validate one canonical appeal-finance `CancelAssetLock` V1 payload.
+///
+/// The returned `ValidationOutcomeV1` JSON allocation must be released with
+/// [`connect_norito_free`].
+///
+/// # Safety
+/// Every non-null input pointer must remain valid for its corresponding length
+/// until this function returns. Output pointers must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    label_ptr: *const c_uchar,
+    label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+            bytes_ptr,
+            bytes_len as usize,
+            label_ptr,
+            label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
 /// Validate a bounded heterogeneous SoraFS fixture bundle and all supported
 /// manifest, provider, challenge, proof, repair, and orderbook cross-links.
 ///
@@ -45217,6 +46299,11 @@ mod tests {
     use iroha_data_model::isi::rwa::RwaInstructionBox;
 
     use super::*;
+
+    #[test]
+    fn native_signer_jni_contract_revision_is_the_v1_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 1);
+    }
 
     #[test]
     fn disabled_local_fetch_integrity_maps_to_options_error() {
@@ -47606,7 +48693,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_archive_reencoding_ignores_connect_layout_context() {
+    fn canonical_archive_decode_ignores_connect_layout_context_and_rejects_alternate_layout() {
         let envelope = proto::EnvelopeV1 {
             seq: 9,
             payload: proto::ConnectPayloadV1::Control(proto::ControlAfterKeyV1::Close {
@@ -47616,31 +48703,129 @@ mod tests {
                 retryable: false,
             }),
         };
-        let archive = {
+        let canonical =
+            norito::encode_canonical(&envelope).expect("encode canonical archive fixture");
+        let alternate = {
             let packed_flags =
                 norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
             let _layout =
                 norito::core::DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
-            norito::to_bytes(&envelope).expect("encode packed canonical archive")
+            norito::to_bytes(&envelope).expect("encode alternate-layout archive")
         };
         assert_ne!(
-            archive[norito::core::Header::SIZE - 1],
+            alternate[norito::core::Header::SIZE - 1],
             proto::CONNECT_LAYOUT_FLAGS,
             "regression archive must exercise a layout distinct from Connect"
         );
+        assert_ne!(alternate, canonical);
 
         let _connect_layout = norito::core::DecodeFlagsGuard::enter_with_hint(
             proto::CONNECT_LAYOUT_FLAGS,
             proto::CONNECT_LAYOUT_FLAGS,
         );
         let ambient_before = norito::core::effective_decode_flags();
-        let decoded: proto::EnvelopeV1 = decode_canonical_kagemusha_archive(&archive)
+        let decoded: proto::EnvelopeV1 = decode_canonical_kagemusha_archive(&canonical)
             .expect("canonical archive must ignore ambient Connect layout state");
         assert_eq!(decoded, envelope);
+        assert!(
+            decode_canonical_kagemusha_archive::<proto::EnvelopeV1>(&alternate).is_err(),
+            "alternate layouts are structurally decodable but are not canonical wire"
+        );
         assert_eq!(
             norito::core::effective_decode_flags(),
             ambient_before,
             "canonical validation must restore the caller's Norito layout state"
+        );
+    }
+
+    #[test]
+    fn canonical_archive_decode_rejects_forged_counts_and_compressed_expansion_headers() {
+        const FORGED_LENGTH: u64 = 1 << 40;
+        let forged_count = norito::core::frame_bare_with_header_flags::<Vec<u64>>(
+            &FORGED_LENGTH.to_le_bytes(),
+            norito::core::default_encode_flags(),
+        )
+        .expect("frame forged vector count");
+        assert!(
+            decode_canonical_kagemusha_archive::<Vec<u64>>(&forged_count).is_err(),
+            "forged collection counts must fail inside the archive-derived budget"
+        );
+
+        let mut compressed_expansion =
+            norito::encode_canonical(&vec![0xA5_u8; 64]).expect("encode header fixture");
+        const COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
+        const UNCOMPRESSED_LENGTH_OFFSET: usize = COMPRESSION_OFFSET + 1;
+        compressed_expansion[COMPRESSION_OFFSET] = norito::Compression::Zstd as u8;
+        compressed_expansion
+            [UNCOMPRESSED_LENGTH_OFFSET..UNCOMPRESSED_LENGTH_OFFSET + std::mem::size_of::<u64>()]
+            .copy_from_slice(
+                &u64::try_from(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES)
+                    .expect("native archive ceiling fits u64")
+                    .to_le_bytes(),
+            );
+        assert!(
+            decode_canonical_kagemusha_archive::<Vec<u8>>(&compressed_expansion).is_err(),
+            "compression must be rejected from the fixed header before expansion allocation"
+        );
+    }
+
+    #[test]
+    fn canonical_archive_decode_cleans_a_value_on_post_decode_mismatch() {
+        let canonical = norito::encode_canonical(&0xA5_u8).expect("encode canonical byte");
+        let mut noncanonical_payload = canonical[norito::core::Header::SIZE..].to_vec();
+        noncanonical_payload.push(0);
+        let noncanonical = norito::core::frame_bare_with_header_flags::<u8>(
+            &noncanonical_payload,
+            norito::core::default_encode_flags(),
+        )
+        .expect("frame structurally decodable noncanonical byte");
+        assert_eq!(
+            norito::decode_from_bytes::<u8>(&noncanonical)
+                .expect("noncanonical fixture remains structurally decodable"),
+            0xA5
+        );
+
+        let mut cleaned = false;
+        assert!(
+            decode_canonical_kagemusha_archive_with_cleanup::<u8, _>(&noncanonical, |value| {
+                *value = 0;
+                cleaned = true;
+            },)
+            .is_err()
+        );
+        assert!(
+            cleaned,
+            "post-decode canonicality failure must invoke sensitive cleanup"
+        );
+    }
+
+    #[test]
+    fn canonical_archive_decode_limits_cover_the_exact_native_ceiling() {
+        assert!(!kagemusha_archive_out_of_bounds(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        ));
+        assert!(kagemusha_archive_out_of_bounds(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1
+        ));
+
+        let limits = kagemusha_canonical_decode_limits(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES);
+        assert_eq!(
+            limits.max_sequence_elements(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        );
+        assert_eq!(limits.max_field_bytes(), KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES);
+        assert_eq!(
+            limits.max_total_elements(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES * 2
+        );
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES * KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                + KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE
+        );
+        assert_eq!(
+            limits.max_nesting_depth(),
+            KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH
         );
     }
 
@@ -48429,6 +49614,73 @@ mod sorafs_tests {
                 .and_then(JsonValue::as_str),
             Some("order_request_bad_signature_v1.to")
         );
+    }
+
+    #[test]
+    fn sorafs_reference_appeal_finance_cancel_asset_lock_profiles_via_bridge_ffi() {
+        for (relative_path, status, code, category) in [
+            (
+                "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
+                "Ok",
+                "SFS-OK-000",
+                "validation",
+            ),
+            (
+                "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+                "Error",
+                "SFS-NORITO-001",
+                "norito",
+            ),
+            (
+                "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+                "Error",
+                "SFS-VAL-001",
+                "validation",
+            ),
+        ] {
+            let payload = repo_fixture(relative_path);
+            let label = relative_path
+                .rsplit('/')
+                .next()
+                .expect("fixture path contains a file name")
+                .as_bytes();
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let rc = unsafe {
+                connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+                    payload.as_ptr(),
+                    payload.len() as c_ulong,
+                    label.as_ptr(),
+                    label.len() as c_ulong,
+                    123,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(rc, 0, "{relative_path}: bridge validator call");
+            let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+            assert_eq!(
+                outcome.get("status").and_then(JsonValue::as_str),
+                Some(status),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("code").and_then(JsonValue::as_str),
+                Some(code),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("category").and_then(JsonValue::as_str),
+                Some(category),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("generated_at").and_then(JsonValue::as_u64),
+                Some(123),
+                "{relative_path}"
+            );
+        }
     }
 
     #[test]

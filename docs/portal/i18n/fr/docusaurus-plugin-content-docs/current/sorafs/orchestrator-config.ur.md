@@ -59,7 +59,7 @@ JSON permet de sérialiser des liens entre les liaisons SDK et les liens vers le
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

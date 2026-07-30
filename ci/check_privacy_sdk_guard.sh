@@ -67,6 +67,22 @@ RETIRED_PUBLIC_SYMBOLS = (
     "nativeProofRequest",
     "nativeBuildProof",
     "nativeVerifyProof",
+    "buildZkAceTransferAuthorizationV1",
+    "buildRegisterZkAceIdentityCommitmentInstruction",
+    "buildRotateZkAceIdentityCommitmentInstruction",
+    "buildRevokeZkAceIdentityCommitmentInstruction",
+    "buildZkAceAuthorizationProofV1",
+    "buildZkAceAuthorizedTransferInstruction",
+    "ZkAceTransferAuthorizationV1Options",
+    "ZkAceTransferAuthorizationV1",
+    "RegisterZkAceIdentityCommitmentInstructionInput",
+    "RotateZkAceIdentityCommitmentInstructionInput",
+    "RevokeZkAceIdentityCommitmentInstructionInput",
+    "ZkAcePublicInputsV1Input",
+    "ZkAceAuthorizationProofV1Input",
+    "ZkAceAuthorizationProofV1",
+    "ZkAceWitnessV1Input",
+    "ZkAceAuthorizedTransferInstructionInput",
 )
 
 DELETED_PYTHON_MODULES = (
@@ -96,6 +112,114 @@ def read(relative: str, overrides: dict[str, str]) -> str:
 def require(condition: bool, message: str, errors: list[str]) -> None:
     if not condition:
         errors.append(message)
+
+
+def cargo_feature_values(source: str, name: str) -> tuple[str, ...]:
+    match = re.search(
+        rf"(?ms)^{re.escape(name)}[ \t]*=[ \t]*\[(.*?)\][ \t]*$",
+        source,
+    )
+    if match is None:
+        raise GuardFailure(f"missing Cargo feature {name}")
+    payload = match.group(1)
+    values = tuple(re.findall(r'"([^"]+)"', payload))
+    residue = re.sub(r'"[^"]+"|[,\s#A-Za-z0-9_./-]*', "", payload)
+    if residue:
+        raise GuardFailure(f"unsupported Cargo feature syntax for {name}")
+    return values
+
+
+def cargo_inline_dependency_features(
+    source: str, name: str
+) -> tuple[str, ...]:
+    match = re.search(
+        rf"(?m)^{re.escape(name)}[ \t]*=[ \t]*"
+        r"\{[^\r\n]*features[ \t]*=[ \t]*\[([^\]]*)\][^\r\n]*\}[ \t]*$",
+        source,
+    )
+    if match is None:
+        raise GuardFailure(f"missing inline Cargo dependency features for {name}")
+    return tuple(re.findall(r'"([^"]+)"', match.group(1)))
+
+
+def check_exact12_feature_boundary(
+    overrides: dict[str, str] | None = None,
+) -> None:
+    overrides = overrides or {}
+    errors: list[str] = []
+    rust_model = read("crates/iroha_data_model/src/privacy.rs", overrides)
+    data_model_lib = read("crates/iroha_data_model/src/lib.rs", overrides)
+    data_model_block = read(
+        "crates/iroha_data_model/src/block/mod.rs", overrides
+    )
+    data_model_manifest = read(
+        "crates/iroha_data_model/Cargo.toml", overrides
+    )
+    bridge_manifest = read(
+        "crates/connect_norito_bridge/Cargo.toml", overrides
+    )
+    core_manifest = read("crates/iroha_core/Cargo.toml", overrides)
+
+    exact12_conformance_features = cargo_feature_values(
+        data_model_manifest, "privacy-exact12-conformance"
+    )
+    bridge_data_model_features = cargo_inline_dependency_features(
+        bridge_manifest, "iroha_data_model"
+    )
+    core_release_features = cargo_feature_values(
+        core_manifest, "privacy-release-evidence"
+    )
+    exact12_conformance_gate = (
+        '#[cfg(any(test, feature = "privacy-exact12-conformance"))]'
+    )
+    require(
+        not exact12_conformance_features,
+        "iroha_data_model privacy-exact12-conformance must remain an empty, "
+        "exact-surface feature without fixture or randomness edges",
+        errors,
+    )
+    require(
+        "privacy-exact12-conformance" in bridge_data_model_features
+        and "test-fixtures" not in bridge_data_model_features,
+        "connect_norito_bridge must request only the narrow exact-12 "
+        "conformance surface, never iroha_data_model/test-fixtures",
+        errors,
+    )
+    require(
+        "iroha_data_model/privacy-exact12-conformance"
+        in core_release_features
+        and "iroha_data_model/test-fixtures" not in core_release_features,
+        "privacy release evidence must use the narrow exact-12 conformance "
+        "surface instead of general data-model fixtures",
+        errors,
+    )
+    require(
+        rust_model.count(exact12_conformance_gate) == 2
+        and (
+            exact12_conformance_gate
+            + "\npub use exact12_fixture::{"
+        )
+        in rust_model
+        and (
+            exact12_conformance_gate
+            + "\nmod exact12_fixture {"
+        )
+        in rust_model,
+        "privacy-exact12-conformance must gate exactly the exact-12 exports "
+        "and implementation module",
+        errors,
+    )
+    require(
+        "privacy-exact12-conformance" not in data_model_lib
+        and "privacy-exact12-conformance" not in data_model_block
+        and '#[cfg(any(test, feature = "test-fixtures"))]\npub mod testing;'
+        in data_model_lib,
+        "the exact-12 conformance feature must not expose general testing "
+        "modules or block-tampering helpers",
+        errors,
+    )
+    if errors:
+        raise GuardFailure("\n".join(f"- {error}" for error in errors))
 
 
 def literal_assignment(source: str, name: str):
@@ -465,13 +589,20 @@ def _workflow_run_has_cargo_policy(run: str) -> bool:
 
 NEGATIVE_CONTROL_STEP_NAME = "Privacy SDK guard negative controls"
 NEGATIVE_CONTROL_COMMAND_PREFIX = "ci/check_privacy_sdk_guard.sh "
-NEGATIVE_CONTROL_COUNT = 229
+NEGATIVE_CONTROL_COUNT = 232
 WORKFLOW_META_NEGATIVE_CONTROLS = frozenset(
     {
         "--negative-control-negative-controls-workflow",
         "--negative-control-negative-controls-comment-workflow",
         "--negative-control-negative-controls-order-workflow",
         "--negative-control-negative-controls-inventory-parity",
+    }
+)
+EXACT12_FEATURE_NEGATIVE_CONTROLS = frozenset(
+    {
+        "--negative-control-exact12-bridge-test-fixtures",
+        "--negative-control-exact12-conformance-rand-edge",
+        "--negative-control-exact12-release-evidence-test-fixtures",
     }
 )
 
@@ -552,6 +683,22 @@ def _check_cargo_workflow(
         "with": (
             ("python-version", '"3.12"'),
             ("update-environment", "false"),
+        ),
+    }
+    mobile_python_binding_step = {
+        "name": "Bind the canonical mobile Python",
+        "env": (("SETUP_PYTHON_PATH", setup_python_path),),
+        "run": "\n".join(
+            (
+                "mobile_python=\"$(\"$SETUP_PYTHON_PATH\" -I -S -c "
+                "'import pathlib,sys; "
+                "print(pathlib.Path(sys.executable).resolve(strict=True))')\"",
+                "[[ \"$(\"$mobile_python\" -I -S -c "
+                "'import sys; "
+                "print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')\" "
+                '== "3.12" ]]',
+                'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"',
+            )
         ),
     }
     native_provision_step = {
@@ -745,6 +892,10 @@ def _check_cargo_workflow(
             )
         else:
             setup_matches = ()
+        if job_name == "privacy-sdk-guard":
+            required_steps.append(
+                ("canonical mobile Python binding", mobile_python_binding_step)
+            )
         required_steps.extend(
             (
                 ("private Cargo provision", policy["provision"]),
@@ -842,7 +993,7 @@ def _check_cargo_workflow(
             ordered_indices.append(final_matches[0][0])
             policy_indices.add(final_matches[0][0])
 
-        expected_order_length = 10 if job_name == "privacy-sdk-guard" else (
+        expected_order_length = 11 if job_name == "privacy-sdk-guard" else (
             8 if policy["python"] else 7
         )
         require(
@@ -853,9 +1004,9 @@ def _check_cargo_workflow(
                     ordered_indices, ordered_indices[1:]
                 )
             ),
-            f"{job_name} must keep checkout, toolchain, setup, provision, "
-            "verification, fetch, tests, negative controls, consumer, and "
-            "final verification in canonical order",
+            f"{job_name} must keep checkout, toolchain, setup, mobile Python "
+            "binding, provision, verification, fetch, tests, negative controls, "
+            "consumer, and final verification in canonical order",
             errors,
         )
         policy_indices.update(
@@ -863,15 +1014,36 @@ def _check_cargo_workflow(
         )
         expected_cargo_step_indices[job_name] = policy_indices
 
-    semantic_python_path_count = sum(
+    semantic_python_path_run_count = sum(
         step.fields["run"].count(setup_python_path)
         for _, _, step in all_steps
         if isinstance(step.fields.get("run"), str)
     )
+    semantic_python_path_env_count = sum(
+        key.count(setup_python_path) + value.count(setup_python_path)
+        for _, _, step in all_steps
+        for key, value in (
+            step.fields["env"]
+            if isinstance(step.fields.get("env"), tuple)
+            else ()
+        )
+    )
+    semantic_python_path_count = sum(
+        value.count(setup_python_path)
+        if isinstance(value, str)
+        else sum(
+            key.count(setup_python_path) + item.count(setup_python_path)
+            for key, item in value
+        )
+        for _, _, step in all_steps
+        for value in step.fields.values()
+    )
     require(
-        semantic_python_path_count == 7,
+        semantic_python_path_run_count == 7
+        and semantic_python_path_env_count == 1
+        and semantic_python_path_count == 8,
         "setup-python output must be threaded into every Python provision, "
-        "verification, and self-test",
+        "verification, self-test, and the canonical mobile Python binding",
         errors,
     )
 
@@ -1011,6 +1183,7 @@ def _mutate_workflow_meta_negative_control(source: str, mode: str) -> str:
 def check(overrides: dict[str, str] | None = None) -> None:
     overrides = overrides or {}
     errors: list[str] = []
+    check_exact12_feature_boundary(overrides)
 
     version_rows = matrix_rows("matrix-version")
     registry_rows = matrix_rows("registry-sha256")
@@ -1375,9 +1548,11 @@ def check(overrides: dict[str, str] | None = None) -> None:
         == {
             "iroha_privacy_capabilities_v1",
             "iroha_privacy_validate_capabilities_v1",
+            "iroha_privacy_exact12_fixture_bundle_v1",
+            "iroha_privacy_validate_exact12_fixture_bundle_v1",
             "iroha_privacy_free_buffer",
         },
-        "C privacy ABI must contain only capability snapshot, typed validator, and zeroizing free",
+        "C privacy ABI must contain only capability snapshot, exact-12 conformance, typed validators, and zeroizing free",
         errors,
     )
     cli_root = root / "crates/iroha_cli"
@@ -1883,7 +2058,10 @@ if mode:
     if not mode.startswith("--negative-control-"):
         raise SystemExit(f"unknown mode: {mode}")
     try:
-        check()
+        if mode in EXACT12_FEATURE_NEGATIVE_CONTROLS:
+            check_exact12_feature_boundary()
+        else:
+            check()
     except (GuardFailure, SyntaxError, ValueError) as error:
         raise SystemExit(
             "negative control requires a valid canonical baseline:\n" + str(error)
@@ -1973,8 +2151,9 @@ if mode:
     elif mode == "--negative-control-python-path-threading-workflow":
         path = ".github/workflows/pr_privacy_sdk_guard.yml"
         overrides[path] = read(path, {}).replace(
-            "${{ steps.privacy-python.outputs.python-path }}",
-            "python3",
+            "          SETUP_PYTHON_PATH: "
+            "${{ steps.privacy-python.outputs.python-path }}\n",
+            "          SETUP_PYTHON_PATH: python3\n",
             1,
         )
     elif mode == "--negative-control-js-privacy-abi-drift":
@@ -1989,6 +2168,27 @@ if mode:
         overrides[path] = read(path, {}).replace(
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22",
+            1,
+        )
+    elif mode == "--negative-control-exact12-bridge-test-fixtures":
+        path = "crates/connect_norito_bridge/Cargo.toml"
+        overrides[path] = read(path, {}).replace(
+            '"privacy-exact12-conformance"',
+            '"test-fixtures"',
+            1,
+        )
+    elif mode == "--negative-control-exact12-conformance-rand-edge":
+        path = "crates/iroha_data_model/Cargo.toml"
+        overrides[path] = read(path, {}).replace(
+            "privacy-exact12-conformance = []",
+            'privacy-exact12-conformance = ["iroha_crypto/rand"]',
+            1,
+        )
+    elif mode == "--negative-control-exact12-release-evidence-test-fixtures":
+        path = "crates/iroha_core/Cargo.toml"
+        overrides[path] = read(path, {}).replace(
+            '"iroha_data_model/privacy-exact12-conformance"',
+            '"iroha_data_model/test-fixtures"',
             1,
         )
     else:
@@ -2011,7 +2211,10 @@ if mode:
             path = "crates/iroha_js_host/src/lib.rs"
             overrides[path] = read(path, {}).replace("PrivacyProtocolIdV1::ALL", "[]")
     try:
-        check(overrides)
+        if mode in EXACT12_FEATURE_NEGATIVE_CONTROLS:
+            check_exact12_feature_boundary(overrides)
+        else:
+            check(overrides)
     except (GuardFailure, SyntaxError, ValueError):
         print(f"negative control rejected canonical privacy SDK drift: {mode}")
         raise SystemExit(0)

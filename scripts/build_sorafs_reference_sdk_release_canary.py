@@ -193,10 +193,42 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "public_key_fingerprint_recorded": True,
                 "private_key_absent": True,
                 "signature_algorithm": args.signature_algorithm,
+                "signing_provider": args.signing_provider,
+                "signing_provider_revision": args.signing_provider_revision,
+                "hsm_signature_verified": True,
                 "manifest_digest_hex": args.manifest_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
                 "public_key_fingerprint_hex": args.public_key_fingerprint_hex,
                 "raw_manifest_included": False,
+            }
+        )
+    elif args.kind == "supply_chain":
+        payload.update(
+            {
+                "target_count": len(args.targets),
+                "target_results": [
+                    {
+                        "target": target,
+                        "binary_smoke_passed": True,
+                        "deterministic_archive_replay_passed": True,
+                        "installation_verified": True,
+                        "rollback_verified": True,
+                        "yank_verified": True,
+                        "sbom_generated": True,
+                        "critical_vulnerability_count": 0,
+                        "high_vulnerability_count": 0,
+                        "oidc_identity_verified": True,
+                        "cosign_provenance_verified": True,
+                    }
+                    for target in args.targets
+                ],
+                "release_manifest_digest_hex": args.release_manifest_digest_hex,
+                "sbom_index_digest_hex": args.sbom_index_digest_hex,
+                "vulnerability_report_digest_hex": args.vulnerability_report_digest_hex,
+                "provenance_bundle_digest_hex": args.provenance_bundle_digest_hex,
+                "raw_sboms_included": False,
+                "raw_vulnerability_reports_included": False,
+                "raw_provenance_included": False,
             }
         )
     elif args.kind == "downstream_bindings":
@@ -287,6 +319,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
         validate_signature_algorithm(args.signature_algorithm, errors=errors)
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--signing-provider", args.signing_provider),
+                ("--signing-provider-revision", args.signing_provider_revision),
+            ),
+        )
+        if args.signing_provider != "external_ed25519_hsm":
+            errors.append("--signing-provider must be `external_ed25519_hsm`")
     if args.kind == "governance_approval":
         require_kind_options(
             args,
@@ -305,18 +347,30 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
 
-    if args.kind == "release_archive":
+    if args.kind in {"release_archive", "supply_chain"}:
         args.targets = validate_name_set(
             split_csv_values(args.target),
             allowed=REQUIRED_RELEASE_TARGETS,
             option="--target",
             errors=errors,
         )
+    if args.kind == "release_archive":
         validate_hex64(
             args.archive_index_digest_hex,
             option="--archive-index-digest-hex",
             errors=errors,
         )
+    elif args.kind == "supply_chain":
+        for option, value in (
+            ("--sbom-index-digest-hex", args.sbom_index_digest_hex),
+            (
+                "--vulnerability-report-digest-hex",
+                args.vulnerability_report_digest_hex,
+            ),
+            ("--provenance-bundle-digest-hex", args.provenance_bundle_digest_hex),
+        ):
+            require_kind_options(args, errors, ((option, value),))
+            validate_hex64(value, option=option, errors=errors)
     elif args.kind == "downstream_bindings":
         args.packages = validate_name_set(
             split_csv_values(args.package),
@@ -454,9 +508,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--smoke-output-digest-hex")
     parser.add_argument("--header-digest-hex")
     parser.add_argument("--ffi-contract-digest-hex")
+    parser.add_argument("--sbom-index-digest-hex")
+    parser.add_argument("--vulnerability-report-digest-hex")
+    parser.add_argument("--provenance-bundle-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--public-key-fingerprint-hex")
     parser.add_argument("--signature-algorithm", default="ed25519")
+    parser.add_argument("--signing-provider")
+    parser.add_argument("--signing-provider-revision", type=positive_int_arg)
     parser.add_argument("--target", action="append", default=[])
     parser.add_argument("--package", action="append", default=[])
     parser.add_argument("--smoke-duration-seconds", type=positive_int_arg, default=600)

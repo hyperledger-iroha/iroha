@@ -14,6 +14,7 @@ use std::{
 };
 
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
+use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::numeric::{Quantity, XorQuantity};
 use iroha_data_model::{
     ChainId,
@@ -48,10 +49,10 @@ pub const APPEAL_FINANCE_RECONCILIATION_CONTEXT_MAX_BYTES_V1: usize = 64 * 1024;
 pub const APPEAL_FINANCE_MAX_CHAIN_ID_BYTES_V1: usize = 128;
 /// Authenticated checkpoint runtime identity schema version.
 pub const APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1: u8 = 1;
+/// Public runtime-provider qualification schema version.
+pub const APPEAL_FINANCE_RUNTIME_PROVIDER_QUALIFICATION_VERSION_V1: u8 = 1;
 /// Sealed checkpoint record schema version.
 pub const APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_VERSION_V1: u8 = 1;
-/// Maximum opaque runtime provider handle length.
-pub const APPEAL_FINANCE_CHECKPOINT_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 /// Maximum canonical wrapper overhead beyond the embedded checkpoint bytes.
 pub const APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 4 * 1024;
 
@@ -118,14 +119,19 @@ pub struct AppealFinanceCheckpointAuthenticationPolicyV1 {
     pub provider_handle: String,
     /// Exact Ed25519 verification key controlled by the provider.
     pub public_key: [u8; 32],
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
 }
 
 impl AppealFinanceCheckpointAuthenticationPolicyV1 {
-    /// Validate the bounded handle and strong Ed25519 key.
+    /// Validate the bounded handle, strong Ed25519 key, and qualification.
     ///
     /// # Errors
     ///
-    /// Rejects an unsupported version, noncanonical handle, or malformed key.
+    /// Rejects an unsupported version, noncanonical handle, malformed key, or
+    /// zero revision/policy digest.
     pub fn validate(&self) -> Result<(), AppealFinanceTransactionForwarderError> {
         if self.version != APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1 {
             return Err(
@@ -136,6 +142,51 @@ impl AppealFinanceCheckpointAuthenticationPolicyV1 {
         checked_checkpoint_verifying_key(self.public_key).map_err(|()| {
             AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy
         })?;
+        AppealFinanceRuntimeProviderQualificationV1::new(self.revision, self.policy_digest)
+            .validate()
+            .map_err(|_| {
+                AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy
+            })?;
+        Ok(())
+    }
+}
+
+/// Public, non-secret qualification for an appeal-finance runtime provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppealFinanceRuntimeProviderQualificationV1 {
+    /// Qualification schema version.
+    pub version: u8,
+    /// Non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Non-zero digest of the exact public provider policy.
+    pub policy_digest: [u8; 32],
+}
+
+impl AppealFinanceRuntimeProviderQualificationV1 {
+    /// Construct a first-release provider qualification.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            version: APPEAL_FINANCE_RUNTIME_PROVIDER_QUALIFICATION_VERSION_V1,
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Validate the schema, revision, and public-policy digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsupported schemas, zero revisions, and zero policy digests.
+    pub fn validate(self) -> Result<(), AppealFinanceTransactionForwarderError> {
+        if self.version != APPEAL_FINANCE_RUNTIME_PROVIDER_QUALIFICATION_VERSION_V1
+            || self.revision == 0
+            || self.policy_digest == [0; 32]
+        {
+            return Err(
+                AppealFinanceTransactionForwarderError::InvalidRuntimeProviderQualification,
+            );
+        }
         Ok(())
     }
 }
@@ -147,6 +198,8 @@ pub struct AppealFinanceCheckpointRuntimeIdentityV1 {
     pub provider_handle: String,
     /// Exact Ed25519 verification key controlled by the provider.
     pub public_key: [u8; 32],
+    /// Active adapter and public-policy qualification.
+    pub qualification: AppealFinanceRuntimeProviderQualificationV1,
 }
 
 /// Fixed external failure classes without provider diagnostics or credentials.
@@ -745,6 +798,8 @@ struct AuthenticatedCheckpointV1 {
     predecessor_checkpoint_digest: Option<[u8; 32]>,
     provider_handle: String,
     public_key: [u8; 32],
+    provider_revision: u64,
+    provider_policy_digest: [u8; 32],
     body_digest: [u8; 32],
     body: CheckpointBodyV1,
     checkpoint_digest: [u8; 32],
@@ -837,7 +892,8 @@ impl AppealFinanceTransactionForwarder {
             .as_deref()
             .map(|bytes| decode_authenticated_checkpoint(bytes, policy, &authentication_policy))
             .transpose();
-        let sealed_record = checkpoint_runtime.load_latest()?;
+        let sealed_record =
+            load_latest_qualified(&authentication_policy, checkpoint_runtime.as_ref())?;
         if let Some(record) = &sealed_record {
             record.to_canonical_bytes(policy.checkpoint_max_bytes)?;
         }
@@ -1139,6 +1195,7 @@ impl AppealFinanceTransactionForwarder {
         let prepared = PreparedOperation::decode_signed_transaction(
             signed_transaction_bytes,
             &entry.chain_id,
+            &entry.authority,
             entry.expected_record.clone(),
             entry.reconciliation_context.clone(),
             self.policy.max_transaction_bytes,
@@ -1530,7 +1587,9 @@ impl AppealFinanceTransactionForwarder {
                 current_bytes,
             );
             if state.sealed_revision != Some(expected_record.revision)
-                || authentication.runtime.load_latest()?.as_ref() != Some(&expected_record)
+                || load_latest_qualified(&authentication.policy, authentication.runtime.as_ref())?
+                    .as_ref()
+                    != Some(&expected_record)
             {
                 return Err(AppealFinanceTransactionForwarderError::CheckpointRollback);
             }
@@ -1674,6 +1733,7 @@ impl PreparedOperation {
     fn decode_signed_transaction(
         bytes: &[u8],
         expected_chain_id: &ChainId,
+        expected_authority: &AccountId,
         expected_record: Option<AssetEscrowRecord>,
         reconciliation_context: Vec<u8>,
         max_transaction_bytes: usize,
@@ -1696,6 +1756,9 @@ impl PreparedOperation {
             != bytes
             || transaction.verify_signature().is_err()
             || transaction.chain() != expected_chain_id
+            || transaction.authority() != expected_authority
+            || transaction.attachments().is_some()
+            || transaction.multisig_signatures().is_some()
         {
             return Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction);
         }
@@ -2175,6 +2238,7 @@ fn validate_checkpoint(
             let signed = PreparedOperation::decode_signed_transaction(
                 bytes,
                 &entry.chain_id,
+                &entry.authority,
                 entry.expected_record.clone(),
                 entry.reconciliation_context.clone(),
                 policy.max_transaction_bytes,
@@ -2228,16 +2292,11 @@ fn validate_checkpoint(
 }
 
 fn validate_runtime_handle(value: &str) -> Result<(), AppealFinanceTransactionForwarderError> {
-    if value.is_empty()
-        || value.len() > APPEAL_FINANCE_CHECKPOINT_PROVIDER_HANDLE_MAX_BYTES_V1
-        || !value.is_ascii()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy);
-    }
-    Ok(())
+    validate_production_runtime_handle(value).map_err(|error| match error {
+        ProductionRuntimeHandleError::InvalidSyntax | ProductionRuntimeHandleError::TestMarked => {
+            AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy
+        }
+    })
 }
 
 fn checked_checkpoint_verifying_key(bytes: [u8; 32]) -> Result<VerifyingKey, ()> {
@@ -2305,6 +2364,8 @@ fn validate_authenticated_checkpoint(
         || !valid_predecessor
         || checkpoint.provider_handle != authentication_policy.provider_handle
         || checkpoint.public_key != authentication_policy.public_key
+        || checkpoint.provider_revision != authentication_policy.revision
+        || checkpoint.provider_policy_digest != authentication_policy.policy_digest
         || checkpoint.body_digest != checkpoint_body_digest(&checkpoint.body)?
         || checkpoint.checkpoint_digest == [0; 32]
         || checkpoint.checkpoint_digest != authenticated_checkpoint_digest(checkpoint)?
@@ -2412,8 +2473,14 @@ fn verify_checkpoint_runtime_identity(
 ) -> Result<(), AppealFinanceTransactionForwarderError> {
     policy.validate()?;
     let identity = runtime.identity()?;
+    identity.qualification.validate()?;
     if identity.provider_handle != policy.provider_handle
         || identity.public_key != policy.public_key
+        || identity.qualification
+            != AppealFinanceRuntimeProviderQualificationV1::new(
+                policy.revision,
+                policy.policy_digest,
+            )
         || validate_runtime_handle(&identity.provider_handle).is_err()
         || checked_checkpoint_verifying_key(identity.public_key).is_err()
     {
@@ -2447,6 +2514,8 @@ fn sign_authenticated_checkpoint(
         predecessor_checkpoint_digest,
         provider_handle: authentication_policy.provider_handle.clone(),
         public_key: authentication_policy.public_key,
+        provider_revision: authentication_policy.revision,
+        provider_policy_digest: authentication_policy.policy_digest,
         body_digest: checkpoint_body_digest(&body)?,
         body,
         checkpoint_digest: [0; 32],
@@ -2460,11 +2529,21 @@ fn sign_authenticated_checkpoint(
     {
         return Err(AppealFinanceTransactionForwarderError::CheckpointTooLarge);
     }
-    checkpoint.signature =
-        runtime.sign_digest(checkpoint_signature_digest(checkpoint.checkpoint_digest))?;
+    let signature = runtime.sign_digest(checkpoint_signature_digest(checkpoint.checkpoint_digest));
     verify_checkpoint_runtime_identity(authentication_policy, runtime)?;
+    checkpoint.signature = signature?;
     validate_authenticated_checkpoint(&checkpoint, policy, authentication_policy)?;
     Ok(checkpoint)
+}
+
+fn load_latest_qualified(
+    authentication_policy: &AppealFinanceCheckpointAuthenticationPolicyV1,
+    runtime: &dyn AppealFinanceCheckpointRuntime,
+) -> Result<Option<AppealFinanceSealedCheckpointRecordV1>, AppealFinanceTransactionForwarderError> {
+    verify_checkpoint_runtime_identity(authentication_policy, runtime)?;
+    let result = runtime.load_latest();
+    verify_checkpoint_runtime_identity(authentication_policy, runtime)?;
+    result.map_err(Into::into)
 }
 
 fn seal_checkpoint_record(
@@ -2476,14 +2555,33 @@ fn seal_checkpoint_record(
 ) -> Result<(), AppealFinanceTransactionForwarderError> {
     next.to_canonical_bytes(checkpoint_max_bytes)?;
     verify_checkpoint_runtime_identity(authentication_policy, runtime)?;
-    let current = runtime.load_latest()?;
+    let current = load_latest_qualified(authentication_policy, runtime)?;
     if current.as_ref().map(|record| record.revision) != expected_revision {
         return Err(AppealFinanceTransactionForwarderError::CheckpointFork);
     }
-    match runtime.compare_and_swap_latest(expected_revision, next) {
+    let compare_and_swap_result = runtime.compare_and_swap_latest(expected_revision, next);
+    if let Err(error) = verify_checkpoint_runtime_identity(authentication_policy, runtime) {
+        return Err(
+            if matches!(
+                compare_and_swap_result,
+                Ok(()) | Err(AppealFinanceCheckpointExternalError::Ambiguous)
+            ) {
+                AppealFinanceTransactionForwarderError::CheckpointAuthenticationAmbiguous
+            } else {
+                error
+            },
+        );
+    }
+    match compare_and_swap_result {
         Ok(()) => {}
         Err(AppealFinanceCheckpointExternalError::Ambiguous) => {
-            if runtime.load_latest()?.as_ref() != Some(next) {
+            if load_latest_qualified(authentication_policy, runtime)
+                .map_err(|_| {
+                    AppealFinanceTransactionForwarderError::CheckpointAuthenticationAmbiguous
+                })?
+                .as_ref()
+                != Some(next)
+            {
                 return Err(
                     AppealFinanceTransactionForwarderError::CheckpointAuthenticationAmbiguous,
                 );
@@ -2491,10 +2589,15 @@ fn seal_checkpoint_record(
         }
         Err(error) => return Err(error.into()),
     }
-    if runtime.load_latest()?.as_ref() != Some(next) {
+    if load_latest_qualified(authentication_policy, runtime)
+        .map_err(|_| AppealFinanceTransactionForwarderError::CheckpointAuthenticationAmbiguous)?
+        .as_ref()
+        != Some(next)
+    {
         return Err(AppealFinanceTransactionForwarderError::CheckpointFork);
     }
     verify_checkpoint_runtime_identity(authentication_policy, runtime)
+        .map_err(|_| AppealFinanceTransactionForwarderError::CheckpointAuthenticationAmbiguous)
 }
 
 fn checkpoint_decode_limits(
@@ -2611,6 +2714,9 @@ pub enum AppealFinanceTransactionForwarderError {
     /// Runtime checkpoint identity policy is malformed or unsupported.
     #[error("appeal-finance checkpoint authentication policy is invalid")]
     InvalidCheckpointAuthenticationPolicy,
+    /// Runtime provider revision or public-policy digest is malformed.
+    #[error("appeal-finance runtime provider qualification is invalid")]
+    InvalidRuntimeProviderQualification,
     /// The runtime HSM/KMS identity differs from the configured identity.
     #[error("appeal-finance checkpoint runtime identity does not match configuration")]
     CheckpointRuntimeIdentityMismatch,
@@ -2709,7 +2815,8 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         asset::AssetDefinitionId,
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+        transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
     use tempfile::TempDir;
 
@@ -2719,14 +2826,23 @@ mod tests {
     struct TestCheckpointRuntime {
         provider_handle: String,
         key: SigningKey,
+        qualification: Mutex<AppealFinanceRuntimeProviderQualificationV1>,
+        qualification_after_sign: Mutex<Option<AppealFinanceRuntimeProviderQualificationV1>>,
+        qualification_after_compare_and_swap:
+            Mutex<Option<AppealFinanceRuntimeProviderQualificationV1>>,
         latest: Mutex<Option<AppealFinanceSealedCheckpointRecordV1>>,
     }
 
     impl TestCheckpointRuntime {
         fn new(seed: u8) -> Self {
             Self {
-                provider_handle: format!("appeal-finance-test-hsm-{seed}"),
+                provider_handle: format!("appeal-finance-hsm-{seed}"),
                 key: SigningKey::from_bytes(&[seed; 32]),
+                qualification: Mutex::new(AppealFinanceRuntimeProviderQualificationV1::new(
+                    1, [seed; 32],
+                )),
+                qualification_after_sign: Mutex::new(None),
+                qualification_after_compare_and_swap: Mutex::new(None),
                 latest: Mutex::new(None),
             }
         }
@@ -2736,7 +2852,36 @@ mod tests {
                 version: APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
                 provider_handle: self.provider_handle.clone(),
                 public_key: self.key.verifying_key().to_bytes(),
+                revision: 1,
+                policy_digest: [self.key.to_bytes()[0]; 32],
             }
+        }
+
+        fn replace_qualification(
+            &self,
+            qualification: AppealFinanceRuntimeProviderQualificationV1,
+        ) {
+            *self.qualification.lock().expect("test qualification lock") = qualification;
+        }
+
+        fn replace_qualification_after_next_sign(
+            &self,
+            qualification: AppealFinanceRuntimeProviderQualificationV1,
+        ) {
+            *self
+                .qualification_after_sign
+                .lock()
+                .expect("test post-sign qualification lock") = Some(qualification);
+        }
+
+        fn replace_qualification_after_next_compare_and_swap(
+            &self,
+            qualification: AppealFinanceRuntimeProviderQualificationV1,
+        ) {
+            *self
+                .qualification_after_compare_and_swap
+                .lock()
+                .expect("test post-CAS qualification lock") = Some(qualification);
         }
 
         fn replace_latest(&self, record: Option<AppealFinanceSealedCheckpointRecordV1>) {
@@ -2752,6 +2897,10 @@ mod tests {
             Ok(AppealFinanceCheckpointRuntimeIdentityV1 {
                 provider_handle: self.provider_handle.clone(),
                 public_key: self.key.verifying_key().to_bytes(),
+                qualification: *self
+                    .qualification
+                    .lock()
+                    .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)?,
             })
         }
 
@@ -2759,7 +2908,20 @@ mod tests {
             &self,
             digest: [u8; 32],
         ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError> {
-            Ok(self.key.sign(&digest).to_bytes())
+            let signature = self.key.sign(&digest).to_bytes();
+            if let Some(qualification) = self
+                .qualification_after_sign
+                .lock()
+                .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)?
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)? =
+                    qualification;
+            }
+            Ok(signature)
         }
 
         fn load_latest(
@@ -2792,6 +2954,18 @@ mod tests {
                 return Err(AppealFinanceCheckpointExternalError::Rejected);
             }
             *latest = Some(next.clone());
+            if let Some(qualification) = self
+                .qualification_after_compare_and_swap
+                .lock()
+                .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)?
+                .take()
+            {
+                *self
+                    .qualification
+                    .lock()
+                    .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)? =
+                    qualification;
+            }
             Ok(())
         }
     }
@@ -3006,13 +3180,14 @@ mod tests {
                 .unwrap(),
             AppealFinanceTransactionEnqueueResultV1::Existing { .. }
         ));
-        let substituted = AppealFinanceOperationV1::Drawdown(DrawdownAssetLock::new(
-            escrow_id(),
-            Quantity::from(40_u32),
-            Quantity::from(100_u32),
-        ));
+        let mut substituted_context = context;
+        substituted_context.reconciliation_context = vec![0xA1, 0x02];
         assert!(matches!(
-            forwarder.enqueue_unsigned_operation(authority, substituted, &context),
+            forwarder.enqueue_unsigned_operation(
+                authority,
+                drawdown_operation(),
+                &substituted_context
+            ),
             Err(AppealFinanceTransactionForwarderError::IdentityConflict)
         ));
         assert_ne!(inserted.operation_id(), [0; 32]);
@@ -3061,6 +3236,69 @@ mod tests {
         assert_ne!(
             forwarder
                 .store_signed_transaction(operation_id, &valid)
+                .unwrap(),
+            [0; 32]
+        );
+    }
+
+    #[test]
+    fn signed_envelope_rejects_proof_and_even_empty_multisig_sidecars() {
+        let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
+        let context = drawdown_context();
+        let signer = key(4);
+        let authority = AccountId::new(signer.public_key().clone());
+        let operation_id = forwarder
+            .enqueue_unsigned_operation(authority.clone(), drawdown_operation(), &context)
+            .unwrap()
+            .operation_id();
+        forwarder
+            .claim_for_signing(operation_id, cursor(7, 7))
+            .unwrap();
+
+        let transaction_builder = || {
+            TransactionBuilder::new(
+                ChainId::from("appeal-finance-forwarder-test"),
+                authority.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([InstructionBox::from(drawdown_operation())])
+        };
+        let attachments = ProofAttachmentList(vec![ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "appeal-sidecar-vk"),
+        )]);
+        let attached = transaction_builder()
+            .with_attachments(attachments)
+            .try_sign(signer.private_key())
+            .unwrap();
+        assert!(attached.verify_signature().is_ok());
+        assert!(matches!(
+            forwarder.store_signed_transaction(operation_id, &norito::to_bytes(&attached).unwrap()),
+            Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
+        ));
+
+        let mut empty_multisig = transaction_builder()
+            .try_sign(signer.private_key())
+            .unwrap();
+        empty_multisig.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
+        assert!(empty_multisig.verify_signature().is_ok());
+        assert!(matches!(
+            forwarder.store_signed_transaction(
+                operation_id,
+                &norito::to_bytes(&empty_multisig).unwrap()
+            ),
+            Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
+        ));
+
+        let exact = transaction_builder()
+            .try_sign(signer.private_key())
+            .unwrap();
+        assert!(exact.attachments().is_none());
+        assert!(exact.multisig_signatures().is_none());
+        assert_ne!(
+            forwarder
+                .store_signed_transaction(operation_id, &norito::to_bytes(&exact).unwrap())
                 .unwrap(),
             [0; 32]
         );
@@ -3529,5 +3767,135 @@ mod tests {
             Err(AppealFinanceTransactionForwarderError::CheckpointRuntimeIdentityMismatch)
         ));
         assert!(!checkpoint_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn test_marked_checkpoint_provider_is_rejected_before_state_access() {
+        let dir = TempDir::new().unwrap();
+        let runtime = Arc::new(TestCheckpointRuntime::new(50));
+        let mut authentication_policy = runtime.authentication_policy();
+        authentication_policy.provider_handle = "hsm:dummy:appeal-finance".to_owned();
+
+        assert!(matches!(
+            AppealFinanceTransactionForwarder::open(
+                dir.path(),
+                policy(),
+                authentication_policy,
+                runtime,
+            ),
+            Err(AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy)
+        ));
+        assert!(!checkpoint_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn checkpoint_provider_handles_use_central_production_grammar() {
+        let runtime = TestCheckpointRuntime::new(49);
+        let mut authentication_policy = runtime.authentication_policy();
+        authentication_policy.provider_handle =
+            "hsm://appeal-finance/checkpoint.primary-v1_slot-a".to_owned();
+        authentication_policy
+            .validate()
+            .expect("canonical production provider handle");
+
+        for handle in [
+            "https://operator:secret@checkpoint",
+            "https://checkpoint/path?credential=secret",
+            "https://checkpoint/path#fragment",
+            "hsm://appeal-finance/%63heckpoint",
+            "hsm:\\appeal-finance\\checkpoint",
+        ] {
+            authentication_policy.provider_handle = handle.to_owned();
+            assert!(matches!(
+                authentication_policy.validate(),
+                Err(AppealFinanceTransactionForwarderError::InvalidCheckpointAuthenticationPolicy)
+            ));
+        }
+    }
+
+    #[test]
+    fn qualification_drift_discards_candidate_before_durable_state_changes() {
+        let dir = TempDir::new().unwrap();
+        let runtime = Arc::new(TestCheckpointRuntime::new(51));
+        let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
+        let checkpoint_before = std::fs::read(checkpoint_path(dir.path())).unwrap();
+        let sealed_before = runtime.load_latest().unwrap();
+        runtime.replace_qualification(AppealFinanceRuntimeProviderQualificationV1::new(
+            2, [0xA5; 32],
+        ));
+
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(
+                account(4),
+                drawdown_operation(),
+                &drawdown_context(),
+            ),
+            Err(AppealFinanceTransactionForwarderError::CheckpointRuntimeIdentityMismatch)
+        ));
+        assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(checkpoint_path(dir.path())).unwrap(),
+            checkpoint_before
+        );
+        assert_eq!(runtime.load_latest().unwrap(), sealed_before);
+    }
+
+    #[test]
+    fn post_sign_qualification_drift_discards_checkpoint_signature() {
+        let dir = TempDir::new().unwrap();
+        let runtime = Arc::new(TestCheckpointRuntime::new(52));
+        let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
+        let checkpoint_before = std::fs::read(checkpoint_path(dir.path())).unwrap();
+        let sealed_before = runtime.load_latest().unwrap();
+        runtime.replace_qualification_after_next_sign(
+            AppealFinanceRuntimeProviderQualificationV1::new(2, [0xA6; 32]),
+        );
+
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(
+                account(4),
+                drawdown_operation(),
+                &drawdown_context(),
+            ),
+            Err(AppealFinanceTransactionForwarderError::CheckpointRuntimeIdentityMismatch)
+        ));
+        assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(checkpoint_path(dir.path())).unwrap(),
+            checkpoint_before
+        );
+        assert_eq!(runtime.load_latest().unwrap(), sealed_before);
+    }
+
+    #[test]
+    fn post_compare_and_swap_qualification_drift_is_ambiguous() {
+        let dir = TempDir::new().unwrap();
+        let runtime = Arc::new(TestCheckpointRuntime::new(53));
+        let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
+        let checkpoint_before = std::fs::read(checkpoint_path(dir.path())).unwrap();
+        let sealed_before = runtime.load_latest().unwrap().unwrap();
+        runtime.replace_qualification_after_next_compare_and_swap(
+            AppealFinanceRuntimeProviderQualificationV1::new(2, [0xA7; 32]),
+        );
+
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(
+                account(4),
+                drawdown_operation(),
+                &drawdown_context(),
+            ),
+            Err(AppealFinanceTransactionForwarderError::CheckpointAuthenticationAmbiguous)
+        ));
+        assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(checkpoint_path(dir.path())).unwrap(),
+            checkpoint_before
+        );
+        let sealed_after = runtime.load_latest().unwrap().unwrap();
+        assert_eq!(
+            sealed_after.checkpoint_sequence,
+            sealed_before.checkpoint_sequence + 1
+        );
+        assert_ne!(sealed_after.revision, sealed_before.revision);
     }
 }

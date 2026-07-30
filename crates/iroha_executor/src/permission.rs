@@ -148,8 +148,9 @@ declare_permissions! {
     iroha_executor_data_model::permission::asset::{CanBurnAsset},
     iroha_executor_data_model::permission::asset::{CanTransferAsset},
     iroha_executor_data_model::permission::asset::{CanModifyAssetMetadata},
-    iroha_executor_data_model::permission::asset::{CanSetAssetTransferFreeze},
+    iroha_executor_data_model::permission::asset::{CanSetAssetTransferAvailability},
     iroha_executor_data_model::permission::asset::{CanSetAssetTransferDailyLimit},
+    iroha_executor_data_model::permission::asset::{CanSetAssetHoldingLimit},
 
     iroha_executor_data_model::permission::nft::{CanRegisterNft},
     iroha_executor_data_model::permission::nft::{CanUnregisterNft},
@@ -1026,8 +1027,8 @@ pub mod asset {
 
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
-        CanSetAssetTransferDailyLimit, CanSetAssetTransferFreeze, CanTransferAsset,
+        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanSetAssetHoldingLimit,
+        CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit, CanTransferAsset,
         CanTransferAssetWithDefinition,
     };
 
@@ -1142,8 +1143,9 @@ pub mod asset {
         };
     }
 
-    impl_asset_definition_control_permission!(CanSetAssetTransferFreeze);
+    impl_asset_definition_control_permission!(CanSetAssetTransferAvailability);
     impl_asset_definition_control_permission!(CanSetAssetTransferDailyLimit);
+    impl_asset_definition_control_permission!(CanSetAssetHoldingLimit);
 
     impl ValidateGrantRevoke for CanMintAsset {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
@@ -1325,8 +1327,9 @@ pub mod asset_definition {
         iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanModifyAssetMetadataWithDefinition,
-        iroha_executor_data_model::permission::asset::CanSetAssetTransferFreeze,
+        iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability,
         iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit,
+        iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit,
     );
 }
 

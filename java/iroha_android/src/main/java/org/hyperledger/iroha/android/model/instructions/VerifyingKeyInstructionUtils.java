@@ -53,6 +53,19 @@ final class VerifyingKeyInstructionUtils {
     return VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(value, context);
   }
 
+  static String requireProductionBackend(
+      final Map<String, String> arguments, final String key) {
+    final String value = arguments.get(key);
+    if (value == null || trimWhitespace(value).isEmpty()) {
+      throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
+    }
+    return requireProductionBackend(value, key);
+  }
+
+  static String requireProductionBackend(final String value, final String context) {
+    return VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(value, context);
+  }
+
   static String optional(final Map<String, String> arguments, final String key) {
     final String value = arguments.get(key);
     if (value == null) {

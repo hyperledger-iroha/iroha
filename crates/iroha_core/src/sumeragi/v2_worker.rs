@@ -93,7 +93,7 @@ use super::{
         V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{DurableLaneRolloverAuthority, V2LaneWorkEffect, lane_output_identity},
-    v2_runtime::RuntimeQueueLaneSnapshot,
+    v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueLaneSnapshot},
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
         authenticate_certified_body_request_identity,
@@ -350,8 +350,10 @@ struct PersistedCertifiedServeLifecycle {
 ///
 /// The record remains after its volatile fair-ingress carrier disappears.
 /// An exact retransmission therefore resumes the same immutable ingress
-/// ordinal, while a restart never exposes route or runnable work which was not
-/// itself durably retained.
+/// ordinal while that physical occurrence remains undrained, while a restart
+/// never exposes route or runnable work which was not itself durably retained.
+/// Once an occurrence drains, the logical Serve lifecycle remains retained but
+/// a later wire retransmission receives a fresh scheduler ordinal.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServeIngressWaiter {
@@ -733,6 +735,19 @@ enum CertifiedServeIngressReservationState {
     Prepared(CertifiedServeLifecycleId),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CertifiedServeRuntimeEpisodeState {
+    Ready,
+    Claimed {
+        /// The one immutable older lifecycle allowed to acquire I/O positions
+        /// during this turn. A bounded effect fan-out may enqueue more than
+        /// one command for that same owner, but another owner must wait for
+        /// the mandatory post-turn recheck.
+        predecessor_ordinal: Option<u128>,
+    },
+    Complete,
+}
+
 #[derive(Debug)]
 struct V2IoCertifiedServeIngressReservation {
     id: CertifiedServeIngressReservationId,
@@ -745,6 +760,30 @@ struct V2IoCertifiedServeIngressReservation {
     /// selecting by this value cannot move a late retry ahead of an already
     /// queued carrier.
     carrier_ordinal: Option<u64>,
+    /// Bounded older-runtime closure for this exact ticket occurrence.
+    ///
+    /// Each claimed turn admits or services at most one strictly older owner.
+    /// Exact carrier retries retain the state with the immutable ordinal.
+    runtime_episode: CertifiedServeRuntimeEpisodeState,
+}
+
+/// Exact runner barrier selected by the certified Serve ingress gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CertifiedServeBarrier {
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    lifecycle_ordinal: u128,
+}
+
+impl CertifiedServeBarrier {
+    /// Exact request selected for the dedicated ingress turn.
+    pub(crate) const fn request_hash(self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.request_hash
+    }
+
+    /// Actor-global immutable lifecycle ordinal of this logical ticket.
+    pub(crate) const fn lifecycle_ordinal(self) -> u128 {
+        self.lifecycle_ordinal
+    }
 }
 
 /// One finite runner episode in which already-selected local producers may
@@ -909,6 +948,19 @@ impl V2IoCommand {
         }
     }
 
+    /// Runtime lifecycle retained by a completion-producing consensus command.
+    const fn runtime_lifecycle_ordinal(&self) -> Option<u128> {
+        match self {
+            Self::Sign { task, .. } => Some(task.lifecycle_ordinal()),
+            Self::Store(task) => Some(task.lifecycle_ordinal()),
+            Self::Validate(task) => Some(task.lifecycle_ordinal()),
+            Self::Apply(task) => Some(task.lifecycle_ordinal()),
+            Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
+                None
+            }
+        }
+    }
+
     const fn serve_lifecycle_id(&self) -> Option<CertifiedServeLifecycleId> {
         match self {
             Self::Serve { lifecycle_id, .. } => Some(*lifecycle_id),
@@ -1041,6 +1093,7 @@ struct V2IoCompletionOwnership {
     retained_at: Instant,
     service_debt: u64,
     requires_runtime_capacity: bool,
+    runtime_lifecycle_ordinal: Option<u128>,
 }
 
 #[derive(Debug, Default)]
@@ -1116,7 +1169,12 @@ impl V2IoAdmission {
         );
     }
 
-    fn retain_completion(&self, retained_at: Instant, requires_runtime_capacity: bool) {
+    fn retain_completion(
+        &self,
+        retained_at: Instant,
+        requires_runtime_capacity: bool,
+        runtime_lifecycle_ordinal: Option<u128>,
+    ) {
         let mut state = self
             .completion_state
             .lock()
@@ -1129,6 +1187,7 @@ impl V2IoAdmission {
             retained_at,
             service_debt: 0,
             requires_runtime_capacity,
+            runtime_lifecycle_ordinal,
         });
     }
 
@@ -1160,6 +1219,15 @@ impl V2IoAdmission {
             .owned
             .get(position)
             .map(|owned| owned.requires_runtime_capacity)
+    }
+
+    fn completion_ownership_at(&self, position: usize) -> Option<V2IoCompletionOwnership> {
+        self.completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owned
+            .get(position)
+            .copied()
     }
 
     fn record_completion_service_debt(&self) -> bool {
@@ -1281,6 +1349,14 @@ struct V2IoCommandQueueState {
     serve_ingress_reservation: Option<V2IoCertifiedServeIngressReservation>,
     /// Bounded durable request owners behind the selected ingress occurrence.
     ///
+    /// There is at most one waiter per `(requester, phase)` family, so the
+    /// frozen prefix is bounded by `serve_family_capacity` (the configured
+    /// roster plus bounded authenticated sources, across the two certified
+    /// phases). Promotion only moves one of these existing records; it never
+    /// mints an ordinal or replenishes the prefix. Once a runtime clock is
+    /// frozen, every newly admitted ticket comes from the shared source after
+    /// that clock owner.
+    ///
     /// A waiter whose `handed_off` is `None` has no volatile fair carrier. It
     /// preserves only exact identity and ordinal so same-height restart or
     /// cancellation cannot remint an old logical stage.
@@ -1308,6 +1384,7 @@ struct V2IoCommandQueue {
     serve_family_capacity: usize,
     serve_context: Option<wire::HeightContext>,
     serve_state_store: Option<CertifiedServeStateStore>,
+    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
     admission: Arc<V2IoAdmission>,
     state: Mutex<V2IoCommandQueueState>,
     ready: Condvar,
@@ -1359,6 +1436,7 @@ fn v2_io_command_channel(
     observer_per_source_capacity: usize,
     admission: Arc<V2IoAdmission>,
 ) -> (V2IoCommandSender, V2IoCommandReceiver) {
+    let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
     build_v2_io_command_channel(
         capacity,
         roster_serve_capacity,
@@ -1374,6 +1452,7 @@ fn v2_io_command_channel(
         BTreeMap::new(),
         0,
         0,
+        lifecycle_ordinals,
     )
 }
 
@@ -1388,6 +1467,7 @@ fn persistent_v2_io_command_channel(
     context: &wire::HeightContext,
     local_validator: Option<wire::ValidatorIndex>,
     body_store: &V2BodyStore,
+    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
 ) -> Result<(V2IoCommandSender, V2IoCommandReceiver), String> {
     let serve_family_capacity = certified_serve_family_capacity(
         roster_serve_capacity,
@@ -1395,6 +1475,7 @@ fn persistent_v2_io_command_channel(
         observer_per_source_capacity,
     )?;
     let (store, persisted) = CertifiedServeStateStore::open(root, context, serve_family_capacity)?;
+    lifecycle_ordinals.advance_past(persisted.next_ingress_reservation_ordinal)?;
     let (serves, serve_by_request, serve_by_family, serve_replacements, serve_ingress_waiters) =
         restore_certified_serve_tombstones(
             context,
@@ -1421,6 +1502,7 @@ fn persistent_v2_io_command_channel(
         serve_ingress_waiters,
         persisted.next_ingress_reservation_ordinal,
         persisted.next_lifecycle_admission_ordinal,
+        lifecycle_ordinals,
     ))
 }
 
@@ -1468,6 +1550,7 @@ fn build_v2_io_command_channel(
     >,
     next_serve_ingress_reservation_ordinal: u128,
     next_serve_admission_ordinal: u128,
+    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
 ) -> (V2IoCommandSender, V2IoCommandReceiver) {
     let serve_family_capacity = certified_serve_family_capacity(
         roster_serve_capacity,
@@ -1483,6 +1566,7 @@ fn build_v2_io_command_channel(
         serve_family_capacity,
         serve_context,
         serve_state_store,
+        lifecycle_ordinals,
         admission,
         state: Mutex::new(V2IoCommandQueueState {
             commands: VecDeque::with_capacity(capacity.min(1_024)),
@@ -1861,6 +1945,7 @@ fn restore_certified_serve_tombstones(
             state: CertifiedServeIngressReservationState::Provisional,
             handed_off: None,
             carrier_ordinal: None,
+            runtime_episode: CertifiedServeRuntimeEpisodeState::Ready,
         };
         if serve_ingress_waiters.insert(id, reservation).is_some() {
             return Err("Sumeragi v2 durable Serve waiter ordinal is duplicated".to_owned());
@@ -2202,6 +2287,9 @@ impl V2IoCommandQueue {
             .serve_ingress_waiters
             .remove(&next)
             .expect("selected live Serve waiter remains indexed");
+        // This is a pure ownership move inside the already bounded frozen
+        // prefix. In particular, promotion must not advance the actor-global
+        // source or the durable Serve high-watermark.
         state.serve_ingress_reservation = Some(reservation);
         true
     }
@@ -2245,6 +2333,27 @@ impl V2IoCommandQueue {
                 .insert(reservation_id, reservation)
                 .is_none(),
             "selected Serve waiter is disjoint from retained waiters"
+        );
+        Self::promote_next_serve_ingress_waiter(state)
+    }
+
+    /// Retire one physically drained ingress occurrence while retaining its
+    /// logical Serve lifecycle/tombstone in `serves`.
+    ///
+    /// A later wire retransmission must reserve a fresh actor-global scheduler
+    /// ordinal; otherwise duplicate traffic could repeatedly resurrect the old
+    /// ticket ahead of a timeout which became due after the first drain.
+    fn retire_selected_serve_ingress_occurrence(
+        state: &mut V2IoCommandQueueState,
+        reservation_id: CertifiedServeIngressReservationId,
+    ) -> bool {
+        let reservation = state
+            .serve_ingress_reservation
+            .take()
+            .expect("selected Serve ingress reservation remains installed");
+        assert_eq!(
+            reservation.id, reservation_id,
+            "Serve ingress occurrence cannot retire another durable waiter"
         );
         Self::promote_next_serve_ingress_waiter(state)
     }
@@ -2365,6 +2474,13 @@ impl V2IoCommandQueue {
         let mut state = self.lock();
         if !state.sender_open || !state.receiver_open {
             return Err(CertifiedServeIngressReserveError::Closed);
+        }
+        if state.producer_episode_active {
+            // The runner claimed this finite episode while holding the same
+            // mutex and may still acquire I/O ownership. Do not mint or attach
+            // an exact ticket until it retires, or that later producer could
+            // cross a ticket whose ordinal was already visible.
+            return Err(CertifiedServeIngressReserveError::Busy);
         }
 
         let retained_waiter_id = state
@@ -2491,16 +2607,19 @@ impl V2IoCommandQueue {
                 }
             }
         }
-        let Some(ordinal) = state.next_serve_ingress_reservation_ordinal.checked_add(1) else {
-            // No later producer may continue after the immutable local
-            // admission order can no longer name a fresh owner. Closing the
-            // producer side lets the receiver drain already-owned commands and
-            // then terminate; the fair ingress observes `Closed` and closes its
-            // height before exposing this occurrence.
-            state.sender_open = false;
-            drop(state);
-            self.ready.notify_all();
-            return Err(CertifiedServeIngressReserveError::Closed);
+        let ordinal = match self.lifecycle_ordinals.reserve_one() {
+            Ok(ordinal) if ordinal > state.next_serve_ingress_reservation_ordinal => ordinal,
+            Ok(_) | Err(_) => {
+                // No later producer may continue after the immutable local
+                // admission order can no longer name a fresh owner. Closing the
+                // producer side lets the receiver drain already-owned commands and
+                // then terminate; the fair ingress observes `Closed` and closes its
+                // height before exposing this occurrence.
+                state.sender_open = false;
+                drop(state);
+                self.ready.notify_all();
+                return Err(CertifiedServeIngressReserveError::Closed);
+            }
         };
         let id = CertifiedServeIngressReservationId(ordinal);
         let handed_off = Arc::new(AtomicBool::new(false));
@@ -2518,6 +2637,7 @@ impl V2IoCommandQueue {
             state: CertifiedServeIngressReservationState::Provisional,
             handed_off: Some(Arc::clone(&handed_off)),
             carrier_ordinal: Some(carrier_ordinal),
+            runtime_episode: CertifiedServeRuntimeEpisodeState::Ready,
         };
         let displaced_waiter = retained_waiter_id
             .and_then(|retained_waiter_id| state.serve_ingress_waiters.remove(&retained_waiter_id));
@@ -2675,6 +2795,66 @@ impl V2IoCommandQueue {
         true
     }
 
+    /// Transfer an uncommitted Serve placeholder's physical unit to one
+    /// strictly older causal producer.
+    ///
+    /// The logical barrier, ingress ticket, and durable lifecycle remain
+    /// installed. Only the queue placeholder moves back to `PendingCapacity`;
+    /// therefore later Control or causal work still cannot interpose, while
+    /// the worker rematerializes the exact target under the queue lock as soon
+    /// as the predecessor command is received.
+    fn suspend_materialized_serve_barrier_for_runtime_predecessor(
+        &self,
+        state: &mut V2IoCommandQueueState,
+    ) -> bool {
+        let Some(lifecycle_id) = state.serve_barrier else {
+            return false;
+        };
+        if !state
+            .serves
+            .get(&lifecycle_id)
+            .is_some_and(|tracked| tracked.state == V2IoServeState::Reserved)
+        {
+            return false;
+        }
+        let index = state
+            .commands
+            .iter()
+            .position(|command| command.serve_lifecycle_id() == Some(lifecycle_id))
+            .expect("reserved Serve barrier retains its physical placeholder");
+        assert_eq!(
+            index + 1,
+            state.commands.len(),
+            "later I/O work cannot appear behind an uncommitted Serve barrier"
+        );
+        let command = state
+            .commands
+            .remove(index)
+            .expect("located Serve barrier placeholder remains queued");
+        let V2IoCommand::Serve {
+            lifecycle_id: removed,
+            request,
+        } = command
+        else {
+            unreachable!("Serve lifecycle lookup returned a non-Serve command")
+        };
+        assert_eq!(removed, lifecycle_id);
+        state
+            .serves
+            .get_mut(&lifecycle_id)
+            .expect("reserved Serve barrier remains indexed")
+            .state = V2IoServeState::PendingCapacity;
+        assert!(
+            state
+                .pending_serve_requests
+                .insert(lifecycle_id, request)
+                .is_none(),
+            "materialized Serve barrier cannot already own a pending request"
+        );
+        self.admission.release();
+        true
+    }
+
     /// Retire the sole uncommitted future-slot transaction.
     ///
     /// Shutdown cannot enqueue behind a `Reserved` Serve placeholder because
@@ -2821,6 +3001,54 @@ impl V2IoCommandQueue {
         Ok(())
     }
 
+    fn serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
+        let state = self.lock();
+        let ingress = state.serve_ingress_reservation.as_ref();
+        let ingress_hash = ingress.map(|reservation| reservation.projection.request_hash);
+        let Some(lifecycle_id) = state.serve_barrier else {
+            return ingress
+                .map(|reservation| {
+                    (reservation.id.0 != 0)
+                        .then_some(CertifiedServeBarrier {
+                            request_hash: reservation.projection.request_hash,
+                            lifecycle_ordinal: reservation.id.0,
+                        })
+                        .ok_or_else(|| {
+                            "Sumeragi v2 Serve barrier retained the zero lifecycle ordinal"
+                                .to_owned()
+                        })
+                })
+                .transpose();
+        };
+        let tracked = state
+            .serves
+            .get(&lifecycle_id)
+            .ok_or_else(|| "Sumeragi v2 Serve barrier lost its lifecycle owner".to_owned())?;
+        if !matches!(
+            tracked.state,
+            V2IoServeState::PendingCapacity | V2IoServeState::Reserved
+        ) {
+            return Err(
+                "Sumeragi v2 Serve barrier crossed a non-admission lifecycle state".to_owned(),
+            );
+        }
+        if ingress_hash.is_some_and(|request_hash| request_hash != lifecycle_id.request_hash) {
+            return Err(
+                "Sumeragi v2 Serve barrier changed its admitted ingress request".to_owned(),
+            );
+        }
+        let reservation = ingress.ok_or_else(|| {
+            "Sumeragi v2 active-height Serve barrier lost its ingress lifecycle ordinal".to_owned()
+        })?;
+        if reservation.id.0 == 0 {
+            return Err("Sumeragi v2 Serve barrier retained the zero lifecycle ordinal".to_owned());
+        }
+        Ok(Some(CertifiedServeBarrier {
+            request_hash: lifecycle_id.request_hash,
+            lifecycle_ordinal: reservation.id.0,
+        }))
+    }
+
     fn serve_barrier_request_hash(
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
@@ -2852,6 +3080,100 @@ impl V2IoCommandQueue {
         Ok(Some(lifecycle_id.request_hash))
     }
 
+    fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
+        let mut state = self.lock();
+        let materialized_request_hash = state.serve_barrier.map(|lifecycle| lifecycle.request_hash);
+        let reservation = state.serve_ingress_reservation.as_mut().ok_or_else(|| {
+            "Sumeragi v2 Serve runtime episode lost its exact ingress ticket".to_owned()
+        })?;
+        if reservation.id.0 != barrier.lifecycle_ordinal
+            || reservation.projection.request_hash != barrier.request_hash
+            || materialized_request_hash
+                .is_some_and(|request_hash| request_hash != barrier.request_hash)
+        {
+            return Err("Sumeragi v2 Serve runtime episode changed barrier identity".to_owned());
+        }
+        match reservation.runtime_episode {
+            CertifiedServeRuntimeEpisodeState::Ready => {
+                reservation.runtime_episode = CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: None,
+                };
+                Ok(true)
+            }
+            CertifiedServeRuntimeEpisodeState::Claimed { .. }
+            | CertifiedServeRuntimeEpisodeState::Complete => Ok(false),
+        }
+    }
+
+    /// Return whether one claimed exact-Serve turn can dispatch an older
+    /// completion-producing causal effect without losing its target position.
+    fn serve_runtime_predecessor_capacity_available(
+        &self,
+        barrier: CertifiedServeBarrier,
+    ) -> Result<bool, String> {
+        let state = self.lock();
+        let materialized_request_hash = state.serve_barrier.map(|lifecycle| lifecycle.request_hash);
+        let reservation = state.serve_ingress_reservation.as_ref().ok_or_else(|| {
+            "Sumeragi v2 Serve runtime episode lost its exact ingress ticket".to_owned()
+        })?;
+        if reservation.id.0 != barrier.lifecycle_ordinal
+            || reservation.projection.request_hash != barrier.request_hash
+            || materialized_request_hash
+                .is_some_and(|request_hash| request_hash != barrier.request_hash)
+        {
+            return Err("Sumeragi v2 Serve runtime episode changed barrier identity".to_owned());
+        }
+        if !matches!(
+            reservation.runtime_episode,
+            CertifiedServeRuntimeEpisodeState::Claimed { .. }
+        ) {
+            return Err(
+                "Sumeragi v2 Serve runtime predecessor capacity queried outside a claimed turn"
+                    .to_owned(),
+            );
+        }
+        let transferable_target_slot = state.serve_barrier.is_some_and(|lifecycle_id| {
+            state
+                .serves
+                .get(&lifecycle_id)
+                .is_some_and(|tracked| tracked.state == V2IoServeState::Reserved)
+        });
+        Ok(transferable_target_slot
+            || (state.commands.len() < self.capacity
+                && self.admission.has_capacity(V2IoAdmissionClass::Consensus)))
+    }
+
+    fn finish_serve_runtime_episode_turn(
+        &self,
+        barrier: CertifiedServeBarrier,
+        older_predecessor_remains: bool,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let materialized_request_hash = state.serve_barrier.map(|lifecycle| lifecycle.request_hash);
+        let reservation = state.serve_ingress_reservation.as_mut().ok_or_else(|| {
+            "Sumeragi v2 Serve runtime episode lost its exact ingress ticket".to_owned()
+        })?;
+        if reservation.id.0 != barrier.lifecycle_ordinal
+            || reservation.projection.request_hash != barrier.request_hash
+            || materialized_request_hash
+                .is_some_and(|request_hash| request_hash != barrier.request_hash)
+        {
+            return Err("Sumeragi v2 Serve runtime episode changed barrier identity".to_owned());
+        }
+        if !matches!(
+            reservation.runtime_episode,
+            CertifiedServeRuntimeEpisodeState::Claimed { .. }
+        ) {
+            return Err("Sumeragi v2 Serve runtime episode settled an unclaimed turn".to_owned());
+        }
+        reservation.runtime_episode = if older_predecessor_remains {
+            CertifiedServeRuntimeEpisodeState::Ready
+        } else {
+            CertifiedServeRuntimeEpisodeState::Complete
+        };
+        Ok(())
+    }
+
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
         let state = self.lock();
         let Some(lifecycle_id) = state.serve_barrier else {
@@ -2875,6 +3197,7 @@ impl V2IoCommandQueue {
         }
     }
 
+    #[cfg(test)]
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         let state = self.lock();
         state.sender_open
@@ -3358,7 +3681,7 @@ impl V2IoCommandQueue {
             let promoted = admission
                 .ingress_reservation_id
                 .is_some_and(|reservation_id| {
-                    Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id)
+                    Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id)
                 });
             drop(state);
             if promoted || admission.ingress_reservation_id.is_some() {
@@ -3479,7 +3802,7 @@ impl V2IoCommandQueue {
         let promoted = admission
             .ingress_reservation_id
             .is_some_and(|reservation_id| {
-                Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id)
+                Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id)
             });
         drop(state);
         if matches!(committed, CertifiedServeCommit::Queued)
@@ -3514,7 +3837,7 @@ impl V2IoCommandQueue {
                 .as_ref()
                 .is_some_and(|reservation| reservation.id == reservation_id)
         {
-            let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
+            let _ = Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
         }
         drop(state);
         self.ready.notify_all();
@@ -3680,10 +4003,42 @@ impl V2IoCommandQueue {
             }
             return Err(V2IoTrySendError::ConflictingWorkId { work_id: *work_id });
         }
-        if state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some() {
+        let command_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
+        let exact_predecessor_ordinal =
+            state
+                .serve_ingress_reservation
+                .as_ref()
+                .and_then(|reservation| {
+                    let command_ordinal = command_lifecycle_ordinal?;
+                    if command_ordinal >= reservation.id.0 {
+                        return None;
+                    }
+                    match reservation.runtime_episode {
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: None,
+                        } => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: Some(existing),
+                        } if existing == command_ordinal => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Ready
+                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
+                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                    }
+                });
+        let exact_target_active =
+            state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some();
+        if exact_target_active && exact_predecessor_ordinal.is_none() {
             return Err(V2IoTrySendError::Full(command));
         }
+        let suspended_target = exact_predecessor_ordinal.is_some()
+            && self.suspend_materialized_serve_barrier_for_runtime_predecessor(&mut state);
         if state.commands.len() >= self.capacity || !self.admission.try_reserve(class) {
+            if suspended_target {
+                assert!(
+                    self.materialize_serve_barrier(&mut state),
+                    "failed predecessor admission must restore its exact Serve placeholder"
+                );
+            }
             return Err(V2IoTrySendError::Full(command));
         }
         if let Some((work_id, descriptor)) = descriptor {
@@ -3697,6 +4052,27 @@ impl V2IoCommandQueue {
             debug_assert!(replaced.is_none());
         }
         state.commands.push_back(command);
+        if let Some(predecessor_ordinal) = exact_predecessor_ordinal {
+            let reservation = state
+                .serve_ingress_reservation
+                .as_mut()
+                .expect("claimed predecessor admission retains its exact Serve ticket");
+            match &mut reservation.runtime_episode {
+                CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: selected,
+                } => match selected {
+                    Some(existing) => assert_eq!(
+                        *existing, predecessor_ordinal,
+                        "one Serve turn cannot admit two causal lifecycle owners"
+                    ),
+                    None => *selected = Some(predecessor_ordinal),
+                },
+                CertifiedServeRuntimeEpisodeState::Ready
+                | CertifiedServeRuntimeEpisodeState::Complete => {
+                    unreachable!("predecessor admission escaped its claimed Serve turn")
+                }
+            }
+        }
         drop(state);
         self.ready.notify_one();
         Ok(())
@@ -3972,6 +4348,31 @@ impl V2IoCommandSender {
         self.queue.serve_barrier_request_hash()
     }
 
+    fn serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
+        self.queue.serve_barrier()
+    }
+
+    fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
+        self.queue.claim_serve_runtime_episode(barrier)
+    }
+
+    fn serve_runtime_predecessor_capacity_available(
+        &self,
+        barrier: CertifiedServeBarrier,
+    ) -> Result<bool, String> {
+        self.queue
+            .serve_runtime_predecessor_capacity_available(barrier)
+    }
+
+    fn finish_serve_runtime_episode_turn(
+        &self,
+        barrier: CertifiedServeBarrier,
+        older_predecessor_remains: bool,
+    ) -> Result<(), String> {
+        self.queue
+            .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
+    }
+
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
         self.queue.serve_barrier_waits_for_predecessor_completion()
     }
@@ -4104,6 +4505,7 @@ enum V2IoCompletion {
         lifecycle_id: CertifiedServeLifecycleId,
         reason: String,
     },
+    #[cfg(test)]
     AuxiliaryNoop,
     CandidateLoaded(LockedCandidateLoad),
     CandidateLoadUnavailable {
@@ -4133,45 +4535,6 @@ impl V2IoCompletion {
         )
     }
 
-    fn work_id(&self) -> Option<EffectWorkId> {
-        match self {
-            Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => Some(*work_id),
-            Self::Stored(completion) => Some(completion.work_id()),
-            Self::Validated(completion) => Some(completion.work_id()),
-            Self::Applied(completion) => Some(completion.work_id()),
-            Self::CertifiedResponse { .. }
-            | Self::CertifiedRequestFailed { .. }
-            | Self::AuxiliaryNoop
-            | Self::CandidateLoaded(_)
-            | Self::CandidateLoadUnavailable { .. }
-            | Self::CandidateLoadFailed { .. }
-            | Self::Retired
-            | Self::RetirementFailed(_)
-            | Self::RecoveryRequired(_)
-            | Self::Failed(_) => None,
-        }
-    }
-
-    const fn serve_lifecycle_id(&self) -> Option<CertifiedServeLifecycleId> {
-        match self {
-            Self::CertifiedResponse { lifecycle_id, .. }
-            | Self::CertifiedRequestFailed { lifecycle_id, .. } => Some(*lifecycle_id),
-            Self::Signature { .. }
-            | Self::Stored(_)
-            | Self::Validated(_)
-            | Self::Applied(_)
-            | Self::ApplyDeferred { .. }
-            | Self::AuxiliaryNoop
-            | Self::CandidateLoaded(_)
-            | Self::CandidateLoadUnavailable { .. }
-            | Self::CandidateLoadFailed { .. }
-            | Self::Retired
-            | Self::RetirementFailed(_)
-            | Self::RecoveryRequired(_)
-            | Self::Failed(_) => None,
-        }
-    }
-
     fn acknowledgement(&self) -> V2IoCompletionAcknowledgement {
         match self {
             Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => {
@@ -4196,8 +4559,9 @@ impl V2IoCompletion {
             | Self::Retired
             | Self::RetirementFailed(_)
             | Self::RecoveryRequired(_)
-            | Self::Failed(_)
-            | Self::AuxiliaryNoop => V2IoCompletionAcknowledgement::Untracked,
+            | Self::Failed(_) => V2IoCompletionAcknowledgement::Untracked,
+            #[cfg(test)]
+            Self::AuxiliaryNoop => V2IoCompletionAcknowledgement::Untracked,
         }
     }
 }
@@ -4348,6 +4712,7 @@ impl V2IoHandle {
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
         observer_serve_capacity: usize,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
         let admission = Arc::new(V2IoAdmission::new(
@@ -4368,6 +4733,7 @@ impl V2IoHandle {
             &context,
             local_validator,
             &body_store,
+            lifecycle_ordinals,
         )?;
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
@@ -4385,6 +4751,7 @@ impl V2IoHandle {
                 while let Ok(command) = command_rx.recv() {
                     let work_id = command.work_id();
                     let serve_lifecycle_id = command.serve_lifecycle_id();
+                    let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
                     match command {
                         V2IoCommand::Retire(receipt) => {
                             let Some(completion) = execute_retire_io_command(&output_guard, || {
@@ -4556,10 +4923,11 @@ impl V2IoHandle {
                                         );
                                         true
                                     } else {
-                                        send_completion(
+                                        send_completion_with_lifecycle_ordinal(
                                             &completion_tx,
                                             &worker_admission,
                                             Ok(completion),
+                                            runtime_lifecycle_ordinal,
                                         );
                                         false
                                     }
@@ -4606,6 +4974,7 @@ impl V2IoHandle {
         self.command_tx.try_send_as(class, command)
     }
 
+    #[cfg(test)]
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         self.command_tx.queue.can_enqueue_as(class)
     }
@@ -4632,6 +5001,31 @@ impl V2IoHandle {
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
         self.command_tx.serve_barrier_request_hash()
+    }
+
+    fn serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
+        self.command_tx.serve_barrier()
+    }
+
+    fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
+        self.command_tx.claim_serve_runtime_episode(barrier)
+    }
+
+    fn serve_runtime_predecessor_capacity_available(
+        &self,
+        barrier: CertifiedServeBarrier,
+    ) -> Result<bool, String> {
+        self.command_tx
+            .serve_runtime_predecessor_capacity_available(barrier)
+    }
+
+    fn finish_serve_runtime_episode_turn(
+        &self,
+        barrier: CertifiedServeBarrier,
+        older_predecessor_remains: bool,
+    ) -> Result<(), String> {
+        self.command_tx
+            .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
     }
 
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
@@ -4709,6 +5103,10 @@ impl V2IoHandle {
             .completion_requires_runtime_capacity_at(position)
     }
 
+    fn completion_ownership_at(&self, position: usize) -> Option<V2IoCompletionOwnership> {
+        self.admission.completion_ownership_at(position)
+    }
+
     fn try_recv_completion_unacknowledged(&self) -> Result<V2IoCompletion, mpsc::TryRecvError> {
         self.completion_rx.try_recv()
     }
@@ -4778,8 +5176,22 @@ fn send_completion(
     admission: &V2IoAdmission,
     completion: Result<V2IoCompletion, String>,
 ) {
+    send_completion_with_lifecycle_ordinal(sender, admission, completion, None);
+}
+
+fn send_completion_with_lifecycle_ordinal(
+    sender: &mpsc::SyncSender<V2IoCompletion>,
+    admission: &V2IoAdmission,
+    completion: Result<V2IoCompletion, String>,
+    runtime_lifecycle_ordinal: Option<u128>,
+) {
     let completion = completion.unwrap_or_else(V2IoCompletion::Failed);
-    let _ = send_tracked_completion(sender, admission, completion);
+    let _ = send_tracked_completion_with_lifecycle_ordinal(
+        sender,
+        admission,
+        completion,
+        runtime_lifecycle_ordinal,
+    );
 }
 
 fn send_tracked_completion(
@@ -4787,7 +5199,20 @@ fn send_tracked_completion(
     admission: &V2IoAdmission,
     completion: V2IoCompletion,
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
-    admission.retain_completion(Instant::now(), completion.requires_runtime_capacity());
+    send_tracked_completion_with_lifecycle_ordinal(sender, admission, completion, None)
+}
+
+fn send_tracked_completion_with_lifecycle_ordinal(
+    sender: &mpsc::SyncSender<V2IoCompletion>,
+    admission: &V2IoAdmission,
+    completion: V2IoCompletion,
+    runtime_lifecycle_ordinal: Option<u128>,
+) -> Result<(), mpsc::SendError<V2IoCompletion>> {
+    admission.retain_completion(
+        Instant::now(),
+        completion.requires_runtime_capacity(),
+        runtime_lifecycle_ordinal,
+    );
     sender.send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
     })
@@ -4798,7 +5223,20 @@ fn try_send_tracked_completion(
     admission: &V2IoAdmission,
     completion: V2IoCompletion,
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
-    admission.retain_completion(Instant::now(), completion.requires_runtime_capacity());
+    try_send_tracked_completion_with_lifecycle_ordinal(sender, admission, completion, None)
+}
+
+fn try_send_tracked_completion_with_lifecycle_ordinal(
+    sender: &mpsc::SyncSender<V2IoCompletion>,
+    admission: &V2IoAdmission,
+    completion: V2IoCompletion,
+    runtime_lifecycle_ordinal: Option<u128>,
+) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
+    admission.retain_completion(
+        Instant::now(),
+        completion.requires_runtime_capacity(),
+        runtime_lifecycle_ordinal,
+    );
     sender.try_send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
     })
@@ -5035,6 +5473,14 @@ enum LocalCompletion {
     },
 }
 
+impl LocalCompletion {
+    const fn runtime_lifecycle_ordinal(&self) -> u128 {
+        match self {
+            Self::Reconstructed { task, .. } => task.lifecycle_ordinal(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BodyFetchServiceOwner {
     None,
@@ -5046,6 +5492,13 @@ enum BodyFetchServiceOwner {
 enum CompletionSource {
     Io,
     Local,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompletionDrainPolicy {
+    Fair,
+    IoOnly,
+    ExactServePredecessor { serve_lifecycle_ordinal: u128 },
 }
 
 enum PendingServiceCompletion {
@@ -10609,6 +11062,44 @@ pub(crate) struct ProductionV2Services {
 }
 
 impl ProductionV2Services {
+    /// Restore the actor-global lifecycle source before constructing runtime
+    /// owners for this height.
+    ///
+    /// The same durable Serve state is fully validated again when the I/O
+    /// worker opens. Reading its high-watermark here ensures startup effects,
+    /// clocks, FIFO admissions, and restored exact waiters cannot alias after
+    /// a crash. Liveness remains conditional on a suffix without infinitely
+    /// recurring process crashes; safety does not rely on that condition.
+    pub(crate) fn restore_lifecycle_ordinal_source(
+        context: &wire::HeightContext,
+        chunk_root: impl AsRef<Path>,
+        observer_source_capacity: usize,
+        observer_per_source_capacity: usize,
+    ) -> Result<RuntimeLifecycleOrdinalSource, String> {
+        let serve_family_capacity = certified_serve_family_capacity(
+            context.roster.len(),
+            observer_source_capacity,
+            observer_per_source_capacity,
+        )?;
+        let context_chunk_root = chunk_root
+            .as_ref()
+            .join(hex::encode(context.id().0.as_ref()));
+        let (_store, persisted) =
+            CertifiedServeStateStore::open(&context_chunk_root, context, serve_family_capacity)?;
+        if persisted.ingress_waiters.iter().any(|waiter| {
+            waiter.ingress_ordinal == 0
+                || waiter.ingress_ordinal > persisted.next_ingress_reservation_ordinal
+        }) {
+            return Err(
+                "Sumeragi v2 durable Serve waiter exceeds its actor-global high-watermark"
+                    .to_owned(),
+            );
+        }
+        Ok(RuntimeLifecycleOrdinalSource::after_high_watermark(
+            persisted.next_ingress_reservation_ordinal,
+        ))
+    }
+
     /// Start the ordered I/O adapter for one immutable height context.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
@@ -10624,12 +11115,19 @@ impl ProductionV2Services {
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
         kura: Arc<crate::kura::Kura>,
+        provider_ingest_finalized_archive: Option<
+            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
+        >,
+        reputation_finalized_archive: Option<
+            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
+        >,
         block_cadence: Duration,
         genesis_account: iroha_data_model::account::AccountId,
         events_sender: EventsSender,
         consensus_io_capacity: usize,
         auxiliary_io_capacity: usize,
         orphan_chunk_capacity: usize,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
@@ -10697,6 +11195,8 @@ impl ProductionV2Services {
             state,
             queue,
             Arc::clone(&kura),
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
             context.chain_id.clone(),
             block_cadence,
             genesis_account,
@@ -10713,6 +11213,7 @@ impl ProductionV2Services {
             auxiliary_io_capacity,
             consensus_io_capacity,
             reply_route_source_capacity,
+            lifecycle_ordinals,
             Arc::clone(&output_guard),
         )?;
         super::status::set_v2_effect_completion_observer(
@@ -11014,6 +11515,57 @@ impl ProductionV2Services {
         self.io
             .as_ref()
             .map_or(Ok(None), |io| io.serve_barrier_request_hash())
+    }
+
+    /// Return the exact selected Serve request and its actor-global ordinal.
+    pub(crate) fn certified_serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
+        self.io.as_ref().map_or(Ok(None), V2IoHandle::serve_barrier)
+    }
+
+    /// Claim one bounded older-runtime turn for this exact ticket.
+    ///
+    /// A claimed turn must be settled after the executor re-evaluates the
+    /// strictly older owner set. Ordinary carrier retries retain this state. A
+    /// process restart reconstructs it as ready only after the shared source
+    /// was advanced beyond the waiter, so no reconstructed runtime owner can
+    /// be older than that restored ticket.
+    pub(crate) fn claim_certified_serve_runtime_episode(
+        &self,
+        barrier: CertifiedServeBarrier,
+    ) -> Result<bool, String> {
+        self.io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
+            .claim_serve_runtime_episode(barrier)
+    }
+
+    /// Return whether this claimed turn can dispatch one strictly older causal
+    /// owner into the completion-producing I/O corridor.
+    ///
+    /// A full frozen Control prefix returns `false` until the worker consumes a
+    /// unit. A materialized but uncommitted target returns `true`: its physical
+    /// unit can be transferred to the older owner without releasing the
+    /// logical exact-Serve barrier.
+    pub(crate) fn certified_serve_runtime_predecessor_capacity_available(
+        &self,
+        barrier: CertifiedServeBarrier,
+    ) -> Result<bool, String> {
+        self.io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
+            .serve_runtime_predecessor_capacity_available(barrier)
+    }
+
+    /// Reopen the next bounded turn while an older owner remains, otherwise seal it.
+    pub(crate) fn finish_certified_serve_runtime_episode_turn(
+        &self,
+        barrier: CertifiedServeBarrier,
+        older_predecessor_remains: bool,
+    ) -> Result<(), String> {
+        self.io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
+            .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
     }
 
     /// Clone the internal gate which reserves Serve order at fair admission.
@@ -11580,7 +12132,8 @@ impl ProductionV2Services {
             });
         }
 
-        let ownership_position = usize::from(self.held_io_completion.is_some());
+        let ownership_position =
+            usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
         let Some(io) = self.io.as_ref() else {
             return IoCompletionTake::unavailable();
         };
@@ -11652,6 +12205,73 @@ impl ProductionV2Services {
         completion
     }
 
+    fn take_exact_serve_predecessor_completion(
+        &mut self,
+        runtime_capacity_available: bool,
+        serve_lifecycle_ordinal: u128,
+    ) -> IoCompletionTake {
+        let ownership_position =
+            usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
+        let io_ownership = self
+            .io
+            .as_ref()
+            .and_then(|io| io.completion_ownership_at(ownership_position))
+            .filter(|owned| {
+                owned.runtime_lifecycle_ordinal.is_some_and(|ordinal| {
+                    ordinal < serve_lifecycle_ordinal
+                        && (runtime_capacity_available || !owned.requires_runtime_capacity)
+                })
+            });
+        let local = if runtime_capacity_available {
+            self.local_completions
+                .iter()
+                .filter(|completion| {
+                    completion.runtime_lifecycle_ordinal() < serve_lifecycle_ordinal
+                })
+                .min_by_key(|completion| completion.runtime_lifecycle_ordinal())
+                .cloned()
+        } else {
+            None
+        };
+        let source = match (
+            io_ownership.and_then(|owned| owned.runtime_lifecycle_ordinal),
+            local
+                .as_ref()
+                .map(LocalCompletion::runtime_lifecycle_ordinal),
+        ) {
+            (Some(io), Some(local)) if io < local => Some(CompletionSource::Io),
+            (Some(io), Some(local)) if local < io => Some(CompletionSource::Local),
+            (Some(_), Some(_)) => Some(self.next_completion_source),
+            (Some(_), None) => Some(CompletionSource::Io),
+            (None, Some(_)) => Some(CompletionSource::Local),
+            (None, None) => None,
+        };
+        let completion = match source {
+            Some(CompletionSource::Io) => {
+                let take = self.take_io_completion(runtime_capacity_available);
+                if take.completion.is_none()
+                    && !take.retained_runtime
+                    && let Some(local) = local
+                {
+                    IoCompletionTake::ready(PendingServiceCompletion::Local(local))
+                } else {
+                    take
+                }
+            }
+            Some(CompletionSource::Local) => IoCompletionTake::ready(
+                PendingServiceCompletion::Local(local.expect("selected local completion exists")),
+            ),
+            None => IoCompletionTake::unavailable(),
+        };
+        if let Some(completion) = &completion.completion {
+            self.next_completion_source = match completion {
+                PendingServiceCompletion::Io { .. } => CompletionSource::Local,
+                PendingServiceCompletion::Local(_) => CompletionSource::Io,
+            };
+        }
+        completion
+    }
+
     fn retire_held_io_completion(&mut self) {
         let Some(completion) = self.held_io_completion.take() else {
             return;
@@ -11676,7 +12296,35 @@ impl ProductionV2Services {
         &mut self,
         executor: &mut V2EffectExecutor<R>,
     ) -> Result<usize, EffectExecutorError> {
-        self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH, false)
+        self.drain_completions_inner(
+            executor,
+            MAX_COMPLETION_DRAIN_BATCH,
+            CompletionDrainPolicy::Fair,
+        )
+    }
+
+    /// Admit at most one completed causal owner strictly older than an exact Serve ticket.
+    ///
+    /// The task's immutable actor-global ordinal is inspected before the
+    /// completion crosses into runtime. Consequently a completion created
+    /// after the ticket cannot use the ticket's one bounded predecessor
+    /// episode, even when fresh retransmissions repeatedly reopen ingress.
+    /// Until successful service, every production I/O or reconstruction
+    /// completion also remains in the executor's external-owner set, allowing
+    /// the runner's post-turn recheck to reopen this ticket for the next older
+    /// owner without inspecting or consuming a later completion.
+    pub(crate) fn drain_exact_serve_runtime_predecessor<R: EffectRuntime>(
+        &mut self,
+        executor: &mut V2EffectExecutor<R>,
+        serve_lifecycle_ordinal: u128,
+    ) -> Result<usize, EffectExecutorError> {
+        self.drain_completions_inner(
+            executor,
+            1,
+            CompletionDrainPolicy::ExactServePredecessor {
+                serve_lifecycle_ordinal,
+            },
+        )
     }
 
     /// Service at most one I/O result from the producer prefix frozen before an
@@ -11692,7 +12340,7 @@ impl ProductionV2Services {
             io.serve_barrier_waits_for_predecessor_completion()
         });
         match waits {
-            Ok(true) => self.drain_completions_inner(executor, 1, true),
+            Ok(true) => self.drain_completions_inner(executor, 1, CompletionDrainPolicy::IoOnly),
             Ok(false) => Ok(0),
             Err(reason) => Err(executor.external_service_failed(reason, self)),
         }
@@ -11702,7 +12350,7 @@ impl ProductionV2Services {
         &mut self,
         executor: &mut V2EffectExecutor<R>,
         limit: usize,
-        io_only: bool,
+        policy: CompletionDrainPolicy,
     ) -> Result<usize, EffectExecutorError> {
         if self.output_guard.restart_required() {
             return Err(executor
@@ -11714,10 +12362,19 @@ impl ProductionV2Services {
         let mut local_completion_deferred = false;
         while attempts < limit {
             let runtime_capacity_available = executor.remaining_completion_capacity() != 0;
-            let take = if io_only {
-                self.take_io_completion(runtime_capacity_available)
-            } else {
-                self.take_next_completion(runtime_capacity_available)
+            let take = match policy {
+                CompletionDrainPolicy::Fair => {
+                    self.take_next_completion(runtime_capacity_available)
+                }
+                CompletionDrainPolicy::IoOnly => {
+                    self.take_io_completion(runtime_capacity_available)
+                }
+                CompletionDrainPolicy::ExactServePredecessor {
+                    serve_lifecycle_ordinal,
+                } => self.take_exact_serve_predecessor_completion(
+                    runtime_capacity_available,
+                    serve_lifecycle_ordinal,
+                ),
             };
             let completion = match take.completion {
                 Some(completion) => completion,
@@ -11841,16 +12498,20 @@ impl ProductionV2Services {
                     PendingServiceCompletion::Io {
                         completion:
                             V2IoCompletion::CertifiedRequestFailed {
-                                lifecycle_id: _,
+                                lifecycle_id,
                                 reason,
                             },
                         ..
                     } => {
                         return Err(executor.external_service_failed(
-                            format!("certified-body retention contract failed: {reason}"),
+                            format!(
+                                "certified-body retention contract failed for lifecycle \
+                                 {lifecycle_id:?}: {reason}"
+                            ),
                             self,
                         ));
                     }
+                    #[cfg(test)]
                     PendingServiceCompletion::Io {
                         completion: V2IoCompletion::AuxiliaryNoop,
                         ..
@@ -13044,14 +13705,6 @@ impl ProductionV2Services {
             .filter(|entry| entry.validator != self.local_peer)
             .map(|entry| entry.validator.clone())
             .collect()
-    }
-
-    fn enqueue_io(&self, command: V2IoCommand) -> Result<(), String> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        self.io()?.enqueue(command)
     }
 
     fn enqueue_fail_stop_io(&self, command: V2IoCommand) -> Result<(), String> {
@@ -14486,11 +15139,13 @@ pub(super) mod tests {
         v2_block_sync::tests::durable_history_fixture,
         v2_body_store::DurableBodyReceipt,
         v2_chunks::encode_payload,
+        v2_core::MAX_EFFECTS_PER_STEP,
         v2_effects::EffectQueueConfig,
         v2_lane_work::tests::durable_lane_history_fixture,
         v2_runtime::{
             BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
-            RetiredBodyPipelineCompletions, RuntimeStep,
+            RetiredBodyPipelineCompletions, RuntimeEffectOwnership, RuntimeLifecycleOwner,
+            RuntimeStep,
         },
         v2_transport::{authenticate_certified_body_request, authenticate_payload_chunk},
     };
@@ -14547,6 +15202,7 @@ pub(super) mod tests {
             context,
             Some(0),
             body_store,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         )?;
         Ok((sender, receiver, admission))
     }
@@ -14732,7 +15388,7 @@ pub(super) mod tests {
     ) -> (FairV2Ingress, CertifiedServeIngressGate) {
         let ingress = FairV2Ingress::new(
             128,
-            128 * 1024 * 1024,
+            5 * 64 * 1024 * 1024,
             64 * 1024 * 1024,
             8 * 1024 * 1024,
             8 * 1024 * 1024,
@@ -14815,9 +15471,24 @@ pub(super) mod tests {
     struct SaturatedCompletionRuntime {
         queued: usize,
         capacity: usize,
+        next_lifecycle_ordinal: u128,
+        local_proposal_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+        external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
+        external_lifecycle_owner_capacity: Option<usize>,
     }
 
     impl SaturatedCompletionRuntime {
+        fn new(queued: usize, capacity: usize) -> Self {
+            Self {
+                queued,
+                capacity,
+                next_lifecycle_ordinal: 1,
+                local_proposal_owners: BTreeMap::new(),
+                external_lifecycle_owners: Vec::new(),
+                external_lifecycle_owner_capacity: None,
+            }
+        }
+
         fn reject_completion() -> Result<(), EnqueueError> {
             Err(EnqueueError::Full)
         }
@@ -14833,6 +15504,85 @@ pub(super) mod tests {
             now: Instant,
         ) -> Result<RuntimeStep<AdapterEffect>, String> {
             self.step_effects(now)
+        }
+
+        fn take_effect_ownership(
+            &mut self,
+            effects: &[AdapterEffect],
+        ) -> Result<Vec<RuntimeEffectOwnership>, String> {
+            if effects.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Err("saturated test runtime returned effects without ownership".to_owned())
+            }
+        }
+
+        fn set_external_lifecycle_owners(
+            &mut self,
+            owners: Vec<RuntimeLifecycleOwner>,
+        ) -> Result<(), String> {
+            let capacity = self.external_lifecycle_owner_capacity.ok_or_else(|| {
+                "saturated test runtime external-owner capacity is not configured".to_owned()
+            })?;
+            if owners.len() > capacity || owners.iter().any(|owner| owner.lifecycle_ordinal() == 0)
+            {
+                return Err(
+                    "saturated test runtime external lifecycle ownership is invalid".to_owned(),
+                );
+            }
+            let mut exact_by_ordinal = BTreeMap::new();
+            for owner in &owners {
+                if exact_by_ordinal
+                    .insert(owner.lifecycle_ordinal(), owner)
+                    .is_some()
+                {
+                    return Err(
+                        "saturated test runtime external lifecycle ownership is not unique"
+                            .to_owned(),
+                    );
+                }
+            }
+            self.external_lifecycle_owners = owners;
+            Ok(())
+        }
+
+        fn configure_external_lifecycle_owner_capacity(
+            &mut self,
+            max_pending_work: usize,
+        ) -> Result<(), String> {
+            let capacity = max_pending_work
+                .checked_add(MAX_EFFECTS_PER_STEP)
+                .ok_or_else(|| {
+                    "saturated test runtime external-owner capacity overflowed".to_owned()
+                })?;
+            if max_pending_work == 0 || self.external_lifecycle_owners.len() > capacity {
+                return Err("saturated test runtime external-owner capacity is invalid".to_owned());
+            }
+            self.external_lifecycle_owner_capacity = Some(capacity);
+            Ok(())
+        }
+
+        fn mint_local_proposal_effect_ownership(
+            &mut self,
+            tag: EventTag,
+            manifest: &wire::PayloadManifest,
+        ) -> Result<RuntimeEffectOwnership, String> {
+            let mut semantic = Vec::from(b"body-pipeline".as_slice());
+            semantic.extend_from_slice(&manifest.round.encode());
+            semantic.extend_from_slice(&manifest.subject.encode());
+            let identity = Hash::new(semantic);
+            if let Some(existing) = self.local_proposal_owners.get(&identity) {
+                return Ok(existing.clone());
+            }
+            let lifecycle_ordinal = self.next_lifecycle_ordinal;
+            self.next_lifecycle_ordinal = self
+                .next_lifecycle_ordinal
+                .checked_add(1)
+                .ok_or_else(|| "saturated test runtime lifecycle ordinal exhausted".to_owned())?;
+            let ownership = RuntimeEffectOwnership::fresh_for_test(tag, lifecycle_ordinal);
+            self.local_proposal_owners
+                .insert(identity, ownership.clone());
+            Ok(ownership)
         }
 
         fn take_scheduler_ownership(&mut self) -> Result<(), String> {
@@ -14873,7 +15623,12 @@ pub(super) mod tests {
             Err(EnqueueError::Full)
         }
 
-        fn commit_body_available(&mut self, _reservation: BodyAvailableReservation) {}
+        fn commit_body_available(
+            &mut self,
+            _reservation: BodyAvailableReservation,
+        ) -> Result<(), EnqueueError> {
+            Ok(())
+        }
 
         fn abort_body_available(&mut self, _reservation: BodyAvailableReservation) {}
 
@@ -23492,6 +24247,533 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_io() {
+        let (mut service, _) = fixture();
+        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+        let later_ordinal = 70_u128;
+        let later_work_id = EffectWorkId::for_test(70);
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &completion_tx,
+            &admission,
+            V2IoCompletion::Signature {
+                work_id: later_work_id,
+                signature: vec![0x70],
+                outbound_payload: None,
+            },
+            Some(later_ordinal),
+        )
+        .expect("retain a completion created after the exact Serve ticket");
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+
+        let payload = b"older local reconstruction";
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"older local reconstruction block",
+            )),
+            payload_hash: Hash::new(payload),
+        };
+        let round = wire::ConsensusRound {
+            context_id: service.context.id(),
+            height: service.context.height,
+            view: 0,
+        };
+        let manifest = encode_payload(&service.context, round, subject, payload)
+            .expect("encode older local reconstruction")
+            .manifest()
+            .clone();
+        let tag = EventTag::new(
+            service.context.height,
+            round.view,
+            Generation::new(service.context.height),
+        );
+        let older_task = BodyFetchTask::ordinary_for_test(7, tag, manifest.clone());
+        service
+            .local_completions
+            .push_back(LocalCompletion::Reconstructed {
+                task: older_task.clone(),
+                manifest,
+                body: payload.to_vec().into(),
+            });
+
+        let first_ticket_ordinal = 50;
+        let IoCompletionTake {
+            completion:
+                Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed { task, .. })),
+            retained_runtime: false,
+        } = service.take_exact_serve_predecessor_completion(true, first_ticket_ordinal)
+        else {
+            panic!("the strictly older local reconstruction must own the bounded episode");
+        };
+        assert_eq!(task, older_task);
+        service
+            .complete_body_reconstruction_fetch(&task)
+            .expect("successful predecessor admission retires the exact local owner");
+        assert!(service.local_completions.is_empty());
+        assert!(service.held_io_completion.is_none());
+        assert_eq!(
+            service
+                .io
+                .as_ref()
+                .expect("attached completion corridor")
+                .completion_snapshot(Instant::now())
+                .depth,
+            1,
+            "the later I/O completion must remain outside runtime"
+        );
+
+        for fresh_ticket_ordinal in first_ticket_ordinal..=later_ordinal {
+            assert!(matches!(
+                service.take_exact_serve_predecessor_completion(true, fresh_ticket_ordinal),
+                IoCompletionTake {
+                    completion: None,
+                    retained_runtime: false,
+                }
+            ));
+            assert!(service.held_io_completion.is_none());
+        }
+        assert_eq!(
+            service
+                .io
+                .as_ref()
+                .expect("attached completion corridor")
+                .completion_snapshot(Instant::now())
+                .depth,
+            1,
+            "retransmission churn cannot let an equal-or-later completion overtake its ticket"
+        );
+
+        assert!(matches!(
+            service.take_exact_serve_predecessor_completion(true, later_ordinal + 1),
+            IoCompletionTake {
+                completion: Some(PendingServiceCompletion::Io {
+                    completion: V2IoCompletion::Signature { work_id, .. },
+                    ownership_position: 0,
+                }),
+                retained_runtime: false,
+            } if work_id == later_work_id
+        ));
+        service
+            .io
+            .as_ref()
+            .expect("attached completion corridor")
+            .admission
+            .acknowledge_completion_at(0);
+        drop(service.io.take());
+    }
+
+    #[test]
+    fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
+        let (mut service, keys) = fixture();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = service.context.roster[0].validator.clone();
+        let (command_tx, _command_rx, admission) = test_io_command_channel(4);
+        for expected in 1_u128..=4 {
+            assert_eq!(
+                command_tx
+                    .queue
+                    .lifecycle_ordinals
+                    .reserve_one()
+                    .expect("reserve pre-ticket lifecycle ordinal"),
+                expected
+            );
+        }
+        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect repeated-claim barrier")
+            .expect("admitted exact request owns a barrier");
+        assert_eq!(barrier.lifecycle_ordinal(), 5);
+        assert_eq!(
+            command_tx
+                .queue
+                .lifecycle_ordinals
+                .reserve_one()
+                .expect("reserve adversarial post-ticket lifecycle ordinal"),
+            6
+        );
+
+        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+        let older_io_work_id = EffectWorkId::for_test(1);
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &completion_tx,
+            &admission,
+            V2IoCompletion::Signature {
+                work_id: older_io_work_id,
+                signature: vec![0x01],
+                outbound_payload: None,
+            },
+            Some(1),
+        )
+        .expect("retain first strictly older I/O completion");
+        let later_io_work_id = EffectWorkId::for_test(6);
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &completion_tx,
+            &admission,
+            V2IoCompletion::Signature {
+                work_id: later_io_work_id,
+                signature: vec![0x06],
+                outbound_payload: None,
+            },
+            Some(6),
+        )
+        .expect("retain later-rank I/O completion");
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+
+        let payload = b"same-rank replacement source";
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"same-rank replacement source block",
+            )),
+            payload_hash: Hash::new(payload),
+        };
+        let round = wire::ConsensusRound {
+            context_id: service.context.id(),
+            height: service.context.height,
+            view: 0,
+        };
+        let manifest = encode_payload(&service.context, round, subject, payload)
+            .expect("encode same-rank replacement source")
+            .manifest()
+            .clone();
+        let tag = EventTag::new(
+            service.context.height,
+            round.view,
+            Generation::new(service.context.height),
+        );
+        let older_local_task = BodyFetchTask::ordinary_for_test(1, tag, manifest.clone());
+        service
+            .local_completions
+            .push_back(LocalCompletion::Reconstructed {
+                task: older_local_task.clone(),
+                manifest,
+                body: payload.to_vec().into(),
+            });
+
+        assert!(
+            service
+                .claim_certified_serve_runtime_episode(barrier)
+                .expect("claim first bounded predecessor turn")
+        );
+        assert!(matches!(
+            service.take_exact_serve_predecessor_completion(
+                true,
+                barrier.lifecycle_ordinal()
+            ),
+            IoCompletionTake {
+                completion: Some(PendingServiceCompletion::Io {
+                    completion: V2IoCompletion::Signature { work_id, .. },
+                    ownership_position: 0,
+                }),
+                retained_runtime: false,
+            } if work_id == older_io_work_id
+        ));
+        service
+            .io
+            .as_ref()
+            .expect("attached completion corridor")
+            .admission
+            .acknowledge_completion_at(0);
+        service
+            .finish_certified_serve_runtime_episode_turn(barrier, true)
+            .expect("remaining same-rank local owner reopens the episode");
+
+        assert!(
+            service
+                .claim_certified_serve_runtime_episode(barrier)
+                .expect("claim second bounded predecessor turn")
+        );
+        let IoCompletionTake {
+            completion:
+                Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed { task, .. })),
+            retained_runtime: false,
+        } = service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal())
+        else {
+            panic!("the second turn must select the same-rank replacement owner");
+        };
+        assert_eq!(task, older_local_task);
+        service
+            .complete_body_reconstruction_fetch(&task)
+            .expect("retire second strictly older source");
+        assert!(matches!(
+            service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal()),
+            IoCompletionTake {
+                completion: None,
+                retained_runtime: false,
+            }
+        ));
+        service
+            .finish_certified_serve_runtime_episode_turn(barrier, false)
+            .expect("later-rank I/O cannot keep the older-owner episode open");
+        assert!(
+            !service
+                .claim_certified_serve_runtime_episode(barrier)
+                .expect("completed episode cannot be reclaimed")
+        );
+        assert_eq!(
+            service
+                .io
+                .as_ref()
+                .expect("attached completion corridor")
+                .completion_snapshot(Instant::now())
+                .depth,
+            1,
+            "later-rank completion remains outside runtime until after target ingress"
+        );
+        assert!(matches!(
+            service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal()),
+            IoCompletionTake {
+                completion: None,
+                retained_runtime: false,
+            }
+        ));
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire repeated-claim gate");
+        drop(service.io.take());
+    }
+
+    #[test]
+    fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission() {
+        let (service, keys) = fixture();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let requester = request.request().requester.clone();
+        let via = service.context.roster[0].validator.clone();
+        let (command_tx, command_rx, _admission) = test_io_command_channel(1);
+        assert_eq!(
+            command_tx
+                .queue
+                .lifecycle_ordinals
+                .reserve_one()
+                .expect("reserve the causal predecessor ordinal"),
+            1
+        );
+        command_tx
+            .try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(90),
+                    subject: proposal.subject,
+                },
+            )
+            .expect("fill the sole physical slot with a frozen Control predecessor");
+        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect the exact barrier")
+            .expect("the admitted target owns a barrier");
+        assert_eq!(barrier.lifecycle_ordinal(), 2);
+        assert!(
+            command_tx
+                .claim_serve_runtime_episode(barrier)
+                .expect("claim the bounded causal predecessor turn")
+        );
+        assert!(
+            !command_tx
+                .serve_runtime_predecessor_capacity_available(barrier)
+                .expect("inspect the full frozen prefix"),
+            "the runner must wait instead of dispatching a retained effect into a full queue"
+        );
+
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let sign = |ordinal| V2IoCommand::Sign {
+            task: ConsensusSignTask::for_test(
+                ordinal,
+                tag,
+                super::super::v2::SignRequest::Proposal(proposal.clone()),
+            ),
+            restore_outbound_payload: false,
+        };
+        assert!(matches!(
+            command_tx.try_send(sign(1)),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        assert!(matches!(
+            command_tx.try_send(sign(2)),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        assert!(matches!(
+            command_tx.try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(91),
+                    subject: proposal.subject,
+                },
+            ),
+            Err(V2IoTrySendError::Full(_))
+        ));
+
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(90),
+                ..
+            })
+        ));
+        assert!(
+            command_tx
+                .serve_runtime_predecessor_capacity_available(barrier)
+                .expect("the drained Control prefix releases causal capacity")
+        );
+        command_tx
+            .try_send(sign(1))
+            .expect("the claimed turn admits its strictly older causal owner");
+        {
+            let state = command_tx.queue.lock();
+            assert!(matches!(
+                state
+                    .serve_ingress_reservation
+                    .as_ref()
+                    .map(|reservation| reservation.runtime_episode),
+                Some(CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: Some(1)
+                })
+            ));
+        }
+        assert!(matches!(
+            command_tx.try_send(sign(2)),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        assert!(matches!(
+            command_tx.try_send(sign(3)),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        assert!(matches!(
+            command_tx.try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(92),
+                    subject: proposal.subject,
+                },
+            ),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Sign { task, .. }) if task.id() == EffectWorkId::for_test(1)
+        ));
+        command_rx.complete_work(EffectWorkId::for_test(1));
+        command_tx.acknowledge_completion(EffectWorkId::for_test(1));
+
+        let _prepared = command_tx
+            .prepare_reserved_serve(
+                CertifiedServeOwnerKey::Roster(requester.clone()),
+                request.clone(),
+            )
+            .expect("materialize the uncommitted exact target");
+        {
+            let state = command_tx.queue.lock();
+            assert!(matches!(
+                state.commands.front(),
+                Some(V2IoCommand::Serve { .. })
+            ));
+        }
+        assert!(
+            command_tx
+                .serve_runtime_predecessor_capacity_available(barrier)
+                .expect("the older owner can borrow the uncommitted target unit")
+        );
+        command_tx
+            .try_send(sign(1))
+            .expect("same-rank causal replacement precedes the materialized target");
+        {
+            let state = command_tx.queue.lock();
+            assert!(matches!(
+                state.commands.front(),
+                Some(V2IoCommand::Sign { task, .. })
+                    if task.id() == EffectWorkId::for_test(1)
+            ));
+            let lifecycle_id = state
+                .serve_barrier
+                .expect("the exact logical barrier remains installed");
+            assert_eq!(
+                state.serves.get(&lifecycle_id).map(|serve| serve.state),
+                Some(V2IoServeState::PendingCapacity),
+                "only the physical target unit transfers to the same-rank predecessor"
+            );
+        }
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Sign { task, .. }) if task.id() == EffectWorkId::for_test(1)
+        ));
+        {
+            let state = command_tx.queue.lock();
+            assert!(matches!(
+                state.commands.front(),
+                Some(V2IoCommand::Serve { .. })
+            ));
+        }
+        command_rx.complete_work(EffectWorkId::for_test(1));
+        command_tx.acknowledge_completion(EffectWorkId::for_test(1));
+        command_tx
+            .finish_serve_runtime_episode_turn(barrier, false)
+            .expect("the mandatory full recheck seals the exhausted causal episode");
+        assert!(
+            !command_tx
+                .claim_serve_runtime_episode(barrier)
+                .expect("sealed causal ownership cannot be resurrected")
+        );
+
+        let (admission, committed) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(requester),
+            &request,
+        );
+        assert!(matches!(committed, CertifiedServeCommit::Queued));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Serve { lifecycle_id, .. }) if lifecycle_id == admission.lifecycle_id
+        ));
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire the full Control-prefix fixture gate");
+    }
+
+    #[test]
     fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
         let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
         let channel_capacity = admission.capacity();
@@ -23560,10 +24842,7 @@ pub(super) mod tests {
         let (mut service, keys) = fixture();
         allow_fixture_block_payload(&mut service.context);
         let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime {
-                queued: 1,
-                capacity: 1,
-            },
+            SaturatedCompletionRuntime::new(1, 1),
             BTreeMap::new(),
             service.context.clone(),
             service.local_peer.clone(),
@@ -23755,10 +25034,7 @@ pub(super) mod tests {
     fn successful_auxiliary_drain_republishes_cleared_completion_ownership() {
         let (mut service, _) = fixture();
         let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime {
-                queued: 0,
-                capacity: 1,
-            },
+            SaturatedCompletionRuntime::new(0, 1),
             BTreeMap::new(),
             service.context.clone(),
             service.local_peer.clone(),
@@ -23807,10 +25083,7 @@ pub(super) mod tests {
     fn auxiliary_completion_drain_is_batch_bounded() {
         let (mut service, _) = fixture();
         let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime {
-                queued: 0,
-                capacity: 1,
-            },
+            SaturatedCompletionRuntime::new(0, 1),
             BTreeMap::new(),
             service.context.clone(),
             service.local_peer.clone(),
@@ -24883,6 +26156,21 @@ pub(super) mod tests {
                 .expect("provisional target is runner-visible"),
             Some(request.request_hash())
         );
+        let first_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect exact actor-global barrier")
+            .expect("provisional target retains its barrier");
+        assert_eq!(first_barrier.lifecycle_ordinal(), 1);
+        assert!(
+            command_tx
+                .claim_serve_runtime_episode(first_barrier)
+                .expect("claim the bounded predecessor episode")
+        );
+        assert!(
+            !command_tx
+                .claim_serve_runtime_episode(first_barrier)
+                .expect("same ticket cannot reopen its episode")
+        );
 
         assert!(matches!(
             ingress.try_push(certified_serve_inbound_with_route(
@@ -24896,6 +26184,17 @@ pub(super) mod tests {
             fair_ingress_accounting_snapshot(&ingress),
             admitted,
             "coalescing must retain the ticket, ordinal, and every capacity owner"
+        );
+        assert_eq!(
+            command_tx
+                .serve_barrier()
+                .expect("exact retry retains the selected barrier"),
+            Some(first_barrier)
+        );
+        assert!(
+            !command_tx
+                .claim_serve_runtime_episode(first_barrier)
+                .expect("carrier retry retains the currently claimed episode turn")
         );
         {
             let state = command_tx.queue.lock();
@@ -24988,6 +26287,10 @@ pub(super) mod tests {
                 "committing one target atomically promotes the next live waiter"
             );
             assert!(state.serve_barrier.is_none());
+            assert_eq!(
+                state.next_serve_ingress_reservation_ordinal, 2,
+                "promotion moves a frozen waiter without minting a replacement"
+            );
             assert_eq!(state.next_serve_admission_ordinal, 1);
         }
         assert!(
@@ -25033,8 +26336,8 @@ pub(super) mod tests {
             assert!(state.serve_ingress_reservation.is_none());
             assert_eq!(
                 state.serve_ingress_waiters.len(),
-                2,
-                "committed logical requests retain dormant monotone aliases"
+                0,
+                "drained physical tickets retire while logical Serve owners remain indexed"
             );
             assert_eq!(state.next_serve_admission_ordinal, 2);
         }
@@ -25099,6 +26402,106 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
+        let (service, keys) = fixture();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let requester = request.request().requester.clone();
+        let via = service.context.roster[0].validator.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
+        let first_route = routes.mint_via(requester.clone(), via.clone());
+        let retry_route = routes
+            .redeliver(&first_route)
+            .expect("mint post-drain exact retransmission route");
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
+        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound_with_route(
+                request.request(),
+                via.clone(),
+                first_route,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let first_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect first exact barrier")
+            .expect("first carrier owns a barrier");
+        assert!(
+            command_tx
+                .claim_serve_runtime_episode(first_barrier)
+                .expect("claim first physical occurrence")
+        );
+        command_tx
+            .finish_serve_runtime_episode_turn(first_barrier, false)
+            .expect("seal the drained occurrence after its full predecessor recheck");
+        assert!(
+            !command_tx
+                .claim_serve_runtime_episode(first_barrier)
+                .expect("one physical occurrence cannot resurrect its sealed episode")
+        );
+        let (first_admission, first_commit) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(requester.clone()),
+            &request,
+        );
+        assert!(matches!(first_commit, CertifiedServeCommit::Queued));
+        assert!(command_tx.queue.lock().serve_ingress_waiters.is_empty());
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound_with_route(
+                request.request(),
+                via,
+                retry_route,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let retry_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect post-drain retransmission barrier")
+            .expect("post-drain retransmission owns a fresh barrier");
+        assert_eq!(retry_barrier.request_hash(), first_barrier.request_hash());
+        assert!(retry_barrier.lifecycle_ordinal() > first_barrier.lifecycle_ordinal());
+        assert!(
+            command_tx
+                .claim_serve_runtime_episode(retry_barrier)
+                .expect("fresh physical occurrence owns its own bounded episode")
+        );
+        command_tx
+            .finish_serve_runtime_episode_turn(retry_barrier, false)
+            .expect("seal the retransmission occurrence independently");
+        assert!(
+            !command_tx
+                .claim_serve_runtime_episode(retry_barrier)
+                .expect("the retransmission cannot reopen its completed episode")
+        );
+        let (retry_admission, retry_commit) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(requester),
+            &request,
+        );
+        assert_eq!(
+            retry_admission.lifecycle_id, first_admission.lifecycle_id,
+            "wire retransmission retains the logical Serve lifecycle/tombstone"
+        );
+        assert!(matches!(retry_commit, CertifiedServeCommit::Coalesced));
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire post-drain retransmission gate");
+    }
+
+    #[test]
     fn fair_ingress_gate_overflow_closes_without_partial_admission() {
         let (service, keys) = fixture();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -25116,6 +26519,7 @@ pub(super) mod tests {
             let mut state = command_tx.queue.lock();
             state.next_serve_ingress_reservation_ordinal = u128::MAX;
         }
+        command_tx.queue.lifecycle_ordinals.exhaust_for_test();
         let before = fair_ingress_accounting_snapshot(&ingress);
 
         assert!(matches!(
@@ -25152,7 +26556,8 @@ pub(super) mod tests {
 
     #[test]
     fn fair_ingress_classifies_current_historical_future_and_unauthenticated_requests() {
-        let (service, keys) = fixture();
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let authenticated = authenticated_serve_request(
             &service.context,
@@ -25171,7 +26576,13 @@ pub(super) mod tests {
                 .expect("open raw-gate persistent queue");
         let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
 
-        let (foreign_service, foreign_keys) = fixture();
+        let (mut foreign_service, foreign_keys) = fixture();
+        allow_fixture_block_payload(&mut foreign_service.context);
+        foreign_service.context.chain_id = ChainId::from("v2-worker-foreign-test");
+        foreign_service
+            .context
+            .validate()
+            .expect("valid distinct foreign context");
         let (_, _, foreign_proposal) =
             proposal_body_and_payload(&foreign_service.context, &foreign_keys);
         let foreign = authenticated_serve_request(
@@ -25192,7 +26603,7 @@ pub(super) mod tests {
                     authenticated.request().clone(),
                 ),
             )),
-            foreign.request().requester.clone(),
+            service.context.roster[3].validator.clone(),
             via.clone(),
         );
         assert!(matches!(
@@ -25267,29 +26678,79 @@ pub(super) mod tests {
             historical_ingress.try_push(certified_serve_inbound(authenticated.request(), via,)),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
+        let active_round = wire::ConsensusRound {
+            context_id: active_context.id(),
+            height: active_context.height,
+            view: proposal.round.view,
+        };
+        let active = authenticated_serve_request(
+            &active_context,
+            &keys[2],
+            active_round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let active_via = active_context.roster[3].validator.clone();
+        assert!(matches!(
+            historical_ingress.try_push(certified_serve_inbound(active.request(), active_via,)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(
+            active_tx
+                .serve_barrier_request_hash()
+                .expect("inspect mixed historical/current Serve target"),
+            Some(active.request_hash())
+        );
         let admitted = fair_ingress_accounting_snapshot(&historical_ingress);
-        assert_eq!(admitted.last_admission_ordinal, 1);
-        assert!(
-            admitted
-                .lanes
-                .iter()
-                .flat_map(|lane| &lane.entries)
-                .all(|entry| !entry.owns_certified_serve_ticket),
-            "historical context-store service does not charge the active exact-Serve geometry"
+        assert_eq!(admitted.last_admission_ordinal, 2);
+        let ticket_owners = admitted
+            .lanes
+            .iter()
+            .flat_map(|lane| &lane.entries)
+            .filter(|entry| entry.owns_certified_serve_ticket)
+            .count();
+        assert_eq!(
+            ticket_owners, 1,
+            "only the current-height request charges the active exact-Serve geometry"
         );
         {
             let state = active_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_none());
+            assert_eq!(
+                state
+                    .serve_ingress_reservation
+                    .as_ref()
+                    .map(|reservation| reservation.projection.request_hash),
+                Some(active.request_hash())
+            );
             assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
             assert_eq!(state.next_serve_admission_ordinal, 0);
         }
-        assert!(
-            !active_serve_root
-                .path()
-                .join(CERTIFIED_SERVE_STATE_FILE)
-                .exists(),
-            "historical classification performs no active-height Serve-state write"
+        let barrier_hash = active.request_hash();
+        let selected = historical_ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                        ..
+                    }) if HashOf::new(request) == barrier_hash
+                )
+            })
+            .expect("historical request cannot hide the active exact-Serve target");
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(selected_request),
+            ..
+        }) = selected.message()
+        else {
+            panic!("mixed selector preserves the current certified request");
+        };
+        assert_eq!(selected_request, active.request());
+        assert_eq!(
+            active_tx
+                .serve_barrier_request_hash()
+                .expect("dequeued unprepared target rolls its reservation back"),
+            None
         );
         let delivered = historical_ingress
             .try_recv_if(|_| true)
@@ -25420,22 +26881,36 @@ pub(super) mod tests {
         let before = fair_ingress_accounting_snapshot(&ingress);
 
         assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
+            ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
+            Err(FairV2IngressPushError::Full(_))
         ));
-        assert_ne!(
+        assert_eq!(
             fair_ingress_accounting_snapshot(&ingress),
             before,
-            "the accepted target remains visible while the finite producer episode finishes"
+            "a running producer episode cannot partially consume fair-ingress capacity"
         );
         {
             let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_some());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
+            assert!(state.serve_ingress_reservation.is_none());
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
+            assert_eq!(
+                command_tx
+                    .queue
+                    .lifecycle_ordinals
+                    .next_ordinal()
+                    .expect("inspect shared ordinal source"),
+                Some(1),
+                "Busy admission must not mint an actor-global ordinal"
+            );
             assert!(state.producer_episode_active);
         }
 
         drop(producer_episode);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
         {
             let state = command_tx.queue.lock();
             assert!(state.serve_ingress_reservation.is_some());
@@ -25566,7 +27041,6 @@ pub(super) mod tests {
                 Some(V2IoServeState::Reserved)
             );
         }
-
         let (admission, committed) = drain_and_commit_gated_serve(
             &ingress,
             &command_tx,
@@ -25818,10 +27292,10 @@ pub(super) mod tests {
             let state = command_tx.queue.lock();
             assert_eq!(state.next_serve_admission_ordinal, 1);
             assert_eq!(
-                state.next_serve_ingress_reservation_ordinal, 1,
-                "an exact terminal retry reattaches without reminting its ingress ordinal"
+                state.next_serve_ingress_reservation_ordinal, 2,
+                "an exact terminal retry retains its tombstone but mints a fresh physical scheduler ordinal"
             );
-            assert_eq!(state.serve_ingress_waiters.len(), 1);
+            assert!(state.serve_ingress_waiters.is_empty());
             assert_eq!(state.serves.len(), 1);
             assert_eq!(
                 state
@@ -25954,17 +27428,17 @@ pub(super) mod tests {
         {
             let state = command_tx.queue.lock();
             assert_eq!(state.next_serve_ingress_reservation_ordinal, 2);
-            assert!(
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert_eq!(
                 state
-                    .serve_ingress_waiters
-                    .values()
-                    .any(|waiter| waiter.projection.request_hash == higher.request_hash())
-            );
-            assert!(
-                state
-                    .serve_ingress_waiters
-                    .values()
-                    .all(|waiter| waiter.projection.request_hash != original.request_hash())
+                    .serve_by_family
+                    .get(&CertifiedServeFamilyKey {
+                        requester: higher.request().requester.clone(),
+                        phase: higher.request().certificate.phase,
+                    })
+                    .copied(),
+                Some(replacement.lifecycle_id),
+                "the logical higher-view owner remains without resurrecting a drained ticket"
             );
         }
 
@@ -26062,6 +27536,17 @@ pub(super) mod tests {
             )),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
+        let restored_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect restored exact waiter")
+            .expect("restored waiter regains a carrier");
+        assert_eq!(restored_barrier.lifecycle_ordinal(), 1);
+        assert!(
+            command_tx
+                .claim_serve_runtime_episode(restored_barrier)
+                .expect("restart reconstructs the volatile episode claim"),
+            "the claim may reset across a crash; liveness assumes a suffix without infinitely recurring restarts, while the restored high-watermark keeps all new runtime owners younger"
+        );
         let (retried, committed) = drain_and_commit_gated_serve(
             &ingress,
             &command_tx,
@@ -26086,6 +27571,70 @@ pub(super) mod tests {
         ingress
             .unbind_certified_serve_gate(&gate)
             .expect("retire restored unsealed fixture gate");
+    }
+
+    #[test]
+    fn restored_serve_waiter_advances_shared_runtime_source() {
+        let (service, keys) = fixture();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let request = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let body_root = TempDir::new().expect("restored waiter body root");
+        let serve_root = TempDir::new().expect("restored waiter state root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 4, 4)
+            .expect("fixture family capacity");
+        let (store, _) =
+            CertifiedServeStateStore::open(serve_root.path(), &context, family_capacity)
+                .expect("open durable Serve state");
+        let mut persisted = PersistedCertifiedServeState::empty(&context);
+        persisted.next_ingress_reservation_ordinal = 41;
+        persisted
+            .ingress_waiters
+            .push(PersistedCertifiedServeIngressWaiter {
+                ingress_ordinal: 41,
+                owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+                request: request.request().clone(),
+            });
+        store
+            .persist(&persisted)
+            .expect("persist exact undrained waiter high-watermark");
+
+        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+        let admission = V2IoAdmission::unbounded_for_tests();
+        let (command_tx, _command_rx) = persistent_v2_io_command_channel(
+            4,
+            context.roster.len(),
+            4,
+            4,
+            Arc::clone(&admission),
+            serve_root.path(),
+            &context,
+            Some(0),
+            &body_store,
+            lifecycle_ordinals.clone(),
+        )
+        .expect("restore waiter with shared actor-global source");
+        assert!(
+            command_tx
+                .queue
+                .lock()
+                .serve_ingress_waiters
+                .contains_key(&CertifiedServeIngressReservationId(41))
+        );
+        assert_eq!(
+            lifecycle_ordinals
+                .reserve_one()
+                .expect("new runtime owner follows restored waiter"),
+            42
+        );
     }
 
     #[test]
@@ -29848,10 +31397,7 @@ pub(super) mod tests {
         assert!(ownership_a.advance_reply_cursors(&route_a, 3, 5));
 
         let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime {
-                queued: 0,
-                capacity: 8,
-            },
+            SaturatedCompletionRuntime::new(0, 8),
             BTreeMap::new(),
             service.context.clone(),
             service.local_peer.clone(),

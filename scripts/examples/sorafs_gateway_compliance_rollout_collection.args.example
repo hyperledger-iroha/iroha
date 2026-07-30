@@ -47,3 +47,4 @@ catalog_promotion,controller_runtime,moderation_toggle,gateway_reload,enforcemen
 /runtime/sorafs/gateway-compliance/observability-canary.json
 --governance-approval-evidence
 /runtime/sorafs/gateway-compliance/governance-approval.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

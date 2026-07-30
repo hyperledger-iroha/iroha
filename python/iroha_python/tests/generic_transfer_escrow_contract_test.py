@@ -47,6 +47,7 @@ OracleCondition = settlement_module.OracleCondition
 Payment = settlement_module.Payment
 ContractCallIntent = client_module.ContractCallIntent
 ToriiClient = client_module.ToriiClient
+VerifiedCommittedTransaction = client_module.VerifiedCommittedTransaction
 
 
 def _response(payload: Any, status: int = 200) -> requests.Response:
@@ -54,6 +55,14 @@ def _response(payload: Any, status: int = 200) -> requests.Response:
     response.status_code = status
     response.headers["Content-Type"] = "application/json"
     response._content = json.dumps(payload).encode("utf-8")
+    return response
+
+
+def _norito_response(payload: bytes, status: int = 200) -> requests.Response:
+    response = requests.Response()
+    response.status_code = status
+    response.headers["Content-Type"] = "application/x-norito"
+    response._content = payload
     return response
 
 
@@ -213,6 +222,140 @@ def test_signed_role_scoped_escrow_queries_use_native_query_payloads(
         b"buyer-query",
     ]
     assert all(call["url"].endswith("/query") for call in session.calls)
+
+
+def test_verified_committed_transaction_uses_two_signed_native_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction_hash = "11" * 32
+    block_hash = "22" * 32
+    result_hash = "33" * 32
+    crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
+    crypto.build_find_committed_transaction_query = (
+        lambda authority, private_key, requested_hash: b"transaction-query"
+    )
+    crypto.committed_transaction_carrier_block_hash = (
+        lambda requested_hash, response: block_hash
+    )
+    crypto.build_find_block_by_hash_query = (
+        lambda authority, private_key, requested_hash: b"block-query"
+    )
+    crypto.verify_committed_transaction_inclusion = (
+        lambda requested_hash, transaction_response, block_response: {
+            "transaction_hash": transaction_hash,
+            "block_hash": block_hash,
+            "block_height": 7,
+            "result_hash": result_hash,
+            "proof_kind": "ordinary",
+            "entrypoint_kind": "External",
+            "authority": "authority@payments",
+            "signer_public_key_hex": "44" * 32,
+            "metadata": {"walkthrough": "availability"},
+            "executable": {"Instructions": []},
+            "result_ok": True,
+            "rejection_code": None,
+            "rejection_message": None,
+            "contract_rejection": None,
+            "batch_outcomes": [],
+            "committed_transaction": {
+                "entrypoint_hash": transaction_hash,
+                "block_hash": block_hash,
+            },
+        }
+    )
+    monkeypatch.setitem(sys.modules, f"{PURE_PACKAGE}.crypto", crypto)
+    session = FakeSession(
+        [
+            _norito_response(b"transaction-response"),
+            _norito_response(b"block-response"),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    verified = client.get_verified_committed_transaction(
+        transaction_hash=transaction_hash,
+        authority="authority@payments",
+        private_key_hex="44" * 32,
+    )
+
+    assert verified.transaction_hash == transaction_hash
+    assert verified.block_hash == block_hash
+    assert verified.block_height == 7
+    assert verified.result_hash == result_hash
+    assert verified.proof_kind == "ordinary"
+    assert verified.entrypoint_kind == "External"
+    assert verified.authority == "authority@payments"
+    assert verified.signer_public_key_hex == "44" * 32
+    assert verified.metadata == {"walkthrough": "availability"}
+    assert verified.executable == {"Instructions": []}
+    assert verified.result_ok
+    assert verified.rejection_code is None
+    assert verified.batch_outcomes == ()
+    assert [call["data"] for call in session.calls] == [
+        b"transaction-query",
+        b"block-query",
+    ]
+    assert all(
+        call["headers"]["Accept"] == "application/x-norito"
+        for call in session.calls
+    )
+
+
+def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None:
+    payload = {
+        "transaction_hash": "11" * 32,
+        "block_hash": "22" * 32,
+        "block_height": 7,
+        "result_hash": "33" * 32,
+        "proof_kind": "ordinary",
+        "entrypoint_kind": "External",
+        "authority": "authority@payments",
+        "signer_public_key_hex": "44" * 32,
+        "metadata": {},
+        "executable": {"Instructions": []},
+        "result_ok": False,
+        "rejection_code": "BelowMinimum",
+        "rejection_message": "contract rejection",
+        "contract_rejection": {
+            "contract": "BoiFiLiquidity",
+            "namespace": "FiLiquidityError",
+            "name": "BelowMinimum",
+            "code": 18,
+        },
+        "batch_outcomes": [],
+        "committed_transaction": {},
+    }
+    verified = VerifiedCommittedTransaction.from_payload(payload)
+    assert verified.rejection_code == "BelowMinimum"
+    assert verified.contract_rejection == {
+        "contract": "BoiFiLiquidity",
+        "namespace": "FiLiquidityError",
+        "name": "BelowMinimum",
+        "code": 18,
+    }
+
+    unknown_field = {**payload, "unverified_hint": "ignored"}
+    with pytest.raises(ValueError, match="must contain exactly"):
+        VerifiedCommittedTransaction.from_payload(unknown_field)
+
+    missing_field = dict(payload)
+    del missing_field["committed_transaction"]
+    with pytest.raises(ValueError, match="must contain exactly"):
+        VerifiedCommittedTransaction.from_payload(missing_field)
+
+    mismatched = dict(payload)
+    mismatched["rejection_code"] = "NotPermitted"
+    with pytest.raises(ValueError, match="manifest-authenticated"):
+        VerifiedCommittedTransaction.from_payload(mismatched)
+
+    for invalid_code in (True, "18", 0, 0x1_0000_0000):
+        malformed = dict(payload)
+        malformed["contract_rejection"] = {
+            **payload["contract_rejection"],
+            "code": invalid_code,
+        }
+        with pytest.raises((TypeError, ValueError), match="contract rejection code"):
+            VerifiedCommittedTransaction.from_payload(malformed)
 
 
 class FakeInstruction:

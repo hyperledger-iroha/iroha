@@ -68,6 +68,8 @@ captured deployed aggregate producer/scheduler rollout evidence, proof service
 hardening, deployed public receipt explorer rollout evidence, deployed
 proof-token issuance producers/explorer-linking rollout evidence, or deployed
 moderation ledger publication service described by the original plan.
+The captured deployed source-event producer and scheduler rollout evidence
+remains open.
 
 ## Shipped Foundations
 
@@ -137,16 +139,26 @@ moderation ledger publication service described by the original plan.
   aggregate-id prefix, stable query id, fixed sorted population inventory,
   fixed sorted metric schema, privacy mode, reduced rational epsilon,
   per-subject contribution cap, suppression threshold, policy digest, and
-  bounded composition budget keyed by the stable query id. Delta is fixed at
-  zero. `sorafs_node::StorageConfig` validates and projects that single
-  production policy, and
+  bounded composition budget keyed by the stable query id. Enabled privacy
+  publication also pins an independently administered finalized release anchor
+  by one opaque production handle, non-zero revision, and non-zero lowercase
+  public-policy digest. Differential-privacy modes pin the threshold-PRF
+  provider by the same three non-secret fields; suppression-only mode rejects a
+  dormant PRF binding. Delta is fixed at zero.
+  `sorafs_node::StorageConfig` validates and projects that single production
+  policy and both exact runtime-provider bindings, and
   `NodeHandle::publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
   accepts only the evaluation timestamp and predecessor block hash.
 - Differential-privacy publication requires a deployment-owned
-  `PrivacyCyclePrfProviderV1` and an independently administered finalized
-  `PrivacyReleaseAnchorV1`. Node startup fails closed when the configured
-  aggregate policy requires noise and either dependency is absent. For every
-  due window, including catch-up windows, the node constructs a fresh canonical
+  `ProductionPrivacyCyclePrfProviderV1` and an independently administered
+  `ProductionPrivacyReleaseAnchorV1`. Standard Node, Torii, and `irohad`
+  launch paths construct `QualifiedPrivacyCyclePrfProviderV1` and
+  `QualifiedPrivacyReleaseAnchorV1` from the exact config pins before opening
+  persistence. Enabled startup fails closed on missing, unexpected,
+  substituted, unavailable, stale, test-marked, zero, or mismatched provider
+  identity and public policy; a prebuilt Node cannot also receive ambiguous raw
+  providers through Torii. For every due window, including catch-up windows,
+  the node constructs a fresh canonical
   request bound to the stable query id, governed policy digest, exact cycle
   window, population-inventory digest, and metric-schema digest. All-zero
   outputs and fixed provider failure classes fail closed without exposing
@@ -158,9 +170,9 @@ moderation ledger publication service described by the original plan.
   anchor advances only through the exact durable suffix (and exact publication
   outbox entries), while an anchor ahead of the local checkpoint or a
   same-height conflict fails closed. The
-  standard daemon exposes runtime-only injection boundaries but does not ship a
-  file/environment fallback or an in-tree production implementation of either
-  external service.
+  standard daemon exposes the qualified runtime-only injection boundaries but
+  does not ship a file/environment fallback or an in-tree external adapter for
+  either service.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/source-events` for
   canonical-authenticated local aggregate source-event ingestion. The handler
@@ -452,7 +464,7 @@ verify the same canonical payloads used for publication.
 | Ledger builder | Builds cycle headers, entry roots, proofs, and publisher signatures. | V1 payload/proof/publication helpers shipped in the data model; local source-entry cycle builder, local node publication to filesystem/CAR, signed runtime DAG external payloads, payload-free publication readback canary tooling, and the rollout evidence verifier are shipped; deployed anchoring and captured service rollout evidence remain open. |
 | Proof API | Serves cycle metadata, entries, inclusion proofs, proof-token issuance indexes, explorer snapshots, and token verification. | Local Torii readback for published cycles, entry proofs, proof-token issuance indexes, explorer snapshots, and proof-token verification is shipped with bounded list/explorer arrays, local verifier throttling, local browser UI route, client/CLI readback helpers, payload-free explorer canary tooling, and rollout evidence summary validation; deployed service hardening and captured public rollout evidence are not shipped. |
 | Receipt explorer | Public UI for browsing cycles and verifying entries. | Local explorer snapshot API, static Torii browser UI, CLI readback bridge, `iroha sorafs transparency explorer-canary` rollout-evidence tooling, and summary-gate validation are shipped; captured deployed public rollout evidence is not shipped. |
-| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical fixed-population/fixed-schema aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, per-subject clipping and exact integer discrete-Laplace worker, stable query/window release identity, durable composition-budget and hash-chained release ledgers, finalized-head reconciliation, fail-closed runtime threshold-PRF and release-anchor boundaries, canonical-authenticated Torii source-event ingestion, a caller-seed-free authenticated publish-due trigger, client/CLI tooling, privacy aggregate canary evidence, and rollout summary validation are shipped. Reviewed independently administered production implementations of the threshold service and finalized release anchor plus live Governance DAG anchoring remain open, and captured deployed source-event producer and scheduler rollout evidence remains open. |
+| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical fixed-population/fixed-schema aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, per-subject clipping and exact integer discrete-Laplace worker, stable query/window release identity, durable composition-budget and hash-chained release ledgers, finalized-head reconciliation, strict non-secret `iroha_config` provider pins, production-only runtime seams, and standard Node/Torii/`irohad` construction of qualified wrappers before persistence are shipped. The wrappers require the exact configured opaque handle, revision, and policy digest and revalidate before and after every operation. Canonical-authenticated Torii source-event ingestion, a caller-seed-free authenticated publish-due trigger, client/CLI tooling, privacy aggregate canary evidence, and rollout summary validation are also shipped. A separately administered leader lease, reviewed external threshold/finalized-anchor adapters, live Governance DAG anchoring, and captured deployed source-event/scheduler evidence remain open. |
 
 Document only the local `/v1/sorafs/transparency/*` readback,
 canonical-authenticated source-entry ingest, privacy aggregate source-event
@@ -481,12 +493,14 @@ shipped until the live builder, deployment, and explorer paths exist.
   client/CLI producer and scheduler trigger tooling,
   `NodeHandle::record_privacy_aggregate_source_event(...)`, and
   `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`.
-  Inject the reviewed runtime threshold-PRF service and independently
-  administered finalized release-anchor adapters on every DP-enabled node; no
-  file, environment, request, process-local head, or deterministic fallback is
-  permitted. Exercise multi-replica byte identity, full-checkpoint rollback,
-  anchor-ahead/behind/equivocation, policy rotation, budget exhaustion, and
-  crash-before/after-checkpoint negatives against those external services.
+  Inject reviewed external threshold-PRF and independently administered
+  finalized release-anchor adapters matching the exact config pins on every
+  enabled node. Compose release-anchor mutation with a separately
+  administered leader lease; no file, environment, request, process-local
+  head, or deterministic fallback is permitted. Exercise multi-replica byte
+  identity, full-checkpoint rollback, anchor-ahead/behind/equivocation, policy
+  rotation, budget exhaustion, and crash-before/after-checkpoint negatives
+  against those external services.
 - Finish deployed proof API hardening and capture public receipt explorer
   rollout evidence by running the shipped `iroha sorafs transparency
   explorer-canary` tooling beyond the local token-verifier throttle, bounded

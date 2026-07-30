@@ -1816,7 +1816,21 @@ let issue = try SorafsReplicationInstructionBuilders.issueReplicationOrder(
 let complete = try SorafsReplicationInstructionBuilders.completeReplicationOrder(
     orderId: orderId,
     providerId: providerId,
-    completionEpoch: 27
+    completionEpoch: 27,
+    expectedAuthority: try SorafsProviderIngestCompletionAuthorityV1(
+        providerOwner: providerOwner,
+        signerPolicy: try SorafsProviderIngestCompletionSignerPolicyV1(
+            policyId: policyId,
+            revision: 2,
+            predecessorDigest: predecessorDigest,
+            policyDigest: policyDigest
+        )
+    ),
+    expectedAssignmentRevision: 3,
+    finalizedAnchor: try SorafsProviderIngestFinalizedAnchorV1(
+        height: 41,
+        blockHash: blockHash
+    )
 )
 let expire = try SorafsReplicationInstructionBuilders.expireReplicationOrder(
     orderId: orderId,
@@ -1826,9 +1840,11 @@ let expire = try SorafsReplicationInstructionBuilders.expireReplicationOrder(
 
 IDs must be non-zero lowercase 64-hex strings. Issue validates canonical,
 bounded `ReplicationOrderV1` framing, the embedded order ID, target/provider
-assignment policy, and deadline ordering. Completion is provider-specific and
-always contains `order_id`, `provider_id`, and `completion_epoch`; missing,
-legacy, or unknown fields are rejected by the decoder.
+assignment policy, and deadline ordering. Completion requires the exact
+six-field hard cut: `order_id`, `provider_id`, `completion_epoch`,
+`expected_authority`, `expected_assignment_revision`, and `finalized_anchor`.
+The authority retains the provider owner and four-part signer-policy chain;
+missing, retired three-field, alias, or unknown shapes are rejected.
 
 ## NoritoBridge packaging
 
