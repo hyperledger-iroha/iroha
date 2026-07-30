@@ -64034,6 +64034,7 @@ pub struct AccountOnboardingResponseDto {
 
 #[cfg(all(test, feature = "app_api"))]
 mod sponsored_onboarding_dto_tests {
+    use iroha_crypto::{Algorithm, Hash, Signature};
     use iroha_data_model::{
         account::{AccountId, MultisigMember, MultisigPolicy},
         alias_setup::{AliasFramedInstructionV1, AliasPlanDispositionV1},
@@ -64041,7 +64042,8 @@ mod sponsored_onboarding_dto_tests {
 
     use super::{
         AccountOnboardingPlanRequestDto, account_onboarding_receipt_signature_is_valid,
-        onboarding_disposition_transition_allowed, onboarding_frames_are_ordered_subset,
+        checked_routing_fixture_keypair, onboarding_disposition_transition_allowed,
+        onboarding_frames_are_ordered_subset,
     };
 
     #[test]
