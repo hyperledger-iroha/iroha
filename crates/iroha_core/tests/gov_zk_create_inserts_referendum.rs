@@ -147,8 +147,9 @@ fn create_election_inserts_referendum_with_configured_window() {
 
     let election_count_before = stx.world.elections_mut().iter().count();
     let referendum_count_before = stx.world.governance_referenda_mut().iter().count();
+    let bounded_election_id = "ref-auto".to_owned();
     let create = CreateElection {
-        election_id: "ref-auto".to_string(),
+        election_id: bounded_election_id.clone(),
         options: MAX_ELECTION_OPTIONS_V1,
         eligible_root: [0u8; 32],
         start_ts: 0,
@@ -163,7 +164,7 @@ fn create_election_inserts_referendum_with_configured_window() {
     let election = stx
         .world
         .elections_mut()
-        .get("ref-auto")
+        .get(bounded_election_id.as_str())
         .cloned()
         .expect("bounded election inserted");
     assert_eq!(election.options, MAX_ELECTION_OPTIONS_V1);
@@ -177,15 +178,14 @@ fn create_election_inserts_referendum_with_configured_window() {
         referendum_count_before + 1
     );
 
-    let election_id = "ref-auto".to_owned();
     for tally_len in [0, 64, 65] {
         stx.world
             .elections_mut()
-            .get_mut(&election_id)
+            .get_mut(&bounded_election_id)
             .expect("bounded election remains present")
             .tally = vec![0; tally_len];
         let finalize = FinalizeElection {
-            election_id: "ref-auto".to_string(),
+            election_id: bounded_election_id.clone(),
             tally: vec![0; MAX_ELECTION_OPTIONS_V1 as usize],
             tally_proof: ProofAttachment::new_ref(
                 "halo2/ipa".into(),
@@ -210,7 +210,7 @@ fn create_election_inserts_referendum_with_configured_window() {
         let rejected = stx
             .world
             .elections_mut()
-            .get("ref-auto")
+            .get(bounded_election_id.as_str())
             .cloned()
             .expect("rejected finalize must preserve election state");
         assert!(!rejected.finalized);
@@ -224,7 +224,7 @@ fn create_election_inserts_referendum_with_configured_window() {
     let rec = stx
         .world
         .governance_referenda_mut()
-        .get("ref-auto")
+        .get(bounded_election_id.as_str())
         .copied()
         .expect("referendum inserted");
     assert_eq!(rec.mode, iroha_core::state::GovernanceReferendumMode::Zk);

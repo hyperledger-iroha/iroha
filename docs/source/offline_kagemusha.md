@@ -56,12 +56,23 @@ Torii reports final chain finality.
 
 Canonical request and native-bridge decoding rejects compression and alternate
 Norito layouts from the fixed header before reconstruction. Each route applies
-its exact framed-body ceiling, and both the public redeem extractor and the
-nested redeem-result archive use a fourfold decoded-allocation budget plus a
-64-level nesting limit derived from the supplied canonical bytes. A compressed
-length field, forged collection count, or structurally decodable
-non-canonical representation therefore fails before it can inherit Norito's
-broader generic decode allowance.
+its exact framed-body ceiling. Public request extractors start with a fourfold
+frame-derived allocation base. Lineage selectors add 64 KiB; top-up adds six
+maximum 192 KiB shield proofs plus 64 KiB; and redeem budgets its bounded
+256 KiB recursive proof pairs plus three fixed copies of the 192 KiB unshield
+proof. Before owned reconstruction, a schema-aware canonical wire preflight
+walks the redemption field path without allocating and rejects an unshield
+proof whose encoded `Vec<u8>` count exceeds that limit. Native fixed-depth
+schemas use the same fourfold base with a depth-derived fixed allowance; a
+redemption build result has its own larger profile, including six fixed
+unshield-proof copies, because it contains both the change bundle and its
+duplicated change result. Finality, lineage, operation-status, and release
+wrappers contain nested collections whose cardinality is checked after
+reconstruction, so their explicit schema profiles retain Norito's conservative
+32-fold frame-scaled ceiling plus 64 KiB. Both public and native paths retain
+schema-specific nesting limits. A compressed length field, forged collection
+count, oversized unshield proof, or structurally decodable non-canonical
+representation therefore fails within its body and allocation ceilings.
 
 Readiness and operation responses support Torii's typed response negotiation.
 Readiness is authoritative only when its block context, live asset scale,

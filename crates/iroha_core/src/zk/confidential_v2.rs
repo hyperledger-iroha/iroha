@@ -67,7 +67,8 @@ pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2: &[u8] =
 /// Canonical public-input schema for asset-hidden transfers.
 pub const ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"asset_hidden_transfer_v1","public_inputs":["pool_id","asset_set_root","input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","chain_tag"]}"#;
 /// Maximum accepted encoded confidential proof size.
-pub const CONFIDENTIAL_V2_MAX_PROOF_BYTES: u32 = 192 * 1024;
+pub const CONFIDENTIAL_V2_MAX_PROOF_BYTES: u32 =
+    iroha_data_model::offline::KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4 as u32;
 /// Width of the pinned Axiom Poseidon secure permutation.
 pub const CONFIDENTIAL_POSEIDON_T_V3: usize = 3;
 /// Sponge rate of the pinned Axiom Poseidon secure permutation.
