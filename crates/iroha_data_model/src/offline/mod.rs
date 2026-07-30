@@ -86,6 +86,11 @@ pub const KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2: u32 = 1 << KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
 /// Maximum canonical top-up shield proof envelope accepted at typed ingress.
 pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
+/// Absolute canonical byte ceiling for one ABI-21 unshield-v3 proof.
+///
+/// The installed verifier record may advertise a lower limit, but no
+/// Kagemusha redemption archive may carry a larger proof.
+pub const KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4: usize = 192 * 1024;
 /// Maximum number of branch decisions carried by one recursive spend lineage.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2: u8 = 64;
 /// Maximum number of device-to-device transfers in one recursive spend lineage.
@@ -9142,6 +9147,49 @@ mod device_authority_p256_tests {
                 field: "redeem_result.v4.request_archive",
             })
         ));
+
+        let mut maximum_unshield = request.clone();
+        maximum_unshield.redeem_proof.proof.bytes =
+            vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
+        maximum_unshield
+            .validate_public_binding()
+            .expect("maximum-sized unshield proof remains structurally valid");
+        maximum_unshield.redeem_proof.proof.bytes.push(0x65);
+        assert!(matches!(
+            maximum_unshield.validate_public_binding(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_proof",
+            })
+        ));
+
+        let mut maximum_request = request;
+        maximum_request
+            .bundle
+            .recursive_proof
+            .proof_envelope
+            .proof
+            .bytes =
+            vec![0x64; KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize];
+        maximum_request.redeem_proof.proof.bytes =
+            vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
+        let mut change_bundle = maximum_request.bundle.clone();
+        change_bundle.recursive_proof.proof_envelope.proof.bytes =
+            vec![0x66; KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize];
+        maximum_request.offline_change = Some(KagemushaRecursiveSpendRedeemChangeBranchV4 {
+            output: change_bundle.statement.current_note.clone(),
+            branch_claims: change_bundle.statement.branch_claims.clone(),
+            bundle: change_bundle,
+        });
+        let maximum_archive =
+            norito::encode_canonical(&maximum_request).expect("maximum-shaped redeem request");
+        assert!(maximum_archive.len() <= KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4);
+        let decoded =
+            norito::decode_canonical_with_limits::<KagemushaRecursiveSpendRedeemRequestV4>(
+                &maximum_archive,
+                kagemusha_recursive_spend_redeem_decode_limits_v4(maximum_archive.len()),
+            )
+            .expect("maximum-shaped redeem request must fit the schema-bounded allocation budget");
+        assert_eq!(decoded, maximum_request);
     }
 
     #[test]
@@ -9164,7 +9212,8 @@ mod device_authority_p256_tests {
         assert_eq!(
             limits.max_total_allocated_bytes(),
             KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
-                * KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_ALLOCATION_MULTIPLIER_V4
+                * KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4
+                + KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
         );
         assert_eq!(
             limits.max_nesting_depth(),
@@ -9523,6 +9572,7 @@ fn validate_kagemusha_redeem_proof_attachment_v2(
         || proof.vk_ref.backend.as_str() != KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND
         || proof.vk_ref.name.is_empty()
         || proof.proof.bytes.is_empty()
+        || proof.proof.bytes.len() > KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4
         || proof
             .vk_commitment
             .is_none_or(|commitment| commitment == [0; 32])
@@ -10362,19 +10412,56 @@ pub const KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4: &str =
 pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4: usize = 64 * 1024 * 1024;
 /// Maximum canonical ABI-21 redemption request archive size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4: usize = 48 * 1024 * 1024;
-const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_ALLOCATION_MULTIPLIER_V4: usize = 4;
+/// Frame-derived base multiplier for bounded ABI-21 request reconstruction.
+pub const KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4: usize = 4;
+/// Fixed allocation allowance for a maximum-shaped ABI-21 top-up request.
+pub const KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    6 * KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2 + 64 * 1024;
+/// Fixed allocation allowance for one root ABI-21 recursive bundle.
+pub const KAGEMUSHA_BUNDLE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    8 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for one nested ABI-21 recursive bundle.
+///
+/// This profile covers peer payments, initialization results, and local
+/// wrappers containing one bundle.
+pub const KAGEMUSHA_SINGLE_RECURSIVE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    11 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a maximum-shaped ABI-21 split result.
+pub const KAGEMUSHA_SPLIT_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    24 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a two-parent ABI-21 change-preparation request.
+pub const KAGEMUSHA_PEER_SPLIT_PREPARE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    28 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a two-parent ABI-21 local append request.
+pub const KAGEMUSHA_APPEND_LOCAL_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    34 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a nested ABI-21 terminal-verification request.
+pub const KAGEMUSHA_VERIFY_LOCAL_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    14 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a maximum-shaped ABI-21 redemption request.
+pub const KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize = 27
+    * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize
+    + 3 * KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4
+    + 1024 * 1024;
+/// Fixed allocation allowance for a maximum-shaped native redemption result.
+pub const KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize = 46
+    * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize
+    + 6 * KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4
+    + 1024 * 1024;
 const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4: usize = 64;
 
 fn kagemusha_recursive_spend_redeem_decode_limits_v4(encoded_len: usize) -> norito::DecodeLimits {
-    // The request is already bounded by the exact canonical archive ceiling.
-    // Scale every decode dimension from those supplied bytes instead of using
-    // the generic canonical decoder's 32-fold allocation allowance.
+    // The fourfold frame-derived base covers decoded structures and ordinary
+    // collection storage. The fixed allowance covers the statically bounded
+    // main, optional-change, and unshield proof depths plus one MiB of
+    // structural headroom, without inheriting the generic 32-fold allowance.
     norito::DecodeLimits::new(
         encoded_len,
         encoded_len,
         encoded_len.saturating_mul(2),
         encoded_len
-            .saturating_mul(KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_ALLOCATION_MULTIPLIER_V4),
+            .saturating_mul(KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4)
+            .saturating_add(KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4),
         KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4,
     )
 }

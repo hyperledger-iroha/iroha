@@ -12496,18 +12496,21 @@ mod exact12_fixture {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use hex_literal::hex;
+
+    use crate::{domain::DomainId, name::Name};
 
     use super::{
         exact12_fixture::{
             account, asset_definition_id, bootle_lantern_policy, commitment, context,
-            encrypted_output, envelope, fcmp_encrypted_output, fcmp_input, fcmp_output,
-            jindo_commitment, jindo_field, nullifier, orchard_action, p256_ciphertext, p256_point,
-            proof_for, proof_variant_name, raw, redigest_bootle_lantern_policy,
-            redigest_zk_ace_policy, sample_statements, sorted_fcmp_outputs, statement_for,
-            statement_variant_name, zk_ace_allowlist, zk_ace_policy, zk_ams_anchor,
-            zk_ams_provision_statement, zk_ams_seed_key, zk_x509_certificate_policy, zk_x509_crl,
-            zk_x509_trust_anchor,
+            encrypted_output, envelope, fcmp_input, fcmp_output, jindo_commitment, jindo_field,
+            nullifier, orchard_action, p256_ciphertext, p256_point, proof_for, proof_variant_name,
+            raw, redigest_bootle_lantern_policy, redigest_zk_ace_policy, sample_statements,
+            sorted_fcmp_outputs, statement_for, statement_variant_name, zk_ace_allowlist,
+            zk_ace_policy, zk_ams_anchor, zk_ams_provision_statement, zk_ams_seed_key,
+            zk_x509_certificate_policy, zk_x509_crl, zk_x509_trust_anchor,
         },
         *,
     };

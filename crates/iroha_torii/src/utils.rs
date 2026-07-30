@@ -2005,6 +2005,10 @@ pub mod extractors {
 
     #[cfg(feature = "app_api")]
     const OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
+    #[cfg(feature = "app_api")]
+    const OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES: usize = 64 * 1024;
+    #[cfg(feature = "app_api")]
+    const OFFLINE_CANONICAL_REDEEM_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES: usize = 1024 * 1024;
 
     /// Schema-specific body and decode limits for public Offline API requests.
     #[cfg(feature = "app_api")]
@@ -2015,21 +2019,27 @@ pub mod extractors {
         const MAX_BODY_BYTES: usize;
         /// Maximum nested value-decode depth needed by this request schema.
         const MAX_NESTING_DEPTH: usize;
+        /// Fixed allowance for schema-bounded nested proof reconstruction.
+        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize = 0;
 
         /// Build payload-derived limits for one already body-capped archive.
         fn decode_limits(encoded_len: usize) -> norito::core::DecodeLimits {
             // Every variable-length member is represented in the exact
             // uncompressed canonical frame. Per-sequence and cumulative
             // element limits therefore derive from the supplied frame, while
-            // the fourfold allocation budget accounts for decoded structs and
-            // nested collection storage without inheriting Norito's generic
+            // the fourfold base accounts for decoded structs and nested
+            // collection storage. Schemas carrying bounded proof material add
+            // only the fixed allowance required by their statically known
+            // canonical field depth. This avoids inheriting Norito's generic
             // 32-fold allowance. The schema-specific body ceiling is checked
             // before these limits are installed.
             norito::core::DecodeLimits::new(
                 encoded_len,
                 encoded_len,
                 encoded_len.saturating_mul(2),
-                encoded_len.saturating_mul(OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER),
+                encoded_len
+                    .saturating_mul(OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER)
+                    .saturating_add(Self::FIXED_ALLOCATION_ALLOWANCE_BYTES),
                 Self::MAX_NESTING_DEPTH,
             )
         }
@@ -2042,6 +2052,8 @@ pub mod extractors {
         const MAX_BODY_BYTES: usize =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2;
         const MAX_NESTING_DEPTH: usize = 32;
+        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize =
+            OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
     }
 
     #[cfg(feature = "app_api")]
@@ -2049,6 +2061,11 @@ pub mod extractors {
         const MAX_BODY_BYTES: usize =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4;
         const MAX_NESTING_DEPTH: usize = 32;
+        // The proof bytes cross up to ten charged reconstruction boundaries;
+        // the fourfold frame-derived base already covers four of them.
+        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize = 6
+            * iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2
+            + OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
     }
 
     #[cfg(feature = "app_api")]
@@ -2056,6 +2073,15 @@ pub mod extractors {
         const MAX_BODY_BYTES: usize =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4;
         const MAX_NESTING_DEPTH: usize = 64;
+        // Beyond the fourfold base, the main recursive proof crosses eleven
+        // additional charged boundaries, the optional change proof sixteen,
+        // and the unshield proof three. One MiB covers bounded state vectors
+        // plus remaining collection and string bookkeeping.
+        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize = 27
+            * iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+                as usize
+            + 3 * iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2
+            + OFFLINE_CANONICAL_REDEEM_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
     }
 
     #[cfg(feature = "app_api")]
@@ -3853,7 +3879,7 @@ pub mod extractors {
 
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_max_shaped_schema_archives_fit_the_fourfold_allocation_budget() {
+        fn offline_norito_max_shaped_schema_archives_fit_the_schema_allocation_budget() {
             use iroha_torii_shared::offline_api::{
                 OfflineRecipientLineageRequest, OfflineRecipientLineageSelectorV2,
             };
@@ -3874,6 +3900,7 @@ pub mod extractors {
                     canonical
                         .len()
                         .saturating_mul(OFFLINE_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER)
+                        .saturating_add(T::FIXED_ALLOCATION_ALLOWANCE_BYTES)
                 );
                 let decoded = decode_offline_canonical_norito::<T>(&canonical)
                     .expect("real Offline DTO must fit its decode budget");

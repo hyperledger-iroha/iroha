@@ -56,12 +56,17 @@ Torii reports final chain finality.
 
 Canonical request and native-bridge decoding rejects compression and alternate
 Norito layouts from the fixed header before reconstruction. Each route applies
-its exact framed-body ceiling, and both the public redeem extractor and the
-nested redeem-result archive use a fourfold decoded-allocation budget plus a
-64-level nesting limit derived from the supplied canonical bytes. A compressed
-length field, forged collection count, or structurally decodable
-non-canonical representation therefore fails before it can inherit Norito's
-broader generic decode allowance.
+its exact framed-body ceiling. Public top-up, redeem, and lineage extractors use
+a fourfold frame-derived allocation base plus a schema-specific fixed allowance
+for their statically bounded proof depth. Lineage adds 64 KiB; top-up adds six
+maximum shield proofs plus 64 KiB; and redeem adds the remaining charged
+boundaries for its main, optional-change, and unshield proofs plus 1 MiB of
+structural headroom. The native bridge retains a fourfold base plus 64 KiB for
+non-proof archives and applies the same top-up or recursive fixed allowance at
+every proof-bearing decode boundary. Both public and native paths retain
+explicit schema-specific nesting limits. A compressed length field, forged
+collection count, or structurally decodable non-canonical representation
+therefore fails before it can inherit Norito's broader generic decode allowance.
 
 Readiness and operation responses support Torii's typed response negotiation.
 Readiness is authoritative only when its block context, live asset scale,
