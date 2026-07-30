@@ -41,7 +41,6 @@ pub(crate) mod p256_scalar_bit_bus;
 pub(crate) mod p256_trace;
 pub(crate) mod p256_value_bus;
 pub(crate) mod p256_window_air;
-pub(crate) mod preprocessed_fixed;
 pub(crate) mod profile;
 pub(crate) mod projection_air;
 pub(crate) mod relation;

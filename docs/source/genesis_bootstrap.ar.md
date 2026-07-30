@@ -24,8 +24,9 @@ translator: machine-google-reviewed
   الحد الأقصى للحجم (`genesis.bootstrap_max_bytes`). تتلقى الطلبات خارج القائمة المسموح بها `NotAllowed`، و
   الحمولات الموقعة بواسطة المفتاح الخاطئ تتلقى `MismatchedPubkey`.
 - **تدفق الطالب:** عندما يكون التخزين فارغًا ويكون `genesis.file` غير محدد (و
-  `genesis.bootstrap_enabled=true`)، تقوم العقدة بإجراء اختبارات مبدئية للأقران الموثوق بهم باستخدام الخيار الاختياري
-  `genesis.expected_hash`، ثم يقوم بإحضار الحمولة والتحقق من صحة التوقيعات عبر `validate_genesis_block`،
+  `genesis.bootstrap_enabled=true`)، يجب أن يثبّت `genesis.expected_hash` كتلة التكوين الموقّعة
+  بدقة. ويُعد غياب الملف والتجزئة خطأً في إعداد بدء التشغيل قبل إرسال أي طلب. ثم تجلب العقدة
+  الحمولة وتتحقق من صحة التوقيعات عبر `validate_genesis_block`،
   ويستمر `genesis.bootstrap.nrt` بجانب Kura قبل تطبيق الكتلة. يعيد Bootstrap المحاولة
   الشرف `genesis.bootstrap_request_timeout`، `genesis.bootstrap_retry_interval`، و
   `genesis.bootstrap_max_attempts`.
@@ -34,5 +35,6 @@ translator: machine-google-reviewed
   عبر أقرانهم إحباط الجلب؛ لا يعود المستجيبون/المهلات إلى التكوين المحلي.
 - **خطوات المشغل:** تأكد من إمكانية الوصول إلى نظير واحد موثوق به على الأقل من خلال تكوين صالح وتكوينه
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` ومقابض إعادة المحاولة، و
-  اختياريًا، قم بتثبيت `expected_hash` لتجنب قبول حمولات غير متطابقة. يمكن أن تكون الحمولات المستمرة
+  ثبّت الكتلة الدقيقة في `expected_hash` قبل تمكين التمهيد البعيد. أما `genesis.file` المحلي
+  الموقّع فهو عنصر صريح ولا يحتاج إلى تثبيت تجزئة إضافي. ويمكن أن تكون الحمولات المستمرة
   يُعاد استخدامه في عمليات التمهيد اللاحقة عن طريق الإشارة من `genesis.file` إلى `genesis.bootstrap.nrt`.

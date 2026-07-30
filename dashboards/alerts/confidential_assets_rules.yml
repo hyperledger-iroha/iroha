@@ -67,8 +67,8 @@ groups:
           summary: "Confidential gas schedule diverged across validators"
           description: |
             At least one validator is reporting a different confidential gas multiplier than its peers.
-            Confirm the active config (`confidential.gas`) and redeploy or hot-reload to restore parity
-            before approving confidential transactions.
+            Confirm the startup config (`confidential.gas`) and perform a coordinated validator
+            restart to restore parity before approving confidential transactions.
       - alert: ConfidentialGasTelemetryMissing
         expr: |
           absent(iroha_confidential_gas_base_verify)

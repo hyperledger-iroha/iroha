@@ -573,13 +573,6 @@ impl AccountId {
         self.clone()
     }
 
-    /// Borrow the single-signature public key.
-    #[inline]
-    #[must_use]
-    pub fn signatory(&self) -> &PublicKey {
-        self.expect_single_signatory()
-    }
-
     /// Borrow the single-signature public key when present.
     #[inline]
     #[must_use]
@@ -785,18 +778,21 @@ impl Account {
         <Self as Registered>::With::new(id)
     }
 
-    /// Return a reference to the account signatory, panicking if the controller is not single-key.
-    #[inline]
-    #[must_use]
-    pub fn signatory(&self) -> &PublicKey {
-        self.id.signatory()
-    }
-
     /// Borrow the account signatory when present.
     #[inline]
     #[must_use]
     pub fn try_signatory(&self) -> Option<&PublicKey> {
         self.id.try_signatory()
+    }
+
+    /// Return the account signatory, panicking if the controller is not single-key.
+    ///
+    /// Prefer [`Self::try_signatory`] whenever the controller can originate from
+    /// decoded input or mutable state.
+    #[inline]
+    #[must_use]
+    pub fn expect_single_signatory(&self) -> &PublicKey {
+        self.id.expect_single_signatory()
     }
 
     /// Return the controller governing this account.
@@ -1261,7 +1257,10 @@ mod account_id_parsing_tests {
         let parsed = AccountId::parse_encoded(&literal)
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("matching prefix should parse");
-        assert_eq!(parsed.signatory(), account.signatory());
+        assert_eq!(
+            parsed.expect_single_signatory(),
+            account.expect_single_signatory()
+        );
     }
 
     #[test]
@@ -1376,7 +1375,7 @@ mod tests {
             .map(ParsedAccountId::into_account_id)
             .expect("should be valid");
         assert_eq!(parsed.controller(), account_id.controller());
-        assert_eq!(parsed.signatory(), key_pair.public_key());
+        assert_eq!(parsed.expect_single_signatory(), key_pair.public_key());
 
         let _err_empty_address =
             AccountId::parse_encoded("@domain").expect_err("@domain should not be valid");
@@ -1387,12 +1386,12 @@ mod tests {
     }
 
     #[test]
-    fn account_signatory_exposed() {
+    fn account_single_signatory_exposed_explicitly() {
         let key_pair = checked_random_keypair();
         let public_key = key_pair.public_key().clone();
         let account_id = AccountId::new(public_key.clone());
         let account = Account::new(account_id.clone()).build(&account_id);
-        assert_eq!(account.signatory(), &public_key);
+        assert_eq!(account.expect_single_signatory(), &public_key);
     }
 
     #[test]
@@ -1404,7 +1403,10 @@ mod tests {
         let parsed = AccountId::parse_encoded(&rendered)
             .map(ParsedAccountId::into_account_id)
             .expect("rendered i105 must parse");
-        assert_eq!(parsed.signatory(), account_id.signatory());
+        assert_eq!(
+            parsed.expect_single_signatory(),
+            account_id.expect_single_signatory()
+        );
     }
 
     #[test]

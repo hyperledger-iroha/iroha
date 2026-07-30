@@ -2368,7 +2368,7 @@ fn canonical_schema_metadata_v1(
             append_schema_count_v1(&mut bytes, enum_meta.variants.len());
             for variant in &enum_meta.variants {
                 append_schema_field_v1(&mut bytes, variant.tag.as_bytes());
-                append_schema_field_v1(&mut bytes, &[variant.discriminant]);
+                append_schema_field_v1(&mut bytes, &variant.discriminant.to_be_bytes());
                 match variant.ty {
                     Some(variant_type) => {
                         append_schema_field_v1(&mut bytes, b"some");

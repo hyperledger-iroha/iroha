@@ -91,7 +91,10 @@ base64 = { workspace = true, features = ["alloc"] }
 bech32 = { workspace = true }
 nonzero_ext = { workspace = true }
 rustc-hash = { workspace = true }
-icu_normalizer = { version = "2.1.1", default-features = false, features = ["compiled_data"] }
+# `Name` NFC normalization is consensus-visible. Keep the algorithm exact;
+# `src/name.rs` fingerprints the already-transitive baked data and fails closed
+# if it differs from the reviewed normalization profile.
+icu_normalizer = { version = "=2.2.0", default-features = false, features = ["compiled_data"] }
 blake2 = "0.10.6"
 blake3 = { workspace = true }
 idna = { version = "1.1.0", default-features = false, features = ["std"] }

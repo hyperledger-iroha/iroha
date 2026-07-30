@@ -8139,7 +8139,7 @@ mod tests {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                     .expect("deterministic authority key")
             })
-            .find(|key| key.public_key() == authority.signatory())
+            .find(|key| key.public_key() == authority.expect_single_signatory())
             .expect("test authority must use the deterministic account fixture")
     }
 

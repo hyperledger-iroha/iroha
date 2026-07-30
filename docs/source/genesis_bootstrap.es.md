@@ -24,8 +24,9 @@ utilizando el protocolo de arranque codificado Norito.
   tapa de tamaño (`genesis.bootstrap_max_bytes`). Las solicitudes fuera de la lista de permitidos reciben `NotAllowed`, y
   las cargas útiles firmadas con la clave incorrecta reciben `MismatchedPubkey`.
 - **Flujo de solicitante:** cuando el almacenamiento está vacío y `genesis.file` no está configurado (y
-  `genesis.bootstrap_enabled=true`), el nodo realiza comprobaciones previas de pares confiables con el opcional
-  `genesis.expected_hash`, luego recupera la carga útil, valida las firmas a través de `validate_genesis_block`,
+  `genesis.bootstrap_enabled=true`), `genesis.expected_hash` debe fijar exactamente el bloque génesis
+  firmado. La ausencia tanto del archivo como del hash es un error de configuración de arranque antes
+  de enviar cualquier solicitud. Después el nodo recupera la carga útil y valida las firmas mediante `validate_genesis_block`,
   y persiste `genesis.bootstrap.nrt` junto a Kura antes de aplicar el bloqueo. Reintentos de arranque
   honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval` y
   `genesis.bootstrap_max_attempts`.
@@ -34,5 +35,6 @@ utilizando el protocolo de arranque codificado Norito.
   entre pares abortar la búsqueda; ningún respondedor/tiempo de espera recurre a la configuración local.
 - **Pasos del operador:** asegúrese de que se pueda acceder al menos a un par confiable con una génesis válida, configure
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` y las perillas de reintento, y
-  Opcionalmente, fije `expected_hash` para evitar aceptar cargas útiles que no coincidan. Las cargas útiles persistentes pueden ser
+  fije el bloque exacto en `expected_hash` antes de habilitar el arranque remoto. Un `genesis.file`
+  local firmado ya es un artefacto explícito y no necesita otro hash. Las cargas útiles persistentes pueden ser
   reutilizado en arranques posteriores apuntando `genesis.file` a `genesis.bootstrap.nrt`.

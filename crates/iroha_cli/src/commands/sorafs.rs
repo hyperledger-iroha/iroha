@@ -11737,7 +11737,6 @@ impl HandshakeUpdateArgs {
             },
             network_acl: None,
             network: network_update,
-            confidential_gas: None,
             soranet_handshake: handshake_update,
             transport: None,
             compute_pricing: None,

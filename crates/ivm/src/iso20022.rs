@@ -4,7 +4,8 @@
 //! providing deterministic XML and key-value parsing for the ISO bridge. XML
 //! payloads are bound to their declared ISO message definition through
 //! `MsgDefIdr` and `Document` XSD namespaces before schema-table validation is
-//! applied.
+//! applied. Network transport is deliberately outside this module and outside
+//! consensus execution.
 
 use core::fmt;
 use std::{
@@ -12,7 +13,6 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
     io::Write,
-    str::FromStr,
 };
 
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -1585,7 +1585,7 @@ const COLR012_SCHEMA: MessageSchema = MessageSchema {
     aliases: COLR012_ALIASES,
 };
 
-/// Errors that can occur when preparing or sending ISO 20022 messages.
+/// Errors that can occur when parsing, validating, or serializing ISO 20022 messages.
 #[derive(Debug)]
 pub enum MsgError {
     NoActiveMessage,
@@ -1609,9 +1609,6 @@ pub enum MsgError {
         kind: InvalidValueKind,
     },
     InvalidFormat,
-    UnsupportedChannel,
-    HttpStatus(u16),
-    Io(std::io::Error),
 }
 
 impl fmt::Display for MsgError {
@@ -1638,20 +1635,7 @@ impl fmt::Display for MsgError {
                 write!(f, "invalid {} value for field `{field}`", kind.label())
             }
             MsgError::InvalidFormat => f.write_str("ISO 20022 message format is invalid"),
-            MsgError::UnsupportedChannel => {
-                f.write_str("ISO 20022 delivery channel is unsupported")
-            }
-            MsgError::HttpStatus(code) => {
-                write!(f, "ISO 20022 transport returned HTTP status {code}")
-            }
-            MsgError::Io(err) => write!(f, "ISO 20022 transport error: {err}"),
         }
-    }
-}
-
-impl From<std::io::Error> for MsgError {
-    fn from(err: std::io::Error) -> Self {
-        MsgError::Io(err)
     }
 }
 
@@ -4115,78 +4099,6 @@ fn parse_xml_into_current(message_type: &str, text: &str) -> Result<(), MsgError
     Ok(())
 }
 
-#[allow(dead_code)]
-struct HttpEndpoint {
-    host: String,
-    port: u16,
-    path: String,
-}
-
-impl HttpEndpoint {
-    fn parse(channel: &str) -> Option<Self> {
-        let trimmed = channel.trim();
-        let without_scheme = trimmed.strip_prefix("http://")?;
-        let (host_part, path_part) = match without_scheme.split_once('/') {
-            Some((host, path)) => (host, format!("/{path}")),
-            None => (without_scheme, "/".to_owned()),
-        };
-        if host_part.is_empty() {
-            return None;
-        }
-        let (host, port) = if let Some((name, port_str)) = host_part.rsplit_once(':') {
-            let port = u16::from_str(port_str).ok()?;
-            (name.to_owned(), port)
-        } else {
-            (host_part.to_owned(), 80)
-        };
-        Some(Self {
-            host,
-            port,
-            path: path_part,
-        })
-    }
-}
-
-fn send_http(endpoint: &HttpEndpoint, payload: &[u8]) -> Result<(), MsgError> {
-    #[cfg(test)]
-    if let Some(override_cb) = HTTP_SENDER_OVERRIDE.with(|sender| sender.borrow().as_ref().copied())
-    {
-        return override_cb(endpoint, payload);
-    }
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-
-    let mut stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port))?;
-    let host_header = if endpoint.port == 80 {
-        endpoint.host.clone()
-    } else {
-        format!("{}:{}", endpoint.host, endpoint.port)
-    };
-    let request = format!(
-        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nContent-Type: application/xml\r\nConnection: close\r\n\r\n",
-        endpoint.path,
-        host_header,
-        payload.len()
-    );
-    stream.write_all(request.as_bytes())?;
-    stream.write_all(payload)?;
-    stream.flush()?;
-
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response)?;
-    let status = response
-        .splitn(2, |b| *b == b'\n')
-        .next()
-        .and_then(|line| std::str::from_utf8(line).ok())
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or(MsgError::InvalidFormat)?;
-    if !(200..300).contains(&status) {
-        return Err(MsgError::HttpStatus(status));
-    }
-    Ok(())
-}
-
 /// Encode a numeric amount as an ASCII string.
 pub fn encode_amount(value: u64) -> Vec<u8> {
     value.to_string().into_bytes()
@@ -4572,86 +4484,8 @@ pub fn msg_verify_sig(sig: &[u8], key: &[u8]) -> bool {
     false
 }
 
-/// Callback type used for delivering messages.
-pub type MsgSendCallback = fn(&str, &[u8]);
-
-#[cfg(test)]
-type TestHttpSender = fn(&HttpEndpoint, &[u8]) -> Result<(), MsgError>;
-
-/// Set the backend used by [`msg_send`].
-///
-/// Passing `None` restores the default in-memory log based behaviour.
-pub fn set_msg_sender(callback: Option<MsgSendCallback>) {
-    MSG_SENDER.with(|s| *s.borrow_mut() = callback);
-}
-
-/// Send the current ISO 20022 message through a channel.
-///
-/// Before dispatching the message is validated using [`msg_validate`]; if
-/// validation fails the function returns `false` and nothing is sent. When the
-/// message is valid it is serialised using [`msg_serialize`] and either passed
-/// to a custom backend registered via [`set_msg_sender`] or recorded in a
-/// thread‑local log for inspection. HTTP channels are delivered via a simple
-/// TCP client; tests can override delivery. The serialised bytes are sent and
-/// the function returns `true` to indicate success.
-pub fn msg_send(channel: &str) -> Result<(), MsgError> {
-    if !msg_validate() {
-        return Err(MsgError::ValidationFailed);
-    }
-    let data = msg_serialize("XML")?;
-    if channel.trim_start().starts_with("http://") {
-        let endpoint = HttpEndpoint::parse(channel).ok_or(MsgError::InvalidFormat)?;
-        send_http(&endpoint, &data)?;
-    } else {
-        MSG_SENDER.with(|sender| {
-            if let Some(cb) = *sender.borrow() {
-                cb(channel, &data);
-            } else {
-                SENT_MSGS.with(|log| {
-                    log.borrow_mut().push((channel.to_owned(), data.clone()));
-                });
-            }
-        });
-    }
-    Ok(())
-}
-
-/// Drain the log of previously sent messages.
-///
-/// This helper is primarily intended for tests or prototype environments that
-/// want to examine what would have been dispatched without installing a custom
-/// backend. The log is cleared as part of this call.
-pub fn take_sent_messages() -> Vec<(String, Vec<u8>)> {
-    SENT_MSGS.with(|log| log.borrow_mut().drain(..).collect())
-}
-
-thread_local! {
-    /// Collected messages sent via [`msg_send`].
-    static SENT_MSGS: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
-    /// Optional callback used to deliver messages.
-    static MSG_SENDER: RefCell<Option<MsgSendCallback>> = RefCell::new(None);
-}
-
-#[cfg(test)]
-thread_local! {
-    static HTTP_SENDER_OVERRIDE: RefCell<Option<TestHttpSender>> = const { RefCell::new(None) };
-}
-
-#[cfg(test)]
-/// Register a test-only HTTP sender override, bypassing real network dispatch.
-fn set_http_sender_override(callback: Option<TestHttpSender>) {
-    HTTP_SENDER_OVERRIDE.with(|sender| *sender.borrow_mut() = callback);
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{self, BufRead, BufReader, ErrorKind, Read, Write},
-        net::{TcpListener, TcpStream},
-        thread,
-        time::{Duration, Instant},
-    };
-
     use ed25519_dalek::SigningKey;
     use norito::codec::{Decode, Encode};
 
@@ -4660,41 +4494,9 @@ mod tests {
         *,
     };
 
-    thread_local! {
-        static HTTP_CALLS: RefCell<Vec<(String, u16, String, Vec<u8>)>> = const {
-            RefCell::new(Vec::new())
-        };
-    }
-
-    const HTTP_TEST_TIMEOUT: Duration = Duration::from_secs(5);
-    const HTTP_TEST_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
-    fn accept_http_test_stream(listener: &TcpListener) -> io::Result<TcpStream> {
-        let started = Instant::now();
-        loop {
-            match listener.accept() {
-                Ok((stream, _)) => return Ok(stream),
-                Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                    if started.elapsed() >= HTTP_TEST_TIMEOUT {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "timed out waiting for ISO 20022 HTTP client",
-                        ));
-                    }
-                    thread::sleep(HTTP_TEST_POLL_INTERVAL);
-                }
-                Err(err) => return Err(err),
-            }
-        }
-    }
-
     // Helper to reset the thread-local between tests.
     fn reset() {
         MESSAGE_STACK.with(|m| m.borrow_mut().clear());
-        SENT_MSGS.with(|s| s.borrow_mut().clear());
-        set_msg_sender(None);
-        set_http_sender_override(None);
-        HTTP_CALLS.with(|calls| calls.borrow_mut().clear());
     }
 
     fn populate_pacs008_minimal() {
@@ -7194,66 +6996,6 @@ mod tests {
     }
 
     #[test]
-    fn msg_send_records_message() {
-        reset();
-        msg_create("pacs.008");
-        populate_pacs008_minimal();
-        msg_set("IntrBkSttlmAmt", b"10");
-        let expected = msg_serialize("XML").unwrap();
-        msg_send("chan").unwrap();
-        SENT_MSGS.with(|log| {
-            let logged = log.borrow();
-            assert_eq!(logged.len(), 1);
-            assert_eq!(logged[0].0, "chan");
-            assert_eq!(logged[0].1, expected);
-        });
-    }
-
-    thread_local! {
-        static CUSTOM: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
-    }
-
-    fn custom_backend(chan: &str, data: &[u8]) {
-        CUSTOM.with(|c| c.borrow_mut().push((chan.to_owned(), data.to_vec())));
-    }
-
-    #[test]
-    fn msg_send_custom_backend() {
-        reset();
-        msg_create("pacs.008");
-        populate_pacs008_minimal();
-        msg_set("IntrBkSttlmAmt", b"10");
-        set_msg_sender(Some(custom_backend));
-        msg_send("chan").unwrap();
-        CUSTOM.with(|c| {
-            let log = c.borrow();
-            assert_eq!(log.len(), 1);
-            assert_eq!(log[0].0, "chan");
-            assert_eq!(log[0].1, msg_serialize("XML").unwrap());
-        });
-    }
-
-    #[test]
-    fn take_sent_messages_drains_log() {
-        reset();
-        msg_create("pacs.008");
-        populate_pacs008_minimal();
-        msg_set("IntrBkSttlmAmt", b"10");
-        msg_send("chan").unwrap();
-        let msgs = take_sent_messages();
-        assert_eq!(msgs.len(), 1);
-        assert!(SENT_MSGS.with(|log| log.borrow().is_empty()));
-    }
-
-    #[test]
-    fn msg_send_requires_valid_message() {
-        reset();
-        msg_create("pacs.008");
-        assert!(matches!(msg_send("chan"), Err(MsgError::ValidationFailed)));
-        SENT_MSGS.with(|log| assert!(log.borrow().is_empty()));
-    }
-
-    #[test]
     fn msg_parse_xml_roundtrip() {
         reset();
         msg_parse(
@@ -7404,90 +7146,6 @@ mod tests {
         );
         assert!(msg_get("Document/FIToFICstmrCdtTrf/Sgntr/SignatureValue").is_none());
         assert!(msg_validate());
-    }
-
-    #[test]
-    fn msg_send_http_invokes_override() {
-        fn record_http(endpoint: &HttpEndpoint, payload: &[u8]) -> Result<(), MsgError> {
-            HTTP_CALLS.with(|calls| {
-                calls.borrow_mut().push((
-                    endpoint.host.clone(),
-                    endpoint.port,
-                    endpoint.path.clone(),
-                    payload.to_vec(),
-                ));
-            });
-            Ok(())
-        }
-
-        reset();
-        msg_create("pacs.008");
-        populate_pacs008_minimal();
-        let expected = msg_serialize("XML").unwrap();
-        set_http_sender_override(Some(record_http));
-        msg_send("http://example.com/submit").unwrap();
-        HTTP_CALLS.with(|calls| {
-            let log = calls.borrow();
-            assert_eq!(log.len(), 1);
-            let (host, port, path, body) = &log[0];
-            assert_eq!(host, "example.com");
-            assert_eq!(*port, 80);
-            assert_eq!(path, "/submit");
-            assert_eq!(body, &expected);
-        });
-    }
-
-    #[test]
-    fn msg_send_http_without_override_sends_payload() {
-        reset();
-        msg_create("pacs.008");
-        populate_pacs008_minimal();
-        let listener = match TcpListener::bind("127.0.0.1:0") {
-            Ok(listener) => listener,
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                eprintln!("skipping msg_send_http_without_override_sends_payload: {err}");
-                return;
-            }
-            Err(err) => panic!("listener: {err}"),
-        };
-        let addr = listener.local_addr().unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let handle = thread::spawn(move || {
-            let mut stream = accept_http_test_stream(&listener).unwrap();
-            stream.set_read_timeout(Some(HTTP_TEST_TIMEOUT)).unwrap();
-            stream.set_write_timeout(Some(HTTP_TEST_TIMEOUT)).unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut headers = String::new();
-            let mut line = String::new();
-            let mut content_len = 0usize;
-            loop {
-                line.clear();
-                let read = reader.read_line(&mut line).unwrap();
-                assert_ne!(read, 0, "HTTP client closed before header terminator");
-                if line == "\r\n" {
-                    break;
-                }
-                if let Some((_, value)) = line
-                    .split_once(':')
-                    .filter(|_| line.to_ascii_lowercase().starts_with("content-length"))
-                {
-                    content_len = value.trim().parse().unwrap_or(0);
-                }
-                headers.push_str(&line);
-            }
-            let mut body = vec![0u8; content_len];
-            reader.read_exact(&mut body).unwrap();
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-                .unwrap();
-            (headers, body)
-        });
-
-        let url = format!("http://{addr}/submit");
-        msg_send(&url).unwrap();
-        let (headers, body) = handle.join().unwrap();
-        assert!(headers.contains("POST /submit HTTP/1.1"));
-        assert!(String::from_utf8_lossy(&body).contains("ISO20022"));
     }
 
     #[test]

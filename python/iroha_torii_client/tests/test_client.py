@@ -5987,43 +5987,29 @@ def test_list_sumeragi_evidence_validates_limit() -> None:
         raise AssertionError("expected RuntimeError for oversized limit")
 
 
-def test_set_confidential_gas_schedule_reuses_logger() -> None:
+def test_confidential_gas_schedule_has_no_runtime_setter() -> None:
+    assert not hasattr(ToriiClient, "set_confidential_gas_schedule")
+
+
+def test_configuration_update_rejects_confidential_gas_before_request() -> None:
     session = RecordingSession()
-    config_payload = {
-        "public_key": "ed0123",
-        "logger": {"level": "Info", "filter": "mod=warn"},
-        "network": {
-            "block_gossip_size": 32,
-            "block_gossip_period_ms": 100,
-            "transaction_gossip_size": 16,
-            "transaction_gossip_period_ms": 50,
-        },
-        "queue": {"capacity": 2048},
-        "confidential_gas": {
-            "proof_base": 1,
-            "per_public_input": 1,
-            "per_proof_byte": 1,
-            "per_nullifier": 1,
-            "per_commitment": 1,
-        },
-    }
-    session.queue(StubResponse(payload=config_payload))
-    session.queue(StubResponse(status_code=202))
     client = ToriiClient("http://node.test", session=session)
 
-    client.set_confidential_gas_schedule(
-        proof_base=9,
-        per_public_input=8,
-        per_proof_byte=7,
-        per_nullifier=6,
-        per_commitment=5,
-    )
+    with pytest.raises(ValueError, match="confidential_gas is read-only"):
+        client.update_configuration(
+            {
+                "logger": {"level": "INFO", "filter": None},
+                "confidential_gas": {
+                    "proof_base": 1,
+                    "per_public_input": 2,
+                    "per_proof_byte": 3,
+                    "per_nullifier": 4,
+                    "per_commitment": 5,
+                },
+            }
+        )
 
-    assert len(session.calls) == 2
-    assert session.calls[1]["method"] == "POST"
-    body = json.loads(session.calls[1]["data"])
-    assert body["logger"] == {"level": "Info", "filter": "mod=warn"}
-    assert body["confidential_gas"]["per_nullifier"] == 6
+    assert session.calls == []
 
 
 def test_get_time_now_parses_snapshot_alt_values() -> None:

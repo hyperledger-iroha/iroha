@@ -24,8 +24,9 @@ usando o protocolo de inicialização codificado Norito.
   tampa de tamanho (`genesis.bootstrap_max_bytes`). Solicitações fora da lista de permissões recebem `NotAllowed` e
   cargas assinadas pela chave errada recebem `MismatchedPubkey`.
 - **Fluxo do solicitante:** quando o armazenamento está vazio e `genesis.file` não está definido (e
-  `genesis.bootstrap_enabled=true`), o nó simula peers confiáveis com o opcional
-  `genesis.expected_hash`, em seguida, busca a carga útil, valida assinaturas via `validate_genesis_block`,
+  `genesis.bootstrap_enabled=true`), `genesis.expected_hash` deve fixar exatamente o bloco gênese
+  assinado. A ausência simultânea do arquivo e do hash é um erro de configuração de inicialização
+  antes de qualquer solicitação ser enviada. Em seguida, o nó busca a carga útil e valida as assinaturas via `validate_genesis_block`,
   e persiste `genesis.bootstrap.nrt` ao lado de Kura antes de aplicar o bloqueio. Novas tentativas de bootstrap
   honra `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval` e
   `genesis.bootstrap_max_attempts`.
@@ -34,5 +35,6 @@ usando o protocolo de inicialização codificado Norito.
   entre pares aborta a busca; nenhum respondedor/tempo limite retorna à configuração local.
 - **Etapas do operador:** garantir que pelo menos um peer confiável seja acessível com uma gênese válida, configure
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` e os botões de nova tentativa, e
-  opcionalmente, fixe `expected_hash` para evitar aceitar cargas incompatíveis. Cargas persistentes podem ser
+  fixe o bloco exato em `expected_hash` antes de ativar o bootstrap remoto. Um `genesis.file`
+  local assinado já é um artefato explícito e não exige outro hash. Cargas persistentes podem ser
   reutilizado em inicializações subsequentes apontando `genesis.file` para `genesis.bootstrap.nrt`.

@@ -15,7 +15,10 @@ use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     domain::{Domain, DomainId},
     isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox, SetKeyValue},
-    kaigi::{KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration},
+    kaigi::{
+        KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
+        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+    },
     name::Name,
     nexus::DataSpaceId,
     permission::Permission,
@@ -136,11 +139,12 @@ impl RelaySpec {
 }
 
 fn registration_key(public_key: &PublicKey) -> Result<Name> {
-    Name::from_str(&format!("kaigi_relay__{public_key}")).wrap_err("invalid relay metadata key")
+    kaigi_relay_metadata_key(&AccountId::new(public_key.clone()))
+        .wrap_err("invalid relay metadata key")
 }
 
 fn feedback_key(public_key: &PublicKey) -> Result<Name> {
-    Name::from_str(&format!("kaigi_relay_feedback__{public_key}"))
+    kaigi_relay_feedback_key(&AccountId::new(public_key.clone()))
         .wrap_err("invalid relay feedback key")
 }
 
@@ -527,21 +531,22 @@ mod tests {
     }
 
     #[test]
-    fn relay_metadata_keys_use_public_key_suffix() {
+    fn relay_metadata_keys_use_the_same_canonical_account_digest() {
         let public_key = PublicKey::from_str(
             "ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249",
         )
         .expect("public key");
-        assert_eq!(
-            registration_key(&public_key)
-                .expect("registration key")
-                .to_string(),
-            "kaigi_relay__ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249"
-        );
-        assert_eq!(
-            feedback_key(&public_key).expect("feedback key").to_string(),
-            "kaigi_relay_feedback__ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249"
-        );
+        let registration = registration_key(&public_key)
+            .expect("registration key")
+            .to_string();
+        let feedback = feedback_key(&public_key).expect("feedback key").to_string();
+        let digest = registration
+            .strip_prefix("kaigi_relay__")
+            .expect("registration prefix");
+
+        assert_eq!(digest.len(), 64);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(feedback, format!("kaigi_relay_feedback__{digest}"));
     }
 
     #[test]

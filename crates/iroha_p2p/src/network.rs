@@ -909,11 +909,16 @@ fn relay_origin_signature_len(origin: &PeerId) -> Option<usize> {
         Algorithm::BlsNormal => 96,
         Algorithm::BlsSmall => 48,
         Algorithm::MlDsa => MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+        #[cfg(feature = "gost")]
         Algorithm::Gost3410_2012_256ParamSetA
         | Algorithm::Gost3410_2012_256ParamSetB
         | Algorithm::Gost3410_2012_256ParamSetC => 64,
+        #[cfg(feature = "gost")]
         Algorithm::Gost3410_2012_512ParamSetA | Algorithm::Gost3410_2012_512ParamSetB => 128,
+        #[cfg(feature = "sm")]
         Algorithm::Sm2 => 64,
+        #[allow(unreachable_patterns)]
+        _ => return None,
     })
 }
 
@@ -2013,6 +2018,160 @@ mod data_frame_wire_len_tests {
         fn is_outbound_allowed(&self) -> bool {
             false
         }
+    }
+
+    fn assert_relay_origin_signature_roundtrip(
+        algorithm: Algorithm,
+        seed_tag: u8,
+        expected_signature_len: usize,
+    ) {
+        let key_pair = KeyPair::try_from_seed(vec![seed_tag; 32], algorithm)
+            .unwrap_or_else(|error| panic!("derive deterministic {algorithm:?} key pair: {error}"));
+        assert_eq!(key_pair.algorithm(), algorithm);
+
+        let target_key_pair =
+            KeyPair::try_from_seed(vec![seed_tag.wrapping_add(0x40); 32], Algorithm::Ed25519)
+                .expect("derive deterministic relay target");
+        let target = PeerId::from(target_key_pair.public_key().clone());
+        let payload = DynamicDummy {
+            body: vec![seed_tag, 0xC0, 0xDE],
+        };
+        let frame = RelayMessage::try_new(
+            &key_pair,
+            RelayTarget::Direct(target.clone()),
+            7,
+            message::Priority::High,
+            payload.clone(),
+        )
+        .unwrap_or_else(|error| panic!("sign {algorithm:?} relay origin: {error}"));
+
+        assert_eq!(
+            frame.origin_signature.len(),
+            expected_signature_len,
+            "{algorithm:?} signature width changed"
+        );
+        assert_eq!(
+            relay_origin_signature_len(&frame.origin),
+            Some(expected_signature_len),
+            "{algorithm:?} transport geometry must use the exact signature width"
+        );
+        frame
+            .verify_origin_signature()
+            .unwrap_or_else(|error| panic!("verify fresh {algorithm:?} relay: {error}"));
+
+        let materialized_wire_len = crate::peer::materialized_data_message_wire_len(frame.clone())
+            .expect("materialize signed relay frame");
+        assert_eq!(
+            data_frame_wire_len(
+                &frame.origin,
+                Some(&target),
+                frame.ttl,
+                frame.priority,
+                &payload,
+            ),
+            materialized_wire_len,
+            "{algorithm:?} estimated wire geometry must match the signed frame"
+        );
+        assert_eq!(
+            data_frame_wire_len_from_payload_len::<DynamicDummy>(
+                &frame.origin,
+                Some(&target),
+                payload.encoded_len(),
+            ),
+            materialized_wire_len,
+            "{algorithm:?} payload-length geometry must match the signed frame"
+        );
+
+        let encoded = frame.encode();
+        let (decoded, used) =
+            <RelayMessage<DynamicDummy> as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
+                .unwrap_or_else(|error| panic!("decode {algorithm:?} relay: {error}"));
+        assert_eq!(used, encoded.len());
+        assert_eq!(decoded.origin, frame.origin);
+        assert_eq!(decoded.origin_signature, frame.origin_signature);
+        assert_eq!(decoded.origin_signature.len(), expected_signature_len);
+        assert_eq!(decoded.ttl, frame.ttl);
+        assert_eq!(decoded.priority, frame.priority);
+        assert_eq!(decoded.payload.body, payload.body);
+        match &decoded.target {
+            RelayTarget::Direct(decoded_target) => assert_eq!(decoded_target, &target),
+            RelayTarget::Broadcast => panic!("decoded {algorithm:?} relay lost its target"),
+        }
+        decoded
+            .verify_origin_signature()
+            .unwrap_or_else(|error| panic!("verify round-tripped {algorithm:?} relay: {error}"));
+
+        let mut payload_tampered = decoded;
+        payload_tampered.payload.body.push(0xFF);
+        assert!(
+            payload_tampered.verify_origin_signature().is_err(),
+            "{algorithm:?} relay signature must bind the immutable payload"
+        );
+    }
+
+    #[test]
+    fn relay_origin_signature_roundtrips_with_ed25519() {
+        assert_relay_origin_signature_roundtrip(Algorithm::Ed25519, 0x11, 64);
+    }
+
+    #[test]
+    fn relay_origin_signature_roundtrips_with_secp256k1() {
+        assert_relay_origin_signature_roundtrip(Algorithm::Secp256k1, 0x12, 64);
+    }
+
+    #[test]
+    fn relay_origin_signature_roundtrips_with_bls_normal() {
+        assert_relay_origin_signature_roundtrip(Algorithm::BlsNormal, 0x13, 96);
+    }
+
+    #[test]
+    fn relay_origin_signature_roundtrips_with_bls_small() {
+        assert_relay_origin_signature_roundtrip(Algorithm::BlsSmall, 0x14, 48);
+    }
+
+    #[test]
+    fn relay_origin_signature_roundtrips_with_ml_dsa_65() {
+        assert_relay_origin_signature_roundtrip(
+            Algorithm::MlDsa,
+            0x15,
+            MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+        );
+    }
+
+    #[cfg(feature = "gost")]
+    #[test]
+    fn relay_origin_signature_roundtrips_with_gost_256_param_set_a() {
+        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetA, 0x21, 64);
+    }
+
+    #[cfg(feature = "gost")]
+    #[test]
+    fn relay_origin_signature_roundtrips_with_gost_256_param_set_b() {
+        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetB, 0x22, 64);
+    }
+
+    #[cfg(feature = "gost")]
+    #[test]
+    fn relay_origin_signature_roundtrips_with_gost_256_param_set_c() {
+        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetC, 0x23, 64);
+    }
+
+    #[cfg(feature = "gost")]
+    #[test]
+    fn relay_origin_signature_roundtrips_with_gost_512_param_set_a() {
+        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_512ParamSetA, 0x24, 128);
+    }
+
+    #[cfg(feature = "gost")]
+    #[test]
+    fn relay_origin_signature_roundtrips_with_gost_512_param_set_b() {
+        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_512ParamSetB, 0x25, 128);
+    }
+
+    #[cfg(feature = "sm")]
+    #[test]
+    fn relay_origin_signature_roundtrips_with_sm2() {
+        assert_relay_origin_signature_roundtrip(Algorithm::Sm2, 0x31, 64);
     }
 
     #[test]

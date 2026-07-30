@@ -62,7 +62,5 @@ mod ilp_parity_mem;
 mod ilp_parity_random;
 #[path = "../input_tlv_alloc.rs"]
 mod input_tlv_alloc;
-#[path = "../iso20022_http.rs"]
-mod iso20022_http;
 #[path = "../ivm_abi_doc_sync.rs"]
 mod ivm_abi_doc_sync;

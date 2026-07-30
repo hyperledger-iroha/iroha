@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -406,6 +407,102 @@ class KotodamaPerfGateTests(unittest.TestCase):
         with mock.patch.object(PERF, "PREDECESSOR_TIMED_BODY_SHA256", missing):
             with self.assertRaisesRegex(PERF.GateError, "coverage is incomplete"):
                 PERF.validate_benchmark_policy()
+
+    def test_core_runtime_explicit_max_heap_preserves_predecessor_identity(
+        self,
+    ) -> None:
+        name = PERF.CORE_RUNTIME_WARM_BENCHMARK
+        bodies = PERF._benchmark_timed_bodies(
+            PERF.BENCHMARK_SOURCES, "candidate"
+        )
+        body = bodies[name]
+        self.assertIn(PERF.CORE_RUNTIME_PREDECESSOR_CHECKOUT, body)
+        self.assertNotIn(PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT, body)
+        self.assertEqual(
+            hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            PERF.PREDECESSOR_TIMED_BODY_SHA256[name],
+        )
+
+        sources = list(PERF.BENCHMARK_SOURCES)
+        original = sources[1].read_text(encoding="utf-8")
+        anchor = original.index(f'"{name}"')
+        checkout = original.index(
+            PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT, anchor
+        )
+        changed = PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT.replace(
+            "ivm::Memory::HEAP_MAX_SIZE",
+            "ivm::Memory::HEAP_MAX_SIZE / 2",
+        )
+        mutated = self.root / "core-runtime-smaller-heap.rs"
+        mutated.write_text(
+            original[:checkout]
+            + changed
+            + original[
+                checkout + len(PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT) :
+            ],
+            encoding="utf-8",
+        )
+        sources[1] = mutated
+        with self.assertRaisesRegex(
+            PERF.GateError, "predecessor-equivalent heap limit"
+        ):
+            PERF.validate_benchmark_policy(tuple(sources))
+
+    def test_core_runtime_heap_canonicalization_is_strictly_scoped(
+        self,
+    ) -> None:
+        name = PERF.CORE_RUNTIME_WARM_BENCHMARK
+        original = PERF.BENCHMARK_SOURCES[1].read_text(encoding="utf-8")
+        anchor = original.index(f'"{name}"')
+        checkout = original.index(
+            PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT, anchor
+        )
+        prefix = original[:checkout]
+        suffix = original[
+            checkout + len(PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT) :
+        ]
+        mutations = {
+            "altered-gas": PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT.replace(
+                "GAS_LIMIT", "GAS_LIMIT - 1"
+            ),
+            "duplicate-checkout": (
+                PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT
+                + "; summary"
+                + PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT
+            ),
+        }
+        for label, replacement in mutations.items():
+            with self.subTest(case=label):
+                mutated = self.root / f"core-runtime-{label}.rs"
+                mutated.write_text(
+                    prefix + replacement + suffix,
+                    encoding="utf-8",
+                )
+                sources = list(PERF.BENCHMARK_SOURCES)
+                sources[1] = mutated
+                with self.assertRaises(PERF.GateError):
+                    PERF.validate_benchmark_policy(tuple(sources))
+
+        other_original = PERF.BENCHMARK_SOURCES[0].read_text(encoding="utf-8")
+        other_anchor = other_original.index('"kotodama_runtime_warm_add"')
+        old = "std::hint::black_box(vm.register(10));"
+        old_index = other_original.index(old, other_anchor)
+        mutated = self.root / "other-runtime-explicit-max.rs"
+        mutated.write_text(
+            other_original[:old_index]
+            + "let _ = summary"
+            + PERF.CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT
+            + "; "
+            + old
+            + other_original[old_index + len(old) :],
+            encoding="utf-8",
+        )
+        sources = list(PERF.BENCHMARK_SOURCES)
+        sources[0] = mutated
+        with self.assertRaisesRegex(
+            PERF.GateError, "comparable timed-body drift"
+        ):
+            PERF.validate_benchmark_policy(tuple(sources))
 
     def test_revision_inventory_rejects_missing_duplicate_and_misclassified_ids(self) -> None:
         timed_body_policy = mock.patch.object(

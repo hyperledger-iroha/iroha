@@ -24,8 +24,9 @@ Norito-ကုဒ်ဝှက်ထားသော bootstrap ပရိုတိ�
   ဦးထုပ်အရွယ်အစား (`genesis.bootstrap_max_bytes`)။ ခွင့်ပြုစာရင်းပြင်ပမှ တောင်းဆိုချက်များ `NotAllowed` တို့ကို လက်ခံရရှိသည်။
   သော့မှားဖြင့် ရေးထိုးထားသော payload များသည် `MismatchedPubkey` ကို လက်ခံရရှိသည် ။
 - **Requester flow:** သိုလှောင်မှုဗလာဖြစ်ပြီး `genesis.file` ကို သတ်မှတ်မထားသည့်အခါ (လည်းကောင်း၊
-  `genesis.bootstrap_enabled=true`)၊ node သည် ရွေးချယ်နိုင်မှုဖြင့် ယုံကြည်စိတ်ချရသော ရွယ်တူများကို ရွေးချယ်နိုင်သည်
-  `genesis.expected_hash`၊ ထို့နောက် payload ကိုရယူပြီး၊ `validate_genesis_block` မှတစ်ဆင့် လက်မှတ်များကို တရားဝင်အတည်ပြုပေးသည်။
+  `genesis.bootstrap_enabled=true`)၊ `genesis.expected_hash` သည် လက်မှတ်ရေးထိုးထားသော genesis block အတိအကျကို
+  မဖြစ်မနေ ပင်ထိုးရမည်။ ဖိုင်နှင့် hash နှစ်ခုစလုံး မရှိလျှင် မည်သည့်တောင်းဆိုချက်မျှ မပို့မီ
+  startup configuration error ဖြစ်သည်။ ထို့နောက် node သည် payload ကိုရယူပြီး `validate_genesis_block` မှတစ်ဆင့် လက်မှတ်များကို အတည်ပြုသည်။
   ပိတ်ဆို့ခြင်းကို မကျင့်သုံးမီ Kura နှင့်အတူ `genesis.bootstrap.nrt` ကို ဆက်လက်လုပ်ဆောင်ပါ။ Bootstrap ပြန်စမ်းပါ။
   ဂုဏ်ပြု `genesis.bootstrap_request_timeout`၊ `genesis.bootstrap_retry_interval` နှင့်
   `genesis.bootstrap_max_attempts`။
@@ -34,5 +35,6 @@ Norito-ကုဒ်ဝှက်ထားသော bootstrap ပရိုတိ�
   ရွယ်တူချင်းများ ဖြတ်၍ အကျိူးကို ဖျက်ချသည်။ တုံ့ပြန်သူများ/ အချိန်ကုန်သွားခြင်းများသည် ဒေသတွင်း ဖွဲ့စည်းမှုပုံစံသို့ ပြန်ရောက်သွားခြင်းမရှိပါ။
 - **အော်ပရေတာအဆင့်များ-** အနည်းဆုံးယုံကြည်ရသောရွယ်တူတစ်ဦးသည် မှန်ကန်သောဥပါဒ်တစ်ခုဖြင့်ရောက်ရှိနိုင်ကြောင်းသေချာစေရန်၊ စီစဉ်သတ်မှတ်ပါ
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` နှင့် ပြန်လည်ကြိုးစားသည့်ခလုတ်များကို လည်းကောင်း၊
-  ကိုက်ညီမှုမရှိသော ပေးဆောင်မှုများကို လက်ခံခြင်းမှရှောင်ရှားရန် `expected_hash` ကို ပင်ထိုးရွေးချယ်နိုင်သည်။ Persisted payloads တွေ ဖြစ်နိုင်ပါတယ်။
+  remote bootstrap ကို ဖွင့်မီ အတိအကျ block ကို `expected_hash` တွင် ပင်ထိုးပါ။ Local လက်မှတ်ရေးထိုးထားသော
+  `genesis.file` သည် ရှင်းလင်းသော artifact ဖြစ်ပြီး ထပ်ဆောင်း hash မလိုပါ။ Persisted payloads တွေ ဖြစ်နိုင်ပါတယ်။
   `genesis.file` ကို `genesis.bootstrap.nrt` သို့ ညွှန်ပြခြင်းဖြင့် နောက်ဘွတ်ဖိနပ်များတွင် ပြန်လည်အသုံးပြုသည်။

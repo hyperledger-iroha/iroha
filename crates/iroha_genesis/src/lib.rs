@@ -2182,7 +2182,7 @@ pub mod genesis_instructions_json {
         #[test]
         fn deserialize_structured_instructions_supports_npos_bootstrap() {
             let validator_id = ALICE_ID.clone();
-            let validator_peer_id = PeerId::from(validator_id.signatory().clone());
+            let validator_peer_id = PeerId::from(validator_id.expect_single_signatory().clone());
             let register = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator_id.clone(),
@@ -2236,7 +2236,7 @@ pub mod genesis_instructions_json {
             let register = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator_id.clone(),
-                PeerId::from(validator_id.signatory().clone()),
+                PeerId::from(validator_id.expect_single_signatory().clone()),
                 validator_id,
                 Quantity::from(10_u64),
                 Metadata::default(),

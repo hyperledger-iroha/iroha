@@ -2149,7 +2149,8 @@ mod tests {
                         }
                         if let Some(RegisterBox::Account(isi)) =
                             instr.as_any().downcast_ref::<RegisterBox>()
-                            && isi.object().id().signatory() == CARPENTER_KEYPAIR.public_key()
+                            && isi.object().id().expect_single_signatory()
+                                == CARPENTER_KEYPAIR.public_key()
                         {
                             saw_carpenter = true;
                             continue;

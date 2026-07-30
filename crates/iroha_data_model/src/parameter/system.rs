@@ -660,7 +660,7 @@ mod model {
         Encode,
         IntoSchema,
     )]
-    #[display("{fuel},{memory}_SCL")]
+    #[display("{fuel},{memory},{max_output_items},{max_output_bytes}_SCL")]
     #[getset(get_copy = "pub")]
     pub struct SmartContractParameters {
         /// Maximum amount of fuel that a smart contract can consume
@@ -669,6 +669,10 @@ mod model {
         pub memory: NonZeroU64,
         /// Maximum depth of synchronous and chained trigger executions
         pub execution_depth: u8,
+        /// Maximum number of effect artifacts retained by one IVM execution
+        pub max_output_items: NonZeroU64,
+        /// Maximum aggregate encoded size of effect artifacts retained by one IVM execution
+        pub max_output_bytes: NonZeroU64,
     }
 
     /// Single smart contract parameter
@@ -681,6 +685,8 @@ mod model {
         Fuel(NonZeroU64),
         Memory(NonZeroU64),
         ExecutionDepth(u8),
+        MaxOutputItems(NonZeroU64),
+        MaxOutputBytes(NonZeroU64),
     }
 
     /// Set of all current blockchain parameter values
@@ -1263,6 +1269,12 @@ mod defaults {
         pub const fn execution_depth() -> u8 {
             3
         }
+        pub const fn max_output_items() -> NonZeroU64 {
+            nonzero!(4_096_u64)
+        }
+        pub const fn max_output_bytes() -> NonZeroU64 {
+            nonzero!(8_388_608_u64)
+        }
     }
 }
 
@@ -1333,6 +1345,8 @@ impl Default for SmartContractParameters {
             fuel: fuel(),
             memory: memory(),
             execution_depth: execution_depth(),
+            max_output_items: max_output_items(),
+            max_output_bytes: max_output_bytes(),
         }
     }
 }
@@ -1398,10 +1412,14 @@ impl Parameters {
             SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
             SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
             SmartContract(smart_contract.execution_depth) => SmartContractParameter::ExecutionDepth,
+            SmartContract(smart_contract.max_output_items) => SmartContractParameter::MaxOutputItems,
+            SmartContract(smart_contract.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
 
             Executor(executor.fuel) => SmartContractParameter::Fuel,
             Executor(executor.memory) => SmartContractParameter::Memory,
             Executor(executor.execution_depth) => SmartContractParameter::ExecutionDepth,
+            Executor(executor.max_output_items) => SmartContractParameter::MaxOutputItems,
+            Executor(executor.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
         );
     }
 }
@@ -1949,6 +1967,8 @@ impl SmartContractParameters {
             SmartContractParameter::Fuel(self.fuel),
             SmartContractParameter::Memory(self.memory),
             SmartContractParameter::ExecutionDepth(self.execution_depth),
+            SmartContractParameter::MaxOutputItems(self.max_output_items),
+            SmartContractParameter::MaxOutputBytes(self.max_output_bytes),
         ]
         .into_iter()
     }
@@ -1962,6 +1982,8 @@ impl JsonSerialize for SmartContractParameters {
         json_support::write_field(out, &mut first, "fuel", &self.fuel);
         json_support::write_field(out, &mut first, "memory", &self.memory);
         json_support::write_field(out, &mut first, "execution_depth", &self.execution_depth);
+        json_support::write_field(out, &mut first, "max_output_items", &self.max_output_items);
+        json_support::write_field(out, &mut first, "max_output_bytes", &self.max_output_bytes);
         out.push('}');
     }
 }
@@ -1986,11 +2008,23 @@ impl JsonDeserialize for SmartContractParameters {
             .map(|value| json_support::expect_u8(&value, "execution_depth"))
             .transpose()?
             .unwrap_or_else(defaults::smart_contract::execution_depth);
+        let max_output_items = map
+            .remove("max_output_items")
+            .map(|value| json_support::expect_nonzero_u64(&value, "max_output_items"))
+            .transpose()?
+            .unwrap_or_else(defaults::smart_contract::max_output_items);
+        let max_output_bytes = map
+            .remove("max_output_bytes")
+            .map(|value| json_support::expect_nonzero_u64(&value, "max_output_bytes"))
+            .transpose()?
+            .unwrap_or_else(defaults::smart_contract::max_output_bytes);
         json_support::ensure_no_extra(map)?;
         Ok(Self {
             fuel,
             memory,
             execution_depth,
+            max_output_items,
+            max_output_bytes,
         })
     }
 }
@@ -2012,6 +2046,16 @@ impl JsonSerialize for SmartContractParameter {
             }
             SmartContractParameter::ExecutionDepth(value) => {
                 json::write_json_string("ExecutionDepth", out);
+                out.push(':');
+                value.json_serialize(out);
+            }
+            SmartContractParameter::MaxOutputItems(value) => {
+                json::write_json_string("MaxOutputItems", out);
+                out.push(':');
+                value.json_serialize(out);
+            }
+            SmartContractParameter::MaxOutputBytes(value) => {
+                json::write_json_string("MaxOutputBytes", out);
                 out.push(':');
                 value.json_serialize(out);
             }
@@ -2043,6 +2087,14 @@ impl JsonDeserialize for SmartContractParameter {
             "ExecutionDepth" => Ok(Self::ExecutionDepth(json_support::expect_u8(
                 &payload,
                 "ExecutionDepth",
+            )?)),
+            "MaxOutputItems" => Ok(Self::MaxOutputItems(json_support::expect_nonzero_u64(
+                &payload,
+                "MaxOutputItems",
+            )?)),
+            "MaxOutputBytes" => Ok(Self::MaxOutputBytes(json_support::expect_nonzero_u64(
+                &payload,
+                "MaxOutputBytes",
             )?)),
             other => Err(json::Error::UnknownField {
                 field: other.to_owned(),
@@ -2085,6 +2137,55 @@ mod tests {
             max_transactions,
         )));
         assert_eq!(params.block().max_transactions(), max_transactions);
+    }
+
+    #[test]
+    fn smart_contract_output_limits_are_governed_and_roundtrip() {
+        let mut params = Parameters::default();
+        let max_items = NonZeroU64::new(17).expect("non-zero item limit");
+        let max_bytes = NonZeroU64::new(32_768).expect("non-zero byte limit");
+        params.set_parameter(Parameter::SmartContract(
+            SmartContractParameter::MaxOutputItems(max_items),
+        ));
+        params.set_parameter(Parameter::SmartContract(
+            SmartContractParameter::MaxOutputBytes(max_bytes),
+        ));
+        params.set_parameter(Parameter::Executor(SmartContractParameter::MaxOutputItems(
+            max_items,
+        )));
+        params.set_parameter(Parameter::Executor(SmartContractParameter::MaxOutputBytes(
+            max_bytes,
+        )));
+
+        assert_eq!(params.smart_contract().max_output_items(), max_items);
+        assert_eq!(params.smart_contract().max_output_bytes(), max_bytes);
+        assert_eq!(params.executor().max_output_items(), max_items);
+        assert_eq!(params.executor().max_output_bytes(), max_bytes);
+        let bytes = params.encode();
+        let decoded =
+            Parameters::decode_all(&mut bytes.as_slice()).expect("decode governed parameters");
+        assert_eq!(decoded, params);
+
+        #[cfg(feature = "json")]
+        {
+            let json = norito::json::to_json(&params.smart_contract())
+                .expect("serialize smart-contract parameters");
+            let decoded: SmartContractParameters =
+                norito::json::from_str(&json).expect("decode smart-contract parameters");
+            assert_eq!(decoded.max_output_items(), max_items);
+            assert_eq!(decoded.max_output_bytes(), max_bytes);
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn smart_contract_output_limits_reject_zero() {
+        let json = r#"{"max_output_items":0}"#;
+        norito::json::from_str::<SmartContractParameters>(json)
+            .expect_err("zero output item limit must fail");
+        let json = r#"{"max_output_bytes":0}"#;
+        norito::json::from_str::<SmartContractParameters>(json)
+            .expect_err("zero output byte limit must fail");
     }
 
     #[test]

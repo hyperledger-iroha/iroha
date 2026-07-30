@@ -550,7 +550,12 @@ encoded as a single packed payload with one of two layouts:
   bit is set (varint-encoded per `COMPACT_LEN`), followed by concatenated field
   payloads in declaration order. Bit 0 of byte 0 refers to field 0, bit 1 to
   field 1, and so on. Fields that are fixed-size or self-delimiting omit the
-  explicit size header and are decoded sequentially.
+  explicit size header and are decoded sequentially. The bitset is part of the
+  type's canonical layout: a decoder recomputes it from the same compile-time
+  field classification as the encoder and rejects any mismatch, including
+  non-zero padding bits. Each declared size is decoded only as the compact
+  varint advertised by `COMPACT_LEN`; zero is a canonical one-byte varint and
+  is never reinterpreted as a fixed-width `u64`.
 
 Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
 `COMPACT_LEN`) when encoding nested collections or string/blob values.

@@ -5,6 +5,30 @@ Last updated: 2026-07-30
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Taira testnet recovery and offline-cash release closure
+
+The source-side consensus-stall, exact `/status.blocks`, restart-cost,
+supervisor-loop, and canonical offline-cash ingress repairs are complete, but
+public Taira remains on the old deployment. Do not expose it as a ready offline
+cash lane until the guarded reset reports `mandatory: true`, `ready: true` and
+passes the signed public canary.
+
+Remaining work stays ordered and fail-closed:
+
+- Seal the reviewed r5 source closure anchored to signed commit
+  `41287ed727addc87418c1a0878f7bd97c7cce83b`, then build and hash the candidate,
+  runtime, configuration, and eight-artifact release bundle from that one
+  provenance set.
+- Capture fresh signed physical-device evidence on exact `iPhone18,2` / `V54AP`
+  hardware and collect all six independent review categories. Unavailable
+  devices and the incomplete review set remain hard promotion gates; simulator,
+  stale, or partially reviewed evidence is not a substitute.
+- Perform the authorized guarded reset across all four validators, deploy the
+  sealed binary/configuration/artifact set, and prove advancing consensus,
+  query-visible `/status.blocks` equality, mandatory offline readiness, signed
+  canary operation, a restart below 45 seconds, and continued advancement after
+  restart.
+
 ## ZK-ACE JavaScript signed-transaction parity
 
 - Design and implement a new typed JavaScript API for the canonical governed
@@ -18652,10 +18676,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   rejection shims. The first-release HTTP surface contains only typed
   readiness, top-up, redeem, and operation-status resources under
   `/v1/offline`; it has no nested route version or whole-payload wrapper.
-  Governance council
-	  persist/replace/derive-vrf mutation helpers are no longer advertised in
-	  default Torii builds unless `gov_vrf` is compiled, avoiding mounted
-	  not-implemented fallbacks in the production route/tool surface. The shared
+  Governance council selection now uses only the canonical on-chain
+  bonded-citizen sortition path; the unshipped `gov_vrf` derivation prototype
+  and its HTTP/MCP surface are removed. The shared
 	  Offline V2 interop fixture now uses the chain-admissible key-certificate
 	  version directly, and Swift, Kotlin/JVM, and Java Android SDK constructors
 	  mirror that version for wallet-side fixture parity.

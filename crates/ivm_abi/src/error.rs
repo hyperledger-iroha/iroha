@@ -63,8 +63,18 @@ pub enum VmTrapKind {
     HTMAbort,
     NoritoInvalid,
     AbiTypeNotAllowed,
+    HostOutputBudgetExceeded,
     AmxBudgetExceeded,
     Other,
+}
+
+/// Consensus-retained host resource whose execution budget was exhausted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostOutputResource {
+    /// Number of retained effect artifacts.
+    Items,
+    /// Aggregate encoded size of retained effect artifacts.
+    Bytes,
 }
 
 /// Source location mapped from compiler-emitted debug metadata.
@@ -236,6 +246,15 @@ pub enum VMError {
     AbiTypeNotAllowed {
         abi: u8,
         type_id: u16,
+    },
+    /// An execution attempted to retain more effect output than consensus permits.
+    HostOutputBudgetExceeded {
+        /// Resource whose limit was exceeded.
+        resource: HostOutputResource,
+        /// Amount the host attempted to retain.
+        attempted: u64,
+        /// Consensus maximum for the resource.
+        limit: u64,
     },
     /// AMX static analysis budget exceeded for the current dataspace.
     AmxBudgetExceeded {
@@ -409,6 +428,14 @@ impl fmt::Display for VMError {
             VMError::AbiTypeNotAllowed { abi, type_id } => write!(
                 f,
                 "pointer-ABI type 0x{type_id:04x} not allowed for abi_version={abi}"
+            ),
+            VMError::HostOutputBudgetExceeded {
+                resource,
+                attempted,
+                limit,
+            } => write!(
+                f,
+                "host output budget exceeded (resource={resource:?}, attempted={attempted}, limit={limit})"
             ),
             VMError::AmxBudgetExceeded {
                 dataspace,

@@ -96,6 +96,8 @@ default = ["runtime"]
 # Portable VM runtime. Syscalls, opcodes, pointer ABI, and CPU fallbacks are
 # unconditional; only external acceleration backends remain separate.
 runtime = ["halo2"]
+# Expose benchmark-only backend selection hooks. Production builds must leave
+# this disabled so field dispatch is immutable after hardware selection.
 bench = []
 ## Hardware transactional memory experiments on x86_64 (requires nightly RTM intrinsics).
 htm = []
@@ -182,6 +184,7 @@ harness = false
 name = "bench_field"
 path = "benches/bench_field.rs"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "bench_registers_merkle"
@@ -222,6 +225,7 @@ harness = false
 name = "bench_bn254_cuda"
 path = "benches/bench_bn254_cuda.rs"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "bench_vm_aes"

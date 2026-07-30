@@ -41,6 +41,22 @@ guest cannot expand past governance. Warm-runtime keys contain the heap
 ceiling, so changing either parameter deterministically selects a matching
 runtime baseline.
 
+## Retained-effect governance
+
+Gas limits bound computation, while the on-chain
+`smart_contract.max_output_items` and `smart_contract.max_output_bytes`
+parameters bound the effect material a host may retain during one execution.
+The aggregate includes queued instructions, pending FastPQ entries, durable
+state writes, completed AXT state, and access-log artifacts. The first-release
+defaults are 4,096 items and 8 MiB.
+
+All consensus, contract, trigger, access-prepass, and proved-execution hosts
+load these values from the same world-state snapshot. A reservation that would
+cross either boundary returns `HostOutputBudgetExceeded` from the active
+syscall, aborting the VM and transaction before any retained artifacts are
+applied. Tooling may apply a stricter transport limit component-wise, but such
+a limit cannot expand or replace consensus validity.
+
 ## Determinism and schedule hash
 
 The gas schedule is deterministic. Descriptor format 3, domain-separated as

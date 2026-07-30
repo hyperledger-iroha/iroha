@@ -7519,10 +7519,11 @@ redistributable schemas, and official trust/revocation bundles.
   audit, V1 Kagemusha, and version-nested routes instead of preserving
   rejection or compatibility shims. Router and catalog tests assert those
   method/path pairs cannot resolve through aliases or parameter capture.
-- Completed 2026-06-06: removed the default governance council derive-vrf
-  not-implemented fallback and aligned HTTP route registration, OpenAPI paths,
-  and MCP tools behind `gov_vrf` for council persist/replace/derive-vrf
-  mutation helpers.
+- Completed 2026-07-30: removed the unshipped governance council
+  `derive-vrf` prototype, its `gov_vrf` feature, HTTP/MCP surfaces, and
+  documentation. Council selection uses the canonical on-chain bonded-citizen
+  sortition path; the independently authorized persist/replace administration
+  helpers remain.
 - Completed 2026-06-06: refreshed `fixtures/offline/interop_contract_v2.json`
   and its generator so the published redeem vector uses
   `OFFLINE_NOTE_KEY_CERTIFICATE_VERSION` directly. Torii now consumes the

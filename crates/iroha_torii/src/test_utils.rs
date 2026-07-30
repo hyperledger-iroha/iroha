@@ -439,7 +439,7 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         KeyPair::from_private_key(private_key.0.clone()).expect("derive local deployment key pair");
     assert_eq!(
         key_pair.public_key(),
-        authority.signatory(),
+        authority.expect_single_signatory(),
         "local deployment key must match authority"
     );
     let hajimari_entrypoint = verified
@@ -1083,11 +1083,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             panic_on_duplicate_metrics: defaults::telemetry::PANIC_ON_DUPLICATE_METRICS,
         },
         pipeline: A::Pipeline {
-            ivm_proved: A::IvmProvedExecution {
-                enabled: defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             dynamic_prepass: false,
             access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
             parallel_overlay: false,
@@ -1556,7 +1551,7 @@ mod tests {
     fn shared_random_fixture_helpers_emit_default_keys() {
         let creds = super::random_authority();
         assert_eq!(
-            creds.account.signatory().algorithm(),
+            creds.account.expect_single_signatory().algorithm(),
             iroha_crypto::Algorithm::default()
         );
 

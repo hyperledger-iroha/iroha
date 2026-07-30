@@ -24,8 +24,9 @@ Iroha እኩዮች ያለአገር ውስጥ `genesis.file` የተፈረመ የ�
   የመጠን ካፕ (`genesis.bootstrap_max_bytes`)። ከተፈቀደው ዝርዝር ውጭ ያሉ ጥያቄዎች `NotAllowed` ይቀበላሉ እና
   በተሳሳተ ቁልፍ የተፈረሙ የጫኑ ጭነቶች `MismatchedPubkey` ይቀበላሉ።
 - ** የጠያቂ ፍሰት፡** ማከማቻ ባዶ ሲሆን እና `genesis.file` ካልተቀናበረ (እና
-  `genesis.bootstrap_enabled=true`)፣ መስቀለኛ መንገድ የታመኑ አቻዎችን ከአማራጭ ጋር ቀድሟል።
-  `genesis.expected_hash`፣ከዚያም ክፍያውን ያመጣል፣ፊርማዎችን በ`validate_genesis_block` በኩል ያረጋግጣል፣
+  `genesis.bootstrap_enabled=true`)፣ `genesis.expected_hash` ትክክለኛውን የተፈረመ የዘፍጥረት ብሎክ
+  በግዴታ መያዝ አለበት። ፋይልም ሆነ ሃሽ ከሌለ ጅምር የውቅር ስህተት ነው። ከዚያም ክፍያውን
+  ያመጣል፣ፊርማዎችን በ`validate_genesis_block` በኩል ያረጋግጣል፣
   እና እገዳውን ከመተግበሩ በፊት `genesis.bootstrap.nrt` ከኩራ ጋር ይቀጥላል። ቡትስትራፕ ይሞክራል።
   ክብር `genesis.bootstrap_request_timeout`፣ `genesis.bootstrap_retry_interval`፣ እና
   `genesis.bootstrap_max_attempts`.
@@ -34,5 +35,6 @@ Iroha እኩዮች ያለአገር ውስጥ `genesis.file` የተፈረመ የ�
   በመላ እኩዮቻቸው መጭውን ማስወረድ; ምንም ምላሽ ሰጪዎች/የጊዜ ማብቂያዎች ወደ አካባቢያዊ ውቅር አይመለሱም።
 - ** የኦፕሬተር እርምጃዎች: *** ቢያንስ አንድ የታመነ እኩያ በትክክለኛው ዘፍጥረት ሊደረስበት የሚችል መሆኑን ያረጋግጡ ፣ ያዋቅሩ
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` እና እንደገና ሞክር ቁልፎች፣ እና
-  ያልተመጣጠኑ የክፍያ ጭነቶችን ላለመቀበል በአማራጭ `expected_hash` ይሰኩት። ቀጣይነት ያለው ጭነት ሊሆን ይችላል።
+  የርቀት ማስነሻን ከማንቃትዎ በፊት `expected_hash` ላይ ትክክለኛውን ብሎክ ይሰኩ። አካባቢያዊ
+  የተፈረመ `genesis.file` ራሱ ግልጽ አርቲፋክት ነው፣ ተጨማሪ ሃሽም አያስፈልገውም።
   `genesis.file` ወደ `genesis.bootstrap.nrt` በመጠቆም በቀጣይ ቦት ጫማዎች ላይ እንደገና ጥቅም ላይ ይውላል.

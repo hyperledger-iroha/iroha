@@ -12,7 +12,7 @@ mod rename;
 
 use darling::{FromAttributes, FromDeriveInput, FromField, FromMeta, FromVariant, ast::Style};
 use emitter_ext::EmitterExt;
-use manyhow::{Emitter, Result, ToTokensError, emit, error_message, manyhow};
+use manyhow::{Emitter, Result, ToTokensError, emit, manyhow};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::parse_quote;
@@ -221,7 +221,7 @@ struct CodecAttributes {
     skip: bool,
     #[darling(default)]
     compact: bool,
-    index: Option<u8>,
+    index: Option<u32>,
 }
 
 type IntoSchemaData = darling::ast::Data<IntoSchemaVariant, IntoSchemaField>;
@@ -732,19 +732,12 @@ fn metadata_for_enums(
     norito_attrs: &NoritoContainerAttrs,
     variants: &[IntoSchemaVariant],
 ) -> (Vec<syn::Type>, syn::Expr) {
+    let discriminants = enum_variant_indices(emitter, variants);
     let variant_exprs: Vec<_> = variants
         .iter()
-        .enumerate()
-        .filter(|(_, variant)| !variant.codec_attrs.skip)
-        .map(|(discriminant, variant)| {
-            let discriminant = variant_index(emitter, variant, discriminant);
-            if variant.discriminant.is_some() {
-                emit!(
-                    emitter,
-                    "Fieldless enums with explicit discriminants are not allowed"
-                );
-            }
-
+        .zip(discriminants)
+        .filter(|(variant, _)| !variant.codec_attrs.skip)
+        .map(|(variant, discriminant)| {
             let name = &variant.ident;
             let name_str = name.to_string();
             let tag_value = variant
@@ -803,22 +796,82 @@ fn field_to_declaration(field: &CodegenField) -> TokenStream {
     }
 }
 
-/// Look for a `#[codec(index = $int)]` attribute on a variant. If no attribute
-/// is found, fall back to the discriminant or just the variant index.
-fn variant_index(emitter: &mut Emitter, v: &IntoSchemaVariant, i: usize) -> TokenStream {
-    match (v.codec_attrs.index, v.discriminant.as_ref()) {
-        // first, try to use index from the `codec` attribute
-        (Some(index), _) => index.to_token_stream(),
-        // then try to use explicit discriminant
-        (_, Some(discriminant)) => discriminant.to_token_stream(),
-        // then fallback to just variant index
-        (_, _) => {
-            let index = emitter.handle_or_default(u8::try_from(i).map_err(|_| {
-                error_message!("Too many enum variants. Maximum supported number is 256")
-            }));
-            index.to_token_stream()
+fn explicit_variant_discriminant(
+    emitter: &mut Emitter,
+    variant: &IntoSchemaVariant,
+) -> Option<u32> {
+    let expression = variant.discriminant.as_ref()?;
+    let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Int(literal),
+        ..
+    }) = expression
+    else {
+        emit!(
+            emitter,
+            "Norito enum discriminants must be integer literals in 0..=u32::MAX"
+        );
+        return None;
+    };
+    match literal.base10_parse::<u32>() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            emit!(
+                emitter,
+                "Norito enum discriminants must be integer literals in 0..=u32::MAX"
+            );
+            None
         }
     }
+}
+
+/// Resolve the same canonical `u32` indices used by the Norito codec derives.
+fn enum_variant_indices(emitter: &mut Emitter, variants: &[IntoSchemaVariant]) -> Vec<u32> {
+    let mut next_rust_discriminant = Some(0_u32);
+    let mut assigned = std::collections::BTreeMap::<u32, &syn::Ident>::new();
+    let mut indices = Vec::with_capacity(variants.len());
+
+    for variant in variants {
+        let has_explicit = variant.discriminant.is_some();
+        let explicit = explicit_variant_discriminant(emitter, variant);
+        let rust_discriminant = if has_explicit {
+            explicit.unwrap_or_default()
+        } else {
+            match next_rust_discriminant {
+                Some(discriminant) => discriminant,
+                None => {
+                    emit!(
+                        emitter,
+                        "implicit Norito enum discriminant exceeds u32::MAX"
+                    );
+                    0
+                }
+            }
+        };
+        next_rust_discriminant = rust_discriminant.checked_add(1);
+
+        if let (Some(explicit), Some(codec_index)) = (explicit, variant.codec_attrs.index)
+            && explicit != codec_index
+        {
+            emit!(
+                emitter,
+                "`#[codec(index = {})]` must match explicit Rust discriminant {}",
+                codec_index,
+                explicit
+            );
+        }
+        let index = variant.codec_attrs.index.unwrap_or(rust_discriminant);
+        if let Some(first) = assigned.insert(index, &variant.ident) {
+            emit!(
+                emitter,
+                "duplicate Norito enum index {}; first assigned to variant `{}`",
+                index,
+                first
+            );
+        }
+        indices.push(index);
+    }
+
+    indices
 }
 
 /// Convert field to the codegen representation, filtering out skipped fields.

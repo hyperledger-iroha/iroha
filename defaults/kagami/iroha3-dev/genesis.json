@@ -143,12 +143,16 @@
         "executor": {
           "fuel": 55000000,
           "memory": 1048576,
-          "execution_depth": 3
+          "execution_depth": 3,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
         },
         "smart_contract": {
           "fuel": 55000000,
           "memory": 1048576,
-          "execution_depth": 3
+          "execution_depth": 3,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
         },
         "custom": {
           "ivm_gas_limit_per_block": {

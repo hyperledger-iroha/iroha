@@ -2803,24 +2803,6 @@ impl Nts {
     }
 }
 
-/// User-level configuration for admitting `Executable::IvmProved` (proof-carrying IVM overlays).
-#[derive(Debug, ReadConfig, Clone)]
-pub struct IvmProvedExecution {
-    /// Whether `Executable::IvmProved` is accepted by the execution pipeline.
-    ///
-    /// Default is `false` until a full end-to-end IVM execution proof system is shipped.
-    #[config(default = "defaults::pipeline::ivm_proved::ENABLED")]
-    pub enabled: bool,
-    /// Skip deterministic IVM replay for circuits that are known to prove full IVM execution semantics.
-    #[config(default = "defaults::pipeline::ivm_proved::SKIP_REPLAY")]
-    pub skip_replay: bool,
-    /// Allowlist of circuit IDs accepted for `Executable::IvmProved`.
-    ///
-    /// An empty allowlist rejects all proved executions, even when `enabled = true`.
-    #[config(default = "Vec::new()")]
-    pub allowed_circuits: Vec<String>,
-}
-
 /// User-level configuration container for `Pipeline`.
 #[derive(Debug, ReadConfig)]
 #[allow(clippy::struct_excessive_bools)]
@@ -2955,9 +2937,6 @@ pub struct Pipeline {
         default = "defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS"
     )]
     pub overlay_chunk_instructions: usize,
-    /// `Executable::IvmProved` admission/verification settings.
-    #[config(nested)]
-    pub ivm_proved: IvmProvedExecution,
     /// Gas-fee configuration (accepted assets, conversion, and tech account).
     #[config(nested)]
     pub gas: Gas,
@@ -3727,20 +3706,9 @@ impl Oracle {
     }
 }
 
-impl IvmProvedExecution {
-    fn parse(self) -> actual::IvmProvedExecution {
-        actual::IvmProvedExecution {
-            enabled: self.enabled,
-            skip_replay: self.skip_replay,
-            allowed_circuits: self.allowed_circuits,
-        }
-    }
-}
-
 impl Pipeline {
     fn parse(self) -> actual::Pipeline {
         actual::Pipeline {
-            ivm_proved: self.ivm_proved.parse(),
             dynamic_prepass: self.dynamic_prepass,
             access_set_cache_enabled: self.access_set_cache_enabled,
             parallel_overlay: self.parallel_overlay,
@@ -3849,11 +3817,6 @@ mod pipeline_tests {
             overlay_max_instructions: defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
             overlay_max_bytes: defaults::pipeline::OVERLAY_MAX_BYTES,
             overlay_chunk_instructions: defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
-            ivm_proved: IvmProvedExecution {
-                enabled: defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             gas: Gas {
                 tech_account_id: defaults::pipeline::GAS_TECH_ACCOUNT_ID.to_string(),
                 accepted_assets: Vec::new(),
@@ -5297,7 +5260,6 @@ pub struct FraudAttester {
 #[strum(serialize_all = "snake_case")]
 pub enum ZkCurve {
     /// Uses the Pallas curve (Pasta cycle) for Halo2 circuits.
-    #[strum(serialize = "toy_p61_additive")]
     Pallas,
     /// Uses the Pasta curve (Vesta/Pallas cycle) for Halo2 circuits.
     Pasta,
@@ -5626,7 +5588,9 @@ pub struct Genesis {
     /// Optional path to genesis manifest JSON for startup validation.
     #[config(env = "GENESIS_MANIFEST_JSON")]
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Optional expected genesis block hash used during bootstrap preflight.
+    /// Exact genesis block hash required for remote bootstrap.
+    ///
+    /// This may be omitted when a local signed genesis file is configured.
     #[config(env = "GENESIS_EXPECTED_HASH")]
     pub expected_hash: Option<WithOrigin<HashOf<BlockHeader>>>,
     /// Optional explicit peer allowlist that may serve genesis during bootstrap. Defaults to trusted peers.
@@ -5649,6 +5613,8 @@ pub struct Genesis {
     #[config(default = "defaults::genesis::BOOTSTRAP_MAX_ATTEMPTS")]
     pub bootstrap_max_attempts: u32,
     /// Whether to attempt network bootstrap when local genesis is missing.
+    ///
+    /// Enabling this without a local file requires `expected_hash`.
     #[config(default = "true")]
     pub bootstrap_enabled: bool,
 }
@@ -7986,32 +7952,12 @@ impl Queue {
 /// User-level configuration container for `Settlement`.
 #[derive(Debug, ReadConfig, Clone, Default)]
 pub struct Settlement {
-    /// Reverse-repurchase configuration details.
-    #[config(nested)]
-    pub repo: Repo,
     /// Offline settlement configuration.
     #[config(nested)]
     pub offline: Offline,
     /// Router configuration (shadow price, buffers).
     #[config(nested)]
     pub router: Router,
-}
-
-/// User-level configuration container for `Repo`.
-#[derive(Debug, ReadConfig, Clone)]
-pub struct Repo {
-    /// Default haircut, expressed in basis points.
-    #[config(default = "defaults::settlement::repo::DEFAULT_HAIRCUT_BPS")]
-    pub default_haircut_bps: u16,
-    /// Margin call frequency in seconds.
-    #[config(default = "defaults::settlement::repo::DEFAULT_MARGIN_FREQUENCY_SECS")]
-    pub margin_frequency_secs: u64,
-    /// Eligible collateral asset definitions.
-    #[config(default)]
-    pub eligible_collateral: Vec<AssetDefinitionId>,
-    /// Matrix describing which collateral definitions may substitute for another.
-    #[config(default)]
-    pub collateral_substitution_matrix: BTreeMap<AssetDefinitionId, Vec<AssetDefinitionId>>,
 }
 
 /// User-level Kagemusha escrow and execution configuration.
@@ -8089,17 +8035,6 @@ impl Default for Router {
             buffer_xor_only_pct: defaults::settlement::router::XOR_ONLY_PCT,
             buffer_halt_pct: defaults::settlement::router::HALT_PCT,
             buffer_horizon_hours: defaults::settlement::router::BUFFER_HORIZON_HOURS,
-        }
-    }
-}
-
-impl Default for Repo {
-    fn default() -> Self {
-        Self {
-            default_haircut_bps: defaults::settlement::repo::DEFAULT_HAIRCUT_BPS,
-            margin_frequency_secs: defaults::settlement::repo::DEFAULT_MARGIN_FREQUENCY_SECS,
-            eligible_collateral: Vec::new(),
-            collateral_substitution_matrix: BTreeMap::new(),
         }
     }
 }
@@ -8223,43 +8158,8 @@ impl Settlement {
     /// Convert this user configuration into the runtime representation.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Settlement {
         actual::Settlement {
-            repo: self.repo.parse(emitter),
             offline: self.offline.parse(emitter),
             router: self.router.parse(emitter),
-        }
-    }
-}
-
-impl Repo {
-    /// Convert this user configuration into the runtime representation.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Repo {
-        const MAX_HAIRCUT_BPS: u16 = 10_000;
-        let Repo {
-            default_haircut_bps,
-            margin_frequency_secs,
-            eligible_collateral,
-            collateral_substitution_matrix,
-        } = self;
-
-        let haircut = if default_haircut_bps > MAX_HAIRCUT_BPS {
-            emitter.emit(ParseError::InvalidSettlementConfig.into());
-            MAX_HAIRCUT_BPS
-        } else {
-            default_haircut_bps
-        };
-
-        let margin = if margin_frequency_secs == 0 {
-            emitter.emit(ParseError::InvalidSettlementConfig.into());
-            defaults::settlement::repo::DEFAULT_MARGIN_FREQUENCY_SECS
-        } else {
-            margin_frequency_secs
-        };
-
-        actual::Repo {
-            default_haircut_bps: haircut,
-            margin_frequency_secs: margin,
-            eligible_collateral,
-            collateral_substitution_matrix,
         }
     }
 }
@@ -31199,30 +31099,6 @@ mod offline_cfg_tests {
         assert_eq!(format!("{}", cfg.resolve_filter()), "warn,info");
     }
     #[test]
-    fn repo_parse_enforces_defaults() {
-        let repo = Repo {
-            default_haircut_bps: 12_500,
-            margin_frequency_secs: 0,
-            eligible_collateral: vec![iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "bond".parse().unwrap(),
-            )],
-            collateral_substitution_matrix: BTreeMap::new(),
-        };
-
-        let mut emitter = Emitter::new();
-        let parsed = repo.parse(&mut emitter);
-
-        assert_eq!(parsed.default_haircut_bps, 10_000);
-        assert_eq!(
-            parsed.margin_frequency_secs,
-            defaults::settlement::repo::DEFAULT_MARGIN_FREQUENCY_SECS
-        );
-        assert_eq!(parsed.eligible_collateral.len(), 1);
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
     fn codec_parse_requires_cabac_build_flag() {
         if norito::streaming::CABAC_BUILD_AVAILABLE {
             // Nothing to assert when CABAC was compiled in for this test binary.
@@ -31818,6 +31694,12 @@ mod offline_cfg_tests {
         let curve = ZkCurve::from_str(defaults::zk::halo2::CURVE)
             .expect("default curve string should parse");
         assert_eq!(curve, ZkCurve::Pallas);
+        assert_eq!(curve.to_string(), defaults::zk::halo2::CURVE);
+        assert_eq!(curve.into_actual(), actual::Halo2::default().curve);
+        assert!(
+            ZkCurve::from_str("toy_p61_additive").is_err(),
+            "the retired toy-curve compatibility label must not be accepted"
+        );
     }
 
     #[test]
@@ -32071,6 +31953,32 @@ policy_digest_hex = "{policy_digest_hex}"
         assert!(
             format!("{error:?}").contains("sorafs"),
             "unexpected legacy-path error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn retired_settlement_repo_config_is_rejected() {
+        let mut table = base_table();
+        let settlement = table
+            .entry("settlement")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("settlement table");
+        settlement.insert(
+            "repo".into(),
+            Value::Table(Table::from_iter([(
+                "default_haircut_bps".into(),
+                Value::Integer(1_500),
+            )])),
+        );
+
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<super::Root>()
+            .expect_err("retired settlement.repo configuration must be unknown");
+        assert!(
+            format!("{error:?}").contains("repo"),
+            "unexpected retired-config error: {error:?}"
         );
     }
 
