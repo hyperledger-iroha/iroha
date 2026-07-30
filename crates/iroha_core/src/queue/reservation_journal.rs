@@ -6,6 +6,8 @@
 //! transition before the queue exposes it to callers. The first-release admission-bound layout is V5
 //! only: earlier or unknown frame envelopes are retained and rejected without legacy decoding.
 
+#[cfg(test)]
+use std::sync::{Arc, Barrier};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -1015,6 +1017,8 @@ pub(super) struct LaneQueueReservationJournal {
     next_append_fault: Option<(usize, ReservationJournalAppendFault)>,
     #[cfg(test)]
     next_compaction_fault: Option<ReservationJournalCompactionFault>,
+    #[cfg(test)]
+    append_handoff: Option<(Arc<Barrier>, Arc<Barrier>)>,
 }
 
 impl LaneQueueReservationJournal {
@@ -1096,6 +1100,8 @@ impl LaneQueueReservationJournal {
                 next_append_fault: None,
                 #[cfg(test)]
                 next_compaction_fault: None,
+                #[cfg(test)]
+                append_handoff: None,
             },
             replay,
         ))
@@ -1255,6 +1261,12 @@ impl LaneQueueReservationJournal {
         self.verify_cached_storage_at_len(self.known_len)?;
 
         #[cfg(test)]
+        if let Some((reached, resume)) = self.append_handoff.take() {
+            reached.wait();
+            resume.wait();
+        }
+
+        #[cfg(test)]
         let injected_fault = match self.next_append_fault {
             Some((0, fault)) => {
                 self.next_append_fault = None;
@@ -1337,6 +1349,12 @@ impl LaneQueueReservationJournal {
     #[cfg(test)]
     pub(super) fn inject_next_append_fault(&mut self, fault: ReservationJournalAppendFault) {
         self.inject_append_fault_after(0, fault);
+    }
+
+    /// Pause the next append before it touches storage for queue-lock concurrency tests.
+    #[cfg(test)]
+    pub(super) fn install_append_handoff(&mut self, reached: Arc<Barrier>, resume: Arc<Barrier>) {
+        self.append_handoff = Some((reached, resume));
     }
 
     /// Inject one ambiguous append boundary after `successful_appends_before_fault` appends.

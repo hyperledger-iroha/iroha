@@ -762,6 +762,10 @@ fn minimal_config_snapshot() {
                         cache_dir: None,
                     },
                 },
+                transaction_ingress: TransactionIngress {
+                    max_concurrent_compute_jobs: 4,
+                    max_batch_transactions: 512,
+                },
                 da_ingest: DaIngest {
                     replay_cache_capacity: 4096,
                     replay_cache_max_lane_epochs: 1024,
@@ -769,6 +773,7 @@ fn minimal_config_snapshot() {
                     replay_cache_max_sequence_lag: 4096,
                     replay_cache_store_dir: "./storage/da_replay",
                     manifest_store_dir: "./storage/da_manifests",
+                    max_concurrent_compute_jobs: 1,
                     spool_queue_capacity: 1024,
                     spool_batch_max: 32,
                     governance_metadata_key: None,

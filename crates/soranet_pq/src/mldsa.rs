@@ -17,6 +17,8 @@ use crate::{
 
 #[path = "mldsa_backend.rs"]
 mod backend;
+#[path = "mldsa_pqclean_bindings.rs"]
+mod pqclean_bindings;
 
 /// Maximum context length accepted by FIPS 204 ML-DSA signing and verification.
 pub const ML_DSA_CONTEXT_MAX_LEN: usize = 255;
@@ -329,15 +331,26 @@ pub fn generate_mldsa_keypair(
 ) -> Result<MlDsaKeyPair, MlDsaError> {
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
-    generate_mldsa_keypair_from_coins(suite, &coins)
+    generate_mldsa_keypair_from_fips_seed(suite, &coins)
 }
 
-fn generate_mldsa_keypair_from_coins(
+/// Deterministically generate an ML-DSA keypair from the 32-byte seed input
+/// defined by FIPS 204.
+///
+/// This is the lowest-level deterministic key-generation entry point. Callers
+/// that start with arbitrary-length secret material should first run a
+/// domain-separated KDF and zeroize the derived seed after this function
+/// returns.
+///
+/// # Errors
+/// Returns an error when `seed` is all zero, or when generated material fails
+/// canonical key validation.
+pub fn generate_mldsa_keypair_from_fips_seed(
     suite: MlDsaSuite,
-    coins: &[u8; 32],
+    seed: &[u8; 32],
 ) -> Result<MlDsaKeyPair, MlDsaError> {
-    validate_mldsa_material_not_all_zero(suite, "ML-DSA keypair coins", coins)?;
-    let keypair = backend::generate_keypair(suite, coins)?;
+    validate_mldsa_material_not_all_zero(suite, "ML-DSA keypair seed", seed)?;
+    let keypair = backend::generate_keypair(suite, seed)?;
     validate_generated_mldsa_keypair(suite, &keypair)?;
     Ok(keypair)
 }
@@ -831,6 +844,32 @@ mod tests {
             assert_eq!(first.public_key(), second.public_key());
             assert_eq!(first.secret_key(), second.secret_key());
         }
+    }
+
+    #[test]
+    fn fips_seed_keypair_is_deterministic_and_suite_separated() {
+        let seed = [0xD5; 32];
+        let keypair_44 = generate_mldsa_keypair_from_fips_seed(MlDsaSuite::MlDsa44, &seed)
+            .expect("ML-DSA-44 FIPS seed should generate a keypair");
+        let keypair_44_replay = generate_mldsa_keypair_from_fips_seed(MlDsaSuite::MlDsa44, &seed)
+            .expect("ML-DSA-44 FIPS seed should replay");
+        let keypair_65 = generate_mldsa_keypair_from_fips_seed(MlDsaSuite::MlDsa65, &seed)
+            .expect("ML-DSA-65 FIPS seed should generate a keypair");
+
+        assert_eq!(keypair_44.public_key(), keypair_44_replay.public_key());
+        assert_eq!(keypair_44.secret_key(), keypair_44_replay.secret_key());
+        assert_ne!(
+            &keypair_44.public_key()[..32],
+            &keypair_65.public_key()[..32]
+        );
+    }
+
+    #[test]
+    fn fips_seed_keypair_rejects_inert_seed() {
+        let err = generate_mldsa_keypair_from_fips_seed(MlDsaSuite::MlDsa65, &[0_u8; 32])
+            .expect_err("all-zero FIPS key seed must be rejected");
+
+        assert_inert_key_material(err, MlDsaSuite::MlDsa65, "keypair seed");
     }
 
     #[test]

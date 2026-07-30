@@ -812,9 +812,7 @@ fn validate_journal_source_head_lineage(
     for current_head in &current.journal_prefix_source_heads {
         if previous
             .journal_prefix_source_heads
-            .binary_search_by_key(&current_head.entry.source_id, |event| {
-                event.entry.source_id
-            })
+            .binary_search_by_key(&current_head.entry.source_id, |event| event.entry.source_id)
             .is_ok()
         {
             continue;
@@ -907,8 +905,7 @@ impl ReputationFinalizedAnchorManifestV1 {
             });
         }
         if self.journal_source_head_count > self.high_water_marks.journal_events
-            || (self.high_water_marks.journal_events == 0)
-                != (self.journal_source_head_count == 0)
+            || (self.high_water_marks.journal_events == 0) != (self.journal_source_head_count == 0)
         {
             return Err(ReputationFinalizedArchiveError::InvalidManifest {
                 reason: "anchor journal source-head commitment disagrees with its event high-water mark",
@@ -4270,14 +4267,11 @@ impl ReputationFinalizedArchive {
                 &state.authority_policy,
                 state.finalized_at_unix_ms,
             )?)?;
-        let (
-            journal_prefix_source_heads,
-            journal_source_head_count,
-            journal_source_head_root,
-        ) = journal_source_head_commitment(
-            &state.journal_prefix_source_heads,
-            &state.journal_events.retained_suffix,
-        )?;
+        let (journal_prefix_source_heads, journal_source_head_count, journal_source_head_root) =
+            journal_source_head_commitment(
+                &state.journal_prefix_source_heads,
+                &state.journal_events.retained_suffix,
+            )?;
         if journal_source_head_count != target.manifest.journal_source_head_count
             || journal_source_head_root != target.manifest.journal_source_head_root
         {
@@ -7749,11 +7743,10 @@ fn apply_anchor_delta_to_state(
         return Err(ReputationFinalizedArchiveError::ProviderStateRootMismatch);
     }
     state.validate()?;
-    let (_, journal_source_head_count, journal_source_head_root) =
-        journal_source_head_commitment(
-            &state.journal_prefix_source_heads,
-            &state.journal_events.retained_suffix,
-        )?;
+    let (_, journal_source_head_count, journal_source_head_root) = journal_source_head_commitment(
+        &state.journal_prefix_source_heads,
+        &state.journal_events.retained_suffix,
+    )?;
     if journal_source_head_count != manifest.journal_source_head_count
         || journal_source_head_root != manifest.journal_source_head_root
     {

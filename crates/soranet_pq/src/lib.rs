@@ -29,10 +29,10 @@ pub use crate::{
 #[cfg(feature = "pqc")]
 pub use crate::mldsa::{
     MlDsaError, MlDsaKeyPair, MlDsaSignature, MlDsaSuite, generate_mldsa_keypair,
-    generate_mldsa_keypair_from_os, generate_mldsa_keypair_from_rng,
-    generate_mldsa_keypair_from_seed, mldsa_public_key_from_secret_key, sign_mldsa,
-    sign_mldsa_from_os, sign_mldsa_from_rng, validate_mldsa_public_key, validate_mldsa_secret_key,
-    validate_mldsa_signature, verify_mldsa,
+    generate_mldsa_keypair_from_fips_seed, generate_mldsa_keypair_from_os,
+    generate_mldsa_keypair_from_rng, generate_mldsa_keypair_from_seed,
+    mldsa_public_key_from_secret_key, sign_mldsa, sign_mldsa_from_os, sign_mldsa_from_rng,
+    validate_mldsa_public_key, validate_mldsa_secret_key, validate_mldsa_signature, verify_mldsa,
 };
 #[cfg(feature = "pqc")]
 pub use crate::mlkem::{

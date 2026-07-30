@@ -284,14 +284,10 @@ pub struct DaIngestReceipt {
   Rust crate ექსპორტს ახორციელებს `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, Python
   `ToriiClient` ახლა მოიცავს `decode_pdp_commitment_header` და `IrohaSwift` გემებს
   `decodePdpCommitmentHeader` გადატვირთვები ნედლი სათაურის რუკებისთვის ან `HTTPURLResponse` შემთხვევები.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii ასევე ამჟღავნებს `GET /v1/da/manifests/{storage_ticket}`-ს, რათა SDK-ებმა და ოპერატორებმა შეძლონ მანიფესტების მიღება
-  და ბლოკის გეგმები კვანძის კოჭის დირექტორიაში შეხების გარეშე. პასუხი აბრუნებს Norito ბაიტს
-  (base64), გამოსახულია მანიფესტი JSON, `chunk_plan` JSON blob მზად `sorafs fetch`-ისთვის, შესაბამისი
-  თექვსმეტობითი დამუშავება (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) და ასახავს
-  `Sora-PDP-Commitment` სათაური პარიტეტისთვის მიღებული პასუხებიდან. მიწოდება `block_hash=<hex>`-ში
-  შეკითხვის სტრიქონი აბრუნებს დეტერმინისტულ `sampling_plan`-ს (დავალების ჰეში, `sample_window` და ნიმუშის აღება
-  `(index, role, group)` ტოპები, რომლებიც მოიცავს სრულ 2D განლაგებას) ასე რომ, ვალიდატორები და PoR ხელსაწყოები ერთნაირად ხატავენ
-  ინდექსები.
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### დიდი დატვირთვის ნაკადის ნაკადი
 

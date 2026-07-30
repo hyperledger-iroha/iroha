@@ -1,4 +1,9 @@
 //! Module with permission related functionality.
+//!
+//! Post-genesis delegation follows one capability rule: an authority may propagate an exact
+//! permission it already holds, exercise a native use-time ownership root for that same
+//! capability, or use an explicitly wider parent permission. Bootstrap-root permissions remain
+//! genesis-only, and ownership of an adjacent field in a compound scope grants no authority.
 
 use std::{borrow::ToOwned as _, collections::BTreeSet, vec::Vec};
 
@@ -97,14 +102,30 @@ macro_rules! declare_permissions {
 
         impl ValidateGrantRevoke for AnyPermission {
             fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+                self.validate_payload()?;
+                if !self.is_genesis_only() && self.is_owned_by(authority, host) {
+                    return Ok(());
+                }
                 match self { $(
                     AnyPermission::$token_ty(permission) => permission.validate_grant(authority, context, host), )*
                 }
             }
 
             fn validate_revoke(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+                self.validate_payload()?;
+                if !self.is_genesis_only() && self.is_owned_by(authority, host) {
+                    return Ok(());
+                }
                 match self { $(
                     AnyPermission::$token_ty(permission) => permission.validate_revoke(authority, context, host), )*
+                }
+            }
+        }
+
+        impl AnyPermission {
+            fn is_owned_by(&self, authority: &AccountId, host: &Iroha) -> bool {
+                match self { $(
+                    AnyPermission::$token_ty(permission) => permission.is_owned_by(authority, host), )*
                 }
             }
         }
@@ -209,6 +230,38 @@ declare_permissions! {
     iroha_executor_data_model::permission::nexus::{CanManageFeeSponsorProgram},
     iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorProgram},
     iroha_executor_data_model::permission::nexus::{CanWithdrawFeeSponsorProgram},
+}
+
+impl AnyPermission {
+    /// Return whether this permission is immutable after genesis.
+    ///
+    /// Exact possession never bypasses this list: these capabilities are bootstrap roots, not
+    /// recursively delegable tokens.
+    fn is_genesis_only(&self) -> bool {
+        matches!(
+            self,
+            Self::CanManagePeers(_)
+                | Self::CanManageLaneRelayEmergency(_)
+                | Self::CanRegisterDomain(_)
+                | Self::CanReadRestrictedDataspace(_)
+                | Self::CanManageOfflineEscrow(_)
+                | Self::CanActivateKagemushaRecursiveReleaseV4(_)
+                | Self::CanManageOfflineDeviceAttestationPolicy(_)
+                | Self::CanManageRoles(_)
+                | Self::CanUpgradeExecutor(_)
+                | Self::CanRegisterSmartContractCode(_)
+                | Self::CanManageFxCorridors(_)
+        )
+    }
+
+    fn validate_payload(&self) -> Result {
+        match self {
+            Self::CanInvokeContractEntrypoint(permission) => {
+                smart_contract::validate_contract_entrypoint_payload(permission)
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 mod query {
@@ -382,7 +435,9 @@ mod smart_contract {
         }
     }
 
-    fn validate_contract_entrypoint_payload(permission: &CanInvokeContractEntrypoint) -> Result {
+    pub(super) fn validate_contract_entrypoint_payload(
+        permission: &CanInvokeContractEntrypoint,
+    ) -> Result {
         let entrypoint = permission.entrypoint.as_str();
         if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
             return Err(ValidationFail::NotPermitted(
@@ -400,14 +455,13 @@ mod smart_contract {
     ) -> Result {
         validate_contract_entrypoint_payload(permission)?;
         if context.curr_block.is_genesis()
-            || permission.contract.subject_id() == *authority
             || CanRegisterSmartContractCode.is_owned_by(authority, host)
         {
             return Ok(());
         }
 
         Err(ValidationFail::NotPermitted(
-            "only genesis, the deployed contract subject, or a smart-contract registrar may delegate an exact contract entrypoint permission"
+            "only genesis, an exact holder, or a smart-contract registrar may delegate an exact contract entrypoint permission"
                 .to_owned(),
         ))
     }
@@ -666,19 +720,8 @@ mod nexus {
             return Ok(());
         }
 
-        let domain = host
-            .query_single(FindDomainById::new(permission.domain.clone()))
-            .map_err(|_| {
-                ValidationFail::NotPermitted(
-                    "Account-domain manifest permission references an unknown domain".to_owned(),
-                )
-            })?;
-        if domain.owned_by() == authority {
-            return Ok(());
-        }
-
         Err(ValidationFail::NotPermitted(
-            "Only the exact account-domain owner, an existing exact holder, or a dataspace-wide manifest authority may grant or revoke this permission"
+            "Only an existing exact holder or a dataspace-wide manifest authority may grant or revoke this permission"
                 .to_owned(),
         ))
     }
@@ -1185,7 +1228,10 @@ pub mod asset {
 
     impl ValidateGrantRevoke for CanMintAsset {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
+            super::asset_definition::Owner {
+                asset_definition: self.asset.definition(),
+            }
+            .validate(authority, host, context)
         }
         fn validate_revoke(
             &self,
@@ -1193,13 +1239,16 @@ pub mod asset {
             context: &Context,
             host: &Iroha,
         ) -> Result {
-            Owner::from(self).validate(authority, host, context)
+            super::asset_definition::Owner {
+                asset_definition: self.asset.definition(),
+            }
+            .validate(authority, host, context)
         }
     }
 
     impl ValidateGrantRevoke for CanBurnAsset {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
+            validate_asset_or_definition_owner(&self.asset, authority, context, host)
         }
         fn validate_revoke(
             &self,
@@ -1207,7 +1256,7 @@ pub mod asset {
             context: &Context,
             host: &Iroha,
         ) -> Result {
-            Owner::from(self).validate(authority, host, context)
+            validate_asset_or_definition_owner(&self.asset, authority, context, host)
         }
     }
 
@@ -1244,7 +1293,7 @@ pub mod asset {
 
     impl ValidateGrantRevoke for CanModifyAssetMetadata {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
+            validate_asset_or_definition_owner(&self.asset, authority, context, host)
         }
         fn validate_revoke(
             &self,
@@ -1252,8 +1301,23 @@ pub mod asset {
             context: &Context,
             host: &Iroha,
         ) -> Result {
-            Owner::from(self).validate(authority, host, context)
+            validate_asset_or_definition_owner(&self.asset, authority, context, host)
         }
+    }
+
+    fn validate_asset_or_definition_owner(
+        asset: &AssetId,
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        if is_asset_owner(asset, authority, host) {
+            return Ok(());
+        }
+        super::asset_definition::Owner {
+            asset_definition: asset.definition(),
+        }
+        .validate(authority, host, context)
     }
 }
 
@@ -2181,7 +2245,7 @@ mod tests {
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
         },
-        asset::CanMintAssetWithDefinition,
+        asset::{CanMintAsset, CanMintAssetWithDefinition},
         domain::CanRegisterDomain,
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -2191,6 +2255,7 @@ mod tests {
         peer::CanManagePeers,
         query::CanReadRestrictedDataspace,
         settlement::CanExecuteSettlement,
+        smart_contract::CanInvokeContractEntrypoint,
     };
 
     use super::{
@@ -2208,6 +2273,7 @@ mod tests {
                 nexus::{DataSpaceId, FeeSponsorProgramId, UniversalAccountId},
                 permission::Permission as PermissionObject,
                 prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, Json, RoleId},
+                smart_contract::ContractAddress,
             },
         },
     };
@@ -2543,7 +2609,7 @@ mod tests {
     }
 
     #[test]
-    fn alias_resolution_delegate_can_grant_and_revoke_only_the_exact_scope() {
+    fn alias_resolution_delegate_can_propagate_only_the_exact_scope() {
         let authority = make_account_id();
         let context = make_context(&authority, 2);
         let delegated_scope = AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10));
@@ -2555,13 +2621,16 @@ mod tests {
             scope: delegated_scope,
         };
         let other = CanResolveAccountAlias { scope: other_scope };
-        let previous =
-            test_override::replace_permissions(vec![PermissionObject::from(held.clone())]);
+        let held_object = PermissionObject::from(held.clone());
+        let held_dispatched =
+            AnyPermission::try_from(&held_object).expect("delegation token must be typed");
+        let previous = test_override::replace_permissions(vec![held_object]);
 
         let exact_grant = exact.validate_grant(&authority, &context, &Iroha);
         let exact_revoke = exact.validate_revoke(&authority, &context, &Iroha);
         let cross_scope_grant = other.validate_grant(&authority, &context, &Iroha);
-        let recursive_delegation = held.validate_grant(&authority, &context, &Iroha);
+        let recursive_grant = held_dispatched.validate_grant(&authority, &context, &Iroha);
+        let recursive_revoke = held_dispatched.validate_revoke(&authority, &context, &Iroha);
 
         test_override::replace_permissions(previous);
         assert!(exact_grant.is_ok());
@@ -2570,10 +2639,99 @@ mod tests {
             cross_scope_grant,
             Err(ValidationFail::NotPermitted(_))
         ));
-        assert!(matches!(
-            recursive_delegation,
-            Err(ValidationFail::NotPermitted(_))
-        ));
+        assert!(recursive_grant.is_ok());
+        assert!(recursive_revoke.is_ok());
+    }
+
+    #[test]
+    fn exact_holder_dispatch_covers_each_corrected_delegation_family() {
+        let authority = make_account_id();
+        let adjacent_owner = make_other_account_id();
+        let context = make_context(&authority, 2);
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("grant_policy", "universal").expect("asset domain"),
+            "root_asset".parse().expect("asset name"),
+        );
+        let contract = ContractAddress::derive(
+            crate::data_model::account::address::chain_discriminant(),
+            &adjacent_owner,
+            77,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let dataspace = DataSpaceId::new(7);
+        let permissions = vec![
+            PermissionObject::from(CanMintAsset {
+                // Possessing this exact token authorizes propagation even though the authority is
+                // neither the bucket account nor queried as the definition owner.
+                asset: AssetId::new(asset_definition, adjacent_owner),
+            }),
+            PermissionObject::from(CanInvokeContractEntrypoint {
+                contract,
+                entrypoint: "main".to_owned(),
+            }),
+            PermissionObject::from(CanDelegateAccountAliasResolution {
+                scope: AccountAliasPermissionScope::Dataspace(dataspace),
+            }),
+            PermissionObject::from(CanPublishSpaceDirectoryManifestForUaid {
+                dataspace,
+                uaid: UniversalAccountId::from_hash(Hash::new(b"grant-policy-uaid")),
+            }),
+            PermissionObject::from(CanPublishSpaceDirectoryManifestForAccountDomain {
+                dataspace,
+                domain: DomainId::try_new("retail", "universal").expect("account domain"),
+            }),
+            PermissionObject::from(CanEnrollFeeSponsorProgram {
+                program_id: make_fee_sponsor_program_id(authority.clone(), "retail"),
+            }),
+        ];
+
+        for raw in permissions {
+            let name = raw.name().to_owned();
+            let dispatched =
+                AnyPermission::try_from(&raw).expect("corrected permission must be typed");
+            let previous = test_override::replace_permissions(vec![raw]);
+
+            let grant = dispatched.validate_grant(&authority, &context, &Iroha);
+            let revoke = dispatched.validate_revoke(&authority, &context, &Iroha);
+
+            test_override::replace_permissions(previous);
+            assert!(
+                grant.is_ok(),
+                "exact holder could not grant {name}: {grant:?}"
+            );
+            assert!(
+                revoke.is_ok(),
+                "exact holder could not revoke {name}: {revoke:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn exact_contract_holder_cannot_propagate_noncanonical_selector() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let raw = PermissionObject::from(CanInvokeContractEntrypoint {
+            contract: ContractAddress::derive(
+                crate::data_model::account::address::chain_discriminant(),
+                &make_other_account_id(),
+                88,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address"),
+            entrypoint: " main".to_owned(),
+        });
+        let dispatched =
+            AnyPermission::try_from(&raw).expect("contract permission must be structurally typed");
+        let previous = test_override::replace_permissions(vec![raw]);
+
+        let grant = dispatched.validate_grant(&authority, &context, &Iroha);
+        let revoke = dispatched.validate_revoke(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        for result in [grant, revoke] {
+            assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
+        }
     }
 
     #[test]
@@ -2848,20 +3006,28 @@ mod tests {
     }
 
     #[test]
-    fn exact_fee_program_enrollment_holder_cannot_redelegate_it() {
+    fn exact_fee_program_enrollment_holder_can_propagate_exact_token() {
         let sponsor = make_account_id();
         let registrar = make_other_account_id();
         let context = make_context(&registrar, 2);
         let token = CanEnrollFeeSponsorProgram {
             program_id: make_fee_sponsor_program_id(sponsor, "retail"),
         };
-        let previous =
-            test_override::replace_permissions(vec![PermissionObject::from(token.clone())]);
+        let raw = PermissionObject::from(token);
+        let dispatched =
+            AnyPermission::try_from(&raw).expect("fee-program enrollment token must be typed");
+        let previous = test_override::replace_permissions(vec![raw]);
 
-        assert!(matches!(
-            token.validate_grant(&registrar, &context, &Iroha),
-            Err(ValidationFail::NotPermitted(_))
-        ));
+        assert!(
+            dispatched
+                .validate_grant(&registrar, &context, &Iroha)
+                .is_ok()
+        );
+        assert!(
+            dispatched
+                .validate_revoke(&registrar, &context, &Iroha)
+                .is_ok()
+        );
 
         test_override::replace_permissions(previous);
     }

@@ -1550,15 +1550,15 @@ pub mod extractors {
     #[derive(Clone, Copy, Debug)]
     pub struct NoritoVersioned<T>(pub T);
 
-    /// Extractor of raw Norito-versioned bytes from the request body.
+    /// Extractor of raw Norito bytes from the request body.
     ///
     /// Missing or unsupported `Content-Type` yields `415 Unsupported Media Type`.
     /// Callers that need exact payload bytes can decode the returned buffer with
-    /// the appropriate versioned decoder.
+    /// the schema-specific Norito decoder.
     #[derive(Clone, Debug)]
-    pub struct NoritoVersionedBytes(pub Bytes);
+    pub struct NoritoBytes(pub Bytes);
 
-    impl<S> FromRequest<S> for NoritoVersionedBytes
+    impl<S> FromRequest<S> for NoritoBytes
     where
         Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
@@ -1598,7 +1598,7 @@ pub mod extractors {
 
             Bytes::from_request(req, state)
                 .await
-                .map(NoritoVersionedBytes)
+                .map(NoritoBytes)
                 .map_err(typed_body_rejection)
         }
     }

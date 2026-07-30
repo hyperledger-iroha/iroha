@@ -10661,6 +10661,36 @@ where
     )
 }
 
+/// Inspect the element count of a top-level `Vec<T>` under an exact semantic cap.
+///
+/// This uses the same header, compression, layout-flag, and sequence-length
+/// decoder as [`stream_vec_collect_from_reader`]. It stops after the sequence
+/// plan, so it is suitable only for resource-admission preflight: callers must
+/// still perform a complete decode to validate element bytes, the payload
+/// checksum, and trailing data.
+///
+/// # Errors
+///
+/// Returns a header, schema, layout, length, decompression, or resource-limit
+/// error. A count above `max_elements` is rejected before packed-sequence
+/// offsets or output storage are allocated.
+pub fn inspect_stream_vec_len_bounded_from_reader<R, T>(
+    reader: R,
+    max_elements: usize,
+) -> Result<usize, Error>
+where
+    R: Read,
+    T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
+{
+    type Top<U> = Vec<U>;
+    core::stream::inspect_sequence_len_from_reader(
+        reader,
+        <Top<T> as NoritoDeserialize>::schema_hash(),
+        core::payload_alignment_padding_for::<Top<T>>(),
+        max_elements,
+    )
+}
+
 /// Collect a top-level `Vec<T>` by streaming, without buffering the entire payload.
 pub fn stream_vec_collect_from_reader<R, T>(reader: R) -> Result<Vec<T>, Error>
 where

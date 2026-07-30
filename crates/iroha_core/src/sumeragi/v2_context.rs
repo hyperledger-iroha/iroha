@@ -82,6 +82,89 @@ pub fn signed_genesis_voting_peers(
         .collect())
 }
 
+/// Verify that persisted height-one finality consumes the exact voting
+/// authority signed into canonical genesis.
+///
+/// A finality artifact can prove that its PoPs and CommitQC are internally
+/// valid, but that proof is self-referential until its ordered validators and
+/// aligned PoP bytes are compared with an external trust root. This check
+/// supplies that root from the signed `RegisterPeerWithPop` instructions.
+///
+/// # Errors
+///
+/// Returns [`V2GenesisBootstrapError`] when genesis does not define a valid
+/// voting authority, the height context is not a valid genesis context, or
+/// the persisted authority differs in any validator or PoP byte.
+pub fn validate_signed_genesis_v2_authority(
+    genesis: &GenesisBlock,
+    context: &wire::HeightContext,
+    validator_set_pops: &[Vec<u8>],
+) -> Result<(), V2GenesisBootstrapError> {
+    let signed = signed_genesis_validator_pops(genesis)?;
+    if signed.is_empty() {
+        return Err(V2GenesisBootstrapError::EmptyVotingRoster);
+    }
+    let exact_authority = signed.len() == context.roster.len()
+        && context.roster.len() == validator_set_pops.len()
+        && signed
+            .iter()
+            .zip(context.roster.iter().zip(validator_set_pops.iter()))
+            .all(
+                |((signed_validator, signed_pop), (persisted_validator, persisted_pop))| {
+                    signed_validator == &persisted_validator.validator
+                        && signed_pop == persisted_pop
+                        && (context.mode != wire::ConsensusMode::Permissioned
+                            || persisted_validator.power == 1)
+                },
+            );
+    if !exact_authority {
+        return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
+    }
+    // Establish the signed-genesis trust root before performing any
+    // self-contained validation over the persisted, attacker-controlled
+    // context. Besides preserving the precise authority-mismatch diagnostic,
+    // this keeps unauthorised validator sets out of the more expensive
+    // cryptographic validation path.
+    VerifiedHeightContext::genesis(context.clone(), validator_set_pops.to_vec())
+        .map_err(|error| V2GenesisBootstrapError::Adapter(error.to_string()))?;
+    Ok(())
+}
+
+/// Verify the complete persisted height-one election against deterministically
+/// executed signed genesis state.
+///
+/// The cheaper pre-replay check in [`validate_signed_genesis_v2_authority`]
+/// anchors validator identities and PoPs before an untrusted finality roster is
+/// used. This second check runs after genesis execution and additionally binds
+/// NPoS powers, quorum, epoch bounds, leader seed, next-epoch snapshot, and the
+/// staged Nexus/AMX projection to their signed state derivation.
+///
+/// # Errors
+///
+/// Returns [`V2GenesisBootstrapError`] when recomputing the canonical genesis
+/// context fails or any persisted context/PoP byte differs.
+pub(crate) fn validate_staged_genesis_v2_authority(
+    genesis: &GenesisBlock,
+    staged: &StateBlock<'_>,
+    context: &wire::HeightContext,
+    validator_set_pops: &[Vec<u8>],
+) -> Result<(), V2GenesisBootstrapError> {
+    let expected = freeze_staged_genesis_v2(
+        genesis,
+        staged,
+        context.mode,
+        wire::SumeragiV2GenesisContextParameters {
+            da_layout: context.da_layout,
+            nexus_amx_context_hash: *context.nexus_amx_context_hash.as_ref(),
+        },
+    )?;
+    let (verified, _) = expected.into_parts();
+    if verified.context() != context || verified.proofs_of_possession() != validator_set_pops {
+        return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
+    }
+    Ok(())
+}
+
 /// Freeze and cryptographically verify the height-one context from a validated
 /// but uncommitted genesis state block.
 ///
@@ -311,6 +394,9 @@ pub enum V2GenesisBootstrapError {
     /// Staged and signed PoPs or their canonical order differ.
     #[error("Sumeragi v2 staged proof of possession does not match signed genesis")]
     ProofOfPossessionMismatch,
+    /// Persisted height-one finality names another voting authority.
+    #[error("Sumeragi v2 height-one finality voting authority differs from signed genesis")]
+    FinalityVotingAuthorityMismatch,
     /// NPoS mode omitted its signed on-chain election parameters.
     #[error("Sumeragi v2 NPoS genesis is missing election parameters")]
     MissingNposParameters,
@@ -779,6 +865,83 @@ mod tests {
                 true,
             )),
             Err(V2GenesisBootstrapError::InvalidProofOfPossession)
+        ));
+    }
+
+    #[test]
+    fn persisted_genesis_finality_authority_is_rooted_in_signed_genesis() {
+        let voters = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic signed genesis voter")
+            })
+            .collect::<Vec<_>>();
+        let genesis = signed_roster_genesis(&voters, false, false);
+        let authority = |keys: &[KeyPair]| {
+            let mut ordered = keys.iter().collect::<Vec<_>>();
+            ordered.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let roster = ordered
+                .iter()
+                .map(|key| wire::ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            let validator_set_pops = ordered
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("valid finality PoP")
+                })
+                .collect::<Vec<_>>();
+            let context = wire::HeightContext {
+                chain_id: ChainId::from("signed-genesis-finality-authority-test"),
+                protocol_version: wire::PROTOCOL_VERSION,
+                height: 1,
+                epoch: 0,
+                epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
+                mode: wire::ConsensusMode::Permissioned,
+                parent_commit_qc: None,
+                snapshot_bootstrap: None,
+                quorum: wire::DualQuorum::from_roster(&roster).expect("canonical quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"signed genesis finality authority"),
+                da_layout: wire::DataAvailabilityLayout {
+                    encoding: wire::PayloadEncoding::Plain,
+                    chunk_size_bytes: 1024,
+                    data_shards: 0,
+                    parity_shards: 0,
+                    max_payload_size_bytes: 4096,
+                    max_chunk_count: 4,
+                },
+                leader_seed: [0xA7; 32],
+            };
+            (context, validator_set_pops)
+        };
+        let (signed_context, signed_pops) = authority(&voters);
+        validate_signed_genesis_v2_authority(&genesis, &signed_context, &signed_pops)
+            .expect("the exact signed authority must be accepted");
+
+        let mut forged_power_context = signed_context.clone();
+        forged_power_context.roster[0].power = 1_000;
+        forged_power_context.quorum =
+            wire::DualQuorum::from_roster(&forged_power_context.roster).expect("forged quorum");
+        assert!(matches!(
+            validate_signed_genesis_v2_authority(&genesis, &forged_power_context, &signed_pops,),
+            Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch)
+        ));
+
+        let attacker_keys = (81_u8..=84)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic attacker voter")
+            })
+            .collect::<Vec<_>>();
+        let (attacker_context, attacker_pops) = authority(&attacker_keys);
+        assert!(matches!(
+            validate_signed_genesis_v2_authority(&genesis, &attacker_context, &attacker_pops,),
+            Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch)
         ));
     }
 

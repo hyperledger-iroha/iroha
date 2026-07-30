@@ -284,14 +284,10 @@ I18NI0000000069X, I18NI000000070X, I18NI000000000071X, དང་ I18NI0000000007
   རསཊ་ཀྲེཊ་གིས་ `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, པའི་ཐོན་ཕྱིར་འདྲེན་འབདཝ་ཨིན།
   `ToriiClient` ད་ལྟ་`decode_pdp_commitment_header` དང་I18NI000000185X གྲུ་གཟིངས།
   `decodePdpCommitmentHeader` མགོ་ཡིག་ས་ཁྲ་ངོ་མ་ཚུ་གི་དོན་ལུ་ ཡང་ན་ `HTTPURLResponse` instances.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii གིས་ `GET /v1/da/manifests/{storage_ticket}` ཡང་གསལ་སྟོན་འབདཝ་ལས་ SDKs དང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསལ་སྟོན་ཚུ་འཐོབ་ཚུགས།
-  དང་ མཛུབ་གནོན་གྱི་ སྣོད་ཐོ་ལུ་ མ་ཐུག་པར་ འཆར་གཞི་བཟོ་ནི། ལན་འདི་ Norito བཱའིཊིསི་སླར་ལོག་འབདཝ་ཨིན།
-  (base64), redendered venuse, JSON, a `chunk_plan` JSON blob འདི་ I18NI000000190X གི་དོན་ལུ་གྲ་སྒྲིག་ཡོདཔ་ཨིན།
-  hex (I18NI000000191X, `client_blob_id`, `blob_hash`, `chunk_root`), དེ་ལས་
-  `Sora-PDP-Commitment` ཆ་སྙོམས་དོན་ལུ་ བཙུགས་མི་ལན་ཚུ་ལས་ མགོ་ཡིག་། ནང་ `block_hash=<hex>` བཀྲམ་སྤེལ་འབད་དོ།
-  འདྲི་དཔྱད་ཡིག་རྒྱུན་འདི་གིས་ གཏན་འབེབས་ `sampling_plan` (འགན་སྤྲོད་ཧེཤ་, I18NI000000198X, དང་ དཔེ་ཚད་བཟོ་ཡོདཔ་ཨིན།
-  `(index, role, group)` tuples གིས་ 2D བཀོད་སྒྲིག་ཆ་ཚང་ནང་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན་) དེ་འབདཝ་ལས་ བདེན་དཔྱད་དང་ པོ་ཨར་ ལག་ཆས་ཚུ་ གཅིག་མཚུངས་སྦེ་འབྲི།
-  ཟུར་ཐོ་ཚུ།
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### གླ་ཆ་སྦོམ་གྱི་རྒྱུན་འབབ་འཕྲོ་མཐུད།
 

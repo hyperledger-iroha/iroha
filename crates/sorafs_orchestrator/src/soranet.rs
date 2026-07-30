@@ -522,6 +522,13 @@ pub enum GuardDirectoryError {
         #[source]
         source: norito::Error,
     },
+    /// Exact snapshot digest or freshness authentication failed.
+    #[error("guard directory authentication failed: {source}")]
+    SnapshotAuthentication {
+        /// Underlying digest, validity, decode, or signature error.
+        #[source]
+        source: norito::Error,
+    },
     /// Snapshot version is not supported by the parser.
     #[error("guard directory version {version} is not supported")]
     UnsupportedVersion {
@@ -735,20 +742,49 @@ impl RelayDirectory {
         PathHintReport { applied, missing }
     }
 
-    /// Decode a guard directory snapshot encoded with Norito and populate relay descriptors.
+    /// Inspect a guard directory snapshot without establishing external trust or freshness.
+    ///
+    /// This is suitable for local diagnostics only. Runtime callers must use
+    /// [`Self::from_guard_directory_bytes_at`].
     ///
     /// # Errors
     ///
-    /// Returns an error if the payload cannot be decoded, if certificate verification fails,
-    /// or when issuer metadata is inconsistent.
-    pub fn from_guard_directory_bytes(bytes: &[u8]) -> Result<Self, GuardDirectoryError> {
-        let snapshot = GuardDirectorySnapshotV2::from_bytes(bytes)
+    /// Returns an error if the payload cannot be decoded, its embedded
+    /// signatures are inconsistent, or issuer metadata is invalid.
+    pub fn inspect_guard_directory_bytes(bytes: &[u8]) -> Result<Self, GuardDirectoryError> {
+        let snapshot = GuardDirectorySnapshotV2::inspect_bytes(bytes)
             .map_err(|source| GuardDirectoryError::Decode { source })?;
-        Self::from_guard_directory_snapshot(snapshot)
+        Self::from_guard_directory_snapshot(snapshot, None)
+    }
+
+    /// Authenticate an exact guard directory artifact at an explicit Unix second.
+    ///
+    /// The expected snapshot digest must be obtained independently of the
+    /// snapshot bytes. It commits to the embedded issuer records, unlike the
+    /// snapshot's `directory_hash`, which binds certificates to consensus
+    /// metadata but does not authenticate the snapshot file itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the digest or validity window differs, decoding
+    /// fails, certificate verification fails, or issuer metadata is invalid.
+    pub fn from_guard_directory_bytes_at(
+        bytes: &[u8],
+        expected_snapshot_digest: [u8; 32],
+        at_unix: i64,
+    ) -> Result<Self, GuardDirectoryError> {
+        let snapshot = GuardDirectorySnapshotV2::authenticate_bytes_at(
+            bytes,
+            expected_snapshot_digest,
+            at_unix,
+        )
+        .map_err(|source| GuardDirectoryError::SnapshotAuthentication { source })?;
+        Self::from_guard_directory_snapshot(snapshot, Some(at_unix))
     }
 
     fn from_guard_directory_snapshot(
         snapshot: GuardDirectorySnapshotV2,
+        at_unix: Option<i64>,
     ) -> Result<Self, GuardDirectoryError> {
         if snapshot.version != 2 {
             return Err(GuardDirectoryError::UnsupportedVersion {
@@ -826,13 +862,21 @@ impl RelayDirectory {
                 }
             })?;
 
-            bundle
-                .verify(
+            let verified = if let Some(at_unix) = at_unix {
+                bundle.verify_at(
+                    &issuer.ed25519_key,
+                    &issuer.issuer.mldsa65_public,
+                    validation_phase,
+                    at_unix,
+                )
+            } else {
+                bundle.verify_signatures(
                     &issuer.ed25519_key,
                     &issuer.issuer.mldsa65_public,
                     validation_phase,
                 )
-                .map_err(|source| GuardDirectoryError::CertificateDecode { source })?;
+            };
+            verified.map_err(|source| GuardDirectoryError::CertificateDecode { source })?;
 
             let mut endpoints = Vec::with_capacity(bundle.certificate.endpoints.len());
             for endpoint in &bundle.certificate.endpoints {
@@ -2521,7 +2565,7 @@ mod tests {
             CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
             RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
         },
-        directory::{GuardDirectoryRelayEntryV2, encode_validation_phase},
+        directory::{GuardDirectoryRelayEntryV2, compute_snapshot_digest, encode_validation_phase},
         handshake::HandshakeSuite,
     };
     use iroha_data_model::{
@@ -2677,7 +2721,7 @@ mod tests {
         let bytes = to_bytes(&snapshot).expect("encode snapshot");
 
         let directory =
-            RelayDirectory::from_guard_directory_bytes(&bytes).expect("decode guard directory");
+            RelayDirectory::inspect_guard_directory_bytes(&bytes).expect("decode guard directory");
         assert_eq!(directory.directory_hash(), Some(directory_hash));
         assert_eq!(
             directory.validation_phase(),
@@ -2703,14 +2747,44 @@ mod tests {
     }
 
     #[test]
+    fn guard_directory_runtime_load_requires_exact_digest_and_current_window() {
+        let directory_hash = [0xAB; 32];
+        let (snapshot, _) = build_directory_snapshot(
+            CertificateValidationPhase::Phase3RequireDual,
+            directory_hash,
+        );
+        let bytes = to_bytes(&snapshot).expect("encode snapshot");
+        let digest = compute_snapshot_digest(&bytes);
+
+        RelayDirectory::from_guard_directory_bytes_at(&bytes, digest, snapshot.valid_after_unix)
+            .expect("pinned active snapshot should load");
+
+        let digest_err = RelayDirectory::from_guard_directory_bytes_at(
+            &bytes,
+            [0xEE; 32],
+            snapshot.valid_after_unix,
+        )
+        .expect_err("untrusted snapshot digest must fail");
+        assert!(digest_err.to_string().contains("digest mismatch"));
+
+        let expired = RelayDirectory::from_guard_directory_bytes_at(
+            &bytes,
+            digest,
+            snapshot.valid_until_unix,
+        )
+        .expect_err("expired snapshot must fail");
+        assert!(expired.to_string().contains("expired"));
+    }
+
+    #[test]
     fn guard_directory_detects_hash_mismatch() {
         let (mut snapshot, _) =
             build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
         snapshot.directory_hash = [0xBB; 32];
         let bytes = to_bytes(&snapshot).expect("encode snapshot");
 
-        let err =
-            RelayDirectory::from_guard_directory_bytes(&bytes).expect_err("hash mismatch expected");
+        let err = RelayDirectory::inspect_guard_directory_bytes(&bytes)
+            .expect_err("hash mismatch expected");
         match err {
             GuardDirectoryError::CertificateDirectoryHashMismatch { .. } => {}
             GuardDirectoryError::Decode { source } => {
@@ -2731,7 +2805,7 @@ mod tests {
         snapshot.issuers[0].ed25519_public = [0u8; 32];
         snapshot.issuers[0].fingerprint = [0xEE; 32];
 
-        let err = RelayDirectory::from_guard_directory_snapshot(snapshot)
+        let err = RelayDirectory::from_guard_directory_snapshot(snapshot, None)
             .expect_err("all-zero issuer Ed25519 key should fail before certificate verification");
         match err {
             GuardDirectoryError::InvalidIssuerEd25519KeyMaterial { reason, .. } => {
@@ -2755,7 +2829,7 @@ mod tests {
             snapshot.issuers[0].ed25519_public = public_key;
             snapshot.issuers[0].fingerprint = [0xEE; 32];
 
-            let err = RelayDirectory::from_guard_directory_snapshot(snapshot).expect_err(
+            let err = RelayDirectory::from_guard_directory_snapshot(snapshot, None).expect_err(
                 "invalid issuer Ed25519 key should fail before certificate verification",
             );
             match err {

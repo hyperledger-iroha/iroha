@@ -1,60 +1,25 @@
-use core::{array, ffi::c_int};
-
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
 };
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::Zeroizing;
 
 use super::{
     ML_DSA_CONTEXT_MAX_LEN, MlDsaError, MlDsaKeyPair, MlDsaSuite, validate_mldsa_secret_key_len,
 };
 
+// SAFETY INVARIANT:
+// `pqclean_bindings` is generated from the exact pinned PQClean headers and is
+// the only module that declares their private C ABI. Every foreign call below
+// receives one of those generated `repr(C)` types, an array whose length is a
+// FIPS 204 constant, or a byte buffer sized by a generated header constant.
+// The safe public API validates encoded lengths before this module unpacks
+// caller-controlled key material.
+
 const SEEDBYTES: usize = 32;
 const CRHBYTES: usize = 64;
 const TRBYTES: usize = 64;
 const RNDBYTES: usize = 32;
-const N: usize = 256;
-
-#[repr(C)]
-#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
-struct Poly {
-    coeffs: [i32; N],
-}
-
-impl Default for Poly {
-    fn default() -> Self {
-        Self { coeffs: [0; N] }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-struct Polyvecl<const L: usize> {
-    vec: [Poly; L],
-}
-
-impl<const L: usize> Default for Polyvecl<L> {
-    fn default() -> Self {
-        Self {
-            vec: array::from_fn(|_| Poly::default()),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
-struct Polyveck<const K: usize> {
-    vec: [Poly; K],
-}
-
-impl<const K: usize> Default for Polyveck<K> {
-    fn default() -> Self {
-        Self {
-            vec: array::from_fn(|_| Poly::default()),
-        }
-    }
-}
 
 pub(super) fn generate_keypair(
     suite: MlDsaSuite,
@@ -116,17 +81,7 @@ macro_rules! mldsa_suite {
     (
         $module:ident,
         $suite:expr,
-        k = $k:expr,
-        l = $l:expr,
-        beta = $beta:expr,
-        gamma1 = $gamma1:expr,
-        gamma2 = $gamma2:expr,
-        omega = $omega:expr,
-        ctilde = $ctilde:expr,
-        polyw1 = $polyw1:expr,
-        pk_len = $pk_len:expr,
-        sk_len = $sk_len:expr,
-        sig_len = $sig_len:expr,
+        bindings = $bindings:ident,
         matrix_expand = $matrix_expand:ident,
         vecl_uniform_eta = $vecl_uniform_eta:ident,
         veck_uniform_eta = $veck_uniform_eta:ident,
@@ -158,6 +113,7 @@ macro_rules! mldsa_suite {
         unpack_sk = $unpack_sk:ident
     ) => {
         mod $module {
+            use super::super::pqclean_bindings::$bindings::*;
             use super::*;
 
             pub(super) fn generate_keypair(
@@ -165,8 +121,8 @@ macro_rules! mldsa_suite {
             ) -> Result<MlDsaKeyPair, MlDsaError> {
                 let mut seed_input = Zeroizing::new([0u8; SEEDBYTES + 2]);
                 seed_input[..SEEDBYTES].copy_from_slice(coins);
-                seed_input[SEEDBYTES] = $k as u8;
-                seed_input[SEEDBYTES + 1] = $l as u8;
+                seed_input[SEEDBYTES] = K_DOMAIN_BYTE;
+                seed_input[SEEDBYTES + 1] = L_DOMAIN_BYTE;
 
                 let mut expanded = Zeroizing::new([0u8; (2 * SEEDBYTES) + CRHBYTES]);
                 shake256_into(expanded.as_mut(), &[seed_input.as_ref()]);
@@ -174,17 +130,17 @@ macro_rules! mldsa_suite {
                 let rhoprime = &expanded[SEEDBYTES..SEEDBYTES + CRHBYTES];
                 let key = &expanded[SEEDBYTES + CRHBYTES..];
 
-                let mut mat = Zeroizing::new(vec![Polyvecl::<$l>::default(); $k]);
-                let mut s1 = Polyvecl::<$l>::default();
-                let mut s2 = Polyveck::<$k>::default();
+                let mut mat = Zeroizing::new(vec![Polyvecl::default(); K]);
+                let mut s1 = Polyvecl::default();
+                let mut s2 = Polyveck::default();
                 let mut s1hat;
-                let mut t1 = Polyveck::<$k>::default();
-                let mut t0 = Polyveck::<$k>::default();
+                let mut t1 = Polyveck::default();
+                let mut t0 = Polyveck::default();
 
                 unsafe {
                     $matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
                     $vecl_uniform_eta(&mut s1, rhoprime.as_ptr(), 0);
-                    $veck_uniform_eta(&mut s2, rhoprime.as_ptr(), $l as u16);
+                    $veck_uniform_eta(&mut s2, rhoprime.as_ptr(), L_NONCE);
                 }
 
                 s1hat = s1.clone();
@@ -206,7 +162,7 @@ macro_rules! mldsa_suite {
                     $veck_power2round(&mut t1, &mut t0, &t1_unrounded);
                 }
 
-                let mut public_key = vec![0u8; $pk_len];
+                let mut public_key = vec![0u8; PUBLIC_KEY_BYTES];
                 unsafe {
                     $pack_pk(public_key.as_mut_ptr(), rho.as_ptr(), &t1);
                 }
@@ -214,7 +170,7 @@ macro_rules! mldsa_suite {
                 let mut tr = Zeroizing::new([0u8; TRBYTES]);
                 shake256_into(tr.as_mut(), &[&public_key]);
 
-                let mut secret_key = Zeroizing::new(vec![0u8; $sk_len]);
+                let mut secret_key = Zeroizing::new(vec![0u8; SECRET_KEY_BYTES]);
                 unsafe {
                     $pack_sk(
                         secret_key.as_mut_ptr(),
@@ -239,9 +195,9 @@ macro_rules! mldsa_suite {
                 let mut rho = Zeroizing::new([0u8; SEEDBYTES]);
                 let mut tr = Zeroizing::new([0u8; TRBYTES]);
                 let mut key = Zeroizing::new([0u8; SEEDBYTES]);
-                let mut t0 = Polyveck::<$k>::default();
-                let mut s1 = Polyvecl::<$l>::default();
-                let mut s2 = Polyveck::<$k>::default();
+                let mut t0 = Polyveck::default();
+                let mut s1 = Polyvecl::default();
+                let mut s2 = Polyveck::default();
 
                 unsafe {
                     $unpack_sk(
@@ -273,7 +229,7 @@ macro_rules! mldsa_suite {
                     });
                 }
 
-                let mut canonical = Zeroizing::new(vec![0u8; $sk_len]);
+                let mut canonical = Zeroizing::new(vec![0u8; SECRET_KEY_BYTES]);
                 unsafe {
                     $pack_sk(
                         canonical.as_mut_ptr(),
@@ -297,13 +253,13 @@ macro_rules! mldsa_suite {
 
             fn public_and_t0_from_secret_parts(
                 rho: &[u8],
-                s1: &Polyvecl<$l>,
-                s2: &Polyveck<$k>,
-            ) -> (Vec<u8>, Polyveck<$k>) {
-                let mut mat = Zeroizing::new(vec![Polyvecl::<$l>::default(); $k]);
+                s1: &Polyvecl,
+                s2: &Polyveck,
+            ) -> (Vec<u8>, Polyveck) {
+                let mut mat = Zeroizing::new(vec![Polyvecl::default(); K]);
                 let mut s1hat = s1.clone();
-                let mut t1 = Polyveck::<$k>::default();
-                let mut t0 = Polyveck::<$k>::default();
+                let mut t1 = Polyveck::default();
+                let mut t0 = Polyveck::default();
 
                 unsafe {
                     $matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
@@ -324,7 +280,7 @@ macro_rules! mldsa_suite {
                     $veck_power2round(&mut t1, &mut t0, &t1_unrounded);
                 }
 
-                let mut public_key = vec![0u8; $pk_len];
+                let mut public_key = vec![0u8; PUBLIC_KEY_BYTES];
                 unsafe {
                     $pack_pk(public_key.as_mut_ptr(), rho.as_ptr(), &t1);
                 }
@@ -346,9 +302,9 @@ macro_rules! mldsa_suite {
                 let mut key = Zeroizing::new([0u8; SEEDBYTES]);
                 let mut mu = Zeroizing::new([0u8; CRHBYTES]);
                 let mut rhoprime = Zeroizing::new([0u8; CRHBYTES]);
-                let mut t0 = Polyveck::<$k>::default();
-                let mut s1 = Polyvecl::<$l>::default();
-                let mut s2 = Polyveck::<$k>::default();
+                let mut t0 = Polyveck::default();
+                let mut s1 = Polyvecl::default();
+                let mut s2 = Polyveck::default();
 
                 unsafe {
                     $unpack_sk(
@@ -371,7 +327,7 @@ macro_rules! mldsa_suite {
                 );
                 shake256_into(rhoprime.as_mut(), &[key.as_ref(), coins, mu.as_ref()]);
 
-                let mut mat = Zeroizing::new(vec![Polyvecl::<$l>::default(); $k]);
+                let mut mat = Zeroizing::new(vec![Polyvecl::default(); K]);
                 unsafe {
                     $matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
                     $vecl_ntt(&mut s1);
@@ -379,15 +335,15 @@ macro_rules! mldsa_suite {
                     $veck_ntt(&mut t0);
                 }
 
-                let mut sig = vec![0u8; $sig_len];
+                let mut sig = vec![0u8; SIGNATURE_BYTES];
                 let mut nonce = 0u16;
 
                 loop {
-                    let mut y = Polyvecl::<$l>::default();
+                    let mut y = Polyvecl::default();
                     let mut z;
-                    let mut w1 = Polyveck::<$k>::default();
-                    let mut w0 = Polyveck::<$k>::default();
-                    let mut h = Polyveck::<$k>::default();
+                    let mut w1 = Polyveck::default();
+                    let mut w0 = Polyveck::default();
+                    let mut h = Polyveck::default();
                     let mut cp = Poly::default();
 
                     unsafe {
@@ -409,14 +365,14 @@ macro_rules! mldsa_suite {
                         $veck_decompose(&mut w1, &mut w0, &w1_before_decompose);
                     }
 
-                    let mut w1_packed = Zeroizing::new(vec![0u8; $k * $polyw1]);
+                    let mut w1_packed = Zeroizing::new(vec![0u8; K * POLYW1_PACKEDBYTES]);
                     unsafe {
                         $veck_pack_w1(w1_packed.as_mut_ptr(), &w1);
                     }
 
-                    let mut c_tilde = Zeroizing::new([0u8; $ctilde]);
+                    let mut c_tilde = Zeroizing::new([0u8; CTILDEBYTES]);
                     shake256_into(c_tilde.as_mut(), &[mu.as_ref(), w1_packed.as_ref()]);
-                    sig[..$ctilde].copy_from_slice(c_tilde.as_ref());
+                    sig[..CTILDEBYTES].copy_from_slice(c_tilde.as_ref());
 
                     unsafe {
                         $poly_challenge(&mut cp, sig.as_ptr());
@@ -430,7 +386,7 @@ macro_rules! mldsa_suite {
                         $vecl_add(&mut z, &z_before_add, &y);
                         $vecl_reduce(&mut z);
                     }
-                    if (unsafe { $vecl_chknorm(&z, (($gamma1) - ($beta)) as i32) }) != 0 {
+                    if (unsafe { $vecl_chknorm(&z, GAMMA1 - BETA) }) != 0 {
                         continue;
                     }
 
@@ -443,7 +399,7 @@ macro_rules! mldsa_suite {
                         $veck_sub(&mut w0, &w0_before_sub, &h);
                         $veck_reduce(&mut w0);
                     }
-                    if (unsafe { $veck_chknorm(&w0, (($gamma2) - ($beta)) as i32) }) != 0 {
+                    if (unsafe { $veck_chknorm(&w0, GAMMA2 - BETA) }) != 0 {
                         continue;
                     }
 
@@ -452,7 +408,7 @@ macro_rules! mldsa_suite {
                         $veck_invntt(&mut h);
                         $veck_reduce(&mut h);
                     }
-                    if (unsafe { $veck_chknorm(&h, ($gamma2) as i32) }) != 0 {
+                    if (unsafe { $veck_chknorm(&h, GAMMA2) }) != 0 {
                         continue;
                     }
 
@@ -461,7 +417,7 @@ macro_rules! mldsa_suite {
                         $veck_add(&mut w0, &w0_before_add, &h);
                     }
                     let hints = unsafe { $veck_make_hint(&mut h, &w0, &w1) };
-                    if hints > $omega {
+                    if hints > OMEGA {
                         continue;
                     }
 
@@ -471,76 +427,6 @@ macro_rules! mldsa_suite {
                     return Ok(sig);
                 }
             }
-
-            #[allow(unsafe_code)]
-            unsafe extern "C" {
-                fn $matrix_expand(mat: *mut Polyvecl<$l>, rho: *const u8);
-                fn $vecl_uniform_eta(v: *mut Polyvecl<$l>, seed: *const u8, nonce: u16);
-                fn $veck_uniform_eta(v: *mut Polyveck<$k>, seed: *const u8, nonce: u16);
-                fn $vecl_uniform_gamma1(v: *mut Polyvecl<$l>, seed: *const u8, nonce: u16);
-                fn $vecl_ntt(v: *mut Polyvecl<$l>);
-                fn $vecl_invntt(v: *mut Polyvecl<$l>);
-                fn $vecl_pointwise(r: *mut Polyvecl<$l>, a: *const Poly, v: *const Polyvecl<$l>);
-                fn $vecl_add(w: *mut Polyvecl<$l>, u: *const Polyvecl<$l>, v: *const Polyvecl<$l>);
-                fn $vecl_reduce(v: *mut Polyvecl<$l>);
-                fn $vecl_chknorm(v: *const Polyvecl<$l>, bound: i32) -> c_int;
-                fn $veck_ntt(v: *mut Polyveck<$k>);
-                fn $veck_invntt(v: *mut Polyveck<$k>);
-                fn $veck_pointwise(r: *mut Polyveck<$k>, a: *const Poly, v: *const Polyveck<$k>);
-                fn $veck_reduce(v: *mut Polyveck<$k>);
-                fn $veck_chknorm(v: *const Polyveck<$k>, bound: i32) -> c_int;
-                fn $veck_caddq(v: *mut Polyveck<$k>);
-                fn $veck_add(w: *mut Polyveck<$k>, u: *const Polyveck<$k>, v: *const Polyveck<$k>);
-                fn $veck_sub(w: *mut Polyveck<$k>, u: *const Polyveck<$k>, v: *const Polyveck<$k>);
-                fn $veck_power2round(
-                    v1: *mut Polyveck<$k>,
-                    v0: *mut Polyveck<$k>,
-                    v: *const Polyveck<$k>,
-                );
-                fn $veck_decompose(
-                    v1: *mut Polyveck<$k>,
-                    v0: *mut Polyveck<$k>,
-                    v: *const Polyveck<$k>,
-                );
-                fn $veck_make_hint(
-                    h: *mut Polyveck<$k>,
-                    v0: *const Polyveck<$k>,
-                    v1: *const Polyveck<$k>,
-                ) -> u32;
-                fn $veck_pack_w1(out: *mut u8, w1: *const Polyveck<$k>);
-                fn $matrix_pointwise(
-                    t: *mut Polyveck<$k>,
-                    mat: *const Polyvecl<$l>,
-                    v: *const Polyvecl<$l>,
-                );
-                fn $poly_challenge(c: *mut Poly, seed: *const u8);
-                fn $poly_ntt(p: *mut Poly);
-                fn $pack_pk(pk: *mut u8, rho: *const u8, t1: *const Polyveck<$k>);
-                fn $pack_sk(
-                    sk: *mut u8,
-                    rho: *const u8,
-                    tr: *const u8,
-                    key: *const u8,
-                    t0: *const Polyveck<$k>,
-                    s1: *const Polyvecl<$l>,
-                    s2: *const Polyveck<$k>,
-                );
-                fn $pack_sig(
-                    sig: *mut u8,
-                    c: *const u8,
-                    z: *const Polyvecl<$l>,
-                    h: *const Polyveck<$k>,
-                );
-                fn $unpack_sk(
-                    rho: *mut u8,
-                    tr: *mut u8,
-                    key: *mut u8,
-                    t0: *mut Polyveck<$k>,
-                    s1: *mut Polyvecl<$l>,
-                    s2: *mut Polyveck<$k>,
-                    sk: *const u8,
-                );
-            }
         }
     };
 }
@@ -548,17 +434,7 @@ macro_rules! mldsa_suite {
 mldsa_suite!(
     mldsa44,
     MlDsaSuite::MlDsa44,
-    k = 4,
-    l = 4,
-    beta = 78,
-    gamma1 = 1 << 17,
-    gamma2 = (8_380_417 - 1) / 88,
-    omega = 80,
-    ctilde = 32,
-    polyw1 = 192,
-    pk_len = 1312,
-    sk_len = 2560,
-    sig_len = 2420,
+    bindings = mldsa44,
     matrix_expand = PQCLEAN_MLDSA44_CLEAN_polyvec_matrix_expand,
     vecl_uniform_eta = PQCLEAN_MLDSA44_CLEAN_polyvecl_uniform_eta,
     veck_uniform_eta = PQCLEAN_MLDSA44_CLEAN_polyveck_uniform_eta,
@@ -593,17 +469,7 @@ mldsa_suite!(
 mldsa_suite!(
     mldsa65,
     MlDsaSuite::MlDsa65,
-    k = 6,
-    l = 5,
-    beta = 196,
-    gamma1 = 1 << 19,
-    gamma2 = (8_380_417 - 1) / 32,
-    omega = 55,
-    ctilde = 48,
-    polyw1 = 128,
-    pk_len = 1952,
-    sk_len = 4032,
-    sig_len = 3309,
+    bindings = mldsa65,
     matrix_expand = PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_expand,
     vecl_uniform_eta = PQCLEAN_MLDSA65_CLEAN_polyvecl_uniform_eta,
     veck_uniform_eta = PQCLEAN_MLDSA65_CLEAN_polyveck_uniform_eta,
@@ -638,17 +504,7 @@ mldsa_suite!(
 mldsa_suite!(
     mldsa87,
     MlDsaSuite::MlDsa87,
-    k = 8,
-    l = 7,
-    beta = 120,
-    gamma1 = 1 << 19,
-    gamma2 = (8_380_417 - 1) / 32,
-    omega = 75,
-    ctilde = 64,
-    polyw1 = 128,
-    pk_len = 2592,
-    sk_len = 4896,
-    sig_len = 4627,
+    bindings = mldsa87,
     matrix_expand = PQCLEAN_MLDSA87_CLEAN_polyvec_matrix_expand,
     vecl_uniform_eta = PQCLEAN_MLDSA87_CLEAN_polyvecl_uniform_eta,
     veck_uniform_eta = PQCLEAN_MLDSA87_CLEAN_polyveck_uniform_eta,

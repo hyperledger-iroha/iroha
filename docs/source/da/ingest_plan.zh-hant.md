@@ -373,22 +373,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` 覆蓋 Rust，Python `ToriiClient`
   現在導出 `decode_pdp_commitment_header`，並且 `IrohaSwift` 提供匹配的助手，因此可以移動
   客戶端可以立即存儲編碼的採樣計劃。 【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii 還公開 `GET /v1/da/manifests/{storage_ticket}`，以便 SDK 和操作員可以獲取清單
-  和塊計劃而不觸及節點的假脫機目錄。響應返回 Norito 字節
-  (base64)，渲染清單 JSON，為 `sorafs fetch` 準備的 `chunk_plan` JSON blob，以及相關的
-  十六進制摘要（`storage_ticket`、`client_blob_id`、`blob_hash`、`chunk_root`），因此下游工具可以
-  向編排器提供數據而無需重新計算摘要，並發出相同的 `Sora-PDP-Commitment` 標頭
-  鏡像攝取響應。傳遞 `block_hash=<hex>` 作為查詢參數返回確定性
-  `sampling_plan` 植根於 `block_hash || client_blob_id`（在驗證器之間共享），其中包含
-  `assignment_hash`、請求的 `sample_window` 和採樣的 `(index, role, group)` 元組
-  整個 2D 條帶佈局，以便 PoR 採樣器和驗證器可以重放相同的索引。採樣器
-  將 `client_blob_id`、`chunk_root` 和 `ipa_commitment` 混合到賦值哈希中； `iroha 應用程序 da get
-  --block-hash ` now writes `sampling_plan_.json` 位於清單 + 塊計劃旁邊
-  保留的哈希值，並且 JS/Swift Torii 客戶端公開相同的 `assignment_hash_hex`，因此驗證器
-  和證明者共享一個確定性探針集。當 Torii 返回抽樣計劃時，`iroha app da
-  證明可用性` now reuses that deterministic probe set (seed derived from `sample_seed`)
-  即席抽樣，因此 PoR 見證人與驗證者分配保持一致，即使操作員忽略了
-  `--block-hash` 覆蓋。 【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### 大負載流需要攝取大於配置的單次請求限制的資產的客戶端發起
 通過調用 `POST /v1/da/ingest/chunk/start` 進行流會話。 Torii 響應

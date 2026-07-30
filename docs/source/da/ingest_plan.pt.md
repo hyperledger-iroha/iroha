@@ -374,22 +374,10 @@ Todos os TODOs de ingestão bloqueados anteriormente foram implementados e verif
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` cobre Rust, o Python `ToriiClient`
   agora exporta `decode_pdp_commitment_header` e `IrohaSwift` envia ajudantes correspondentes tão móveis
   os clientes podem armazenar a programação de amostragem codificada imediatamente.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii também expõe `GET /v1/da/manifests/{storage_ticket}` para que SDKs e operadores possam buscar manifestos
-  e pedaços de planos sem tocar no diretório de spool do nó. A resposta retorna os bytes Norito
-  (base64), manifesto JSON renderizado, um blob JSON `chunk_plan` pronto para `sorafs fetch`, além do relevante
-  resumos hexadecimais (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) para que as ferramentas posteriores possam
-  alimenta o orquestrador sem recomputar resumos e emite o mesmo cabeçalho `Sora-PDP-Commitment` para
-  espelhar respostas de ingestão. Passar `block_hash=<hex>` como parâmetro de consulta retorna um valor determinístico
-  `sampling_plan` enraizado em `block_hash || client_blob_id` (compartilhado entre validadores) contendo o
-  `assignment_hash`, o `sample_window` solicitado e as tuplas `(index, role, group)` amostradas abrangendo
-  todo o layout de faixa 2D para que amostradores e validadores PoR possam reproduzir os mesmos índices. O amostrador
-  mistura `client_blob_id`, `chunk_root` e `ipa_commitment` no hash de atribuição; `iroha app da get
-  --block-hash ` now writes `sampling_plan_.json` próximo ao manifesto + plano de bloco com
-  o hash preservado e os clientes JS/Swift Torii expõem o mesmo `assignment_hash_hex` para que os validadores
-  e os provadores compartilham um único conjunto de sondagens determinísticas. Quando Torii retorna um plano de amostragem, `iroha app da
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) em vez disso
-  de amostragem ad-hoc para que as testemunhas PoR se alinhem com as atribuições do validador, mesmo que o operador omita uma
-  `--block-hash` substituir.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Grande fluxo de streaming de carga útilOs clientes que precisam ingerir ativos maiores que o limite de solicitação única configurado iniciam um
 sessão de streaming ligando para `POST /v1/da/ingest/chunk/start`. Torii responde com um

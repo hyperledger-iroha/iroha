@@ -1072,6 +1072,8 @@ mod tests {
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
                 zk_ivm_prove_job_max_retained_bytes:
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+                transaction_ingress:
+                    iroha_config::parameters::actual::TransactionIngress::default(),
                 da_ingest: iroha_config::parameters::actual::DaIngest::default(),
                 connect: Connect {
                     enabled: false,

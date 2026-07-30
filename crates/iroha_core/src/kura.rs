@@ -55,7 +55,7 @@ use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, PublicKey};
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
-    AccountId,
+    AccountId, ChainId,
     block::{
         BlockHeader, SignedBlock,
         consensus::{
@@ -63,8 +63,10 @@ use iroha_data_model::{
             LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
         consensus_v2::{
-            BlockSubject, ExecutionCommitment, HeightContextId, NativeAmxApplicationManifestLeafV1,
-            QuorumCertificateRef, SnapshotV2BootstrapRecord,
+            BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
+            HeightContext, HeightContextId, NativeAmxApplicationManifestLeafV1, QuorumCertificate,
+            QuorumCertificateRef, SnapshotBootstrapAnchor, SnapshotV2BootstrapRecord,
+            ValidatorPower,
             finality::{
                 V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
             },
@@ -212,12 +214,117 @@ struct VerifiedRetainedBlockCacheEntry {
     metadata: StableSidecarMetadata,
 }
 
+const V2_STARTUP_INHERITED_AUTHORITY_DOMAIN: &[u8] =
+    b"iroha:kura:v2-startup-inherited-authority:v1\0";
+
+/// Exact predecessor-controlled inputs of one Sumeragi-v2 height context.
+///
+/// `next_epoch_snapshot` is projected into the successor's current election
+/// fields rather than copied as an optional child field. This makes an NPoS
+/// transition consume exactly the powered roster, quorum, PoPs, epoch bounds,
+/// and leader seed authenticated by the preceding roster.
+#[derive(Encode)]
+struct V2StartupInheritedAuthoritySeal {
+    version: u16,
+    chain_id: ChainId,
+    protocol_version: u16,
+    height: u64,
+    epoch: u64,
+    epoch_end_height: u64,
+    mode: ConsensusMode,
+    parent_commit_qc: Option<QuorumCertificate>,
+    snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
+    roster: Vec<ValidatorPower>,
+    validator_set_pops: Vec<Vec<u8>>,
+    quorum: DualQuorum,
+    da_layout: DataAvailabilityLayout,
+    leader_seed: [u8; 32],
+}
+
+impl V2StartupInheritedAuthoritySeal {
+    const VERSION: u16 = 1;
+
+    fn from_context(context: &HeightContext, validator_set_pops: &[Vec<u8>]) -> Self {
+        Self {
+            version: Self::VERSION,
+            chain_id: context.chain_id.clone(),
+            protocol_version: context.protocol_version,
+            height: context.height,
+            epoch: context.epoch,
+            epoch_end_height: context.epoch_end_height,
+            mode: context.mode,
+            parent_commit_qc: context.parent_commit_qc.clone(),
+            snapshot_bootstrap: context.snapshot_bootstrap,
+            roster: context.roster.clone(),
+            validator_set_pops: validator_set_pops.to_vec(),
+            quorum: context.quorum,
+            da_layout: context.da_layout,
+            leader_seed: context.leader_seed,
+        }
+    }
+
+    fn expected_successor(artifact: &V2FinalityArtifact) -> Option<Self> {
+        let height = artifact.height.checked_add(1)?;
+        let (epoch, epoch_end_height, mode, roster, validator_set_pops, quorum, leader_seed) =
+            artifact
+                .height_context
+                .next_epoch_snapshot
+                .as_ref()
+                .map_or_else(
+                    || {
+                        (
+                            artifact.height_context.epoch,
+                            artifact.height_context.epoch_end_height,
+                            artifact.height_context.mode,
+                            artifact.height_context.roster.clone(),
+                            artifact.validator_set_pops.clone(),
+                            artifact.height_context.quorum,
+                            artifact.height_context.leader_seed,
+                        )
+                    },
+                    |snapshot| {
+                        (
+                            snapshot.epoch,
+                            snapshot.epoch_end_height,
+                            snapshot.mode,
+                            snapshot.roster.clone(),
+                            snapshot.validator_set_pops.clone(),
+                            snapshot.quorum,
+                            snapshot.leader_seed,
+                        )
+                    },
+                );
+        Some(Self {
+            version: Self::VERSION,
+            chain_id: artifact.height_context.chain_id.clone(),
+            protocol_version: artifact.height_context.protocol_version,
+            height,
+            epoch,
+            epoch_end_height,
+            mode,
+            parent_commit_qc: Some(artifact.commit_qc.clone()),
+            snapshot_bootstrap: None,
+            roster,
+            validator_set_pops,
+            quorum,
+            da_layout: artifact.height_context.da_layout,
+            leader_seed,
+        })
+    }
+
+    fn hash(&self) -> Hash {
+        let encoded = self.encode();
+        Hash::new_from_chunks(&[V2_STARTUP_INHERITED_AUTHORITY_DOMAIN, &encoded])
+    }
+}
+
 /// Small immutable projection of one fully verified finality artifact.
 ///
 /// Retaining complete historical artifacts would allow a maximum-size roster
-/// to consume several MiB per height. Startup replay only needs these fixed
-/// commitments; the sole durable-tip artifact is retained separately for lane
-/// completion validation.
+/// to consume several MiB per height. Startup replay retains fixed commitments
+/// to both the artifact's consumed authority and its exact predecessor-derived
+/// successor authority; the sole durable-tip artifact is retained separately
+/// for lane completion validation.
 #[derive(Debug, Clone)]
 pub(crate) struct V2StartupFinalityProjection {
     height: u64,
@@ -228,6 +335,8 @@ pub(crate) struct V2StartupFinalityProjection {
     commit_qc_hash: Hash,
     commit_authority_hash: Hash,
     parent_commit_qc_hash: Option<Hash>,
+    inherited_authority_hash: Hash,
+    successor_authority_hash: Option<Hash>,
     snapshot_bootstrap: Option<(u64, HashOf<BlockHeader>)>,
 }
 
@@ -247,6 +356,13 @@ impl V2StartupFinalityProjection {
                 .parent_commit_qc
                 .as_ref()
                 .map(|qc| Hash::new(qc.encode())),
+            inherited_authority_hash: V2StartupInheritedAuthoritySeal::from_context(
+                &artifact.height_context,
+                &artifact.validator_set_pops,
+            )
+            .hash(),
+            successor_authority_hash: V2StartupInheritedAuthoritySeal::expected_successor(artifact)
+                .map(|authority| authority.hash()),
             snapshot_bootstrap: artifact
                 .height_context
                 .snapshot_bootstrap
@@ -270,6 +386,14 @@ impl V2StartupFinalityProjection {
 
     pub(crate) const fn parent_commit_qc_hash(&self) -> Option<Hash> {
         self.parent_commit_qc_hash
+    }
+
+    pub(crate) const fn inherited_authority_hash(&self) -> Hash {
+        self.inherited_authority_hash
+    }
+
+    pub(crate) const fn successor_authority_hash(&self) -> Option<Hash> {
+        self.successor_authority_hash
     }
 
     pub(crate) const fn snapshot_bootstrap(&self) -> Option<(u64, HashOf<BlockHeader>)> {
@@ -1065,6 +1189,10 @@ const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
 const LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE: &str = "execution_inputs.index";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.norito";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE: &str = "execution_preflights.index";
+/// Lane evidence that authorizes a later durable publication must cross the
+/// complete data/index/directory barrier independently of ordinary batched
+/// sidecar persistence.
+const REQUIRED_LANE_SIDECAR_FSYNC_MODE: FsyncMode = FsyncMode::Always;
 const LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE: &str = "application_receipts.norito";
 const LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE: &str = "application_receipts.index";
 const LANE_MERGE_APPLICATION_FRONTIER_FILE: &str = "merge_application_frontier_v1.norito";
@@ -29177,6 +29305,18 @@ impl Kura {
             false,
         ) {
             if existing == *artifact {
+                if !Self::sync_indexed_sidecar_barriers(
+                    &data_path,
+                    &index_path,
+                    "lane block artifact",
+                ) {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "failed to make existing lane block artifact durable",
+                        ),
+                        data_path,
+                    ));
+                }
                 return Ok(None);
             }
             if self.lane_block_artifact_is_active_canonical_locked(
@@ -29208,7 +29348,7 @@ impl Kura {
             lane_block_height,
             &payload,
             "lane block artifact",
-            self.sidecar_fsync_mode(),
+            REQUIRED_LANE_SIDECAR_FSYNC_MODE,
             None,
             SidecarIndexOrigin::FirstWrite,
         );
@@ -29348,10 +29488,8 @@ impl Kura {
                 .map_err(|err| Error::IO(err, checkpoint.data_path.clone()))?;
             data.set_len(checkpoint.data_len)
                 .map_err(|err| Error::IO(err, checkpoint.data_path.clone()))?;
-            if matches!(self.sidecar_fsync_mode(), FsyncMode::Always) {
-                data.sync_data()
-                    .map_err(|err| Error::IO(err, checkpoint.data_path.clone()))?;
-            }
+            data.sync_data()
+                .map_err(|err| Error::IO(err, checkpoint.data_path.clone()))?;
         } else if let Err(err) = std::fs::remove_file(&checkpoint.data_path)
             && err.kind() != ErrorKind::NotFound
         {
@@ -29388,11 +29526,9 @@ impl Kura {
                     index
                         .set_len(0)
                         .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
-                    if matches!(self.sidecar_fsync_mode(), FsyncMode::Always) {
-                        index
-                            .sync_data()
-                            .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
-                    }
+                    index
+                        .sync_data()
+                        .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
                 } else {
                     let source_pos =
                         current.entry_position(before.base_height).ok_or_else(|| {
@@ -29442,9 +29578,7 @@ impl Kura {
                             ));
                         }
                         temp.flush()?;
-                        if matches!(self.sidecar_fsync_mode(), FsyncMode::Always) {
-                            temp.sync_data()?;
-                        }
+                        temp.sync_data()?;
                         Ok(())
                     })();
                     if let Err(err) = rebuild_result {
@@ -29484,11 +29618,9 @@ impl Kura {
                         .and_then(|_| index.write_all(&bytes))
                         .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
                 }
-                if matches!(self.sidecar_fsync_mode(), FsyncMode::Always) {
-                    index
-                        .sync_data()
-                        .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
-                }
+                index
+                    .sync_data()
+                    .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
             }
         } else if let Err(err) = std::fs::remove_file(&checkpoint.index_path)
             && err.kind() != ErrorKind::NotFound
@@ -29496,9 +29628,7 @@ impl Kura {
             return Err(Error::IO(err, checkpoint.index_path.clone()));
         }
 
-        if matches!(self.sidecar_fsync_mode(), FsyncMode::Always)
-            && let Some(parent) = checkpoint.data_path.parent()
-        {
+        if let Some(parent) = checkpoint.data_path.parent() {
             sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
         }
 
@@ -34771,6 +34901,18 @@ impl Kura {
             "lane block execution input",
         ) {
             if existing == *artifact {
+                if !Self::sync_indexed_sidecar_barriers(
+                    &data_path,
+                    &index_path,
+                    "lane block execution input",
+                ) {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "failed to make existing lane block execution input durable",
+                        ),
+                        data_path,
+                    ));
+                }
                 return Ok(());
             }
             if self
@@ -34820,7 +34962,7 @@ impl Kura {
             lane_block_height,
             &payload,
             "lane block execution input",
-            self.sidecar_fsync_mode(),
+            REQUIRED_LANE_SIDECAR_FSYNC_MODE,
             None,
             SidecarIndexOrigin::FirstWrite,
         );
@@ -35151,6 +35293,18 @@ impl Kura {
             "lane block execution preflight",
         ) {
             if existing == *artifact {
+                if !Self::sync_indexed_sidecar_barriers(
+                    &data_path,
+                    &index_path,
+                    "lane block execution preflight",
+                ) {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "failed to make existing lane block execution preflight durable",
+                        ),
+                        data_path,
+                    ));
+                }
                 return Ok(());
             }
             if self
@@ -35205,7 +35359,7 @@ impl Kura {
             lane_block_height,
             &payload,
             "lane block execution preflight",
-            self.sidecar_fsync_mode(),
+            REQUIRED_LANE_SIDECAR_FSYNC_MODE,
             None,
             SidecarIndexOrigin::FirstWrite,
         );
@@ -47109,6 +47263,12 @@ impl BlockStore {
         }
 
         if logical_count > durable_count {
+            warn!(
+                logical_count,
+                durable_count,
+                discarded_count = logical_count - durable_count,
+                "block store contains an uncommitted suffix; pruning to the durable commit marker"
+            );
             self.commit_marker_count = durable_count;
             self.commit_marker_pending = None;
             self.prune(durable_count)?;
@@ -68981,6 +69141,136 @@ mod tests {
             LaneBlockPayloadAvailability::MissingLaneArtifact,
             "payload recovery must inspect only the descriptor's exact global proposal height"
         );
+    }
+
+    #[test]
+    fn canonical_lane_ownership_crosses_strict_barriers_before_batched_block_commit() {
+        for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            assert_eq!(
+                config.fsync_mode,
+                FsyncMode::Batched,
+                "fixture must exercise the shipped batched fsync mode"
+            );
+            let lane_config = two_lane_runtime_config();
+            let lane_id = LaneId::from(1);
+            let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+            let lane_block_height = 1;
+            let block = dummy_block_with_lane_payload_ownership(
+                lane_id,
+                lane_entry.dataspace_id,
+                lane_block_height,
+            );
+            let block_hash = block.hash();
+            let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+
+            inject_failure();
+            assert!(
+                kura.store_block(Arc::clone(&block)).is_err(),
+                "injected {label} lane-ownership barrier failure unexpectedly stored block"
+            );
+            assert_eq!(
+                kura.blocks_count(),
+                0,
+                "a canonical block must not publish after its {label} ownership barrier fails"
+            );
+            assert_eq!(
+                kura.get_durable_block_hash(nonzero!(1_usize)),
+                None,
+                "the durable block journal must not outrun lane ownership"
+            );
+            assert_eq!(
+                kura.read_lane_block_artifact(lane_id, lane_block_height),
+                None,
+                "failed pre-commit ownership staging must roll back durably"
+            );
+
+            kura.store_block(block)
+                .unwrap_or_else(|error| panic!("retry after {label} barrier failure: {error:?}"));
+            assert_eq!(
+                kura.get_durable_block_hash(nonzero!(1_usize)),
+                Some(block_hash)
+            );
+            assert!(
+                kura.read_lane_block_artifact(lane_id, lane_block_height)
+                    .is_some(),
+                "successful canonical publication must retain its strict ownership sidecar"
+            );
+        }
+    }
+
+    #[test]
+    fn lane_execution_evidence_overrides_batched_fsync_and_reissues_failed_barriers() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        assert_eq!(
+            config.fsync_mode,
+            FsyncMode::Batched,
+            "fixture must exercise the shipped batched fsync mode"
+        );
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.store_block(block)
+            .expect("store canonical lane payload source");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover exact execution input");
+
+        for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
+            inject_failure();
+            assert!(
+                kura.persist_lane_block_execution_input(&recovered).is_err(),
+                "injected {label} execution-input barrier failure must be reported"
+            );
+        }
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("execution-input retry must reissue every strict barrier");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("strict execution input");
+
+        let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"strict lane execution preflight state",
+        )));
+        let results = vec![TransactionResult::new(TransactionResultInner::Ok(
+            DataTriggerSequence::new(),
+        ))];
+        for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
+            inject_failure();
+            assert!(
+                kura.persist_lane_block_execution_preflight(
+                    &input,
+                    7,
+                    state_hash.clone(),
+                    results.clone(),
+                )
+                .is_err(),
+                "injected {label} execution-preflight barrier failure must be reported"
+            );
+        }
+        kura.persist_lane_block_execution_preflight(&input, 7, state_hash, results.clone())
+            .expect("execution-preflight retry must reissue every strict barrier");
+        let preflight = kura
+            .read_lane_block_execution_preflight(lane_id, lane_block_height)
+            .expect("strict execution preflight");
+        assert_eq!(preflight.results, results);
     }
 
     #[test]

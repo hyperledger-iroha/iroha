@@ -373,22 +373,10 @@ hashing, chunking ואימות מניפסטים אופציונליים.
   כיסוי `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` Rust, ה-Python `ToriiClient`
   מייצאת כעת `decode_pdp_commitment_header`, ו-`IrohaSwift` שולחת עוזרים תואמים כל כך ניידים
   לקוחות יכולים לאחסן את לוח הזמנים של הדגימה המקודד באופן מיידי.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii חושף גם את `GET /v1/da/manifests/{storage_ticket}` כך ש-SDK ואופרטורים יכולים להביא מניפסטים
-  ותוכניות נתחים מבלי לגעת בספריית הסליל של הצומת. התגובה מחזירה את ה-Norito בתים
-  (base64), מניפסט JSON שעבר עיבוד, כתם `chunk_plan` JSON מוכן ל-`sorafs fetch`, בתוספת הרלוונטי
-  hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) כך שהכלים במורד הזרם יכולים
-  להאכיל את המתזמר מבלי לחשב מחדש תקצירים, ופולט את אותה כותרת `Sora-PDP-Commitment` ל
-  תגובות בליעת מראה. העברת `block_hash=<hex>` כפרמטר שאילתה מחזירה דטרמיניסטית
-  `sampling_plan` מושרש ב-`block_hash || client_blob_id` (משותף בין מאמתים) המכיל את
-  `assignment_hash`, ה-`sample_window` המבוקש, ו-`(index, role, group)` דוגמת tuples משתרעות
-  את כל פריסת הפסים הדו-ממדיים כך שדגמי PoR ומאמתים יכולים להפעיל מחדש את אותם מדדים. הסמפלר
-  מערבבת `client_blob_id`, `chunk_root` ו-`ipa_commitment` לתוך ה-hash של ההקצאה; `iroha app da get
-  --block-hash ` now writes `sampling_plan_.json` לצד המניפסט + תוכנית נתח עם
-  ה-hash נשמר, ולקוחות JS/Swift Torii חושפים את אותו `assignment_hash_hex` כך שמאמתים
-  ומוכיחים חולקים מערך בדיקה דטרמיניסטי יחיד. כאשר Torii מחזירה תוכנית דגימה, `iroha app da
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) במקום זאת
-  של דגימה אד-הוק כך שעדי PoR יעמדו בתור עם הקצאות אימות גם אם המפעיל משמיט
-  `--block-hash` לעקוף.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### זרימת מטען גדוללקוחות שצריכים להטמיע נכסים גדולים מהמגבלה שהוגדרה לבקשה יחידה יוזמים א
 הפעלת סטרימינג על ידי התקשרות ל-`POST /v1/da/ingest/chunk/start`. Torii מגיב עם א

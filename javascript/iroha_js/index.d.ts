@@ -8481,11 +8481,6 @@ export interface DaManifestFetchResponse {
   manifest_bytes: Buffer;
   manifest_json: unknown;
   chunk_plan: SorafsChunkFetchPlanV1;
-  sampling_plan: {
-    assignment_hash_hex: string;
-    sample_window: number;
-    samples: ReadonlyArray<{ index: number; role: string; group: number }>;
-  } | null;
 }
 
 export interface DaProofSummaryOptions {
@@ -8645,7 +8640,6 @@ export interface DaManifestPersistedPaths {
   manifestPath: string;
   manifestJsonPath: string;
   chunkPlanPath: string;
-  samplingPlanPath?: string | null;
   label: string;
 }
 
@@ -11159,7 +11153,7 @@ export declare class ToriiClient {
   ): Promise<SorafsManifestResponse>;
   getDaManifest(
     storageTicketHex: string,
-    options?: { signal?: AbortSignal; blockHashHex?: string },
+    options?: { signal?: AbortSignal },
   ): Promise<DaManifestFetchResponse>;
   getDaManifestToDir(
     storageTicketHex: string,
@@ -11167,7 +11161,6 @@ export declare class ToriiClient {
       outputDir?: string;
       signal?: AbortSignal;
       label?: string;
-      blockHashHex?: string;
     },
   ): Promise<{
     manifest: DaManifestFetchResponse;

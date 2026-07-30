@@ -1975,6 +1975,9 @@ struct AppState {
     chain_id: Arc<ChainId>,
     #[cfg(feature = "app_api")]
     transaction_max_content_len: usize,
+    transaction_ingress_compute_inflight: Arc<tokio::sync::Semaphore>,
+    transaction_batch_max_transactions: usize,
+    transaction_batch_max_bytes: usize,
     state: Arc<CoreState>,
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
@@ -2060,6 +2063,7 @@ struct AppState {
     #[cfg(feature = "app_api")]
     recipient_lookup_rate_limiter: limits::RateLimiter,
     da_ingest: iroha_config::parameters::actual::DaIngest,
+    da_ingest_compute_inflight: Arc<tokio::sync::Semaphore>,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
@@ -6289,10 +6293,8 @@ async fn catch_handler_panics(
     let error_format =
         utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT))
             .unwrap_or(ResponseFormat::Json);
-    match std::panic::AssertUnwindSafe(next.run(req))
-        .catch_unwind()
-        .await
-    {
+    let handler = iroha_core::panic_hook::with_hook_suppressed_async(next.run(req));
+    match std::panic::AssertUnwindSafe(handler).catch_unwind().await {
         Ok(response) => Ok(response),
         Err(payload) => {
             let message = payload
@@ -7721,6 +7723,10 @@ mod response_negotiation_middleware_tests {
             .route(
                 "/panic",
                 get(|| async {
+                    assert!(
+                        iroha_core::panic_hook::is_suppressed(),
+                        "caught request panics must not trigger process shutdown"
+                    );
                     panic!("adversarial test panic");
                     #[allow(unreachable_code)]
                     StatusCode::OK
@@ -7765,6 +7771,10 @@ mod response_negotiation_middleware_tests {
             };
             assert_eq!(envelope.code(), "internal_server_error");
             assert!(!envelope.message().contains("adversarial test panic"));
+            assert!(
+                !iroha_core::panic_hook::is_suppressed(),
+                "request-local suppression must not leak after recovery"
+            );
         }
     }
 }
@@ -43106,8 +43116,7 @@ async fn handler_post_sorafs_por_vrf(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoVersionedBytes(body):
-        crate::utils::extractors::NoritoVersionedBytes,
+    crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
 ) -> AxResponse {
     let submission = match sorafs_manifest::por::decode_provider_vrf_submission_v1(&body) {
         Ok(submission) => submission,
@@ -45052,6 +45061,44 @@ async fn handler_post_transaction(
     submit_signed_transaction_for_ingress(app, headers, accept, transaction).await
 }
 
+fn try_acquire_transaction_ingress_compute(
+    limiter: &Arc<tokio::sync::Semaphore>,
+) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
+    limiter
+        .clone()
+        .try_acquire_owned()
+        .map_err(|error| Error::AppServiceUnavailable {
+            code: "transaction_ingress_compute_saturated",
+            message: format!(
+                "transaction-ingress compute capacity is unavailable; retry later: {error}"
+            ),
+        })
+}
+
+async fn run_transaction_ingress_compute_job<T, F>(
+    permit: tokio::sync::OwnedSemaphorePermit,
+    worker_failure_code: &'static str,
+    work: F,
+) -> Result<(T, tokio::sync::OwnedSemaphorePermit), Error>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, Error> + Send + 'static,
+{
+    let (result, permit) = tokio::task::spawn_blocking(move || {
+        let result = work();
+        // The physical worker owns capacity. Dropping or timing out the HTTP
+        // future detaches `spawn_blocking`, but cannot admit replacement work
+        // until this closure has actually stopped.
+        (result, permit)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: worker_failure_code,
+        message: error.to_string(),
+    })?;
+    Ok((result?, permit))
+}
+
 /// Admit one already-decoded caller-signed transaction through the canonical
 /// Torii transaction path.
 ///
@@ -45101,6 +45148,7 @@ async fn submit_signed_transaction_for_ingress_globally_synced(
             )));
         }
     }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -45115,50 +45163,54 @@ async fn submit_signed_transaction_for_ingress_globally_synced(
             )));
         }
     }
-    let submitted_signed_transaction_hash = transaction.hash();
-    let transaction_bytes =
-        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
-            &transaction,
-        );
-    let transaction = DecodedVersionedSignedTransaction::decode_versioned(&transaction_bytes)
-        .map_err(|error| Error::AppQueryValidation {
-            code: "invalid_transaction_payload",
-            message: format!("transaction payload could not be decoded: {error}"),
-        })?;
-    if transaction.hash() != submitted_signed_transaction_hash {
-        return Err(Error::AppServiceUnavailable {
-            code: "transaction_identity_changed",
-            message: "canonical transaction decoding changed the signed transaction hash"
-                .to_owned(),
-        });
-    }
-    let accepted_tx = {
-        let chain_id = app.chain_id.clone();
-        let state = app.state.clone();
-        let telemetry = app.telemetry.clone();
-        tokio::task::spawn_blocking(move || {
-            routing::accept_decoded_signed_transaction_for_ingress(
+    let compute_permit =
+        try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
+    let chain_id = app.chain_id.clone();
+    let state = app.state.clone();
+    let telemetry = app.telemetry.clone();
+    let (accepted_tx, compute_permit) = run_transaction_ingress_compute_job(
+        compute_permit,
+        "transaction_admission_worker_failed",
+        move || {
+            let submitted_signed_transaction_hash = transaction.hash();
+            let transaction_bytes =
+                <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                    &transaction,
+                );
+            let transaction = DecodedVersionedSignedTransaction::decode_versioned(
+                &transaction_bytes,
+            )
+            .map_err(|error| Error::AppQueryValidation {
+                code: "invalid_transaction_payload",
+                message: format!("transaction payload could not be decoded: {error}"),
+            })?;
+            if transaction.hash() != submitted_signed_transaction_hash {
+                return Err(Error::AppServiceUnavailable {
+                    code: "transaction_identity_changed",
+                    message: "canonical transaction decoding changed the signed transaction hash"
+                        .to_owned(),
+                });
+            }
+            let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress(
                 chain_id,
                 state,
                 transaction,
                 &telemetry,
-            )
-        })
-        .await
-        .map_err(|error| Error::AppServiceUnavailable {
-            code: "transaction_admission_worker_failed",
-            message: error.to_string(),
-        })??
-    };
-    if accepted_tx.external().map(SignedTransaction::hash)
-        != Some(submitted_signed_transaction_hash)
-    {
-        return Err(Error::AppServiceUnavailable {
-            code: "transaction_identity_changed",
-            message: "transaction admission changed the caller-signed transaction identity"
-                .to_owned(),
-        });
-    }
+            )?;
+            if accepted_tx.external().map(SignedTransaction::hash)
+                != Some(submitted_signed_transaction_hash)
+            {
+                return Err(Error::AppServiceUnavailable {
+                    code: "transaction_identity_changed",
+                    message: "transaction admission changed the caller-signed transaction identity"
+                        .to_owned(),
+                });
+            }
+            Ok(accepted_tx)
+        },
+    )
+    .await?;
+    drop(compute_permit);
     #[allow(unused_variables)]
     let durable_retry_claim = app
         .queue
@@ -45217,6 +45269,7 @@ async fn handler_post_transaction_entrypoint(
             )));
         }
     }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -45234,19 +45287,18 @@ async fn handler_post_transaction_entrypoint(
             )));
         }
     }
-    let accepted_tx = {
-        let chain_id = app.chain_id.clone();
-        let state = app.state.clone();
-        let telemetry = app.telemetry.clone();
-        tokio::task::spawn_blocking(move || {
-            routing::accept_transaction_for_ingress(chain_id, state, transaction, &telemetry)
-        })
-        .await
-        .map_err(|error| Error::AppServiceUnavailable {
-            code: "transaction_entrypoint_admission_worker_failed",
-            message: error.to_string(),
-        })??
-    };
+    let compute_permit =
+        try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
+    let chain_id = app.chain_id.clone();
+    let state = app.state.clone();
+    let telemetry = app.telemetry.clone();
+    let (accepted_tx, compute_permit) = run_transaction_ingress_compute_job(
+        compute_permit,
+        "transaction_entrypoint_admission_worker_failed",
+        move || routing::accept_transaction_for_ingress(chain_id, state, transaction, &telemetry),
+    )
+    .await?;
+    drop(compute_permit);
     #[allow(unused_variables)]
     let durable_retry_claim = app
         .queue
@@ -45299,6 +45351,83 @@ fn decode_transaction_batch_payloads(
             })
         })
         .collect()
+}
+
+fn invalid_transaction_batch_envelope(error: norito::Error) -> Error {
+    Error::AppQueryValidation {
+        code: "invalid_transaction_batch_envelope",
+        message: format!("transaction batch envelope could not be decoded: {error}"),
+    }
+}
+
+fn validate_transaction_batch_body_size(body: &Bytes, max_bytes: usize) -> Result<(), Error> {
+    if body.len() > max_bytes {
+        return Err(Error::AppQueryValidation {
+            code: "transaction_batch_payload_too_large",
+            message: format!(
+                "transaction batch body contains {} bytes; configured maximum is {max_bytes}",
+                body.len()
+            ),
+        });
+    }
+    let header = norito::core::Header::read(std::io::Cursor::new(body.as_ref()))
+        .map_err(invalid_transaction_batch_envelope)?;
+    let max_declared_bytes = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    if header.length > max_declared_bytes {
+        return Err(Error::AppQueryValidation {
+            code: "transaction_batch_payload_too_large",
+            message: format!(
+                "transaction batch declares {} decoded bytes; configured maximum is {max_bytes}",
+                header.length
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn decode_transaction_batch_request(
+    body: Bytes,
+    max_transactions: usize,
+    queue: &Queue,
+    state: &CoreState,
+) -> Result<Vec<DecodedVersionedSignedTransaction>, Error> {
+    let count = match norito::inspect_stream_vec_len_bounded_from_reader::<_, Vec<u8>>(
+        std::io::Cursor::new(body.as_ref()),
+        max_transactions,
+    ) {
+        Ok(count) => count,
+        Err(norito::Error::SequenceLengthExceeded { length, .. }) => {
+            return Err(Error::AppQueryValidation {
+                code: "transaction_batch_too_large",
+                message: format!(
+                    "transaction batch contains {length} transactions; configured maximum is {max_transactions}"
+                ),
+            });
+        }
+        Err(error) => return Err(invalid_transaction_batch_envelope(error)),
+    };
+    if count == 0 {
+        return Err(Error::AppQueryValidation {
+            code: "empty_transaction_batch",
+            message: "transaction batch must contain at least one signed transaction".to_owned(),
+        });
+    }
+
+    // This exact count comes from Norito's authoritative top-level sequence
+    // decoder. Apply queue pressure before allocating or decoding any inner
+    // transaction payload.
+    routing::reject_ingress_if_queue_capacity_saturated(queue, state, count)?;
+
+    let payloads =
+        norito::stream_vec_collect_from_reader::<_, Vec<u8>>(std::io::Cursor::new(body.as_ref()))
+            .map_err(invalid_transaction_batch_envelope)?;
+    if payloads.len() != count {
+        return Err(Error::AppQueryValidation {
+            code: "invalid_transaction_batch_envelope",
+            message: "transaction batch count changed during complete Norito decoding".to_owned(),
+        });
+    }
+    decode_transaction_batch_payloads(payloads)
 }
 
 #[derive(Debug)]
@@ -45935,15 +46064,8 @@ async fn allow_transaction_batch_rate_limit(
 async fn handler_post_transactions_batch(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    Norito(payloads): Norito<Vec<Vec<u8>>>,
+    crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
 ) -> Result<Response, Error> {
-    if payloads.is_empty() {
-        return Err(Error::AppQueryValidation {
-            code: "empty_transaction_batch",
-            message: "transaction batch must contain at least one signed transaction".to_owned(),
-        });
-    }
-
     let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
     if app.require_api_token && !app.api_tokens_set.is_empty() {
         let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
@@ -45953,20 +46075,27 @@ async fn handler_post_transactions_batch(
             )));
         }
     }
-
-    routing::reject_ingress_if_queue_capacity_saturated(
-        app.queue.as_ref(),
-        app.state.as_ref(),
-        payloads.len(),
-    )?;
-
-    let transactions =
-        tokio::task::spawn_blocking(move || decode_transaction_batch_payloads(payloads))
-            .await
-            .map_err(|error| Error::AppServiceUnavailable {
-                code: "transaction_batch_decode_worker_failed",
-                message: error.to_string(),
-            })??;
+    validate_transaction_batch_body_size(&body, app.transaction_batch_max_bytes)?;
+    let compute_permit =
+        try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
+    let (transactions, compute_permit) = run_transaction_ingress_compute_job(
+        compute_permit,
+        "transaction_batch_decode_worker_failed",
+        {
+            let queue = app.queue.clone();
+            let state = app.state.clone();
+            let max_transactions = app.transaction_batch_max_transactions;
+            move || {
+                decode_transaction_batch_request(
+                    body,
+                    max_transactions,
+                    queue.as_ref(),
+                    state.as_ref(),
+                )
+            }
+        },
+    )
+    .await?;
 
     if !allow_transaction_batch_rate_limit(&app.tx_rate_limiter, token_hdr, &transactions).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -45976,60 +46105,64 @@ async fn handler_post_transactions_batch(
 
     let accepted_count = {
         let app = app.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut accepted = Vec::with_capacity(transactions.len());
-            let mut stateless_cache_warm = Vec::new();
-            let prechecks = precheck_transaction_batch_ed25519(
-                &transactions,
-                app.state.pipeline.signature_batch_max_ed25519,
-            );
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-            let mut local_route_cache = Vec::new();
-            for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
-                let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
-                    app.chain_id.clone(),
-                    app.state.clone(),
-                    transaction,
-                    &app.telemetry,
-                    precheck.single_ed25519_prechecked,
-                    precheck.precheck_rejection,
-                )?;
-                if precheck.single_ed25519_prechecked {
-                    stateless_cache_warm.push(accepted_tx.clone());
-                }
-                let routing_plan = app
-                    .queue
-                    .route_plan_with_state(&accepted_tx, app.state.as_ref())
-                    .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
-                let routing_decision = routing_plan.coordinator_route();
+        let (accepted_count, _compute_permit) = run_transaction_ingress_compute_job(
+            compute_permit,
+            "transaction_batch_admission_worker_failed",
+            move || {
+                let mut accepted = Vec::with_capacity(transactions.len());
+                let mut stateless_cache_warm = Vec::new();
+                let prechecks = precheck_transaction_batch_ed25519(
+                    &transactions,
+                    app.state.pipeline.signature_batch_max_ed25519,
+                );
                 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-                if !should_execute_route_locally_cached(
-                    app.as_ref(),
-                    routing_decision,
-                    &mut local_route_cache,
-                ) {
-                    return Err(Error::AppServiceUnavailable {
-                        code: "transaction_batch_route_not_local",
-                        message: "batched transaction submission currently accepts only transactions routed to the receiving Torii node".to_owned(),
-                    });
+                let mut local_route_cache = Vec::new();
+                for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
+                    let accepted_tx =
+                        routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
+                            app.chain_id.clone(),
+                            app.state.clone(),
+                            transaction,
+                            &app.telemetry,
+                            precheck.single_ed25519_prechecked,
+                            precheck.precheck_rejection,
+                        )?;
+                    if precheck.single_ed25519_prechecked {
+                        stateless_cache_warm.push(accepted_tx.clone());
+                    }
+                    let routing_plan = app
+                        .queue
+                        .route_plan_with_state(&accepted_tx, app.state.as_ref())
+                        .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
+                    let routing_decision = routing_plan.coordinator_route();
+                    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+                    if !should_execute_route_locally_cached(
+                        app.as_ref(),
+                        routing_decision,
+                        &mut local_route_cache,
+                    ) {
+                        return Err(Error::AppServiceUnavailable {
+                            code: "transaction_batch_route_not_local",
+                            message: "batched transaction submission currently accepts only transactions routed to the receiving Torii node".to_owned(),
+                        });
+                    }
+                    accepted.push((accepted_tx, routing_plan));
                 }
-                accepted.push((accepted_tx, routing_plan));
-            }
-            let accepted_count = accepted.len();
-            routing::push_accepted_transactions_for_ingress_with_routing_plans(
-                app.queue.clone(),
-                app.state.clone(),
-                accepted,
-            )?;
-            app.state
-                .warm_stateless_validation_cache_for_torii_prechecked_batch(&stateless_cache_warm);
-            Ok::<usize, Error>(accepted_count)
-        })
+                let accepted_count = accepted.len();
+                routing::push_accepted_transactions_for_ingress_with_routing_plans(
+                    app.queue.clone(),
+                    app.state.clone(),
+                    accepted,
+                )?;
+                app.state.warm_stateless_validation_cache_for_torii_prechecked_batch(
+                    &stateless_cache_warm,
+                );
+                Ok::<usize, Error>(accepted_count)
+            },
+        )
         .await
-        .map_err(|error| Error::AppServiceUnavailable {
-            code: "transaction_batch_admission_worker_failed",
-            message: error.to_string(),
-        })??
+        ?;
+        accepted_count
     };
 
     Ok(transaction_batch_submission_response(accepted_count))
@@ -53189,6 +53322,8 @@ pub struct Torii {
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
     transaction_max_content_len: ConfigBytes<u64>,
+    transaction_ingress_max_concurrent_compute_jobs: usize,
+    transaction_batch_max_transactions: usize,
     ws_message_timeout: Duration,
     address: WithOrigin<SocketAddr>,
     state: Arc<CoreState>,
@@ -59151,6 +59286,14 @@ impl Torii {
             content_config: content_snapshot,
             address: config.address,
             transaction_max_content_len: config.max_content_len,
+            transaction_ingress_max_concurrent_compute_jobs: config
+                .transaction_ingress
+                .max_concurrent_compute_jobs
+                .get(),
+            transaction_batch_max_transactions: config
+                .transaction_ingress
+                .max_batch_transactions
+                .get(),
             ws_message_timeout: config.ws_message_timeout,
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: None,
@@ -59580,6 +59723,12 @@ impl Torii {
         let query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(
             self.query_heavy_max_inflight.max(1),
         ));
+        let transaction_ingress_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
+            self.transaction_ingress_max_concurrent_compute_jobs,
+        ));
+        let da_ingest_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
+            self.da_ingest.max_concurrent_compute_jobs.get(),
+        ));
         let mcp_tools = Arc::new(if self.mcp.enabled {
             mcp::build_tool_specs(&self.mcp)
         } else {
@@ -59592,6 +59741,13 @@ impl Torii {
             chain_id: self.chain_id.clone(),
             #[cfg(feature = "app_api")]
             transaction_max_content_len: self
+                .transaction_max_content_len
+                .get()
+                .try_into()
+                .unwrap_or(usize::MAX),
+            transaction_ingress_compute_inflight,
+            transaction_batch_max_transactions: self.transaction_batch_max_transactions,
+            transaction_batch_max_bytes: self
                 .transaction_max_content_len
                 .get()
                 .try_into()
@@ -59683,6 +59839,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             recipient_lookup_rate_limiter: self.recipient_lookup_rate_limiter.clone(),
             da_ingest: self.da_ingest.clone(),
+            da_ingest_compute_inflight,
             da_spooler: da_runtime.spooler,
             sumeragi: self.sumeragi.clone(),
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
@@ -63917,6 +64074,9 @@ pub(crate) mod tests_runtime_handlers {
         ));
         let da_replay_store = Arc::new(da::ReplayCursorStore::in_memory());
         let da_ingest = iroha_config::parameters::actual::DaIngest::default();
+        let da_ingest_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
+            da_ingest.max_concurrent_compute_jobs.get(),
+        ));
         let da_receipt_signer = checked_torii_test_keypair_from_seed_byte(
             0xb4,
             Algorithm::Secp256k1,
@@ -64007,6 +64167,13 @@ pub(crate) mod tests_runtime_handlers {
             chain_id: Arc::new(chain_id),
             #[cfg(feature = "app_api")]
             transaction_max_content_len: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
+                .unwrap_or(usize::MAX),
+            transaction_ingress_compute_inflight: Arc::new(tokio::sync::Semaphore::new(
+                defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS.get(),
+            )),
+            transaction_batch_max_transactions:
+                defaults::torii::TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS.get(),
+            transaction_batch_max_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
                 .unwrap_or(usize::MAX),
             state: state.clone(),
             kiso,
@@ -64116,6 +64283,7 @@ pub(crate) mod tests_runtime_handlers {
                 Some(defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE),
             ),
             da_ingest,
+            da_ingest_compute_inflight,
             da_spooler: None,
             #[cfg(feature = "app_api")]
             sorafs_cache,
@@ -65128,6 +65296,192 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    fn transaction_batch_body_for_test(
+        payloads: Vec<Vec<u8>>,
+    ) -> crate::utils::extractors::NoritoBytes {
+        crate::utils::extractors::NoritoBytes(Bytes::from(
+            norito::to_bytes(&payloads).expect("encode transaction batch envelope"),
+        ))
+    }
+
+    #[test]
+    fn transaction_ingress_compute_corridor_enforces_configured_parallelism() {
+        let limiter = Arc::new(tokio::sync::Semaphore::new(2));
+        let first = try_acquire_transaction_ingress_compute(&limiter).expect("first permit");
+        let second = try_acquire_transaction_ingress_compute(&limiter).expect("second permit");
+        let error = match try_acquire_transaction_ingress_compute(&limiter) {
+            Ok(_) => panic!("configured parallelism must reject excess physical work"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "transaction_ingress_compute_saturated",
+                ..
+            }
+        ));
+
+        drop(first);
+        let replacement =
+            try_acquire_transaction_ingress_compute(&limiter).expect("released capacity");
+        drop((second, replacement));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_transaction_ingress_worker_retains_physical_capacity() {
+        let limiter = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = try_acquire_transaction_ingress_compute(&limiter).expect("compute permit");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let request = tokio::spawn(run_transaction_ingress_compute_job(
+            permit,
+            "fixture_worker_failed",
+            move || {
+                started_tx.send(()).expect("announce physical start");
+                release_rx.recv().expect("release physical worker");
+                Ok(())
+            },
+        ));
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("physical worker started");
+
+        request.abort();
+        let _ = request.await;
+        let retained_after_cancellation =
+            try_acquire_transaction_ingress_compute(&limiter).is_err();
+
+        release_tx.send(()).expect("release physical worker");
+        let replacement = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(permit) = try_acquire_transaction_ingress_compute(&limiter) {
+                    break permit;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("physical completion releases capacity");
+        drop(replacement);
+        assert!(
+            retained_after_cancellation,
+            "HTTP cancellation must not free capacity while physical work continues"
+        );
+    }
+
+    #[test]
+    fn transaction_batch_body_limit_rejects_before_decode() {
+        let body = transaction_batch_body_for_test(vec![vec![0_u8; 16]]).0;
+        let error = validate_transaction_batch_body_size(&body, body.len() - 1)
+            .expect_err("wire bytes over the configured limit must be rejected");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "transaction_batch_payload_too_large",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn transaction_batch_declared_decoded_limit_rejects_compressed_expansion() {
+        let payloads = vec![vec![0_u8; 64 * 1024]];
+        let mut encoded = Vec::new();
+        norito::serialize_into(&mut encoded, &payloads, norito::Compression::Zstd)
+            .expect("encode compressed transaction batch envelope");
+        let body = Bytes::from(encoded);
+        let header = norito::core::Header::read(std::io::Cursor::new(body.as_ref()))
+            .expect("read compressed envelope header");
+        assert!(
+            header.length > u64::try_from(body.len()).unwrap_or(u64::MAX),
+            "fixture must expand beyond its encoded length"
+        );
+
+        let error = validate_transaction_batch_body_size(&body, body.len())
+            .expect_err("declared decoded bytes over the limit must be rejected");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "transaction_batch_payload_too_large",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn transaction_batch_count_limit_rejects_before_transaction_decode() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .transaction_batch_max_transactions = 1;
+        let body = transaction_batch_body_for_test(vec![vec![0xff], vec![0xff]]);
+
+        let error = match super::handler_post_transactions_batch(
+            State(app.clone()),
+            HeaderMap::new(),
+            body,
+        )
+        .await
+        {
+            Ok(_) => panic!("oversized batch must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "transaction_batch_too_large",
+                ..
+            }
+        ));
+        assert_eq!(
+            app.queue.active_len(),
+            0,
+            "count rejection must not push a valid prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_batch_queue_capacity_rejects_before_transaction_decode() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+        install_single_slot_transaction_queue(&mut app);
+        let keypair =
+            checked_transaction_batch_test_keypair(0xaf, iroha_crypto::Algorithm::Ed25519);
+        let transaction = signed_transaction_for_test_with_keypair(
+            (*app.chain_id).clone(),
+            &keypair,
+            "batch-queue-before-decode",
+        );
+        let accepted = super::handler_post_transactions_batch(
+            State(app.clone()),
+            HeaderMap::new(),
+            transaction_batch_body_for_test(vec![versioned_signed_transaction(&transaction)]),
+        )
+        .await
+        .expect("fixture transaction should fill the queue");
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 1);
+
+        let error = match super::handler_post_transactions_batch(
+            State(app.clone()),
+            HeaderMap::new(),
+            transaction_batch_body_for_test(vec![vec![0xff]]),
+        )
+        .await
+        {
+            Ok(_) => panic!("full queue must reject before invalid transaction payload decode"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::PushIntoQueue { .. }));
+        assert_eq!(
+            app.queue.active_len(),
+            1,
+            "queue rejection must leave the existing transaction untouched"
+        );
+    }
+
     #[tokio::test]
     async fn handler_post_transactions_batch_accepts_multiple_payloads() {
         let mut app = mk_app_state_for_tests();
@@ -65164,7 +65518,7 @@ pub(crate) mod tests_runtime_handlers {
         let response = super::handler_post_transactions_batch(
             State(app.clone()),
             HeaderMap::new(),
-            Norito(payloads),
+            transaction_batch_body_for_test(payloads),
         )
         .await
         .expect("accepted");
@@ -65219,7 +65573,7 @@ pub(crate) mod tests_runtime_handlers {
         let err = match super::handler_post_transactions_batch(
             State(app.clone()),
             headers,
-            Norito(payloads),
+            transaction_batch_body_for_test(payloads),
         )
         .await
         {
@@ -65275,7 +65629,7 @@ pub(crate) mod tests_runtime_handlers {
         let err = match super::handler_post_transactions_batch(
             State(app.clone()),
             headers,
-            Norito(payloads),
+            transaction_batch_body_for_test(payloads),
         )
         .await
         {
@@ -65332,7 +65686,7 @@ pub(crate) mod tests_runtime_handlers {
         let err = match super::handler_post_transactions_batch(
             State(app.clone()),
             HeaderMap::new(),
-            Norito(payloads),
+            transaction_batch_body_for_test(payloads),
         )
         .await
         {

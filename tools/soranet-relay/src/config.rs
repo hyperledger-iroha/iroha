@@ -1691,9 +1691,12 @@ impl EmergencyThrottleConfig {
 pub struct GuardDirectoryConfig {
     /// Path to the guard directory snapshot.
     pub snapshot_path: PathBuf,
-    /// Optional expected hash of the snapshot file for integrity checks.
-    #[norito(default)]
-    pub expected_directory_hash_hex: Option<String>,
+    /// Required domain-separated BLAKE3 digest of the exact snapshot bytes.
+    ///
+    /// This value must be obtained through a trust path independent of
+    /// `snapshot_path`; the snapshot's embedded `directory_hash` does not
+    /// authenticate its embedded issuer records.
+    pub expected_snapshot_digest_hex: String,
     /// Whether to tolerate missing entries when verifying a snapshot.
     #[norito(default)]
     pub allow_missing_entry: bool,
@@ -1704,18 +1707,12 @@ pub struct GuardDirectoryConfig {
 
 impl GuardDirectoryConfig {
     pub fn apply_defaults(&mut self) -> Result<(), ConfigError> {
-        if let Some(hex_value) = &self.expected_directory_hash_hex {
-            if hex_value.len() != 64 {
-                return Err(ConfigError::GuardDirectory(
-                    "expected_directory_hash_hex must be 64 hex characters".to_string(),
-                ));
-            }
-            hex::decode(hex_value).map_err(|_| {
-                ConfigError::GuardDirectory(
-                    "expected_directory_hash_hex must decode to 32 bytes".to_string(),
-                )
-            })?;
+        if self.expected_snapshot_digest_hex.len() != 64 {
+            return Err(ConfigError::GuardDirectory(
+                "expected_snapshot_digest_hex must be 64 hex characters".to_string(),
+            ));
         }
+        self.expected_snapshot_digest()?;
         Ok(())
     }
 
@@ -1724,29 +1721,25 @@ impl GuardDirectoryConfig {
         &self.snapshot_path
     }
 
-    #[must_use]
-    pub fn expected_directory_hash(&self) -> Option<[u8; 32]> {
-        self.try_expected_directory_hash()
-            .expect("validated expected_directory_hash_hex to decode")
-    }
-
-    pub fn try_expected_directory_hash(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        let Some(hex_value) = self.expected_directory_hash_hex.as_ref() else {
-            return Ok(None);
-        };
-        let raw = hex::decode(hex_value).map_err(|_| {
+    /// Decode the externally provisioned exact snapshot digest.
+    ///
+    /// # Errors
+    /// Returns an error unless the configured value is exactly 32 hex-encoded
+    /// bytes.
+    pub fn expected_snapshot_digest(&self) -> Result<[u8; 32], ConfigError> {
+        let raw = hex::decode(&self.expected_snapshot_digest_hex).map_err(|_| {
             ConfigError::GuardDirectory(
-                "expected_directory_hash_hex must decode to 32 bytes".to_string(),
+                "expected_snapshot_digest_hex must decode to 32 bytes".to_string(),
             )
         })?;
         if raw.len() != 32 {
             return Err(ConfigError::GuardDirectory(
-                "expected_directory_hash_hex must decode to 32 bytes".to_string(),
+                "expected_snapshot_digest_hex must decode to 32 bytes".to_string(),
             ));
         }
         let mut bytes = [0u8; 32];
         bytes.copy_from_slice(&raw);
-        Ok(Some(bytes))
+        Ok(bytes)
     }
 
     #[must_use]
@@ -2648,7 +2641,14 @@ impl HandshakePolicy {
             .transpose()
     }
 
-    pub fn load_certificate_bundle(&self) -> Result<Option<RelayCertificateBundleV2>, ConfigError> {
+    /// Load and verify the configured certificate at an explicit Unix second.
+    ///
+    /// Supplying time keeps configuration parsing deterministic and prevents a
+    /// structurally valid but expired certificate from reaching the runtime.
+    pub fn load_certificate_bundle_at(
+        &self,
+        at_unix: i64,
+    ) -> Result<Option<RelayCertificateBundleV2>, ConfigError> {
         let Some(certificate) = &self.certificate else {
             return Ok(None);
         };
@@ -2671,7 +2671,12 @@ impl HandshakePolicy {
         };
 
         bundle
-            .verify(&issuer_ed25519, mldsa_bytes.as_slice(), validation_phase)
+            .verify_at(
+                &issuer_ed25519,
+                mldsa_bytes.as_slice(),
+                validation_phase,
+                at_unix,
+            )
             .map_err(|err| ConfigError::Certificate {
                 path: certificate.bundle_path.clone(),
                 message: format!("certificate verification failed: {err}"),

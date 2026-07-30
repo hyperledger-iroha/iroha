@@ -1200,6 +1200,20 @@ impl RelayRuntime {
     /// descriptor commits, guard snapshots, and identity keys along the way.
     pub fn new(mut config: RelayConfig) -> Result<Self, RelayError> {
         config.validate()?;
+        let validation_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| {
+                RelayError::Config(ConfigError::Handshake(
+                    "system clock is before the Unix epoch".to_string(),
+                ))
+            })
+            .and_then(|duration| {
+                i64::try_from(duration.as_secs()).map_err(|_| {
+                    RelayError::Config(ConfigError::Handshake(
+                        "current Unix time exceeds i64::MAX".to_string(),
+                    ))
+                })
+            })?;
         if let Some(vpn) = config.vpn_config() {
             vpn.require_runtime_available()?;
         }
@@ -1223,7 +1237,7 @@ impl RelayRuntime {
             );
         }
         let policy = config.handshake_policy().clone();
-        let certificate_bundle = policy.load_certificate_bundle()?;
+        let certificate_bundle = policy.load_certificate_bundle_at(validation_time)?;
         let manual_descriptor = policy.descriptor_commit_bytes()?;
         let descriptor_commit_vec = match (&certificate_bundle, manual_descriptor) {
             (Some(bundle), Some(manual)) if manual != bundle.certificate.descriptor_commit => {
@@ -1319,7 +1333,7 @@ impl RelayRuntime {
 
         if let Some(guard_cfg) = config.guard_directory_config() {
             let commit_bytes = descriptor_commit_bytes.expect("checked above");
-            match guard::load_guard_entry(guard_cfg, &relay_id, &commit_bytes) {
+            match guard::load_guard_entry_at(guard_cfg, &relay_id, &commit_bytes, validation_time) {
                 Ok(entry) => {
                     if let Some(public) = ml_kem_public.as_ref()
                         && public.as_slice() != entry.bundle.certificate.pq_kem_public.as_slice()
@@ -5521,6 +5535,10 @@ mod tests {
 
     impl CertificateTestFixture {
         fn new() -> Self {
+            Self::with_valid_until(i64::MAX)
+        }
+
+        fn with_valid_until(valid_until: i64) -> Self {
             let descriptor_commit = [0xAB; 32];
             let identity_seed = [0x11; 32];
             let identity_seed_hex = hex::encode(identity_seed);
@@ -5573,7 +5591,7 @@ mod tests {
                 ],
                 published_at: 1,
                 valid_after: 1,
-                valid_until: 3_600,
+                valid_until,
                 directory_hash: [0x66; 32],
                 issuer_fingerprint: [0x77; 32],
                 pq_kem_public: ml_kem_public.clone(),
@@ -5688,6 +5706,41 @@ mod tests {
         assert_eq!(
             stored_bundle.certificate.descriptor_commit,
             fixture.descriptor_commit
+        );
+    }
+
+    #[test]
+    fn runtime_rejects_expired_certificate_at_startup() {
+        let fixture = CertificateTestFixture::with_valid_until(2);
+        let json = format!(
+            r#"{{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "handshake": {{
+                    "identity_private_key_hex": "{identity_hex}",
+                    "descriptor_manifest_path": "{manifest}",
+                    "certificate": {{
+                        "bundle_path": "{bundle}",
+                        "issuer_ed25519_hex": "{issuer_ed}",
+                        "issuer_mldsa_hex": "{issuer_mldsa}",
+                        "validation_phase": "phase3_require_dual"
+                    }}
+                }}
+            }}"#,
+            identity_hex = fixture.identity_seed_hex,
+            manifest = fixture.manifest_file.path().display(),
+            bundle = fixture.bundle_file.path().display(),
+            issuer_ed = fixture.issuer_ed25519_hex,
+            issuer_mldsa = fixture.issuer_mldsa_hex,
+        );
+        let config = load_config(&json);
+        let err = match RelayRuntime::new(config) {
+            Ok(_) => panic!("expired certificate must fail at startup"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("expired"),
+            "unexpected startup error: {err}"
         );
     }
 

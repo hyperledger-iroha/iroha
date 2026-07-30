@@ -30,12 +30,14 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "d
 
 # pqcrypto's ML-DSA and ML-KEM NEON C backends are not compatible with MSVC.
 # Keep both algorithms enabled there through their portable clean C implementations.
+# ML-DSA is exact-pinned because `mldsa_pqclean_bindings.rs` is generated from
+# this release's private clean-backend headers.
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"], optional = true }
+pqcrypto-mldsa = { version = "=0.1.2", default-features = false, features = ["std"], optional = true }
 pqcrypto-mlkem = { version = "0.1.1", default-features = false, features = ["std"], optional = true }
 
 [target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
-pqcrypto-mldsa = { version = "0.1.2", optional = true }
+pqcrypto-mldsa = { version = "=0.1.2", optional = true }
 pqcrypto-mlkem = { version = "0.1.1", optional = true }
 
 [dev-dependencies]

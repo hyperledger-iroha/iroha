@@ -14268,6 +14268,9 @@ pub struct Torii {
     /// ISO 20022 bridge configuration.
     #[config(nested)]
     pub iso_bridge: IsoBridge,
+    /// Transaction-ingress compute and HTTP batch limits.
+    #[config(nested)]
+    pub transaction_ingress: TransactionIngress,
     /// Data-availability ingest configuration.
     #[config(nested)]
     pub da_ingest: DaIngest,
@@ -14845,6 +14848,7 @@ impl Torii {
             zk_ivm_prove_job_max_retained_bytes: self.zk_ivm_prove_job_max_retained_bytes,
             connect: self.connect.parse(),
             iso_bridge: self.iso_bridge.parse(),
+            transaction_ingress: self.transaction_ingress.parse(),
             da_ingest: self.da_ingest.parse(),
             sorafs_discovery,
             sorafs_storage,
@@ -17593,6 +17597,36 @@ pub struct IsoCurrencyMinorUnit {
     pub minor_units: u8,
 }
 
+/// User-level Torii transaction-ingress resource corridor.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct TransactionIngress {
+    /// Maximum number of physical decode, verification, and admission jobs.
+    #[config(default = "defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS")]
+    pub max_concurrent_compute_jobs: NonZeroUsize,
+    /// Maximum number of signed transactions in one HTTP batch.
+    #[config(default = "defaults::torii::TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS")]
+    pub max_batch_transactions: NonZeroUsize,
+}
+
+impl Default for TransactionIngress {
+    fn default() -> Self {
+        Self {
+            max_concurrent_compute_jobs:
+                defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS,
+            max_batch_transactions: defaults::torii::TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS,
+        }
+    }
+}
+
+impl TransactionIngress {
+    fn parse(self) -> actual::TransactionIngress {
+        actual::TransactionIngress {
+            max_concurrent_compute_jobs: self.max_concurrent_compute_jobs,
+            max_batch_transactions: self.max_batch_transactions,
+        }
+    }
+}
+
 /// User-level configuration for DA ingest replay cache behaviour.
 #[derive(Debug, ReadConfig, Clone)]
 #[allow(clippy::struct_field_names)]
@@ -17615,6 +17649,9 @@ pub struct DaIngest {
     /// Directory where canonical DA manifests are queued for SoraFS orchestration.
     #[config(default = "defaults::torii::da_manifest_store_dir()")]
     pub manifest_store_dir: PathBuf,
+    /// Maximum number of concurrent CPU-intensive DA ingest jobs.
+    #[config(default = "defaults::torii::DA_MAX_CONCURRENT_COMPUTE_JOBS")]
+    pub max_concurrent_compute_jobs: NonZeroUsize,
     /// Maximum number of DA spool batches queued for async disk persistence.
     #[config(default = "defaults::torii::DA_SPOOL_QUEUE_CAPACITY")]
     pub spool_queue_capacity: NonZeroUsize,
@@ -17646,6 +17683,7 @@ impl Default for DaIngest {
             replay_cache_max_sequence_lag: defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: defaults::torii::da_replay_cache_store_dir(),
             manifest_store_dir: defaults::torii::da_manifest_store_dir(),
+            max_concurrent_compute_jobs: defaults::torii::DA_MAX_CONCURRENT_COMPUTE_JOBS,
             spool_queue_capacity: defaults::torii::DA_SPOOL_QUEUE_CAPACITY,
             spool_batch_max: defaults::torii::DA_SPOOL_BATCH_MAX,
             governance_metadata_key_hex: None,
@@ -17677,6 +17715,7 @@ impl DaIngest {
             replay_cache_max_sequence_lag: self.replay_cache_max_sequence_lag,
             replay_cache_store_dir: self.replay_cache_store_dir,
             manifest_store_dir: self.manifest_store_dir,
+            max_concurrent_compute_jobs: self.max_concurrent_compute_jobs,
             spool_queue_capacity: self.spool_queue_capacity,
             spool_batch_max: self.spool_batch_max,
             governance_metadata_key,

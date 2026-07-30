@@ -160,7 +160,15 @@ hashing, chunking, and verifying optional manifests.
    at most 1,024 source chunks.
 4. Require 1–64 data shards, 2–64 parity shards, and at most 64 row-parity
    stripes. Cross-stripe parity is additionally limited to 64 source stripes,
-   bounding the cubic RS16 matrix step.
+   bounding the cubic RS16 matrix step. `rs16::validate_erasure_work_budget`
+   also caps generated parity bytes and transient RS16 workspace at 128 MiB
+   each, closing multiplicative layouts that pass the dimension caps.
+   Signature verification, normalization, chunking, RS16 generation, manifest
+   construction, and PDP construction run on blocking workers behind
+   `torii.da_ingest.max_concurrent_compute_jobs` (default `1`). The owned
+   semaphore permit remains inside the physical worker, so cancelling an HTTP
+   request cannot admit replacement work while its detached computation is
+   still running.
 5. `retention_policy.required_replica_count` must respect governance baseline.
 6. Signature verification against canonical hash (excluding signature field).
 7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
@@ -410,23 +418,13 @@ All previously blocked ingest TODOs have been implemented and verified:
   plus the relevant
   hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) so downstream tooling can
   feed the orchestrator without recomputing digests, and emits the same `Sora-PDP-Commitment` header to
-  mirror ingest responses. Passing `block_hash=<hex>` as a query parameter returns a deterministic
-  `sampling_plan` rooted in `block_hash || client_blob_id` (shared across validators) containing the
-  `assignment_hash`, the requested `sample_window`, and sampled `(index, role, group)` tuples spanning
-  the entire 2D stripe layout so PoR samplers and validators can replay the same indices. The sampler
-  mixes `client_blob_id`, `chunk_root`, and `ipa_commitment` into the assignment hash; `iroha app da get
-  --block-hash <hex>` now writes `sampling_plan_<ticket>.json` next to the manifest + chunk plan with
-  the hash preserved, and the JS/Swift Torii clients expose the same `assignment_hash_hex` so validators
-  and provers share a single deterministic probe set. When Torii returns a sampling plan, `iroha app da
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) instead
-  of ad-hoc sampling so PoR witnesses line up with validator assignments even if the operator omits a
-  `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
-
-  This query-derived plan is diagnostic only: the requester supplies `block_hash`, and Torii does
-  not bind it to an authoritative challenge or prove that it names the manifest's commitment
-  block. It must not be used for rewards, slashing, provider availability claims, or consensus.
-  Any such consumer must first replace this surface with a committed challenge or council/VRF
-  source whose exact block and manifest binding cannot be chosen by the provider.
+  mirror ingest responses. Manifest retrieval intentionally has no sampling or challenge query:
+  Torii cannot turn a requester-selected value into an availability guarantee. The CLI's explicit
+  `--sample-count`, `--sample-seed`, and `--leaf-index` inputs produce local retrievability
+  diagnostics only; those proofs are not valid inputs for rewards, slashing, provider availability
+  claims, or consensus. Any future enforcement must use a committed challenge (for example, a
+  governed VRF output) whose exact block and manifest binding cannot be chosen by the provider.
+  【crates/iroha_torii/src/da/ingest.rs:1】【crates/iroha_cli/src/commands/da.rs:1】
 
 ### Large Payload Streaming Flow
 

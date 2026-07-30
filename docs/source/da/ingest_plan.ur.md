@@ -373,22 +373,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` کور مورچا ، ازگر `ToriiClient`
   اب `decode_pdp_commitment_header` ، اور `IrohaSwift` جہازوں سے ملاپ کرنے والے مددگاروں کو برآمد کرتا ہے تاکہ موبائل
   کلائنٹ انکوڈڈ نمونے لینے کے شیڈول کو فوری طور پر اسٹش کرسکتے ہیں۔ 【کریٹس/آئروہ/ایس آر سی/ڈی اے آر ایس: 1 】【 ازگر/اروہہ_ٹوری_کلائنٹ/کلائنٹ ۔پی: 1 】【 Irohaswift/ذرائع/Irohaswift/toriiclient.swift: 1】
-- Torii `GET /v1/da/manifests/{storage_ticket}` کو بھی بے نقاب کرتا ہے تاکہ SDKs اور آپریٹرز ظاہر ہوسکیں
-  اور نوڈ کی اسپل ڈائرکٹری کو چھوئے بغیر اس کے منصوبے۔ جواب Norito بائٹس کو لوٹاتا ہے
-  .
-  ہیکس ہضم (`storage_ticket` ، `client_blob_id` ، `blob_hash` ، `chunk_root`) لہذا بہاو ٹولنگ کر سکتے ہیں
-  ہضموں کی بحالی کے بغیر آرکیسٹریٹر کو کھانا کھلانا ، اور اسی `Sora-PDP-Commitment` ہیڈر کو خارج کرتا ہے
-  آئینہ کے جوابات `block_hash=<hex>` کو استفسار پیرامیٹر کے طور پر پاس کرنا ایک تعصب پسند کرتا ہے
-  `sampling_plan` کی جڑ `block_hash || client_blob_id` (جس میں جائزوں میں مشترکہ ہے) پر مشتمل ہے
-  `assignment_hash` ، درخواست کی گئی `sample_window` ، اور نمونہ `(index, role, group)` tuples پھیلا ہوا ہے
-  پوری 2D پٹی لے آؤٹ لہذا POR نمونے لینے والے اور جائز افراد ایک ہی اشاریہ کو دوبارہ چلا سکتے ہیں۔ نمونے لینے والا
-  `client_blob_id` ، `chunk_root` ، اور `ipa_commitment` کو اسائنمنٹ ہیش میں ملا دیتا ہے۔ `اروہ ایپ ڈا حاصل کریں
-  -بلاک ہیش  ` now writes `Sampling_plan_ 
-  ہیش محفوظ ہے ، اور جے ایس/سوئفٹ Torii کلائنٹ ایک ہی `assignment_hash_hex` کو بے نقاب کرتے ہیں تاکہ توثیق کاروں
-  اور پروورز ایک ہی ڈٹرمینسٹک تحقیقات کے سیٹ کا اشتراک کرتے ہیں۔ جب Torii نمونے لینے کا منصوبہ لوٹاتا ہے تو ، `اروہ ایپ ڈی اے
-  اس کے بجائے ثابت-دستیابیت
-  ایڈہاک کے نمونے لینے کا لہذا گواہوں کو توثیق کرنے والے اسائنمنٹس کے ساتھ لائن لگائیں یہاں تک کہ اگر آپریٹر ایک کو چھوڑ دیتا ہے
-  `--block-hash` اوور رائڈ۔ 【کریٹس/آئروہ_ٹوری_شاریڈ/ایس آر سی/ڈی اے/نمونے لینے کے لئے۔ 【جاوا اسکرپٹ/آئروہ_ جے ایس/ایس آر سی/ٹورائکلینٹ. جے ایس: 15903 】【 Irohaswift/ذرائع/irohaswift/toriiclient.swift: 170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### بڑے پے لوڈ اسٹریمنگ فلوکلائنٹ جن کو اثاثوں کو ترتیب دینے والی واحد درخواست کی حد سے بڑے اثاثوں کی ضرورت ہوتی ہے
 `POST /v1/da/ingest/chunk/start` پر کال کرکے اسٹریمنگ سیشن۔ Torii a کے ساتھ جواب دیتا ہے

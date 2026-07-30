@@ -59,7 +59,7 @@ Operators must sign off on the following before entering each phase:
 
 - ✅ Relay advert signed with current admission envelope.
 - ✅ Guard rotation smoke test (`tools/soranet-relay --check-rotation`) passes.
-- ✅ `guard_directory` points at the latest `GuardDirectorySnapshotV2` artefact and `expected_directory_hash_hex` matches the committee digest (relay startup logs the validated hash).
+- ✅ `guard_directory` points at the latest `GuardDirectorySnapshotV2` artefact and `expected_snapshot_digest_hex` matches the exact domain-separated digest distributed through the independent governance channel (relay startup also enforces the snapshot and certificate validity windows).
 - ✅ PQ ratchet metrics (`sorafs_orchestrator_pq_ratio`) stay above target thresholds for the requested stage.
 - ✅ GAR compliance config matches the latest tag (see SNNet-9 catalogue).
 - ✅ Downgrade alarm simulation (disable collectors, expect alert within 5 min).

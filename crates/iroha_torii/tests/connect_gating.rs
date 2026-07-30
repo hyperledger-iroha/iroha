@@ -430,6 +430,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             zk_ivm_prove_job_max_retained_bytes:
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+            transaction_ingress: A::TransactionIngress::default(),
             da_ingest: A::DaIngest::default(),
             connect,
             iso_bridge: iroha_config::parameters::actual::IsoBridge {

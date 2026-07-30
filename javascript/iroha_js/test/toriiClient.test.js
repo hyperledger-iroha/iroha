@@ -6117,13 +6117,7 @@ test("getDaManifest fetches manifest bundle", async () => {
   const chunkPlan = chunkFetchPlan([
     { chunk_index: 0, offset: 0, length: 1, digest_blake3: "ff".repeat(32) },
   ], "dd".repeat(32));
-  const samplingPlan = {
-    assignment_hash: "aa".repeat(32),
-    sample_window: 4,
-    samples: [{ index: 2, role: "global_parity", group: 1 }],
-  };
   const manifestHashHex = "ff".repeat(32);
-  const blockHashHex = "bb".repeat(32);
   const fetchImpl = async (url, init) => {
     captured = { url, init };
     return createResponse({
@@ -6140,18 +6134,15 @@ test("getDaManifest fetches manifest bundle", async () => {
         manifest_norito: manifestB64,
         manifest: { version: 1 },
         chunk_plan: chunkPlan,
-        sampling_plan: samplingPlan,
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getDaManifest(ticketHex, {
-    blockHashHex,
-  });
+  const result = await client.getDaManifest(ticketHex);
   assert.equal(
     captured?.url,
-    `${BASE_URL}/v1/da/manifests/${ticketHex.slice(2).toLowerCase()}?block_hash=${blockHashHex.toLowerCase()}`,
+    `${BASE_URL}/v1/da/manifests/${ticketHex.slice(2).toLowerCase()}`,
   );
   assert.equal(
     captured?.init?.headers?.Accept,
@@ -6161,9 +6152,6 @@ test("getDaManifest fetches manifest bundle", async () => {
   assert.equal(result.manifest_b64, manifestB64);
   assert.equal(result.manifest_hash_hex, manifestHashHex.toLowerCase());
   assert.deepEqual(result.chunk_plan, chunkPlan);
-  assert.deepEqual(result.sampling_plan?.assignment_hash_hex, samplingPlan.assignment_hash.toLowerCase());
-  assert.equal(result.sampling_plan?.sample_window, samplingPlan.sample_window);
-  assert.equal(result.sampling_plan?.samples[0].index, 2);
   assert(Buffer.isBuffer(result.manifest_bytes));
   assert.equal(
     result.manifest_bytes.toString("utf8"),
@@ -6233,11 +6221,6 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
   const chunkPlan = chunkFetchPlan([
     { chunk_index: 0, offset: 0, length: 1, digest_blake3: "ff".repeat(32) },
   ], "dd".repeat(32));
-  const samplingPlan = {
-    assignment_hash: "aa".repeat(32),
-    sample_window: 2,
-    samples: [{ index: 0, role: "data", group: 0 }],
-  };
   const manifestHashHex = "ff".repeat(32);
   const fetchImpl = async () =>
     createResponse({
@@ -6254,7 +6237,6 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
         manifest_norito: manifestB64,
         manifest: { version: 1 },
         chunk_plan: chunkPlan,
-        sampling_plan: samplingPlan,
       },
       headers: { "content-type": "application/json" },
     });
@@ -6267,7 +6249,6 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
     const manifestPath = path.join(tmpDir, `manifest_${label}.norito`);
     const manifestJsonPath = path.join(tmpDir, `manifest_${label}.json`);
     const chunkPlanPath = path.join(tmpDir, `chunk_plan_${label}.json`);
-    const samplingPlanPath = path.join(tmpDir, `sampling_plan_${label}.json`);
 
     assert.equal(result.paths.label, label);
     const persisted = await fs.readFile(manifestPath);
@@ -6277,8 +6258,6 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
     const planJson = JSON.parse(await fs.readFile(chunkPlanPath, "utf8"));
     assert.equal(planJson.schema, "sorafs.chunk_fetch_plan.v1");
     assert.equal(planJson.chunk_fetch_specs[0].chunk_index, 0);
-    const samplingJson = JSON.parse(await fs.readFile(samplingPlanPath, "utf8"));
-    assert.equal(samplingJson.sample_window, samplingPlan.sample_window);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
@@ -7548,7 +7527,16 @@ test("SoraFS storage helpers reject unsupported option fields", async () => {
       () => client.getSorafsManifest("ab".repeat(32), { unexpected: "nope" }),
       "unexpected",
     ],
-    ["getDaManifest", () => client.getDaManifest("ff".repeat(32), { note: "skip" }), "note"],
+    [
+      "getDaManifest",
+      () => client.getDaManifest("ff".repeat(32), { blockHashHex: "aa".repeat(32) }),
+      "blockHashHex",
+    ],
+    [
+      "getDaManifestToDir",
+      () => client.getDaManifestToDir("ff".repeat(32), { blockHashHex: "aa".repeat(32) }),
+      "blockHashHex",
+    ],
   ];
   for (const [label, invoke, field] of cases) {
     // eslint-disable-next-line no-await-in-loop

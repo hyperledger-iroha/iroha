@@ -291,8 +291,10 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 
 - {{#include sorafs/snippets/multi_source_flag_notes.txt}}
 
-- `--guard-directory=PATH` loads a pinned guard set JSON (see below) and
-  `--guard-cache=PATH` persists cache updates across runs. When you need
+- `--guard-directory=PATH` loads a pinned guard set JSON (see below).
+  `--guard-directory-digest=HEX` is required with it and must be the
+  domain-separated BLAKE3 digest published through the independent governance
+  channel. `--guard-cache=PATH` persists cache updates across runs. When you need
   tamper-evidence for the cache (e.g., storing it on shared network volumes),
   pass a 32-byte hex key via `--guard-cache-key=HEX`; the orchestrator signs
   cached guard lists with the key and refuses to load caches whose MAC fails.
@@ -302,16 +304,21 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
   sorafs_cli guard-directory fetch \
     --url https://directory.soranet.dev/mainnet_snapshot.norito \
     --output ./state/guard_directory.norito \
-    --expected-directory-hash <directory-hash-hex>
+    --expected-snapshot-digest <snapshot-digest-hex>
 
   sorafs_cli guard-directory verify \
     --path ./state/guard_directory.norito \
-    --expected-directory-hash <directory-hash-hex>
+    --expected-snapshot-digest <snapshot-digest-hex>
+
+  sorafs_cli guard-directory inspect \
+    --path ./state/guard_directory.norito
   ```
 
-  `fetch` downloads and verifies the SRCv2 payload before writing it to disk,
-  while `verify` replays the validation pipeline for artefacts sourced from
-  other teams, emitting a JSON summary that mirrors the orchestrator output.
+  `fetch` and `verify` authenticate the exact SRCv2 artefact against the
+  externally supplied digest, verify its signatures, and enforce the half-open
+  validity window (`valid_after <= now < valid_until`). `inspect` only performs
+  structural and embedded-signature checks; its output is explicitly marked
+  unauthenticated and must not be used to establish trust.
 - `--scoreboard-out=PATH` persists the computed eligibility/weighting snapshot
   to Norito JSON for audits. Pair it with `--scoreboard-now=UNIX_SECS` when you
   need deterministic fixtures for CI or release evidence.

@@ -282,14 +282,10 @@ Oldin bloklangan barcha qabul qilish TODOlar amalga oshirildi va tasdiqlandi:
   Rust sandiq eksporti `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, Python
   `ToriiClient` endi `decode_pdp_commitment_header` va `IrohaSwift` kemalarini o'z ichiga oladi
   Xom sarlavhali xaritalar yoki `HTTPURLResponse` uchun `decodePdpCommitmentHeader` ortiqcha yuklar misollar.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii shuningdek `GET /v1/da/manifests/{storage_ticket}` ni ochib beradi, shuning uchun SDK va operatorlar manifestlarni olishlari mumkin
-  va tugunning spool katalogiga tegmasdan parcha rejalari. Javob Norito baytlarini qaytaradi
-  (base64), renderlangan manifest JSON, `chunk_plan` JSON blobi `sorafs fetch` uchun tayyor, tegishli
-  hex hazm qiladi (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) va aks ettiradi
-  Paritet uchun qabul qilingan javoblardan `Sora-PDP-Commitment` sarlavhasi. `block_hash=<hex>` ni yetkazib berish
-  so'rovlar qatori deterministik `sampling_plan` (tayinlash xeshi, `sample_window` va namunali)ni qaytaradi
-  `(index, role, group)` to'liq 2D tartibini qamrab oluvchi kortejlar) shuning uchun validatorlar va PoR vositalari bir xil chiziladi
-  indekslari.
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Katta foydali yuk oqimi
 

@@ -310,6 +310,8 @@ impl KeyPair {
     ///
     /// Ed25519 uses the seed directly when 32 bytes are provided; other lengths are
     /// hashed with SHA-256 to obtain a canonical 32-byte seed.
+    /// ML-DSA-65 derives its FIPS 204 key-generation seed through a
+    /// domain-separated HKDF-SHA-512 expansion.
     ///
     /// # Errors
     ///
@@ -383,6 +385,8 @@ impl KeyPair {
     ///
     /// Ed25519 uses the seed directly when 32 bytes are provided; other lengths are
     /// hashed with SHA-256 to obtain a canonical 32-byte seed.
+    /// ML-DSA-65 derives its FIPS 204 key-generation seed through a
+    /// domain-separated HKDF-SHA-512 expansion.
     pub fn from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Self {
         Self::try_from_seed(seed, algorithm)
             .expect("seeded key generation should succeed for supported algorithms")

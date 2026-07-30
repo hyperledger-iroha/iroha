@@ -1,4 +1,8 @@
-//! Definition of Iroha default permission tokens
+//! Definition of Iroha default permission tokens.
+//!
+//! An exact token is a delegable capability unless its type is a genesis-only bootstrap root.
+//! Resource-scoped tokens may also define a native use-time ownership root or an explicit wider
+//! parent token; ownership of an adjacent component of the scope is never sufficient.
 #![allow(clippy::missing_errors_doc)]
 
 use std::{format, string::String, vec::Vec};
@@ -225,8 +229,8 @@ pub mod account {
         ///
         /// Only the corresponding alias, domain, or dataspace-alias owner may grant or
         /// revoke this delegation token. Holding it authorizes delegation of
-        /// [`CanResolveAccountAlias`] for the exact same scope; it never
-        /// authorizes alias mutation or further delegation of this token.
+        /// [`CanResolveAccountAlias`] and further delegation of this token for the exact same
+        /// scope; it never authorizes alias mutation or delegation to a wider scope.
         pub struct CanDelegateAccountAliasResolution {
             /// Exact alias scope whose resolution access may be delegated.
             pub scope: AccountAliasPermissionScope,

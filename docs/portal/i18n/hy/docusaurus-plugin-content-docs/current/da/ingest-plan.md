@@ -282,14 +282,10 @@ pub struct DaIngestReceipt {
   The Rust crate-ն արտահանում է `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, Python-ը
   `ToriiClient`-ն այժմ ներառում է `decode_pdp_commitment_header` և `IrohaSwift` նավերը
   `decodePdpCommitmentHeader` ծանրաբեռնված վերնագրերի չմշակված քարտեզների կամ `HTTPURLResponse` օրինակներ։【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii-ը նաև բացահայտում է `GET /v1/da/manifests/{storage_ticket}`-ը, որպեսզի SDK-ները և օպերատորները կարողանան առբերել մանիֆեստները
-  և բլոկների պլանները՝ առանց հանգույցի կծիկի գրացուցակին դիպչելու: Պատասխանը վերադարձնում է Norito բայթ
-  (base64), ներկայացվել է JSON մանիֆեստը, `chunk_plan` JSON բլբակ, որը պատրաստ է `sorafs fetch`-ի համար, համապատասխանը
-  վեցանկյուն մարսվում է (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) և արտացոլում է
-  `Sora-PDP-Commitment` վերնագիր՝ ներծծման պատասխաններից՝ հավասարության համար: `block_hash=<hex>` մատակարարում է
-  հարցման տողը վերադարձնում է որոշիչ `sampling_plan` (հանձնարարության հեշ, `sample_window` և նմուշառված
-  `(index, role, group)` բազմեր, որոնք ընդգրկում են ամբողջական 2D դասավորությունը), այնպես որ վավերացնողներն ու PoR գործիքները նույնն են նկարում
-  ցուցանիշները։
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Մեծ բեռի հոսքային հոսք
 

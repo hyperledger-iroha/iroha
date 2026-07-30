@@ -43,7 +43,6 @@ workspace = true
 default = [
     "json",
     "bls",
-    "sumeragi-permissioned",
     "fast_dsl",
     "zk-halo2",
     "zk-halo2-ipa",
@@ -156,11 +155,6 @@ bls-multi-pairing = ["iroha_crypto/bls-multi-pairing"]
 # longer linked by `iroha_core`.
 zk-halo2-jemallocator = []
 goldilocks_backend = ["iroha_zkp_halo2/goldilocks_backend", "ivm/goldilocks_backend"]
-
-# Consensus mode (compile-time). Exactly one should be enabled in a given build.
-# Permissioned is the default if none is specified explicitly.
-sumeragi-permissioned = []
-sumeragi-npos = []
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }

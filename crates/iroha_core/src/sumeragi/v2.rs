@@ -3352,7 +3352,9 @@ impl SumeragiV2Adapter {
             wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_) => {}
+            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+            | wire::ConsensusMessageV2Payload::VrfCommit(_)
+            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {}
         }
         Ok(())
     }
@@ -3612,7 +3614,9 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+            | wire::ConsensusMessageV2Payload::VrfCommit(_)
+            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
                 return Ok((None, None));
             }
         };
@@ -3880,7 +3884,9 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+            | wire::ConsensusMessageV2Payload::VrfCommit(_)
+            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
                 return Err(AdapterError::TransportPayload);
             }
         }
@@ -8427,9 +8433,9 @@ fn verify_authenticated_message(
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
-            Err(AdapterError::TransportPayload)
-        }
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => Err(AdapterError::TransportPayload),
     }
 }
 
@@ -8559,7 +8565,7 @@ fn verify_aggregate_signature(
     for signer in signers {
         let index = usize::try_from(*signer)
             .ok()
-            .filter(|index| *index < context.roster.len())
+            .filter(|index| *index < context.roster.len() && *index < proofs_of_possession.len())
             .ok_or(AdapterError::ValidatorIndexOutOfRange(*signer))?;
         public_keys.push(context.roster[index].validator.public_key());
         pops.push(proofs_of_possession[index].as_slice());
@@ -8955,6 +8961,24 @@ mod tests {
         assert!(matches!(
             VerifiedHeightContext::genesis(context, proofs),
             Err(AdapterError::Cryptography(_))
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn aggregate_verification_rejects_signer_without_aligned_pop() {
+        let (context, _keys, proofs) = authenticated_context();
+        let signer = u32::try_from(context.roster.len() - 1).expect("small fixture roster");
+
+        assert!(matches!(
+            verify_aggregate_signature(
+                &context,
+                &[signer],
+                &[],
+                b"missing aligned proof of possession",
+                &proofs[..proofs.len() - 1],
+            ),
+            Err(AdapterError::ValidatorIndexOutOfRange(index)) if index == signer
         ));
     }
 

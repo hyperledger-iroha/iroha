@@ -4548,10 +4548,12 @@ impl V2IoCompletion {
             Self::CertifiedResponse {
                 lifecycle_id,
                 response,
-            } => V2IoCompletionAcknowledgement::Serve {
-                lifecycle_id: *lifecycle_id,
-                terminal: V2IoServeTerminal::Response(response.clone()),
-            },
+            } => {
+                V2IoCompletionAcknowledgement::Serve(Box::new(V2IoServeCompletionAcknowledgement {
+                    lifecycle_id: *lifecycle_id,
+                    terminal: V2IoServeTerminal::Response(response.clone()),
+                }))
+            }
             Self::CertifiedRequestFailed { .. } => V2IoCompletionAcknowledgement::Untracked,
             Self::CandidateLoaded(_)
             | Self::CandidateLoadUnavailable { .. }
@@ -4568,11 +4570,13 @@ impl V2IoCompletion {
 
 enum V2IoCompletionAcknowledgement {
     Work(EffectWorkId),
-    Serve {
-        lifecycle_id: CertifiedServeLifecycleId,
-        terminal: V2IoServeTerminal,
-    },
+    Serve(Box<V2IoServeCompletionAcknowledgement>),
     Untracked,
+}
+
+struct V2IoServeCompletionAcknowledgement {
+    lifecycle_id: CertifiedServeLifecycleId,
+    terminal: V2IoServeTerminal,
 }
 
 struct V2IoHandle {
@@ -5073,12 +5077,9 @@ impl V2IoHandle {
             V2IoCompletionAcknowledgement::Work(work_id) => {
                 self.command_tx.acknowledge_completion(work_id);
             }
-            V2IoCompletionAcknowledgement::Serve {
-                lifecycle_id,
-                terminal,
-            } => {
+            V2IoCompletionAcknowledgement::Serve(serve) => {
                 self.command_tx
-                    .acknowledge_serve_completion(lifecycle_id, terminal)?;
+                    .acknowledge_serve_completion(serve.lifecycle_id, serve.terminal)?;
             }
             V2IoCompletionAcknowledgement::Untracked => {}
         }
@@ -10975,6 +10976,12 @@ fn applied_height_reconstruction_covers(
                     wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
                         round_matches(response.certificate.round)
                     }
+                    wire::ConsensusMessageV2Payload::VrfCommit(commit) => {
+                        commit.epoch == artifact.height_context.epoch
+                    }
+                    wire::ConsensusMessageV2Payload::VrfReveal(reveal) => {
+                        reveal.epoch == artifact.height_context.epoch
+                    }
                 }
             }
             lane_message @ (BlockMessage::LaneBlockProposal(_)
@@ -12645,10 +12652,9 @@ impl ProductionV2Services {
                 Ok(())
             })();
             if let Some((acknowledgement, ownership_position)) = io_acknowledgement {
-                let acknowledge = !matches!(
-                    &acknowledgement,
-                    V2IoCompletionAcknowledgement::Serve { .. }
-                ) || serviced.is_ok();
+                let acknowledge =
+                    !matches!(&acknowledgement, V2IoCompletionAcknowledgement::Serve(_))
+                        || serviced.is_ok();
                 if acknowledge && let Some(io) = self.io.as_ref() {
                     let acknowledged =
                         io.acknowledge_completion_at(acknowledgement, ownership_position);

@@ -65,11 +65,13 @@ cust = { version = "0.3.2", optional = true }
 
 # pqcrypto-mldsa's NEON C backend is not compatible with MSVC. Keep ML-DSA
 # enabled on Windows/AArch64 through its portable clean C implementation.
+# Match `soranet_pq`'s exact header-generated clean-backend binding version so a
+# second library with identical PQClean symbols cannot enter the process.
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"] }
+pqcrypto-mldsa = { version = "=0.1.2", default-features = false, features = ["std"] }
 
 [target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
-pqcrypto-mldsa = { version = "0.1.2" }
+pqcrypto-mldsa = { version = "=0.1.2" }
 
 # sha2-asm uses Unix-style assembly sources which MSVC cannot assemble.
 [target.'cfg(all(target_arch = "x86_64", not(target_env = "msvc")))'.dependencies]

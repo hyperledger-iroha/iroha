@@ -24,10 +24,12 @@ collects artefacts for the incident rehearsal log.
 sorafs_cli guard-directory fetch \
   --url https://directory.soranet.dev/mainnet_snapshot.norito \
   --output ./artefacts/guard_directory_pre_drill.norito \
-  --expected-directory-hash <directory-hash-hex>
+  --expected-snapshot-digest <snapshot-digest-hex>
 ```
-  The command verifies every SRCv2 bundle before persisting the snapshot so the
-  drill starts from a trusted baseline. If the directory only publishes JSON,
+  Obtain the exact snapshot digest from the independent governance channel, not
+  from the download endpoint. The command authenticates that artefact, verifies
+  every SRCv2 bundle, and checks the current validity window before persisting
+  it. If the directory only publishes JSON,
   re-encode it to the Norito binary format with `soranet-directory build`
   before running the rotation helpers.
 
@@ -41,6 +43,10 @@ soranet-directory rotate \
   --out ./artefacts/guard_directory_post_drill.norito \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
+
+  `soranet-directory inspect` is a structural diagnostic and does not
+  authenticate the snapshot; retain the governance digest alongside the
+  rotation artefacts.
 
 - Change window approved by networking & observability on-call.
 

@@ -373,22 +373,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` ሽፋን ዝገት ፣ Python `ToriiClient`
   አሁን `decode_pdp_commitment_header` ወደ ውጭ ይላካል፣ እና `IrohaSwift` ተንቀሳቃሽ ረዳት አጋዥዎችን ይልካል።
   ደንበኞች ኢንኮድ የተደረገውን የናሙና መርሃ ግብር ወዲያውኑ መደበቅ ይችላሉ።
-- Torii በተጨማሪም `GET /v1/da/manifests/{storage_ticket}` ያጋልጣል ስለዚህ ኤስዲኬዎች እና ኦፕሬተሮች ማኒፌክቶችን ማምጣት ይችላሉ።
-  እና የመስቀለኛ መንገዱን የስፑል ማውጫ ሳይነኩ ቸንክ እቅዶች። ምላሹ Norito ባይት ይመልሳል
-  (base64)፣ የተሰራው አንጸባራቂ JSON፣ `chunk_plan` JSON ብሎብ ለ`sorafs fetch` ዝግጁ፣ እና ተዛማጅነት ያለው
-  ሄክስ ዳይጀስት (`storage_ticket`፣ `client_blob_id`፣ `blob_hash`፣ `chunk_root`) የታችኛው ተፋሰስ መሣሪያ ማድረግ ይችላል።
-  ኦርኬስትራውን እንደገና ሳያስሉ ይመግቡ እና ተመሳሳዩን `Sora-PDP-Commitment` አርዕስት ወደ
-  መስተዋቶች ማስገቢያ ምላሾች. `block_hash=<hex>`ን እንደ መጠይቅ ልኬት ማለፍ ቆራጥነት ይመልሳል
-  `sampling_plan` በ `block_hash || client_blob_id` (በአረጋጋጮች የተጋራ)
-  `assignment_hash`፣ የተጠየቀው `sample_window`፣ እና `(index, role, group)` tuples ስፋቶችን ቀርቧል።
-  የPoR ናሙናዎች እና አረጋጋጮች ተመሳሳይ ኢንዴክሶችን እንደገና ማጫወት እንዲችሉ አጠቃላይ የ 2D ድርድር አቀማመጥ። ናሙና ሰጪው
-  `client_blob_id`፣ `chunk_root`፣ እና `ipa_commitment` ወደ ምደባ ሃሽ ያቀላቅላል፤ ኢሮሀ መተግበሪያ አግኝ
-  --block-hash ` now writes `sampling_plan_.json` ከማንፀባረቂያው + ቻንክ እቅድ ቀጥሎ
-  ሃሽ ተጠብቆ፣ እና የJS/Swift Torii ደንበኞች ተመሳሳይ `assignment_hash_hex` አረጋጋጮች ያጋልጣሉ።
-  እና provers አንድ ነጠላ የመወሰኛ መጠይቅ ስብስብ ይጋራሉ። Torii የናሙና እቅድ ሲመልስ `iroha app da
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) በምትኩ
-  የአድ-ሆክ ናሙና ስለዚህ የPoR ምስክሮች ኦፕሬተሩ ቢተውም ከአረጋጋጭ ስራዎች ጋር ይሰለፋሉ።
-  `--block-hash` መሻር።【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/ምንጮች/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### ትልቅ የክፍያ ጭነት ፍሰት ፍሰትከተዋቀረው የነጠላ ጥያቄ ገደብ በላይ የሆኑ ንብረቶችን ማስገባት የሚፈልጉ ደንበኞች ሀ
 የዥረት ክፍለ ጊዜ `POST /v1/da/ingest/chunk/start` በመደወል። Torii በ ሀ

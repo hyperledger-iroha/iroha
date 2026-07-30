@@ -1,18 +1,13 @@
 //! Shared data-availability ingest helpers reused by the Taikai tooling and the
 //! standalone `iroha da` commands.
 
-use std::{path::Path, str::FromStr};
+use std::path::Path;
 
 use eyre::{Result, WrapErr, eyre};
-use iroha::{
-    config::Config,
-    da::{DaManifestBundle, DaSamplingPlan},
-};
-use iroha_crypto::Hash;
+use iroha::{config::Config, da::DaManifestBundle};
 use iroha_data_model::{
     da::{
         ingest::DaIngestReceipt,
-        manifest::DaManifestV1,
         types::{
             BlobClass, ExtraMetadata, FecScheme, MetadataEncryption, MetadataEntry,
             MetadataVisibility,
@@ -20,7 +15,6 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
 };
-use iroha_torii_shared::da::sampling::build_sampling_plan;
 use norito::{
     decode_from_bytes,
     json::{Map, Value},
@@ -63,8 +57,6 @@ pub(super) struct DaManifestFetchBundle {
     pub(super) storage_ticket_hex: String,
     pub(super) manifest_hash_hex: String,
     pub(super) blob_hash_hex: String,
-    pub(super) sampling_plan: Option<Value>,
-    pub(super) sampling_plan_typed: Option<DaSamplingPlan>,
 }
 
 impl DaPublisher {
@@ -174,18 +166,10 @@ impl DaManifestFetcher {
         })
     }
 
-    pub(super) fn fetch(
-        &self,
-        ticket_hex: &str,
-        block_hash_hex: Option<&str>,
-    ) -> Result<DaManifestFetchBundle> {
-        let suffix = block_hash_hex.map_or_else(
-            || ticket_hex.to_owned(),
-            |hash| format!("{ticket_hex}?block_hash={hash}"),
-        );
+    pub(super) fn fetch(&self, ticket_hex: &str) -> Result<DaManifestFetchBundle> {
         let url = self
             .endpoint
-            .join(&suffix)
+            .join(ticket_hex)
             .wrap_err("failed to build DA manifest fetch URL")?;
         let mut request = self.client.get(url).header(ACCEPT, "application/json");
         if let Some((ref login, ref password)) = self.basic_auth {
@@ -212,20 +196,10 @@ impl DaManifestFetcher {
 
         let parsed = DaManifestBundle::from_json(&value)
             .map_err(|err| eyre!("failed to decode DA manifest bundle: {err}"))?;
-        let manifest = parsed
-            .decode_manifest()
-            .map_err(|err| eyre!("failed to decode embedded manifest: {err}"))?;
-        if let (Some(plan), Some(block_hex)) = (parsed.sampling_plan.as_ref(), block_hash_hex) {
-            let block_hash = Hash::from_str(block_hex)
-                .map_err(|err| eyre!("invalid block hash `{block_hex}`: {err}"))?;
-            validate_sampling_plan(&manifest, plan, &block_hash)?;
-        }
 
         let manifest_bytes = parsed.manifest_bytes.clone();
         let manifest_json = parsed.manifest_json.clone();
         let chunk_plan = parsed.chunk_plan.clone();
-        let sampling_plan = value.get("sampling_plan").cloned();
-        let sampling_plan_typed = parsed.sampling_plan;
         let storage_ticket_hex = parsed.storage_ticket_hex;
         let manifest_hash_hex = parsed.manifest_hash_hex;
         let blob_hash_hex = parsed.blob_hash_hex;
@@ -236,55 +210,8 @@ impl DaManifestFetcher {
             storage_ticket_hex,
             manifest_hash_hex,
             blob_hash_hex,
-            sampling_plan,
-            sampling_plan_typed,
         })
     }
-}
-
-fn validate_sampling_plan(
-    manifest: &DaManifestV1,
-    plan: &DaSamplingPlan,
-    block_hash: &Hash,
-) -> Result<()> {
-    let expected = build_sampling_plan(manifest, block_hash);
-    if plan.assignment_hash != expected.assignment_hash {
-        return Err(eyre!(
-            "sampling plan assignment hash does not match block/manifest"
-        ));
-    }
-    if plan.sample_window != expected.sample_window {
-        return Err(eyre!(
-            "sampling plan window {} differs from expected {}",
-            plan.sample_window,
-            expected.sample_window
-        ));
-    }
-    let sample_seed = plan
-        .sample_seed
-        .ok_or_else(|| eyre!("sampling plan missing sample_seed"))?;
-    if sample_seed != expected.sample_seed {
-        return Err(eyre!(
-            "sampling plan seed does not match deterministic sampler"
-        ));
-    }
-    let expected_samples: Vec<_> = expected
-        .samples
-        .iter()
-        .map(|sample| iroha::da::DaSampledChunk {
-            index: sample.chunk_index,
-            role: sample.role,
-            group: sample.group_id,
-        })
-        .collect();
-    if plan.samples != expected_samples {
-        return Err(eyre!(
-            "sampling plan samples differ from deterministic sampler ({} vs {})",
-            plan.samples.len(),
-            expected.samples.len()
-        ));
-    }
-    Ok(())
 }
 
 /// Convert a JSON metadata map into the Norito `ExtraMetadata` structure.
@@ -363,16 +290,6 @@ pub(super) fn load_metadata_from_path(path: &Path) -> Result<ExtraMetadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        da::{
-            manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
-            types::{
-                BlobClass, BlobCodec, BlobDigest, ErasureProfile, ExtraMetadata, RetentionPolicy,
-                StorageTicketId,
-            },
-        },
-        nexus::LaneId,
-    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -421,74 +338,5 @@ mod tests {
             StorageClass::Warm
         ));
         assert!(parse_storage_class("unknown").is_err());
-    }
-
-    #[test]
-    fn sampling_plan_validation_detects_mismatch() {
-        let manifest = sample_manifest(8);
-        let block_hash = Hash::new(b"deterministic-sampling");
-        let expected = build_sampling_plan(&manifest, &block_hash);
-        let mut plan = DaSamplingPlan {
-            assignment_hash: expected.assignment_hash,
-            sample_window: expected.sample_window,
-            sample_seed: Some(expected.sample_seed),
-            samples: expected
-                .samples
-                .iter()
-                .map(|sample| iroha::da::DaSampledChunk {
-                    index: sample.chunk_index,
-                    role: sample.role,
-                    group: sample.group_id,
-                })
-                .collect(),
-        };
-        validate_sampling_plan(&manifest, &plan, &block_hash).expect("plan must validate");
-
-        plan.assignment_hash = BlobDigest::new([0xAA; 32]);
-        let outcome = validate_sampling_plan(&manifest, &plan, &block_hash);
-        assert!(outcome.is_err(), "mismatched plan must fail validation");
-    }
-
-    fn sample_manifest(chunk_count: u32) -> DaManifestV1 {
-        let chunks = (0..chunk_count)
-            .map(|idx| {
-                ChunkCommitment::new_with_role(
-                    idx,
-                    u64::from(idx) * 1024,
-                    1024,
-                    BlobDigest::new(
-                        [u8::try_from(idx).expect("chunk index fits in digest byte"); 32],
-                    ),
-                    if idx % 2 == 0 {
-                        ChunkRole::Data
-                    } else {
-                        ChunkRole::GlobalParity
-                    },
-                    idx / 2,
-                )
-            })
-            .collect();
-        DaManifestV1 {
-            version: DaManifestV1::VERSION,
-            client_blob_id: BlobDigest::new([0x01; 32]),
-            lane_id: LaneId::new(1),
-            epoch: 1,
-            blob_class: BlobClass::NexusLaneSidecar,
-            codec: BlobCodec::new("test/binary"),
-            blob_hash: BlobDigest::new([0x02; 32]),
-            chunk_root: BlobDigest::new([0x03; 32]),
-            storage_ticket: StorageTicketId::new([0x04; 32]),
-            total_size: u64::from(chunk_count) * 1024,
-            chunk_size: 1024,
-            total_stripes: chunk_count,
-            shards_per_stripe: 4,
-            erasure_profile: ErasureProfile::default(),
-            retention_policy: RetentionPolicy::default(),
-            rent_quote: iroha_data_model::da::types::DaRentQuote::default(),
-            chunks,
-            ipa_commitment: BlobDigest::new([0x05; 32]),
-            metadata: ExtraMetadata::default(),
-            issued_at_unix: 1_701_000_000,
-        }
     }
 }

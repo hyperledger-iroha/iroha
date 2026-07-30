@@ -54,14 +54,14 @@ pub enum GuardDirectoryError {
     },
     #[error("guard snapshot `{path}` advertises unknown validation phase `{raw}`")]
     UnknownValidationPhase { path: PathBuf, raw: u8 },
-    #[error("expected guard directory hash {expected} but snapshot `{path}` contained {found}")]
-    DirectoryHashMismatch {
+    #[error("guard snapshot `{path}` failed exact digest authentication: {source}")]
+    SnapshotAuthentication {
         path: PathBuf,
-        expected: String,
-        found: String,
+        #[source]
+        source: norito::Error,
     },
-    #[error("invalid expected guard directory hash for `{path}`: {source}")]
-    InvalidExpectedDirectoryHash {
+    #[error("invalid expected guard snapshot digest for `{path}`: {source}")]
+    InvalidExpectedSnapshotDigest {
         path: PathBuf,
         #[source]
         source: ConfigError,
@@ -173,36 +173,28 @@ pub enum GuardPinningProofValidationError {
 }
 
 /// Resolve and verify the relay entry referenced by the supplied configuration.
-pub fn load_guard_entry(
+pub fn load_guard_entry_at(
     config: &GuardDirectoryConfig,
     identity_ed25519: &[u8; 32],
     expected_descriptor_commit: &[u8; 32],
+    at_unix: i64,
 ) -> Result<GuardDirectoryEntry, GuardDirectoryError> {
     let path = config.snapshot_path().to_path_buf();
     let data = fs::read(&path).map_err(|source| GuardDirectoryError::Io {
         path: path.clone(),
         source,
     })?;
-    let snapshot = GuardDirectorySnapshotV2::from_bytes(&data).map_err(|source| {
-        GuardDirectoryError::Decode {
+    let expected_digest = config.expected_snapshot_digest().map_err(|source| {
+        GuardDirectoryError::InvalidExpectedSnapshotDigest {
             path: path.clone(),
             source,
         }
     })?;
-
-    if let Some(expected_hash) = config.try_expected_directory_hash().map_err(|source| {
-        GuardDirectoryError::InvalidExpectedDirectoryHash {
+    let snapshot = GuardDirectorySnapshotV2::authenticate_bytes_at(&data, expected_digest, at_unix)
+        .map_err(|source| GuardDirectoryError::SnapshotAuthentication {
             path: path.clone(),
             source,
-        }
-    })? && snapshot.directory_hash != expected_hash
-    {
-        return Err(GuardDirectoryError::DirectoryHashMismatch {
-            path: path.clone(),
-            expected: hex_encode(expected_hash),
-            found: hex_encode(snapshot.directory_hash),
-        });
-    }
+        })?;
 
     let validation_phase = decode_validation_phase(snapshot.validation_phase).ok_or(
         GuardDirectoryError::UnknownValidationPhase {
@@ -240,7 +232,7 @@ pub fn load_guard_entry(
                 reason,
             }
         })?;
-    bundle.verify(&ed25519, &issuer.mldsa65_public, validation_phase)?;
+    bundle.verify_at(&ed25519, &issuer.mldsa65_public, validation_phase, at_unix)?;
 
     Ok(GuardDirectoryEntry {
         bundle,
@@ -596,7 +588,7 @@ mod tests {
         },
         directory::{
             GUARD_DIRECTORY_VERSION_V2, GuardDirectoryIssuerV1, GuardDirectoryRelayEntryV2,
-            compute_issuer_fingerprint, encode_validation_phase,
+            compute_issuer_fingerprint, compute_snapshot_digest, encode_validation_phase,
         },
         handshake::HandshakeSuite,
     };
@@ -611,16 +603,19 @@ mod tests {
         config: GuardDirectoryConfig,
         relay_id: [u8; 32],
         descriptor_commit: [u8; 32],
+        at_unix: i64,
+        valid_until_unix: i64,
         _temp: NamedTempFile,
     }
 
     #[test]
     fn load_guard_entry_validates_snapshot() {
         let fixture = snapshot_fixture();
-        let entry = load_guard_entry(
+        let entry = load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
             &fixture.descriptor_commit,
+            fixture.at_unix,
         )
         .expect("guard snapshot validates");
         assert_eq!(
@@ -634,28 +629,66 @@ mod tests {
         let fixture = snapshot_fixture();
         let mut wrong_commit = fixture.descriptor_commit;
         wrong_commit[0] ^= 0xFF;
-        let err = load_guard_entry(&fixture.config, &fixture.relay_id, &wrong_commit)
-            .expect_err("mismatched descriptor commit should fail validation");
+        let err = load_guard_entry_at(
+            &fixture.config,
+            &fixture.relay_id,
+            &wrong_commit,
+            fixture.at_unix,
+        )
+        .expect_err("mismatched descriptor commit should fail validation");
         matches!(err, GuardDirectoryError::DescriptorCommitMismatch { .. });
     }
 
     #[test]
-    fn load_guard_entry_rejects_invalid_expected_hash_without_panic() {
+    fn load_guard_entry_rejects_invalid_expected_digest_without_panic() {
         let mut fixture = snapshot_fixture();
-        fixture.config.expected_directory_hash_hex = Some("zz".repeat(32));
-        match load_guard_entry(
+        fixture.config.expected_snapshot_digest_hex = "zz".repeat(32);
+        match load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
             &fixture.descriptor_commit,
+            fixture.at_unix,
         ) {
-            Err(GuardDirectoryError::InvalidExpectedDirectoryHash { source, .. }) => {
+            Err(GuardDirectoryError::InvalidExpectedSnapshotDigest { source, .. }) => {
                 assert!(
-                    matches!(source, ConfigError::GuardDirectory(ref message) if message.contains("expected_directory_hash_hex")),
-                    "unexpected expected-hash error: {source}"
+                    matches!(source, ConfigError::GuardDirectory(ref message) if message.contains("expected_snapshot_digest_hex")),
+                    "unexpected expected-digest error: {source}"
                 );
             }
-            other => panic!("expected invalid expected-hash error, got {other:?}"),
+            other => panic!("expected invalid expected-digest error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn load_guard_entry_rejects_unpinned_or_expired_snapshot() {
+        let mut unpinned = snapshot_fixture();
+        unpinned.config.expected_snapshot_digest_hex = "00".repeat(32);
+        let err = load_guard_entry_at(
+            &unpinned.config,
+            &unpinned.relay_id,
+            &unpinned.descriptor_commit,
+            unpinned.at_unix,
+        )
+        .expect_err("different exact snapshot digest must fail");
+        assert!(matches!(
+            err,
+            GuardDirectoryError::SnapshotAuthentication { .. }
+        ));
+        assert!(err.to_string().contains("digest mismatch"));
+
+        let expired = snapshot_fixture();
+        let err = load_guard_entry_at(
+            &expired.config,
+            &expired.relay_id,
+            &expired.descriptor_commit,
+            expired.valid_until_unix,
+        )
+        .expect_err("snapshot must fail at its exclusive valid_until");
+        assert!(matches!(
+            err,
+            GuardDirectoryError::SnapshotAuthentication { .. }
+        ));
+        assert!(err.to_string().contains("expired"));
     }
 
     #[test]
@@ -663,10 +696,11 @@ mod tests {
         use std::{fs, time::Duration};
 
         let fixture = snapshot_fixture();
-        let entry = load_guard_entry(
+        let entry = load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
             &fixture.descriptor_commit,
+            fixture.at_unix,
         )
         .expect("guard snapshot validates");
         let dir = tempfile::tempdir().expect("temp dir");
@@ -706,10 +740,11 @@ mod tests {
         use std::{fs, time::Duration};
 
         let fixture = snapshot_fixture();
-        let entry = load_guard_entry(
+        let entry = load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
             &fixture.descriptor_commit,
+            fixture.at_unix,
         )
         .expect("guard snapshot validates");
         let dir = tempfile::tempdir().expect("temp dir");
@@ -726,7 +761,7 @@ mod tests {
         let proof: GuardPinningProof = json::from_slice(&proof_bytes).expect("decode guard proof");
         let snapshot_bytes = fs::read(fixture.config.snapshot_path()).expect("snapshot contents");
         let snapshot =
-            GuardDirectorySnapshotV2::from_bytes(&snapshot_bytes).expect("snapshot decodes");
+            GuardDirectorySnapshotV2::inspect_bytes(&snapshot_bytes).expect("snapshot decodes");
         verify_guard_pinning_proof(&snapshot, &proof).expect("proof validates");
     }
 
@@ -735,10 +770,11 @@ mod tests {
         use std::{fs, time::Duration};
 
         let fixture = snapshot_fixture();
-        let entry = load_guard_entry(
+        let entry = load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
             &fixture.descriptor_commit,
+            fixture.at_unix,
         )
         .expect("guard snapshot validates");
         let dir = tempfile::tempdir().expect("temp dir");
@@ -770,10 +806,11 @@ mod tests {
         use std::{fs, time::Duration};
 
         let fixture = snapshot_fixture();
-        let entry = load_guard_entry(
+        let entry = load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
             &fixture.descriptor_commit,
+            fixture.at_unix,
         )
         .expect("guard snapshot validates");
         let dir = tempfile::tempdir().expect("temp dir");
@@ -792,7 +829,7 @@ mod tests {
         proof.descriptor_commit_hex = "00".repeat(32);
         let snapshot_bytes = fs::read(fixture.config.snapshot_path()).expect("snapshot contents");
         let snapshot =
-            GuardDirectorySnapshotV2::from_bytes(&snapshot_bytes).expect("snapshot decodes");
+            GuardDirectorySnapshotV2::inspect_bytes(&snapshot_bytes).expect("snapshot decodes");
         let err = verify_guard_pinning_proof(&snapshot, &proof)
             .expect_err("descriptor mismatch must be rejected");
         matches!(
@@ -848,7 +885,7 @@ mod tests {
         temp.write_all(&bytes).expect("write snapshot");
         let config = GuardDirectoryConfig {
             snapshot_path: temp.path().to_path_buf(),
-            expected_directory_hash_hex: Some(hex_encode(snapshot.directory_hash)),
+            expected_snapshot_digest_hex: hex_encode(compute_snapshot_digest(&bytes)),
             allow_missing_entry: false,
             pinning_proof_path: None,
         };
@@ -857,6 +894,8 @@ mod tests {
             config,
             relay_id,
             descriptor_commit,
+            at_unix: snapshot.valid_after_unix,
+            valid_until_unix: snapshot.valid_until_unix,
             _temp: temp,
         }
     }

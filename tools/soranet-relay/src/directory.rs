@@ -450,7 +450,7 @@ pub fn rotate_snapshot<R: RngCore + CryptoRng>(
     snapshot_bytes: &[u8],
     rng: &mut R,
 ) -> Result<RotationOutput, DirectoryRotateError> {
-    let snapshot = GuardDirectorySnapshotV2::from_bytes(snapshot_bytes)
+    let snapshot = GuardDirectorySnapshotV2::inspect_bytes(snapshot_bytes)
         .map_err(|source| DirectoryRotateError::Decode { source })?;
     rotate_snapshot_struct(snapshot, rng)
 }
@@ -462,7 +462,7 @@ pub fn rotate_snapshot<R: RngCore + CryptoRng>(
 pub fn inspect_snapshot(
     snapshot_bytes: &[u8],
 ) -> Result<DirectorySnapshotBundle, DirectoryRotateError> {
-    let snapshot = GuardDirectorySnapshotV2::from_bytes(snapshot_bytes)
+    let snapshot = GuardDirectorySnapshotV2::inspect_bytes(snapshot_bytes)
         .map_err(|source| DirectoryRotateError::Decode { source })?;
     let metadata = summarize_snapshot(&snapshot)?;
     Ok(DirectorySnapshotBundle { snapshot, metadata })
@@ -528,7 +528,7 @@ fn build_snapshot(
         })?;
 
         bundle
-            .verify(
+            .verify_signatures(
                 &issuer.verifying_key,
                 &issuer.mldsa_public,
                 validation_phase,
@@ -703,7 +703,7 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         let bundle = RelayCertificateBundleV2::from_cbor(&relay_entry.certificate)
             .map_err(|source| DirectoryRotateError::CertificateDecode { index, source })?;
         bundle
-            .verify(&verifying_key, &issuer.mldsa65_public, validation_phase)
+            .verify_signatures(&verifying_key, &issuer.mldsa65_public, validation_phase)
             .map_err(|source| DirectoryRotateError::CertificateVerify { index, source })?;
         certificate_summaries.push(CertificateSummary {
             path: None,
@@ -835,7 +835,7 @@ fn summarize_snapshot(
             issuer_records.get(&bundle.certificate.issuer_fingerprint)
         {
             bundle
-                .verify(issuer_key, mldsa_public, validation_phase)
+                .verify_signatures(issuer_key, mldsa_public, validation_phase)
                 .map_err(|source| DirectoryRotateError::CertificateVerify { index, source })?;
         }
         certificate_summaries.push(CertificateSummary {
@@ -1639,7 +1639,7 @@ mod tests {
         for entry in &output.bundle.snapshot.relays {
             let bundle = RelayCertificateBundleV2::from_cbor(&entry.certificate).expect("bundle");
             bundle
-                .verify(
+                .verify_signatures(
                     &new_verifying,
                     &output.keys.mldsa_public,
                     output.bundle.metadata.validation_phase,
