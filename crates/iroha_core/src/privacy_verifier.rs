@@ -2246,13 +2246,14 @@ mod tests {
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
             BootleLanternDisclosedAttributeV1, BootleLanternIssuerPublicMatrixV1,
             BootleLanternPolynomialV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
-            PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyChallengeV1,
-            PrivacyCredentialDocumentTypeV1, PrivacyEncryptionKeyV1, PrivacyEngineIdV1,
-            PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1, PrivacyFcmpPoolBootstrapV1,
-            PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1,
-            PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1,
-            PrivacyOrchardActionV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1,
-            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapDigestV1,
+            IrohaZkAmsProofV1, PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+            PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEncryptionKeyV1,
+            PrivacyEngineIdV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
+            PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
+            PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
+            PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
+            PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
+            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapDigestV1,
             PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
             PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
             PrivacyProofManagedPoolBootstrapV1, PrivacyProofSystemIdV1, PrivacyProofV1,
@@ -2262,15 +2263,13 @@ mod tests {
             PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
             PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDateV1,
             PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-            PrivacyVegaMdlSignatureAlgorithmV1, VeRangeTransparentRangeStatementV1,
-            IrohaZkAmsProofV1, PrivacyZkAmsAdmissionAnchorV1,
-            PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
-            PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1,
-            PrivacyZkAmsProvisionAccountV1, PrivacyZkAmsRegistryBootstrapV1,
-            PrivacyZkAmsRegistryIdV1, PrivacyZkAmsSeedPublicKeyV1,
-            PrivacyZkAmsSubjectCommitmentV1, ZK_AMS_PHC_VERSION_V1,
-            ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZkAcePqAuthorizationStatementV1,
-            zk_ams_registry_record_digest_v1,
+            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsAdmissionAnchorV1,
+            PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
+            PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+            PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryIdV1, PrivacyZkAmsSeedPublicKeyV1,
+            PrivacyZkAmsSubjectCommitmentV1, VeRangeTransparentRangeStatementV1,
+            ZK_AMS_PHC_VERSION_V1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
+            ZkAcePqAuthorizationStatementV1, zk_ams_registry_record_digest_v1,
         },
         zk::derive_zk_ace_privacy_authorization_digest,
     };
@@ -2331,15 +2330,12 @@ mod tests {
             },
             vega::derive_device_authentication_digest_v1,
             verange::{commit, prove_batch},
-            zk_ace::{
-                ZkAcePrivacyWitnessV1, prove_zk_ace_privacy_v1,
-            },
+            zk_ace::{ZkAcePrivacyWitnessV1, prove_zk_ace_privacy_v1},
             zk_ams::{
                 ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_MIN_RING_SIZE_V1,
-                ZkAmsBatchCredentialWitnessV1, ZkAmsSeedSecretV1,
-                prove_zk_ams_batch_admission_v1, sign_zk_ams_provision_statement_v1,
-                zk_ams_generator_digest_v1, zk_ams_key_image_v1,
-                zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
+                ZkAmsBatchCredentialWitnessV1, ZkAmsSeedSecretV1, prove_zk_ams_batch_admission_v1,
+                sign_zk_ams_provision_statement_v1, zk_ams_generator_digest_v1,
+                zk_ams_key_image_v1, zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
             },
             zk_x509::credential_stark::{
                 ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
@@ -2554,7 +2550,7 @@ mod tests {
             ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis_hash)
                 .expect("canonical X.509 consensus binding");
         let canonical_proof = PrivacyProofBytesV1::new(
-            encode_zk_x509_credential_envelope_v1(public, b"X5S1main-aggregate", b"X5C1compact-ca")
+            encode_zk_x509_credential_envelope_v1(public, b"X5M1main-aggregate", b"X5C1compact-ca")
                 .expect("canonical X.509 credential envelope"),
         );
         let malformed_proof = PrivacyProofBytesV1::new(Vec::new());
@@ -3712,9 +3708,8 @@ mod tests {
             ChainId,
         )> = OnceLock::new();
         let (envelope, activation, chain_id) = FIXTURE.get_or_init(|| {
-            let compiled =
-                compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
-                    .expect("compiled ZK-ACE profile");
+            let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
+                .expect("compiled ZK-ACE profile");
             let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
                 PrivacyActiveLifecycleV1 {
                     proposed_at_height: 1,
@@ -3755,11 +3750,9 @@ mod tests {
                 replay_nullifier: PrivacyNullifierV1::new([0; 32]),
             };
             let genesis_hash = [0xA7; 32];
-            let mut public_inputs =
-                ZkAcePrivacyPublicInputsV1::new(statement, genesis_hash);
-            let authorization_digest =
-                derive_zk_ace_privacy_authorization_digest(&public_inputs)
-                    .expect("ZK-ACE authorization digest");
+            let mut public_inputs = ZkAcePrivacyPublicInputsV1::new(statement, genesis_hash);
+            let authorization_digest = derive_zk_ace_privacy_authorization_digest(&public_inputs)
+                .expect("ZK-ACE authorization digest");
             public_inputs.statement.replay_nullifier =
                 witness.replay_nullifier_v1(&authorization_digest, &chain_id);
             let proof = prove_zk_ace_privacy_v1(&public_inputs, &witness)
@@ -3846,8 +3839,7 @@ mod tests {
                 .map(|index| {
                     let mut bytes = [0_u8; 32];
                     bytes[0] = u8::try_from(index).expect("bounded ZK-AMS ring index");
-                    let secret =
-                        ZkAmsSeedSecretV1::from_bytes(bytes).expect("ZK-AMS seed secret");
+                    let secret = ZkAmsSeedSecretV1::from_bytes(bytes).expect("ZK-AMS seed secret");
                     (zk_ams_seed_public_key_v1(&secret), secret)
                 })
                 .collect::<Vec<_>>();
@@ -3861,17 +3853,13 @@ mod tests {
                         version: ZK_AMS_PHC_VERSION_V1,
                         issuer_id: bootstrap.issuer_id,
                         policy_id: bootstrap.policy_id,
-                        subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new([
-                            0x41_u8
-                                .checked_add(index)
-                                .expect("bounded subject byte");
-                            32
-                        ]),
+                        subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new(
+                            [0x41_u8.checked_add(index).expect("bounded subject byte"); 32],
+                        ),
                         seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new(*public),
-                        credential_nonce: PrivacyZkAmsCredentialNonceV1::new([
-                            0x51_u8.checked_add(index).expect("bounded nonce byte");
-                            32
-                        ]),
+                        credential_nonce: PrivacyZkAmsCredentialNonceV1::new(
+                            [0x51_u8.checked_add(index).expect("bounded nonce byte"); 32],
+                        ),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -3925,10 +3913,12 @@ mod tests {
                     )
                 },
             );
-            let statement_context = |action_index| PrivacyStatementContextV1 {
+            let statement_context = |transaction_intent_byte: u8| PrivacyStatementContextV1 {
                 chain_id: chain_id.clone(),
-                action_index,
-                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x21; 32]),
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(
+                    [transaction_intent_byte; 32],
+                ),
                 parameter_id: compiled.parameter_id,
                 parameter_digest: compiled.parameter_digest,
                 verifier_digest: compiled.verifier_digest,
@@ -3936,7 +3926,7 @@ mod tests {
                 engine_manifest_digest: compiled.engine_manifest_digest,
             };
             let batch_statement = IrohaZkAmsStatementV1 {
-                context: statement_context(0),
+                context: statement_context(0x21),
                 issuer_id: bootstrap.issuer_id,
                 issuer_public_key: bootstrap.issuer_public_key,
                 issuer_policy_record_digest: bootstrap.issuer_policy_record_digest(),
@@ -3960,8 +3950,7 @@ mod tests {
                     anchors: batch_anchors.clone(),
                 }),
             };
-            let batch_typed_statement =
-                PrivacyStatementV1::IrohaZkAmsV1(batch_statement.clone());
+            let batch_typed_statement = PrivacyStatementV1::IrohaZkAmsV1(batch_statement.clone());
             let batch_statement_digest = batch_typed_statement
                 .digest()
                 .expect("ZK-AMS batch statement digest");
@@ -4027,7 +4016,7 @@ mod tests {
             let account_key = KeyPair::try_from_seed(vec![0x40; 32], Algorithm::Ed25519)
                 .expect("ZK-AMS provisioned account");
             let provision_statement = IrohaZkAmsStatementV1 {
-                context: statement_context(1),
+                context: statement_context(0x22),
                 issuer_id: bootstrap.issuer_id,
                 issuer_public_key: bootstrap.issuer_public_key,
                 issuer_policy_record_digest: bootstrap.issuer_policy_record_digest(),
@@ -4043,18 +4032,16 @@ mod tests {
                 ),
                 policy_id: bootstrap.policy_id,
                 policy_digest: bootstrap.policy_digest,
-                action: PrivacyZkAmsActionV1::ProvisionAccount(
-                    PrivacyZkAmsProvisionAccountV1 {
-                        account_registry_root: batch_next_root,
-                        account_registry_root_epoch: batch_next_epoch,
-                        admitted_seed_key_ring: ring
-                            .iter()
-                            .map(|(public, _)| PrivacyZkAmsSeedPublicKeyV1::new(*public))
-                            .collect(),
-                        account_id: AccountId::new(account_key.public_key().clone()),
-                        key_image: PrivacyZkAmsKeyImageV1::new(key_image),
-                    },
-                ),
+                action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
+                    account_registry_root: batch_next_root,
+                    account_registry_root_epoch: batch_next_epoch,
+                    admitted_seed_key_ring: ring
+                        .iter()
+                        .map(|(public, _)| PrivacyZkAmsSeedPublicKeyV1::new(*public))
+                        .collect(),
+                    account_id: AccountId::new(account_key.public_key().clone()),
+                    key_image: PrivacyZkAmsKeyImageV1::new(key_image),
+                }),
             };
             let provision_typed_statement =
                 PrivacyStatementV1::IrohaZkAmsV1(provision_statement.clone());
@@ -4064,7 +4051,7 @@ mod tests {
             let provision_binding = TranscriptBindingV1 {
                 chain_id: chain_id.as_str().as_bytes(),
                 genesis_hash,
-                action_index: 1,
+                action_index: 0,
                 statement_digest: *provision_statement_digest.as_bytes(),
                 parameter_id: *compiled.parameter_id.as_bytes(),
                 parameter_digest: *compiled.parameter_digest.as_bytes(),
@@ -4093,9 +4080,9 @@ mod tests {
                 statement_digest: provision_statement_digest,
                 statement: provision_typed_statement,
                 proof: PrivacyProofV1::IrohaZkAmsV1(
-                    IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
-                        PrivacyProofBytesV1::new(provision_proof),
-                    ),
+                    IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(PrivacyProofBytesV1::new(
+                        provision_proof,
+                    )),
                 ),
             };
             ZkAmsRuntimeFixtureForTest {
@@ -4527,8 +4514,14 @@ mod tests {
         else {
             unreachable!("ZK-ACE runtime fixture")
         };
-        assert_eq!(effects.protocol_id(), PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
-        assert_eq!(effects.statement_digest(), fixture.envelope.statement_digest);
+        assert_eq!(
+            effects.protocol_id(),
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        );
+        assert_eq!(
+            effects.statement_digest(),
+            fixture.envelope.statement_digest
+        );
         assert_eq!(effects.action_index(), 0);
         let VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(effect) = effects.ledger() else {
             panic!("ZK-ACE dispatch returned the wrong ledger effect")
@@ -4589,16 +4582,14 @@ mod tests {
         };
         let batch_effects = verify_privacy_envelope_v1(&fixture.batch_envelope, context(0))
             .expect("native ZK-AMS batch dispatch");
-        let PrivacyStatementV1::IrohaZkAmsV1(batch_statement) =
-            &fixture.batch_envelope.statement
+        let PrivacyStatementV1::IrohaZkAmsV1(batch_statement) = &fixture.batch_envelope.statement
         else {
             unreachable!("ZK-AMS batch fixture")
         };
         let PrivacyZkAmsActionV1::BatchAdmission(batch) = &batch_statement.action else {
             unreachable!("ZK-AMS batch action")
         };
-        let VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(effect) =
-            batch_effects.ledger()
+        let VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(effect) = batch_effects.ledger()
         else {
             panic!("ZK-AMS batch dispatch returned the wrong ledger effect")
         };
@@ -4612,9 +4603,8 @@ mod tests {
             batch_statement.registry_record_digest
         );
 
-        let provision_effects =
-            verify_privacy_envelope_v1(&fixture.provision_envelope, context(1))
-                .expect("native ZK-AMS provision dispatch");
+        let provision_effects = verify_privacy_envelope_v1(&fixture.provision_envelope, context(0))
+            .expect("native ZK-AMS provision dispatch");
         let PrivacyStatementV1::IrohaZkAmsV1(provision_statement) =
             &fixture.provision_envelope.statement
         else {
@@ -4665,7 +4655,7 @@ mod tests {
             .digest()
             .expect("mutated ZK-AMS statement remains canonical");
         assert!(matches!(
-            verify_privacy_envelope_v1(&rebound, context(1)),
+            verify_privacy_envelope_v1(&rebound, context(0)),
             Err(PrivacyVerificationErrorV1::NativeZkAms(_))
         ));
 

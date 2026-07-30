@@ -59,8 +59,11 @@ use iroha_data_model::{
     offline::{KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2},
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
-        PrivacyCapabilityArchiveValidationStatusV1, PrivacyCapabilitySnapshotV1,
-        PrivacyConsensusPolicyV1, PrivacyProtocolIdV1, validate_privacy_capability_archive_v1,
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
+        PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
+        PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
+        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
+        validate_privacy_exact12_fixture_bundle_v1,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
@@ -1252,6 +1255,12 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
 
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
+const PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1: usize =
+    if PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
+    } else {
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+    };
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PrivacyBufferHeader {
@@ -1306,7 +1315,7 @@ unsafe fn write_privacy_bytes(
         }
         return Ok(());
     }
-    if len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+    if len > PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1 {
         return Err(ERR_CONNECT_ENCODE);
     }
     let total = PRIVACY_BUFFER_HEADER_BYTES
@@ -1348,7 +1357,7 @@ unsafe fn clear_privacy_allocated_buffer(ptr_: *mut c_uchar) -> *mut c_uchar {
     let valid = unsafe {
         (*header).magic == PRIVACY_BUFFER_HEADER_MAGIC
             && (*header).len > 0
-            && (*header).len <= PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
+            && (*header).len <= PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1
     };
     if !valid {
         return ptr_;
@@ -1427,6 +1436,64 @@ pub unsafe extern "C" fn iroha_privacy_validate_capabilities_v1(
     }
     let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
     validate_privacy_capability_archive_v1(archive).code()
+}
+
+/// Return the complete Rust-derived exact-12 statement/envelope KAT bundle.
+///
+/// The output is canonical Norito and must be released with
+/// [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// `out_ptr` and `out_len` must be valid writable pointers for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_exact12_fixture_bundle_v1(
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if out_ptr.is_null() || out_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let Ok(mut bytes) = privacy_exact12_fixture_bundle_bytes_v1() else {
+        return ERR_CONNECT_ENCODE;
+    };
+    let result = if bytes.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+        || !validate_privacy_exact12_fixture_bundle_v1(&bytes).is_valid()
+    {
+        ERR_CONNECT_ENCODE
+    } else {
+        match unsafe { write_privacy_bytes(out_ptr, out_len, &bytes) } {
+            Ok(()) => 0,
+            Err(code) => code,
+        }
+    };
+    bytes.fill(0);
+    result
+}
+
+/// Validate one untrusted canonical exact-12 statement/envelope KAT bundle.
+///
+/// # Safety
+///
+/// For a non-zero `archive_len`, `archive_ptr` must reference at least that
+/// many readable bytes for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_validate_exact12_fixture_bundle_v1(
+    archive_ptr: *const c_uchar,
+    archive_len: c_ulong,
+) -> c_int {
+    if archive_ptr.is_null() {
+        return PrivacyExact12FixtureBundleValidationStatusV1::NullPointer.code();
+    }
+    let Ok(archive_len) = usize::try_from(archive_len) else {
+        return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+    };
+    if archive_len > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+    }
+    let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
+    validate_privacy_exact12_fixture_bundle_v1(archive).code()
 }
 
 fn parse_multisig_spec_bytes(ptr: *const c_char, len: c_ulong) -> BridgeResult<MultisigSpec> {
@@ -37796,6 +37863,46 @@ fn java_privacy_capabilities_archive() -> Result<Vec<u8>, String> {
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_privacy_exact12_fixture_bundle_archive() -> Result<Vec<u8>, String> {
+    let mut archive = privacy_exact12_fixture_bundle_bytes_v1()
+        .map_err(|err| format!("failed to encode exact-12 privacy fixture bundle: {err}"))?;
+    if archive.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        archive.fill(0);
+        return Err("exact-12 privacy fixture bundle exceeds maximum length".to_owned());
+    }
+    let status = validate_privacy_exact12_fixture_bundle_v1(&archive);
+    if !status.is_valid() {
+        archive.fill(0);
+        return Err(format!(
+            "exact-12 privacy fixture bundle validation failed with status {}",
+            status.code()
+        ));
+    }
+    Ok(archive)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_privacy_validate_exact12_fixture_bundle_bytes(archive: Option<&[u8]>) -> jni::sys::jint {
+    let Some(archive) = archive else {
+        return PrivacyExact12FixtureBundleValidationStatusV1::NullPointer.code();
+    };
+    if archive.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+    }
+    validate_privacy_exact12_fixture_bundle_v1(archive).code()
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_privacy_validate_capabilities(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -37830,6 +37937,62 @@ fn java_native_privacy_validate_capabilities(
 fn java_native_privacy_capabilities(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let mut archive = java_privacy_capabilities_archive()?;
+        let array_result = env
+            .byte_array_from_slice(&archive)
+            .map_err(|err| err.to_string());
+        archive.fill(0);
+        let array = array_result?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_state(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_validate_exact12_fixture_bundle(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    if archive.is_null() {
+        return java_privacy_validate_exact12_fixture_bundle_bytes(None);
+    }
+    let archive_len = match env.get_array_length(&archive) {
+        Ok(value) => match usize::try_from(value) {
+            Ok(value) => value,
+            Err(_) => {
+                return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+            }
+        },
+        Err(_) => return PrivacyExact12FixtureBundleValidationStatusV1::MalformedArchive.code(),
+    };
+    if archive_len > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+        return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
+    }
+    match env.convert_byte_array(&archive) {
+        Ok(bytes) => java_privacy_validate_exact12_fixture_bundle_bytes(Some(&bytes)),
+        Err(_) => PrivacyExact12FixtureBundleValidationStatusV1::MalformedArchive.code(),
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_exact12_fixture_bundle(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let mut archive = java_privacy_exact12_fixture_bundle_archive()?;
         let array_result = env
             .byte_array_from_slice(&archive)
             .map_err(|err| err.to_string());
@@ -38370,6 +38533,39 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     java_native_privacy_validate_capabilities(&mut env, archive)
 }
 
+/// Return the canonical exact-12 privacy fixture bundle to the Kotlin/JVM SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_exact12_fixture_bundle(&mut env)
+}
+
+/// Validate an exact-12 privacy fixture bundle for the Kotlin/JVM SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    java_native_privacy_validate_exact12_fixture_bundle(&mut env, archive)
+}
+
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -38414,6 +38610,39 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     java_native_privacy_validate_capabilities(&mut env, archive)
+}
+
+/// Return the canonical exact-12 privacy fixture bundle to the Java Android SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_exact12_fixture_bundle(&mut env)
+}
+
+/// Validate an exact-12 privacy fixture bundle for the Java Android SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    java_native_privacy_validate_exact12_fixture_bundle(&mut env, archive)
 }
 
 #[cfg(any(
@@ -45415,6 +45644,107 @@ mod tests {
         let snapshot = take_privacy_snapshot_output(out_ptr, out_len);
         snapshot.validate().expect("FFI capability snapshot");
         assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    }
+
+    #[test]
+    fn privacy_exact12_fixture_ffi_returns_and_validates_complete_canonical_bytes() {
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let status = unsafe { iroha_privacy_exact12_fixture_bundle_v1(&mut out_ptr, &mut out_len) };
+        assert_eq!(status, 0);
+        assert!(!out_ptr.is_null());
+        assert!(out_len > 0);
+        assert_eq!(
+            unsafe { iroha_privacy_validate_exact12_fixture_bundle_v1(out_ptr, out_len) },
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
+        assert_eq!(
+            unsafe { iroha_privacy_validate_exact12_fixture_bundle_v1(ptr::null(), out_len) },
+            PrivacyExact12FixtureBundleValidationStatusV1::NullPointer.code()
+        );
+        assert_eq!(
+            unsafe { iroha_privacy_validate_exact12_fixture_bundle_v1(out_ptr, 0) },
+            PrivacyExact12FixtureBundleValidationStatusV1::Empty.code()
+        );
+
+        let archive = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        assert_eq!(
+            archive,
+            privacy_exact12_fixture_bundle_bytes_v1().expect("compiled exact12 fixture")
+        );
+        let mut truncated = archive;
+        truncated.pop();
+        assert_ne!(
+            unsafe {
+                iroha_privacy_validate_exact12_fixture_bundle_v1(
+                    truncated.as_ptr(),
+                    c_ulong::try_from(truncated.len()).expect("truncated length"),
+                )
+            },
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
+        iroha_privacy_free_buffer(out_ptr);
+    }
+
+    #[test]
+    fn privacy_exact12_java_archive_is_bounded_deterministic_and_mutation_closed() {
+        let archive =
+            java_privacy_exact12_fixture_bundle_archive().expect("compiled Java fixture bundle");
+        assert_eq!(
+            archive,
+            privacy_exact12_fixture_bundle_bytes_v1().expect("compiled exact12 fixture")
+        );
+        assert!(archive.len() <= PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1);
+        assert_eq!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&archive)),
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
+        assert_eq!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(None),
+            PrivacyExact12FixtureBundleValidationStatusV1::NullPointer.code()
+        );
+        assert_eq!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&[])),
+            PrivacyExact12FixtureBundleValidationStatusV1::Empty.code()
+        );
+        let oversized = vec![0; PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 + 1];
+        assert_eq!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&oversized)),
+            PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code()
+        );
+
+        for truncated in [
+            &archive[..archive.len() - 1],
+            &archive[1..],
+            &archive[..archive.len() / 2],
+        ] {
+            assert_ne!(
+                java_privacy_validate_exact12_fixture_bundle_bytes(Some(truncated)),
+                PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+            );
+        }
+
+        let mut trailing = archive.clone();
+        trailing.push(0);
+        assert_ne!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&trailing)),
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
+        for index in [0, archive.len() / 2, archive.len() - 1] {
+            let mut mutated = archive.clone();
+            mutated[index] ^= 0x80;
+            assert_ne!(
+                java_privacy_validate_exact12_fixture_bundle_bytes(Some(&mutated)),
+                PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+            );
+        }
+
+        let capability_archive =
+            norito::encode_canonical(&privacy_capabilities()).expect("capability archive");
+        assert_ne!(
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&capability_archive)),
+            PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
+        );
     }
 
     fn canonical_bytes(address: &AccountAddress) -> Vec<u8> {

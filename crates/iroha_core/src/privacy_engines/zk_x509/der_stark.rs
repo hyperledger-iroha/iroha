@@ -34,10 +34,10 @@ use crate::privacy_engines::transparent_stark::{
 };
 
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
-pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree4:two-base-and-four-aux-physical-chunks:constrained-phase-depth-count-kind-range-and-conjunction-intermediates:mask-multiplier-degree429:mask-coefficients430:quotient-bound1574580:quotient-coset-capacity2097151:fri-chunk-capacity1048575:four-chunk-composition-capacity4194303:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registration-pending:activation=false";
+pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree801:mask-coefficients802:quotient-bound3151335:quotient-coset-capacity4194303:fri-chunk-capacity1048575:four-chunk-composition-capacity4194303:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registration-pending:activation=false";
 pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x4e, 0x21, 0x2d, 0x78, 0xcc, 0x5b, 0x1c, 0xd6, 0xa9, 0x26, 0x37, 0x12, 0x43, 0x15, 0x96, 0xc8,
-    0x50, 0xca, 0x49, 0x07, 0x90, 0xe6, 0x70, 0x39, 0x61, 0xb3, 0x8f, 0x64, 0xda, 0xc2, 0xfa, 0xf6,
+    0x68, 0x81, 0xad, 0x87, 0x8d, 0x44, 0xd0, 0xfd, 0xff, 0xc7, 0x32, 0x55, 0xa8, 0x74, 0xce, 0xef,
+    0x11, 0x6c, 0xa2, 0xab, 0x7c, 0x0a, 0xc7, 0xeb, 0x5b, 0x53, 0x47, 0x97, 0x0f, 0x41, 0xb7, 0x35,
 ];
 
 /// The aggregate native domain shared with SHA, projection, and every bus.
@@ -49,14 +49,15 @@ pub(crate) const ZK_X509_DER_STARK_BASE_WIDTH_V1: usize = 76;
 pub(crate) const ZK_X509_DER_STARK_AUX_WIDTH_V1: usize = 196;
 pub(crate) const ZK_X509_DER_STARK_FIXED_WIDTH_V1: usize = 14;
 pub(crate) const ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1: usize = 898;
-/// Exact maximum witness degree after constrained selector linearization.
-pub(crate) const ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
+/// Registered local-expression ceiling. The complete numeric evaluator
+/// independently attains degree seven over multiple affine row directions.
+pub(crate) const ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1: u8 = 7;
 pub(crate) const ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1: usize =
     ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1 as usize
         * (ZK_X509_DER_STARK_TRACE_SIZE_V1 + ZK_X509_TRACE_MASK_DEGREE_V1 as usize)
         - ZK_X509_DER_STARK_TRACE_SIZE_V1;
-const _: () = assert!(ZK_X509_TRACE_MASK_DEGREE_V1 == 429);
-const _: () = assert!(ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1 == 1_574_580);
+const _: () = assert!(ZK_X509_TRACE_MASK_DEGREE_V1 == 801);
+const _: () = assert!(ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1 == 3_151_335);
 /// Four independent copy/lookup lanes.
 pub(crate) const ZK_X509_DER_STARK_BUS_LANES_V1: usize = 4;
 /// Maximum number of top-level plus extension-embedded documents.
@@ -4297,9 +4298,9 @@ mod tests {
         assert_eq!(
             digest,
             [
-                0xf2, 0xea, 0x61, 0x54, 0xd0, 0x9b, 0x9d, 0x93, 0xb9, 0xa7, 0x4f, 0xe0, 0xfb, 0x3d,
-                0xa7, 0x6e, 0x29, 0x52, 0x3f, 0xf0, 0xbe, 0x8f, 0xfb, 0x89, 0xa9, 0x22, 0x18, 0xda,
-                0x25, 0xdc, 0xb2, 0x5c,
+                0xea, 0x1b, 0xfd, 0xfe, 0xef, 0xe7, 0xc0, 0x8a, 0xd9, 0xd8, 0x63, 0x42, 0x7e, 0xff,
+                0x74, 0xb7, 0x33, 0xf4, 0xc8, 0x0b, 0x64, 0x42, 0x1f, 0x8f, 0x9b, 0x40, 0x65, 0xa6,
+                0x8e, 0xf2, 0x2f, 0x12,
             ]
         );
 
@@ -5434,7 +5435,7 @@ mod tests {
     }
 
     #[test]
-    fn independently_interpolated_complete_air_degree_is_at_most_four() {
+    fn independently_interpolated_complete_air_degree_matches_registration() {
         const SAMPLE_COUNT: usize = 21;
         let challenges = challenges();
         let public = ZkX509DerStarkPublicTerminalsV1;
@@ -5443,7 +5444,11 @@ mod tests {
             node: [F(47), F(53), F(59), F(61)],
         };
         let mut maximum_degrees = vec![0_usize; ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1];
-        for seed in [3_u64, 5, 11] {
+        // Independent affine directions make cancellation of a nonzero
+        // leading homogeneous term fail closed across the complete evaluator,
+        // while the final assertion separately proves that degree seven is
+        // attained rather than merely budgeted.
+        for seed in [3_u64, 5, 11, 17, 29, 43, 71, 101, 149, 211, 283, 367] {
             let samples = (0..SAMPLE_COUNT)
                 .map(|point| {
                     let point = F(u64::try_from(point).expect("sample point"));

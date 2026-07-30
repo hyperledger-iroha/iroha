@@ -74,6 +74,44 @@ const REGION_BEFORE: usize = 15;
 const REGION_AFTER: usize = 16;
 
 const COPY_LANES: usize = ZK_X509_PROJECTION_COPY_LANES_V1;
+pub(super) const ZK_X509_PROJECTION_CHALLENGE_LABELS_V1: [[&[u8]; 7]; COPY_LANES] = [
+    [
+        b"zk-x509-projection-lane0-copy-beta-v1",
+        b"zk-x509-projection-lane0-copy-gamma-v1",
+        b"zk-x509-projection-lane0-compaction-active-v1",
+        b"zk-x509-projection-lane0-compaction-invocation-v1",
+        b"zk-x509-projection-lane0-compaction-position-v1",
+        b"zk-x509-projection-lane0-compaction-value-v1",
+        b"zk-x509-projection-lane0-compaction-gamma-v1",
+    ],
+    [
+        b"zk-x509-projection-lane1-copy-beta-v1",
+        b"zk-x509-projection-lane1-copy-gamma-v1",
+        b"zk-x509-projection-lane1-compaction-active-v1",
+        b"zk-x509-projection-lane1-compaction-invocation-v1",
+        b"zk-x509-projection-lane1-compaction-position-v1",
+        b"zk-x509-projection-lane1-compaction-value-v1",
+        b"zk-x509-projection-lane1-compaction-gamma-v1",
+    ],
+    [
+        b"zk-x509-projection-lane2-copy-beta-v1",
+        b"zk-x509-projection-lane2-copy-gamma-v1",
+        b"zk-x509-projection-lane2-compaction-active-v1",
+        b"zk-x509-projection-lane2-compaction-invocation-v1",
+        b"zk-x509-projection-lane2-compaction-position-v1",
+        b"zk-x509-projection-lane2-compaction-value-v1",
+        b"zk-x509-projection-lane2-compaction-gamma-v1",
+    ],
+    [
+        b"zk-x509-projection-lane3-copy-beta-v1",
+        b"zk-x509-projection-lane3-copy-gamma-v1",
+        b"zk-x509-projection-lane3-compaction-active-v1",
+        b"zk-x509-projection-lane3-compaction-invocation-v1",
+        b"zk-x509-projection-lane3-compaction-position-v1",
+        b"zk-x509-projection-lane3-compaction-value-v1",
+        b"zk-x509-projection-lane3-compaction-gamma-v1",
+    ],
+];
 const AUX_COPY_NUMERATOR_BEFORE: usize = 0;
 const AUX_COPY_NUMERATOR_AFTER: usize = AUX_COPY_NUMERATOR_BEFORE + COPY_LANES;
 const AUX_COPY_DENOMINATOR_BEFORE: usize = AUX_COPY_NUMERATOR_AFTER + COPY_LANES;
@@ -1818,7 +1856,7 @@ pub(crate) fn projection_io_witnesses_v1(
 }
 
 impl ZkX509ProjectionChallengesV1 {
-    fn validate(self) -> Result<(), ZkX509ProjectionAirErrorV1> {
+    pub(crate) fn validate(self) -> Result<(), ZkX509ProjectionAirErrorV1> {
         let canonical_nonzero = |value: F| {
             value.0 != 0 && value.0 < GOLDILOCKS_MODULUS_V1 && F::canonical(value.0).is_some()
         };

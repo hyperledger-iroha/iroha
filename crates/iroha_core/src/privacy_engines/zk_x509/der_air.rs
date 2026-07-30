@@ -4233,8 +4233,8 @@ pub(crate) fn rfc5280_io_witnesses_v1(
     };
     let mut witnesses = Vec::new();
 
-    // Projection consumes three fixed SPKI slots. The optional slot's unique
-    // inactive encoding is 65 zero octets.
+    // Projection consumes three fixed DER-encoded SPKI slots. The optional
+    // slot's unique inactive encoding is 91 zero octets.
     for certificate_slot in 0..3 {
         let spki = trace.certificates.get(certificate_slot).map_or_else(
             || vec![0; ZK_X509_DER_AIR_P256_SPKI_DER_BYTES_V1],

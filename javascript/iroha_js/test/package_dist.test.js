@@ -31,6 +31,7 @@ const nexusFixture = JSON.parse(
 );
 
 const {
+  PRIVACY_CAPABILITY_VALIDATION_STATUS_V1,
   PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
@@ -160,6 +161,9 @@ function completePrivacyCapabilitiesBinding(overrides = {}) {
     },
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyValidateCapabilitiesV1() {
+      return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID;
     },
     ...overrides,
   };
@@ -635,6 +639,9 @@ test("package dist privacy native availability clears probed capability output",
       privacyCapabilitiesV1() {
         return rejectedOutput;
       },
+      privacyValidateCapabilitiesV1() {
+        return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+      },
     }),
     () => assert.equal(isPrivacyNativeAvailable(), false),
   );
@@ -653,6 +660,9 @@ test("package dist privacy availability admits the capabilities-only first-relea
     privacyCapabilitiesV1() {
       capabilityCalls += 1;
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyValidateCapabilitiesV1() {
+      return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID;
     },
   };
 
@@ -852,11 +862,14 @@ test("package dist privacy capability wrapper rejects malformed Norito output ar
         privacyCapabilitiesV1() {
           return Buffer.from(malformedArchive);
         },
+        privacyValidateCapabilitiesV1() {
+          return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+        },
       }),
       () => {
         assert.throws(
           () => privacyCapabilitiesV1(),
-          /native privacyCapabilitiesV1 returned invalid Norito V1 archive/u,
+          /native privacyCapabilitiesV1 returned an invalid typed privacy capability archive/u,
         );
       },
     );
@@ -897,6 +910,9 @@ test("package dist privacy native availability rejects every unsafe capability o
     withNativeBinding(
       completePrivacyCapabilitiesBinding({
         privacyCapabilitiesV1: privacyCapabilitiesOverride,
+        privacyValidateCapabilitiesV1() {
+          return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+        },
       }),
       () => assert.equal(isPrivacyNativeAvailable(), false),
     );
@@ -910,12 +926,15 @@ test("package dist privacy capability wrapper rejects wrong result schemas", () 
       privacyCapabilitiesV1() {
         return Buffer.from(wrongSchemaArchive);
       },
+      privacyValidateCapabilitiesV1() {
+        return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
+      },
     }),
     () => {
       assert.equal(isPrivacyNativeAvailable(), false);
       assert.throws(
         () => privacyCapabilitiesV1(),
-        /native privacyCapabilitiesV1 returned unexpected privacy result schema/u,
+        /native privacyCapabilitiesV1 returned an invalid typed privacy capability archive/u,
       );
     },
   );

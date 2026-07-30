@@ -444,11 +444,15 @@ await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
 
 ## Native Privacy Bridge
 
-`Hyperledger.Iroha.Privacy.PrivacyNative` is capability-only.
+`Hyperledger.Iroha.Privacy.PrivacyNative` is selector-free.
 `CapabilitiesV1()` returns a CRC-checked canonical
 `PrivacyCapabilitySnapshotV1` Norito archive. `PrivacyProtocolsV1.All` exposes
-the closed `PrivacyProtocolIdV1` enum in exact wire order. Native availability
-requires ABI 21 and only the capability and zeroizing-free symbols. Generic
+the closed `PrivacyProtocolIdV1` enum in exact wire order.
+`Exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements
+and envelopes for all twelve rows; `ValidateExact12FixtureBundleV1(...)`
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. Native
+availability requires ABI 21, both capability symbols, both exact-12 fixture
+symbols, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form algorithm selectors are absent;
 proofs use protocol-specific typed APIs.
 

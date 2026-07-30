@@ -831,6 +831,29 @@ int32_t iroha_privacy_validate_capabilities_v1(
     const uint8_t* archive_ptr,
     unsigned long archive_len);
 
+// Complete Rust-derived canonical statement/envelope bytes for all twelve
+// first-release rows. The archive is accepted only when it is byte-identical
+// to the bundle compiled from the typed Rust fixtures.
+typedef enum iroha_privacy_exact12_fixture_validation_status_v1 {
+    IROHA_PRIVACY_EXACT12_FIXTURE_VALID_V1 = 0,
+    IROHA_PRIVACY_EXACT12_FIXTURE_NULL_POINTER_V1 = 1,
+    IROHA_PRIVACY_EXACT12_FIXTURE_EMPTY_V1 = 2,
+    IROHA_PRIVACY_EXACT12_FIXTURE_ARCHIVE_TOO_LARGE_V1 = 3,
+    IROHA_PRIVACY_EXACT12_FIXTURE_DECODE_RESOURCE_LIMIT_V1 = 4,
+    IROHA_PRIVACY_EXACT12_FIXTURE_SCHEMA_MISMATCH_V1 = 5,
+    IROHA_PRIVACY_EXACT12_FIXTURE_NON_CANONICAL_V1 = 6,
+    IROHA_PRIVACY_EXACT12_FIXTURE_MALFORMED_ARCHIVE_V1 = 7,
+    IROHA_PRIVACY_EXACT12_FIXTURE_INVALID_BUNDLE_V1 = 8
+} iroha_privacy_exact12_fixture_validation_status_v1;
+
+int32_t iroha_privacy_exact12_fixture_bundle_v1(
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+int32_t iroha_privacy_validate_exact12_fixture_bundle_v1(
+    const uint8_t* archive_ptr,
+    unsigned long archive_len);
+
 void iroha_privacy_free_buffer(uint8_t* ptr);
 
 // ---------------- Envelope helpers ----------------

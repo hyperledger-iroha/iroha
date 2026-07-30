@@ -29,6 +29,8 @@ public final class PrivacyNativeBridgeTest {
     sharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests();
     aliasesAndNonCanonicalSpellingsAreRejected();
     sharedTypedValidatorStatusContractIsStable();
+    exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
+    exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable();
     retiredGenericProofSurfaceIsAbsent();
     System.out.println("[IrohaAndroid] PrivacyNativeBridgeTest passed.");
   }
@@ -157,6 +159,7 @@ public final class PrivacyNativeBridgeTest {
 
   private static void sharedTypedValidatorStatusContractIsStable() {
     assert PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024;
+    assert PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES == 2 * 1024 * 1024;
     final PrivacyNativeBridge.ValidationStatusV1[] statuses =
         PrivacyNativeBridge.ValidationStatusV1.values();
     assert statuses.length == 9;
@@ -168,9 +171,83 @@ public final class PrivacyNativeBridgeTest {
           PrivacyNativeBridge.class.getDeclaredMethod("nativeValidateCapabilities", byte[].class);
       assert java.lang.reflect.Modifier.isNative(validator.getModifiers());
       assert validator.getReturnType() == int.class;
+      final java.lang.reflect.Method fixtureQuery =
+          PrivacyNativeBridge.class.getDeclaredMethod("nativeExact12FixtureBundle");
+      final java.lang.reflect.Method fixtureValidator =
+          PrivacyNativeBridge.class.getDeclaredMethod(
+              "nativeValidateExact12FixtureBundle", byte[].class);
+      assert java.lang.reflect.Modifier.isNative(fixtureQuery.getModifiers());
+      assert fixtureQuery.getReturnType() == byte[].class;
+      assert java.lang.reflect.Modifier.isNative(fixtureValidator.getModifiers());
+      assert fixtureValidator.getReturnType() == int.class;
     } catch (final NoSuchMethodException error) {
       throw new AssertionError("shared native typed validator is missing", error);
     }
+    final PrivacyNativeBridge.Exact12FixtureValidationStatusV1[] fixtureStatuses =
+        PrivacyNativeBridge.Exact12FixtureValidationStatusV1.values();
+    assert fixtureStatuses.length == 9;
+    for (int index = 0; index < fixtureStatuses.length; index++) {
+      assert fixtureStatuses[index].code() == index;
+    }
+  }
+
+  private static void exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(null)
+        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.NULL_POINTER;
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(new byte[0])
+        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.EMPTY;
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(
+            new byte[PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES + 1])
+        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.ARCHIVE_TOO_LARGE;
+  }
+
+  private static void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
+    final boolean available = PrivacyNativeBridge.isNativeAvailable();
+    if ("1".equals(System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE")) && !available) {
+      throw new AssertionError(
+          "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required");
+    }
+    if (!available) {
+      return;
+    }
+
+    final byte[] fetched = PrivacyNativeBridge.exact12FixtureBundleV1();
+    final byte[] canonical = Arrays.copyOf(fetched, fetched.length);
+    assert canonical.length > 0;
+    assert canonical.length <= PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES;
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(canonical)
+        == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
+    assert Arrays.equals(canonical, PrivacyNativeBridge.exact12FixtureBundleV1());
+
+    fetched[0] ^= (byte) 0xff;
+    assert Arrays.equals(canonical, PrivacyNativeBridge.exact12FixtureBundleV1());
+
+    final byte[][] truncated = {
+      Arrays.copyOfRange(canonical, 0, canonical.length - 1),
+      Arrays.copyOfRange(canonical, 1, canonical.length),
+      Arrays.copyOfRange(canonical, 0, canonical.length / 2)
+    };
+    for (final byte[] candidate : truncated) {
+      assert PrivacyNativeBridge.validateExact12FixtureBundleV1(candidate)
+          != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
+      assertThrows(() -> PrivacyNativeBridge.requireExact12FixtureBundle(candidate));
+    }
+
+    final byte[] trailing = Arrays.copyOf(canonical, canonical.length + 1);
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(trailing)
+        != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
+
+    final int[] mutationIndices = {0, canonical.length / 2, canonical.length - 1};
+    for (final int index : mutationIndices) {
+      final byte[] mutated = Arrays.copyOf(canonical, canonical.length);
+      mutated[index] ^= (byte) 0x80;
+      assert PrivacyNativeBridge.validateExact12FixtureBundleV1(mutated)
+          != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
+    }
+
+    assert PrivacyNativeBridge.validateExact12FixtureBundleV1(
+            PrivacyNativeBridge.capabilitiesArchiveV1())
+        != PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID;
   }
 
   private static void retiredGenericProofSurfaceIsAbsent() {

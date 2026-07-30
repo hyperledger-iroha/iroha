@@ -170,9 +170,9 @@ use crate::privacy_engines::{
     zk_ams::{
         MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1, MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,
         MAX_ZK_AMS_LSAG_PROOF_BYTES_V1, ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
-        ZK_AMS_ADMISSION_POSSESSION_SUITE_V1, ZK_AMS_LSAG_PROOF_VERSION_V1, ZK_AMS_LSAG_SUITE_V1,
-        ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_RING_SIZES_V1, ZK_AMS_SOURCE_PROFILE_V1,
-        zk_ams_generator_digest_v1,
+        ZK_AMS_ADMISSION_POSSESSION_SUITE_V1, ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+        ZK_AMS_LSAG_PROOF_VERSION_V1, ZK_AMS_LSAG_SUITE_V1, ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1,
+        ZK_AMS_RING_SIZES_V1, ZK_AMS_SOURCE_PROFILE_V1, zk_ams_generator_digest_v1,
     },
 };
 
@@ -263,11 +263,12 @@ const VEGA_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
 const VEGA_AUTHORITATIVE_ISSUER_RUNTIME_SCHEMA_V1: &[u8] = b"issuer-governance:record-v1:issuer-id32+epoch-u64be+compressed-p256-33+document-policy+namespace-policy+digest-policy+issuer-auth-policy+device-auth-policy+predecessor-option32+lifecycle+self-digest32|lineage:immutable-append-only+epoch-one-origin+one-step-cas-rotation+terminal-preserving-revocation+bounded-global-and-per-lineage|statement:exact-issuer-id+record-epoch+record-digest+key+all-algorithm-policy|ledger-verifier:current-active-exact-record-before-native-proof";
 const VEGA_DEVICE_AUTHENTICATION_GOVERNANCE_FRAME_SCHEMA_V1: &[u8] = b"length-framed:domain+frame-version+upstream-commit+chain-id+genesis-hash+action-index+transaction-intent-digest+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+issuer-record-epoch+issuer-record-digest+document-type+namespace+digest-algorithm+issuer-authentication+device-authentication+issuer-public-key+presentation-date+minimum-age+reader-challenge+session-transcript-digest";
 const VEGA_CANONICAL_MDL_WITNESS_SCHEMA_V1: &[u8] = b"figure9-v1:issuer-sig-structure-exact+embedded-mso-exact+birth-item-exact+birth-random-exact+full-date10+rfc3339-utc-seconds20+signed-not-after-valid-from-full-seconds+presentation-validity-date-granularity+presentation-year-closed+satisfiable-valid-until+age-threshold-closed";
+const VEGA_CANONICAL_SIGNATURE_PREFLIGHT_POLICY_V1: &[u8] = b"native-witness-preflight:issuer-and-device-es256-signatures:p1363-r32s32+canonical-nonzero-scalars+low-s-required+reject-high-s-without-normalization+verify-prehash-before-r-s-inverse:v1";
 const ZK_AMS_PROTOCOL_LABEL_V1: &[u8] = b"iroha-zk-ams-v1";
 const ZK_AMS_PARAMETER_SET_LABEL_V1: &[u8] =
     b"zk-ams-v2-masked-relaxed-spartan-t256-lsag-ristretto255-v1";
 const ZK_AMS_BATCH_PROOF_WIRE_LABEL_V1: &[u8] =
-    b"norito:zk-ams-batch-admission:masked-relaxed-spartan+fixed-option-possession-slots8:strict-exact:v1";
+    b"norito:zk-ams-batch-admission:version-u8+masked-relaxed-spartan-bytes+possession-count-u8+fixed-possession-slots8{version-u8+commitment32+response32}+all-zero-unused-tail:strict-exact:v1";
 const ZK_AMS_PROVISION_PROOF_WIRE_LABEL_V1: &[u8] =
     b"norito:zk-ams-provision-account:lsag-ristretto255:strict-exact:v1";
 const ZK_AMS_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
@@ -1382,6 +1383,7 @@ fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
     let ring_size_32 = ZK_AMS_MODEL_RING_SIZES_V1[1].to_be_bytes();
     let ring_size_64 = ZK_AMS_MODEL_RING_SIZES_V1[2].to_be_bytes();
     let admission_possession_version = [ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1];
+    let batch_admission_version = [ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1];
     let lsag_version = [ZK_AMS_LSAG_PROOF_VERSION_V1];
     let compiled_relation_digest = zk_ams_compiled_profile_digest_v1();
     let t256_generator_digest = zk_ams_t256_generator_digest_v1();
@@ -1448,6 +1450,7 @@ fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_AMS_LSAG_SUITE_V1,
             ZK_AMS_ADMISSION_POSSESSION_SUITE_V1,
             &admission_possession_version,
+            &batch_admission_version,
             &lsag_version,
             &compiled_relation_digest,
             &t256_generator_digest,
@@ -1609,6 +1612,7 @@ fn compiled_vega_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivac
             &proof_bytes_encoded,
             &statement_schema_digest,
             VEGA_CANONICAL_MDL_WITNESS_SCHEMA_V1,
+            VEGA_CANONICAL_SIGNATURE_PREFLIGHT_POLICY_V1,
             &issuer_authentication_bytes,
             &mso_payload_bytes,
             &birth_item_bytes,
@@ -1648,6 +1652,7 @@ fn compiled_vega_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivac
             &verifier_digest,
             &statement_schema_digest,
             VEGA_CANONICAL_MDL_WITNESS_SCHEMA_V1,
+            VEGA_CANONICAL_SIGNATURE_PREFLIGHT_POLICY_V1,
             &issuer_authentication_bytes,
             &mso_payload_bytes,
             &birth_item_bytes,
@@ -3625,16 +3630,16 @@ mod tests {
                     154, 34, 44, 20, 66, 167, 0, 191, 100, 27, 99, 33, 159, 187,
                 ],
                 [
-                    238, 198, 206, 167, 90, 54, 63, 19, 34, 83, 19, 215, 202, 231, 140, 91, 161,
-                    15, 46, 118, 142, 118, 155, 100, 77, 51, 213, 154, 197, 192, 223, 223,
+                    223, 255, 91, 222, 168, 220, 117, 146, 114, 212, 178, 85, 184, 102, 46, 214,
+                    16, 245, 201, 57, 147, 60, 162, 75, 105, 220, 194, 136, 102, 79, 207, 34,
                 ],
                 [
                     18, 199, 81, 196, 252, 61, 89, 247, 231, 62, 169, 237, 114, 196, 11, 100, 227,
                     131, 165, 43, 21, 119, 174, 3, 145, 12, 100, 135, 228, 185, 86, 147,
                 ],
                 [
-                    113, 64, 67, 124, 150, 74, 153, 202, 122, 232, 168, 149, 113, 211, 162, 61, 90,
-                    90, 216, 218, 235, 213, 180, 163, 251, 70, 89, 236, 19, 254, 192, 175,
+                    227, 98, 36, 101, 150, 212, 95, 113, 105, 205, 172, 45, 196, 33, 245, 90, 219,
+                    10, 82, 223, 222, 173, 88, 35, 92, 138, 85, 46, 31, 198, 228, 238,
                 ],
             )
         );
@@ -3891,11 +3896,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "05139386e00e38f392a6ef7b4030fa705719588a5db528ec77b32c813cdba545".to_owned(),
-                "abf14ff687fa09b7ef7b11ce0c82bc444d106914eba7680f7bbfbe2f6f6f9209".to_owned(),
-                "029ab894f6b75199780382adb669933c04ae7e55105822a073d75b4f1e541338".to_owned(),
+                "9fa2a07d17989e07bb7ff804bb408e95e127b80ab5e01258b77af9b00c82607d".to_owned(),
+                "cf6bb53805e982444751db072c04d8b52dd9e14712cb90bbf23f68bbf2650c82".to_owned(),
+                "15b85fb98ec6c2c52b5c40fe934489096df48d784d6f752a3be8061999282d1b".to_owned(),
                 "9dcb063f434ea60475beb5e0f4e3ae6cba3a22e0770a376519ffab953c6a3817".to_owned(),
-                "441f7ec2b433ecd28bcec6e026f8c1b094d09c99a247b509137b25fb46a41728".to_owned(),
+                "43c57975605b0e4ca2f39f55687c4788df0a7cc6952353e7ce221e23d2b98d9d".to_owned(),
             )
         );
     }

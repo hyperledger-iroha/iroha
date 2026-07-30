@@ -739,6 +739,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     #endif
 
     static let privacyNativeArchiveMaxBytes = 256 * 1024
+    static let privacyExact12FixtureBundleMaxBytes = 2 * 1024 * 1024
     private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
 
     #if canImport(Darwin)
@@ -1899,6 +1900,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias PrivacyValidateCapabilitiesFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
+    private typealias PrivacyExact12FixtureBundleFn = @convention(c) (
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias PrivacyValidateExact12FixtureBundleFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -2057,6 +2064,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
     private var privacyValidateCapabilitiesFn: PrivacyValidateCapabilitiesFn? = nil
+    private var privacyExact12FixtureBundleFn: PrivacyExact12FixtureBundleFn? = nil
+    private var privacyValidateExact12FixtureBundleFn: PrivacyValidateExact12FixtureBundleFn? = nil
     private var privacyFreeFn: FreeFn? = nil
     private var privacyNativeProbeOk = false
 #else
@@ -2184,6 +2193,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
     private let privacyValidateCapabilitiesFn: Any? = nil
+    private let privacyExact12FixtureBundleFn: Any? = nil
+    private let privacyValidateExact12FixtureBundleFn: Any? = nil
     private let privacyFreeFn: Any? = nil
     private let privacyNativeProbeOk = false
 #endif
@@ -2196,6 +2207,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard let handle else {
             self.privacyCapabilitiesFn = nil
             self.privacyValidateCapabilitiesFn = nil
+            self.privacyExact12FixtureBundleFn = nil
+            self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
             return
         }
@@ -2211,6 +2224,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.privacyValidateCapabilitiesFn = nil
+        }
+        if let fixtureSymbol = dlsym(handle, "iroha_privacy_exact12_fixture_bundle_v1") {
+            self.privacyExact12FixtureBundleFn = unsafeBitCast(
+                fixtureSymbol,
+                to: PrivacyExact12FixtureBundleFn.self
+            )
+        } else {
+            self.privacyExact12FixtureBundleFn = nil
+        }
+        if let validateFixtureSymbol = dlsym(
+            handle,
+            "iroha_privacy_validate_exact12_fixture_bundle_v1"
+        ) {
+            self.privacyValidateExact12FixtureBundleFn = unsafeBitCast(
+                validateFixtureSymbol,
+                to: PrivacyValidateExact12FixtureBundleFn.self
+            )
+        } else {
+            self.privacyValidateExact12FixtureBundleFn = nil
         }
         if let freeSymbol = dlsym(handle, "iroha_privacy_free_buffer") {
             self.privacyFreeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
@@ -3182,6 +3214,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.canonicalJSONBlake3Fn = nil
             self.privacyCapabilitiesFn = nil
             self.privacyValidateCapabilitiesFn = nil
+            self.privacyExact12FixtureBundleFn = nil
+            self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
@@ -3273,12 +3307,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         status: Int32,
         outPtr: UnsafeMutablePointer<UInt8>?,
         outLen: CUnsignedLong,
-        validate: PrivacyValidateCapabilitiesFn?
+        validate: PrivacyValidateCapabilitiesFn?,
+        maximumBytes: Int
     ) -> Bool {
         guard status == 0,
               let outPtr,
               outLen > 0,
-              outLen <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes),
+              outLen <= CUnsignedLong(maximumBytes),
               let validate else {
             return false
         }
@@ -3286,12 +3321,26 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     private func probePrivacyNativeAvailability() {
-        privacyNativeProbeOk = probePrivacyCapabilitiesFunction(privacyCapabilitiesFn)
+        privacyNativeProbeOk =
+            probePrivacyArchiveFunction(
+                privacyCapabilitiesFn,
+                validate: privacyValidateCapabilitiesFn,
+                maximumBytes: Self.privacyNativeArchiveMaxBytes
+            )
+            && probePrivacyArchiveFunction(
+                privacyExact12FixtureBundleFn,
+                validate: privacyValidateExact12FixtureBundleFn,
+                maximumBytes: Self.privacyExact12FixtureBundleMaxBytes
+            )
     }
 
-    private func probePrivacyCapabilitiesFunction(_ function: PrivacyCapabilitiesFn?) -> Bool {
+    private func probePrivacyArchiveFunction(
+        _ function: PrivacyCapabilitiesFn?,
+        validate: PrivacyValidateCapabilitiesFn?,
+        maximumBytes: Int
+    ) -> Bool {
         guard let function,
-              let validate = privacyValidateCapabilitiesFn,
+              let validate,
               let freePrivacyFn = privacyFreeFn ?? freeFn else {
             return false
         }
@@ -3303,6 +3352,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             outPtr: outPtr,
             outLen: outLen,
             validate: validate,
+            maximumBytes: maximumBytes,
             free: freePrivacyFn
         )
     }
@@ -3312,16 +3362,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         outPtr: UnsafeMutablePointer<UInt8>?,
         outLen: CUnsignedLong,
         validate: PrivacyValidateCapabilitiesFn?,
+        maximumBytes: Int,
         free: FreeFn
     ) -> Bool {
         let expected = Self.isValidPrivacyNativeProbeResult(
             status: status,
             outPtr: outPtr,
             outLen: outLen,
-            validate: validate
+            validate: validate,
+            maximumBytes: maximumBytes
         )
         if let outPtr {
-            Self.clearPrivacyNativeBuffer(outPtr, length: outLen)
+            Self.clearPrivacyNativeBuffer(
+                outPtr,
+                length: outLen,
+                maximumBytes: maximumBytes
+            )
             free(outPtr)
         }
         return expected
@@ -3459,6 +3515,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard bridgeEnabledForRuntime else { return false }
         return privacyCapabilitiesFn != nil
             && privacyValidateCapabilitiesFn != nil
+            && privacyExact12FixtureBundleFn != nil
+            && privacyValidateExact12FixtureBundleFn != nil
             && (privacyFreeFn != nil || freeFn != nil)
             && privacyNativeProbeOk
         #else
@@ -6407,7 +6465,40 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return try Self.readPrivacyNativeOutput(
             pointer: outPtr,
             length: outLen,
-            validate: privacyValidateCapabilitiesFn
+            validate: privacyValidateCapabilitiesFn,
+            maximumBytes: Self.privacyNativeArchiveMaxBytes
+        ) { pointer in
+            freePrivacyFn(pointer)
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    func privacyExact12FixtureBundleV1() throws -> Data? {
+        #if canImport(Darwin)
+        guard let privacyExact12FixtureBundleFn,
+              let privacyValidateExact12FixtureBundleFn,
+              let freePrivacyFn = privacyFreeFn ?? freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = privacyExact12FixtureBundleFn(&outPtr, &outLen)
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freePrivacyFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        return try Self.readPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            validate: privacyValidateExact12FixtureBundleFn,
+            maximumBytes: Self.privacyExact12FixtureBundleMaxBytes
         ) { pointer in
             freePrivacyFn(pointer)
         }
@@ -6420,16 +6511,21 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         pointer: UnsafeMutablePointer<UInt8>?,
         length: CUnsignedLong,
         validate: PrivacyValidateCapabilitiesFn,
+        maximumBytes: Int,
         free: (UnsafeMutablePointer<UInt8>?) -> Void
     ) throws -> Data {
         guard let pointer else {
             throw NativeBridgeError.nullPointer
         }
         defer {
-            Self.clearPrivacyNativeBuffer(pointer, length: length)
+            Self.clearPrivacyNativeBuffer(
+                pointer,
+                length: length,
+                maximumBytes: maximumBytes
+            )
             free(pointer)
         }
-        guard length > 0, length <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes) else {
+        guard length > 0, length <= CUnsignedLong(maximumBytes) else {
             throw NativeBridgeError.invalidPrivacyOutput
         }
         guard validate(UnsafePointer(pointer), length) == 0 else {
@@ -6456,13 +6552,32 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    func privacyExact12FixtureValidationStatusV1(_ archive: Data) -> Int32? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let privacyValidateExact12FixtureBundleFn,
+              archive.count <= Self.privacyExact12FixtureBundleMaxBytes else {
+            return nil
+        }
+        return archive.withUnsafeBytes { bytes in
+            privacyValidateExact12FixtureBundleFn(
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(archive.count)
+            )
+        }
+        #else
+        return nil
+        #endif
+    }
+
     private static func clearPrivacyNativeBuffer(
         _ pointer: UnsafeMutablePointer<UInt8>,
-        length: CUnsignedLong
+        length: CUnsignedLong,
+        maximumBytes: Int
     ) {
         guard
             length > 0,
-            length <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes),
+            length <= CUnsignedLong(maximumBytes),
             let count = Int(exactly: length)
         else {
             return

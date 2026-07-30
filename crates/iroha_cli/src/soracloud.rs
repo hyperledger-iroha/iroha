@@ -9131,12 +9131,6 @@ impl Drop for SoracloudTempDir {
     }
 }
 
-#[derive(Clone, Debug)]
-struct OwnedStorageFileEntry {
-    path: Vec<String>,
-    size: u64,
-}
-
 fn run_service_bundle_mutation(
     mode: MutationMode,
     bundle: SoraDeploymentBundleV1,
@@ -20856,16 +20850,14 @@ mod tests {
             .as_ref()
             .expect("static site should exist");
 
-        let server = MockHttpServer::start(BTreeMap::from([
-            (
-                "/v1/sorafs/pin/register".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "ok": true }))
-                        .expect("encode pin register response"),
-                },
-            ),
-        ]));
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/sorafs/pin/register".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&norito::json!({ "ok": true }))
+                    .expect("encode pin register response"),
+            },
+        )]));
 
         let key_pair = soracloud_fixture_key_pair(0x13);
         let authority = AccountId::new(key_pair.public_key().clone());

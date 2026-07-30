@@ -29,12 +29,12 @@ norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = fals
 # daemon consensus mode. Core currently requires BLS and unconditionally uses
 # its JSON/FAST-DSL surfaces; the production bridge additionally needs the
 # complete Halo2/IPA circuit-parameter path.
-iroha_core = { path = "../iroha_core", default-features = false, features = ["json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
+iroha_core = { path = "../iroha_core", default-features = false, features = ["json", "bls", "fast_dsl", "zk-stark", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
 iroha_zkp_halo2 = { workspace = true }
 iroha_torii_shared = { workspace = true }
 fastpq_prover = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["std", "bls", "gost", "sm"] }
-iroha_data_model = { workspace = true, features = ["sm"] }
+iroha_data_model = { workspace = true, features = ["sm", "test-fixtures"] }
 iroha_executor_data_model = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_version = { workspace = true }

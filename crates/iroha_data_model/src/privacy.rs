@@ -362,8 +362,12 @@ impl PrivacyProtocolIdV1 {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use exact12_fixture::{
-    PrivacyExact12FixtureErrorV1, PrivacyExact12TypedEnvelopeRowV1,
-    privacy_exact12_typed_envelope_rows_v1,
+    PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyExact12FixtureBundleV1,
+    PrivacyExact12FixtureBundleValidationStatusV1, PrivacyExact12FixtureErrorV1,
+    PrivacyExact12TypedEnvelopeRowV1, PrivacyExact12TypedFixtureRowV1,
+    privacy_exact12_fixture_bundle_bytes_v1, privacy_exact12_fixture_bundle_v1,
+    privacy_exact12_matrix_bytes_v1, privacy_exact12_typed_envelope_rows_v1,
+    validate_privacy_exact12_fixture_bundle_v1,
 };
 
 /// Return whether `label` is reserved by the first-release privacy registry.
@@ -11770,7 +11774,7 @@ pub enum PrivacyProofEnvelopeValidationError {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 mod exact12_fixture {
-    use std::str::FromStr as _;
+    use std::{fmt::Write as _, str::FromStr as _};
 
     use iroha_crypto::{Algorithm, KeyPair};
 
@@ -11778,6 +11782,12 @@ mod exact12_fixture {
     use crate::{domain::DomainId, name::Name};
 
     const _: [(); 12] = [(); PrivacyProtocolIdV1::COUNT];
+    const EXACT12_CANONICAL_HEADER_V1: [&str; 4] = [
+        "# Iroha first-release privacy parity matrix v1.",
+        "# UTF-8, LF only, tab-separated, no aliases and no extension rows.",
+        "# registry-sha256 hashes the concatenation of every protocol label plus LF in index order.",
+        "# typed-envelope hashes bind the canonical sample statement digest and complete Norito envelope.",
+    ];
 
     pub(super) fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
@@ -12443,6 +12453,84 @@ mod exact12_fixture {
         pub envelope_sha256: [u8; 32],
     }
 
+    /// One complete byte-level KAT row derived from the canonical typed Rust
+    /// fixture.
+    ///
+    /// Both byte strings use canonical uncompressed Norito. Keeping the
+    /// protocol discriminant next to the bytes lets downstream SDKs reject
+    /// cross-protocol substitution before they attempt to decode a statement
+    /// or envelope.
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-row.v1")]
+    pub struct PrivacyExact12TypedFixtureRowV1 {
+        /// Closed protocol identity in canonical discriminant order.
+        pub protocol_id: PrivacyProtocolIdV1,
+        /// Complete canonical [`PrivacyStatementV1`] bytes.
+        pub statement_norito: Vec<u8>,
+        /// Complete canonical [`PrivacyProofEnvelopeV1`] bytes.
+        pub envelope_norito: Vec<u8>,
+    }
+
+    /// Signed byte-level KAT material for all first-release privacy protocols.
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-bundle.v1")]
+    pub struct PrivacyExact12FixtureBundleV1 {
+        /// Exact first-release bundle version.
+        pub version: u32,
+        /// Twelve rows in [`PrivacyProtocolIdV1::ALL`] order.
+        pub rows: Vec<PrivacyExact12TypedFixtureRowV1>,
+    }
+
+    /// Maximum accepted encoded size of the complete exact-12 fixture bundle.
+    pub const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_SEQUENCE_ELEMENTS_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_FIELD_BYTES_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ELEMENTS_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1: usize = 64;
+
+    /// Stable result of validating one untrusted exact-12 fixture bundle.
+    #[repr(i32)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum PrivacyExact12FixtureBundleValidationStatusV1 {
+        /// The archive is byte-identical to the compiled canonical bundle.
+        Valid = 0,
+        /// A native ABI caller supplied a null pointer.
+        NullPointer = 1,
+        /// The archive contains no bytes.
+        Empty = 2,
+        /// The archive exceeds the fixed byte ceiling.
+        ArchiveTooLarge = 3,
+        /// Norito rejected a resource declaration before allocating it.
+        DecodeResourceLimit = 4,
+        /// The archive carries a different typed schema.
+        SchemaMismatch = 5,
+        /// The archive is a non-canonical representation of the typed value.
+        NonCanonical = 6,
+        /// The archive is malformed, truncated, or checksum-invalid.
+        MalformedArchive = 7,
+        /// The typed bundle differs from the one compiled Rust fixture.
+        InvalidBundle = 8,
+    }
+
+    impl PrivacyExact12FixtureBundleValidationStatusV1 {
+        /// Stable native ABI integer representation.
+        #[must_use]
+        pub const fn code(self) -> i32 {
+            self as i32
+        }
+
+        /// Return whether the archive was accepted.
+        #[must_use]
+        pub const fn is_valid(self) -> bool {
+            matches!(self, Self::Valid)
+        }
+    }
+
     /// Failure to derive the fixed exact-12 semantic fixture from current
     /// typed values and canonical Norito serialization.
     #[derive(Debug, Error)]
@@ -12492,22 +12580,183 @@ mod exact12_fixture {
                 PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() }
             })
     }
+
+    /// Build the complete exact-12 byte-level KAT bundle from typed Rust
+    /// values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any statement or envelope cannot be encoded
+    /// canonically, or if the fixture no longer contains exactly twelve rows.
+    pub fn privacy_exact12_fixture_bundle_v1()
+    -> Result<PrivacyExact12FixtureBundleV1, PrivacyExact12FixtureErrorV1> {
+        let rows = sample_statements()
+            .into_iter()
+            .map(|statement| {
+                let protocol_id = statement.protocol_id();
+                let statement_norito = norito::encode_canonical(&statement)?;
+                let envelope = try_envelope(statement)?;
+                let envelope_norito = norito::encode_canonical(&envelope)?;
+                Ok(PrivacyExact12TypedFixtureRowV1 {
+                    protocol_id,
+                    statement_norito,
+                    envelope_norito,
+                })
+            })
+            .collect::<Result<Vec<_>, norito::Error>>()?;
+        if rows.len() != PrivacyProtocolIdV1::COUNT {
+            return Err(PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() });
+        }
+        Ok(PrivacyExact12FixtureBundleV1 { version: 1, rows })
+    }
+
+    /// Encode the complete exact-12 byte-level KAT bundle as canonical Norito.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fixture construction or canonical encoding fails.
+    pub fn privacy_exact12_fixture_bundle_bytes_v1() -> Result<Vec<u8>, PrivacyExact12FixtureErrorV1>
+    {
+        let bundle = privacy_exact12_fixture_bundle_v1()?;
+        Ok(norito::encode_canonical(&bundle)?)
+    }
+
+    /// Validate an untrusted byte-level KAT bundle against the exact bundle
+    /// compiled from current typed Rust fixtures.
+    ///
+    /// The decoder is resource-bounded, requires canonical uncompressed
+    /// Norito, and finally requires byte-for-byte semantic equality with the
+    /// compiled bundle. It therefore rejects reordered rows, wrong variants,
+    /// cross-protocol substitution, stale statement/envelope bytes, and
+    /// unknown extensions.
+    #[must_use]
+    pub fn validate_privacy_exact12_fixture_bundle_v1(
+        archive: &[u8],
+    ) -> PrivacyExact12FixtureBundleValidationStatusV1 {
+        use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
+
+        if archive.is_empty() {
+            return Status::Empty;
+        }
+        if archive.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+            return Status::ArchiveTooLarge;
+        }
+        let limits = norito::DecodeLimits::new(
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_SEQUENCE_ELEMENTS_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_FIELD_BYTES_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ELEMENTS_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ALLOCATION_BYTES_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1,
+        );
+        let decoded = match norito::decode_canonical_with_limits::<PrivacyExact12FixtureBundleV1>(
+            archive, limits,
+        ) {
+            Ok(decoded) => decoded,
+            Err(error) if error.is_decode_resource_limit() => return Status::DecodeResourceLimit,
+            Err(norito::Error::SchemaMismatch) => return Status::SchemaMismatch,
+            Err(
+                norito::Error::NonCanonicalEncoding
+                | norito::Error::DecodeFlagsMismatch { .. }
+                | norito::Error::UnsupportedCompression { .. },
+            ) => return Status::NonCanonical,
+            Err(_) => return Status::MalformedArchive,
+        };
+        let Ok(expected) = privacy_exact12_fixture_bundle_v1() else {
+            return Status::InvalidBundle;
+        };
+        if decoded != expected {
+            return Status::InvalidBundle;
+        }
+        Status::Valid
+    }
+
+    fn canonical_sha256_hex_v1(digest: &[u8; 32]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut output = String::with_capacity(64);
+        for byte in digest {
+            output.push(char::from(HEX[usize::from(byte >> 4)]));
+            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        output
+    }
+
+    /// Generate the complete canonical exact-12 cross-SDK matrix from the
+    /// current compiled protocol registry and typed Norito envelope fixtures.
+    ///
+    /// `fixtures/privacy/exact12_v1.tsv` is a derived cross-SDK artifact of
+    /// this function. Keeping construction here prevents a manually copied
+    /// digest row or whole-file hash from becoming a second semantic source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the typed statement/envelope rows cannot be
+    /// generated canonically or no longer have the exact closed registry size.
+    pub fn privacy_exact12_matrix_bytes_v1() -> Result<Vec<u8>, PrivacyExact12FixtureErrorV1> {
+        let semantic_rows = privacy_exact12_typed_envelope_rows_v1()?;
+        let mut registry_preimage = Vec::new();
+        for protocol_id in PrivacyProtocolIdV1::ALL {
+            registry_preimage.extend_from_slice(protocol_id.canonical_label().as_bytes());
+            registry_preimage.push(b'\n');
+        }
+        let registry_sha256: [u8; 32] = Sha256::digest(&registry_preimage).into();
+
+        let mut output = String::new();
+        for header in EXACT12_CANONICAL_HEADER_V1 {
+            writeln!(&mut output, "{header}").expect("writing to String cannot fail");
+        }
+        writeln!(&mut output, "matrix-version\t1").expect("writing to String cannot fail");
+        writeln!(
+            &mut output,
+            "registry-sha256\t{}",
+            canonical_sha256_hex_v1(&registry_sha256)
+        )
+        .expect("writing to String cannot fail");
+        for (index, protocol_id) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+            let variant = protocol_id.canonical_typed_variant_label();
+            writeln!(
+                &mut output,
+                "protocol\t{index}\t{}\t{variant}\t{variant}",
+                protocol_id.canonical_label()
+            )
+            .expect("writing to String cannot fail");
+        }
+        for semantic in semantic_rows {
+            writeln!(
+                &mut output,
+                "typed-envelope\t{}\t{}\t{}\t{}\t{}",
+                semantic.protocol_id.canonical_label(),
+                semantic.statement_variant,
+                semantic.proof_variant,
+                canonical_sha256_hex_v1(&semantic.statement_digest),
+                canonical_sha256_hex_v1(&semantic.envelope_sha256)
+            )
+            .expect("writing to String cannot fail");
+        }
+        for retired_label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
+            writeln!(&mut output, "retired\t{retired_label}")
+                .expect("writing to String cannot fail");
+        }
+        Ok(output.into_bytes())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
     use hex_literal::hex;
+
+    use crate::{domain::DomainId, name::Name};
 
     use super::{
         exact12_fixture::{
             account, asset_definition_id, bootle_lantern_policy, commitment, context,
-            encrypted_output, envelope, fcmp_encrypted_output, fcmp_input, fcmp_output,
-            jindo_commitment, jindo_field, nullifier, orchard_action, p256_ciphertext, p256_point,
-            proof_for, proof_variant_name, raw, redigest_bootle_lantern_policy,
-            redigest_zk_ace_policy, sample_statements, sorted_fcmp_outputs, statement_for,
-            statement_variant_name, zk_ace_allowlist, zk_ace_policy, zk_ams_anchor,
-            zk_ams_provision_statement, zk_ams_seed_key, zk_x509_certificate_policy, zk_x509_crl,
-            zk_x509_trust_anchor,
+            encrypted_output, envelope, fcmp_input, fcmp_output, jindo_commitment, jindo_field,
+            nullifier, orchard_action, p256_ciphertext, p256_point, proof_for, proof_variant_name,
+            raw, redigest_bootle_lantern_policy, redigest_zk_ace_policy, sample_statements,
+            sorted_fcmp_outputs, statement_for, statement_variant_name, zk_ace_allowlist,
+            zk_ace_policy, zk_ams_anchor, zk_ams_provision_statement, zk_ams_seed_key,
+            zk_x509_certificate_policy, zk_x509_crl, zk_x509_trust_anchor,
         },
         *,
     };
@@ -13502,6 +13751,115 @@ mod tests {
     }
 
     #[test]
+    fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
+        use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
+
+        let bundle = privacy_exact12_fixture_bundle_v1().expect("typed exact12 fixture bundle");
+        let archive =
+            privacy_exact12_fixture_bundle_bytes_v1().expect("canonical exact12 fixture archive");
+        assert_eq!(bundle.version, 1);
+        assert_eq!(bundle.rows.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(archive.len() <= PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1);
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&archive),
+            Status::Valid
+        );
+
+        for (row, expected_protocol) in bundle.rows.iter().zip(PrivacyProtocolIdV1::ALL) {
+            assert_eq!(row.protocol_id, expected_protocol);
+            let statement: PrivacyStatementV1 =
+                norito::decode_from_bytes(&row.statement_norito).expect("typed statement");
+            assert_eq!(statement.protocol_id(), expected_protocol);
+            assert_eq!(
+                norito::encode_canonical(&statement).expect("canonical statement"),
+                row.statement_norito
+            );
+
+            let envelope: PrivacyProofEnvelopeV1 =
+                norito::decode_from_bytes(&row.envelope_norito).expect("typed envelope");
+            assert_eq!(envelope.protocol_id, expected_protocol);
+            assert_eq!(envelope.statement, statement);
+            envelope
+                .validate_with_limits(&PrivacyConsensusLimitsV1::default())
+                .expect("intrinsically valid sample envelope");
+            assert_eq!(
+                norito::encode_canonical(&envelope).expect("canonical envelope"),
+                row.envelope_norito
+            );
+        }
+
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&[]),
+            Status::Empty
+        );
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&vec![
+                0;
+                PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+                    + 1
+            ]),
+            Status::ArchiveTooLarge
+        );
+
+        let truncated = &archive[..archive.len() - 1];
+        assert!(
+            !validate_privacy_exact12_fixture_bundle_v1(truncated).is_valid(),
+            "truncated outer archive must reject"
+        );
+        let mut trailing = archive.clone();
+        trailing.push(0);
+        assert!(
+            !validate_privacy_exact12_fixture_bundle_v1(&trailing).is_valid(),
+            "trailing outer bytes must reject"
+        );
+
+        let mut wrong_version = bundle.clone();
+        wrong_version.version = 2;
+        let wrong_version =
+            norito::encode_canonical(&wrong_version).expect("canonical wrong-version mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&wrong_version),
+            Status::InvalidBundle
+        );
+
+        let mut reordered = bundle.clone();
+        reordered.rows.swap(0, 1);
+        let reordered = norito::encode_canonical(&reordered).expect("canonical reordered mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&reordered),
+            Status::InvalidBundle
+        );
+
+        let mut cross_protocol = bundle.clone();
+        cross_protocol.rows[0].protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+        let cross_protocol =
+            norito::encode_canonical(&cross_protocol).expect("canonical cross-protocol mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&cross_protocol),
+            Status::InvalidBundle
+        );
+
+        let mut stale_statement = bundle.clone();
+        stale_statement.rows[0].statement_norito[0] ^= 1;
+        let stale_statement =
+            norito::encode_canonical(&stale_statement).expect("canonical stale-statement mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&stale_statement),
+            Status::InvalidBundle
+        );
+
+        let mut stale_envelope = bundle;
+        let final_byte = stale_envelope.rows[11].envelope_norito.len() - 1;
+        stale_envelope.rows[11].envelope_norito[final_byte] ^= 1;
+        let stale_envelope =
+            norito::encode_canonical(&stale_envelope).expect("canonical stale-envelope mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&stale_envelope),
+            Status::InvalidBundle
+        );
+    }
+
+    #[test]
     #[ignore = "explicit regeneration helper for fixtures/privacy/exact12_v1.tsv"]
     fn emit_exact12_typed_envelope_fixture_rows() {
         for row in privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics") {
@@ -13517,8 +13875,25 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "explicit complete regeneration helper for fixtures/privacy/exact12_v1.tsv"]
+    fn emit_exact12_matrix_fixture() {
+        let bytes = privacy_exact12_matrix_bytes_v1().expect("compiled exact12 matrix");
+        print!(
+            "{}",
+            std::str::from_utf8(&bytes).expect("exact12 generator emits UTF-8")
+        );
+    }
+
+    #[test]
     fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
         let matrix = include_str!("../../../fixtures/privacy/exact12_v1.tsv");
+        let generated =
+            privacy_exact12_matrix_bytes_v1().expect("generate compiled exact12 matrix");
+        assert_eq!(
+            matrix.as_bytes(),
+            generated,
+            "checked-in exact12 matrix must be regenerated from compiled typed semantics"
+        );
         assert!(matrix.ends_with('\n'), "matrix must end with one LF");
         assert!(!matrix.contains('\r'), "matrix must use canonical LF lines");
         assert!(

@@ -3,8 +3,11 @@ package org.hyperledger.iroha.sdk.privacy
 import java.io.File
 import java.security.MessageDigest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class PrivacyNativeBridgeTest {
     private val matrix = loadExact12Matrix()
@@ -100,8 +103,16 @@ class PrivacyNativeBridgeTest {
     fun sharedTypedValidatorStatusContractIsStable() {
         assertEquals(256 * 1024, PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES)
         assertEquals(
+            2 * 1024 * 1024,
+            PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES,
+        )
+        assertEquals(
             (0..8).toList(),
             PrivacyNativeBridge.ValidationStatusV1.values().map { it.code },
+        )
+        assertEquals(
+            (0..8).toList(),
+            PrivacyNativeBridge.Exact12FixtureValidationStatusV1.values().map { it.code },
         )
         val validator =
             PrivacyNativeBridge::class.java.declaredMethods.single {
@@ -109,6 +120,97 @@ class PrivacyNativeBridgeTest {
             }
         assertEquals(true, java.lang.reflect.Modifier.isNative(validator.modifiers))
         assertEquals(Int::class.javaPrimitiveType, validator.returnType)
+        val fixtureQuery =
+            PrivacyNativeBridge::class.java.declaredMethods.single {
+                it.name == "nativeExact12FixtureBundle"
+            }
+        val fixtureValidator =
+            PrivacyNativeBridge::class.java.declaredMethods.single {
+                it.name == "nativeValidateExact12FixtureBundle"
+            }
+        assertEquals(true, java.lang.reflect.Modifier.isNative(fixtureQuery.modifiers))
+        assertEquals(ByteArray::class.java, fixtureQuery.returnType)
+        assertEquals(true, java.lang.reflect.Modifier.isNative(fixtureValidator.modifiers))
+        assertEquals(Int::class.javaPrimitiveType, fixtureValidator.returnType)
+    }
+
+    @Test
+    fun exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
+        assertEquals(
+            PrivacyNativeBridge.Exact12FixtureValidationStatusV1.NULL_POINTER,
+            PrivacyNativeBridge.validateExact12FixtureBundleV1(null),
+        )
+        assertEquals(
+            PrivacyNativeBridge.Exact12FixtureValidationStatusV1.EMPTY,
+            PrivacyNativeBridge.validateExact12FixtureBundleV1(byteArrayOf()),
+        )
+        assertEquals(
+            PrivacyNativeBridge.Exact12FixtureValidationStatusV1.ARCHIVE_TOO_LARGE,
+            PrivacyNativeBridge.validateExact12FixtureBundleV1(
+                ByteArray(PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES + 1),
+            ),
+        )
+    }
+
+    @Test
+    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
+        val available = PrivacyNativeBridge.isNativeAvailable()
+        if (System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE") == "1") {
+            assertTrue(
+                available,
+                "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required",
+            )
+        }
+        if (!available) return
+
+        val fetched = PrivacyNativeBridge.exact12FixtureBundleV1()
+        val canonical = fetched.copyOf()
+        assertTrue(canonical.isNotEmpty())
+        assertTrue(canonical.size <= PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES)
+        assertEquals(
+            PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID,
+            PrivacyNativeBridge.validateExact12FixtureBundleV1(canonical),
+        )
+        assertContentEquals(canonical, PrivacyNativeBridge.exact12FixtureBundleV1())
+
+        fetched[0] = (fetched[0].toInt() xor 0xff).toByte()
+        assertContentEquals(canonical, PrivacyNativeBridge.exact12FixtureBundleV1())
+
+        listOf(
+            canonical.copyOfRange(0, canonical.size - 1),
+            canonical.copyOfRange(1, canonical.size),
+            canonical.copyOfRange(0, canonical.size / 2),
+        ).forEach { truncated ->
+            assertNotEquals(
+                PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID,
+                PrivacyNativeBridge.validateExact12FixtureBundleV1(truncated),
+            )
+            assertFailsWith<IllegalStateException> {
+                PrivacyNativeBridge.requireExact12FixtureBundle(truncated)
+            }
+        }
+
+        assertNotEquals(
+            PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID,
+            PrivacyNativeBridge.validateExact12FixtureBundleV1(
+                canonical + byteArrayOf(0),
+            ),
+        )
+        setOf(0, canonical.size / 2, canonical.size - 1).forEach { index ->
+            val mutated = canonical.copyOf()
+            mutated[index] = (mutated[index].toInt() xor 0x80).toByte()
+            assertNotEquals(
+                PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID,
+                PrivacyNativeBridge.validateExact12FixtureBundleV1(mutated),
+            )
+        }
+
+        assertNotEquals(
+            PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID,
+            PrivacyNativeBridge.validateExact12FixtureBundleV1(
+                PrivacyNativeBridge.capabilitiesArchiveV1(),
+            ),
+        )
     }
 
     @Test

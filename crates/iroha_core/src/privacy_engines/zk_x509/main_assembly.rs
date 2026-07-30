@@ -30,6 +30,10 @@ use super::{
         IoAccessV1, ZkX509IoAirErrorV1, ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1,
         ZkX509IoSegmentRoleV1, build_zk_x509_io_base_tables_v1,
     },
+    main_io::{
+        ZkX509MainIoDeclarationsV1, ZkX509MainIoPlanErrorV1,
+        compile_zk_x509_main_io_declarations_v1,
+    },
     merkle::{
         ZK_X509_CA_SPKI_DER_BYTES_V1, ZkX509MerkleErrorV1, certificate_policy_record_preimage_v1,
         crl_commitment_preimage_v1, crl_issuer_spki_preimage_v1, crl_record_preimage_v1,
@@ -71,7 +75,7 @@ use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
 
 /// Stable identity of the canonical production material assembler.
 pub(crate) const ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:deduplicated-sequential-byte-io:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay-still-gated:activation=false";
+    b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay-still-gated:activation=false";
 
 const P256_SIGNATURES_V1: usize = 5;
 const PROJECTION_SHA_CALLS_V1: usize = 7;
@@ -88,6 +92,8 @@ pub(crate) struct ZkX509MainIoBaseMaterialV1 {
     pub(crate) witnesses: Vec<ZkX509IoChannelWitnessV1>,
     /// Verifier-visible declarations in sequential channel order.
     pub(crate) declarations: Vec<ZkX509IoChannelDeclarationV1>,
+    /// Exact producer-plus-consumer byte accesses before fixed-capacity padding.
+    pub(crate) logical_active_rows: usize,
     /// Exact endpoint-order byte events.
     pub(crate) execution: Vec<IoAccessV1>,
     /// Exact address-sorted byte events.
@@ -261,6 +267,9 @@ pub(crate) enum ZkX509MainAssemblyErrorV1 {
     /// Cross-segment byte-memory construction failed.
     #[error(transparent)]
     Io(#[from] ZkX509IoAirErrorV1),
+    /// Verifier-owned byte-channel declaration compilation or binding failed.
+    #[error(transparent)]
+    IoPlan(#[from] ZkX509MainIoPlanErrorV1),
     /// The verifier-owned 49-registration topology is not exact.
     #[error("zk-X509 MAIN registration topology is invalid")]
     Registration,
@@ -723,6 +732,7 @@ fn build_p256_material_v1(
 }
 
 fn build_io_material_v1(
+    plan: &ZkX509MainIoDeclarationsV1,
     rfc_trace: &ZkX509Rfc5280TraceV1,
     projection_trace: &ZkX509ProjectionTraceV1,
     disclosed_attributes: usize,
@@ -747,10 +757,18 @@ fn build_io_material_v1(
             u32::try_from(rfc.len()).map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
         rfc.push(extra);
     }
+    plan.validate_witness_declarations_v1(&rfc)?;
     let (declarations, execution, sorted) = build_zk_x509_io_base_tables_v1(&rfc)?;
+    if declarations != plan.declarations
+        || execution.len() != plan.logical_active_rows
+        || sorted.len() != plan.logical_active_rows
+    {
+        return Err(ZkX509MainIoPlanErrorV1::Topology.into());
+    }
     Ok(ZkX509MainIoBaseMaterialV1 {
         witnesses: rfc,
         declarations,
+        logical_active_rows: plan.logical_active_rows,
         execution,
         sorted,
     })
@@ -766,6 +784,7 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
     if verifier_profile.registration.logical_registrations != 49 {
         return Err(ZkX509MainAssemblyErrorV1::Registration);
     }
+    let io_plan = compile_zk_x509_main_io_declarations_v1(statement)?;
     let relation_output = validate_reference_relation_v1(statement, governance, witness)?;
     let rfc_trace = build_zk_x509_rfc5280_trace_v1(
         &witness.certificate_chain_der,
@@ -822,6 +841,7 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
     let (p256_witnesses, p256_materials, optional_certificate_selection) =
         build_p256_material_v1(witness, &rfc_trace, &sha_witnesses)?;
     let io = build_io_material_v1(
+        &io_plan,
         &rfc_trace,
         &projection_trace,
         statement.disclosed_attributes.len(),
@@ -846,7 +866,106 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::zk_x509::relation::tests::fixture;
+    use crate::privacy_engines::zk_x509::{
+        main_io::tests::statement_with_disclosures_v1, relation::tests::fixture,
+    };
+
+    fn synthetic_witnesses_for_plan_v1(
+        plan: &ZkX509MainIoDeclarationsV1,
+    ) -> Vec<ZkX509IoChannelWitnessV1> {
+        plan.declarations
+            .iter()
+            .map(|declaration| {
+                let byte_len =
+                    usize::try_from(declaration.byte_len).expect("test byte length fits usize");
+                let value = declaration.public_value.clone().unwrap_or_else(|| {
+                    vec![
+                        u8::try_from(declaration.channel)
+                            .expect("test channel fits u8")
+                            .wrapping_add(1);
+                        byte_len
+                    ]
+                });
+                ZkX509IoChannelWitnessV1 {
+                    declaration: declaration.clone(),
+                    producer_value: value.clone(),
+                    consumer_values: vec![value; declaration.consumers.len()],
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn verifier_plan_and_witness_declarations_match_for_every_disclosure_count() {
+        for disclosures in 0..=iroha_data_model::privacy::ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
+            let statement = statement_with_disclosures_v1(disclosures);
+            let plan = compile_zk_x509_main_io_declarations_v1(&statement)
+                .expect("valid verifier-owned plan");
+            let witnesses = synthetic_witnesses_for_plan_v1(&plan);
+            plan.validate_witness_declarations_v1(&witnesses)
+                .expect("exact witness declarations");
+            let (declarations, execution, sorted) =
+                build_zk_x509_io_base_tables_v1(&witnesses).expect("valid synthetic base tables");
+            assert_eq!(declarations, plan.declarations);
+            assert_eq!(execution.len(), plan.logical_active_rows);
+            assert_eq!(sorted.len(), plan.logical_active_rows);
+        }
+    }
+
+    #[test]
+    fn verifier_plan_rejects_reordered_missing_extra_and_mutated_witness_metadata() {
+        let statement = statement_with_disclosures_v1(4);
+        let plan =
+            compile_zk_x509_main_io_declarations_v1(&statement).expect("valid verifier-owned plan");
+        let canonical = synthetic_witnesses_for_plan_v1(&plan);
+        let mut mutations = Vec::new();
+
+        let mut changed = canonical.clone();
+        changed.swap(0, 1);
+        mutations.push(changed);
+
+        let mut changed = canonical.clone();
+        changed.pop();
+        mutations.push(changed);
+
+        let mut changed = canonical.clone();
+        changed.push(canonical[0].clone());
+        mutations.push(changed);
+
+        let mut changed = canonical.clone();
+        changed[0].declaration.channel += 1;
+        mutations.push(changed);
+
+        let mut changed = canonical.clone();
+        changed[0].declaration.producer.role = ZkX509IoSegmentRoleV1::Sha256;
+        mutations.push(changed);
+
+        let mut changed = canonical.clone();
+        changed[0].declaration.consumers[0].role = ZkX509IoSegmentRoleV1::P256;
+        mutations.push(changed);
+
+        let mut changed = canonical.clone();
+        changed[0].declaration.byte_len += 1;
+        mutations.push(changed);
+
+        let mut changed = canonical.clone();
+        changed
+            .iter_mut()
+            .find(|witness| witness.declaration.public_value.is_some())
+            .expect("public witness")
+            .declaration
+            .public_value
+            .as_mut()
+            .expect("public value")[0] ^= 1;
+        mutations.push(changed);
+
+        for mutation in mutations {
+            assert_eq!(
+                plan.validate_witness_declarations_v1(&mutation),
+                Err(ZkX509MainIoPlanErrorV1::Topology)
+            );
+        }
+    }
 
     #[test]
     fn complete_main_assembly_scrub_is_recursive_idempotent_and_preserves_public_topology() {
@@ -896,6 +1015,8 @@ mod tests {
         assert!(!assembly.io.declarations.is_empty());
         assert!(!assembly.io.execution.is_empty());
         assert!(!assembly.io.sorted.is_empty());
+        assert_eq!(assembly.io.logical_active_rows, assembly.io.execution.len());
+        assert_eq!(assembly.io.logical_active_rows, assembly.io.sorted.len());
 
         // Poison top-level byte leaves, including otherwise-empty optional
         // preimages, so the test cannot pass merely because a fixture field
@@ -970,6 +1091,7 @@ mod tests {
             .each_ref()
             .map(|material| (material.role, material.assigned));
         let verifier_profile = assembly.verifier_profile;
+        let io_logical_active_rows = assembly.io.logical_active_rows;
 
         assembly.zeroize_private_v1();
         assert!(assembly.private_is_zeroized_v1());
@@ -996,6 +1118,7 @@ mod tests {
             p256_topology
         );
         assert_eq!(assembly.verifier_profile, verifier_profile);
+        assert_eq!(assembly.io.logical_active_rows, io_logical_active_rows);
         assert_eq!(
             construct_zk_x509_main_verifier_profile_v1()
                 .expect("public verifier profile remains reconstructible"),
