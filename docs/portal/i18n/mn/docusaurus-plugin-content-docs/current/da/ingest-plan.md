@@ -282,14 +282,10 @@ pub struct DaIngestReceipt {
   Rust хайрцаг нь `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, Python-г экспортолдог
   `ToriiClient`-д одоо `decode_pdp_commitment_header`, `IrohaSwift` хөлөг багтана
   `decodePdpCommitmentHeader` түүхий толгойн газрын зураг эсвэл `HTTPURLResponse` хэт ачаалал тохиолдлууд.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii нь мөн `GET /v1/da/manifests/{storage_ticket}`-г ил гаргадаг тул SDK болон операторууд манифест татаж авах боломжтой.
-  зангилааны дамар лавлахад хүрэлгүйгээр төлөвлөгөөг хуваах. Хариулт нь Norito байтыг буцаана
-  (base64), manifest JSON, `chunk_plan` JSON blob `sorafs fetch`-д бэлэн, холбогдох
-  hex задлах (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) ба
-  `Sora-PDP-Commitment` гарчиг нь паритын хувьд хүлээн авах хариултаас. -д `block_hash=<hex>` нийлүүлж байна
-  асуулгын мөр нь тодорхойлогч `sampling_plan` (даалгаврын хэш, `sample_window`, түүвэрлэсэн) буцаана
-  `(index, role, group)` багцууд нь бүтэн 2D зохион байгуулалтыг хамардаг) тул баталгаажуулагч болон PoR хэрэгслүүд ижил зүйлийг зурдаг.
-  индексүүд.
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Ачаа ихтэй урсгалын урсгал
 

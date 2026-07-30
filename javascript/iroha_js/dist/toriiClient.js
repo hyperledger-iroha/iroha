@@ -5123,7 +5123,7 @@ export class ToriiClient {
   /**
    * Fetch the canonical DA manifest + chunk plan for a storage ticket (`GET /v1/da/manifests/{ticket}`).
    * @param {string} storageTicketHex
-   * @param {{signal?: AbortSignal, blockHashHex?: string}} [options]
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<DaManifestFetchResponse>}
    */
   async getDaManifest(storageTicketHex, options = {}) {
@@ -5131,19 +5131,8 @@ export class ToriiClient {
       storageTicketHex,
       "storageTicketHex",
     );
-    const opts = ensureRecord(options ?? {}, "getDaManifest options");
-    const blockHashHex = opts.blockHashHex ?? opts.block_hash_hex ?? null;
-    const { blockHashHex: _ignoredBlockHash, block_hash_hex: _ignoredBlockHashSnake, ...rest } =
-      opts;
-    const { signal } = normalizeSignalOnlyOption(rest, "getDaManifest");
-    let path = `/v1/da/manifests/${normalizedTicket}`;
-    if (blockHashHex !== null && blockHashHex !== undefined) {
-      const normalizedHash = normalizeHex32String(
-        blockHashHex,
-        "getDaManifest.blockHashHex",
-      );
-      path = `${path}?block_hash=${normalizedHash}`;
-    }
+    const { signal } = normalizeSignalOnlyOption(options, "getDaManifest");
+    const path = `/v1/da/manifests/${normalizedTicket}`;
     const response = await this._request(
       "GET",
       path,
@@ -5170,13 +5159,17 @@ export class ToriiClient {
    */
   async getDaManifestToDir(storageTicketHex, options = {}) {
     const opts = ensureRecord(options ?? {}, "getDaManifestToDir options");
+    assertSupportedOptionKeys(
+      opts,
+      new Set(["outputDir", "output_dir", "signal", "label", "ticketLabel", "ticket_label"]),
+      "getDaManifestToDir options",
+    );
     const outputDir = await resolveDaOutputDir(
       opts.outputDir ?? opts.output_dir,
       DA_FETCH_ARTIFACT_PREFIX,
     );
     const manifest = await this.getDaManifest(storageTicketHex, {
       signal: opts.signal,
-      blockHashHex: opts.blockHashHex ?? opts.block_hash_hex,
     });
     const label =
       opts.label ??
@@ -32496,51 +32489,6 @@ function pickSorafsRegisterField(record, aliases, context) {
   return present.length === 0 ? SORAFS_REGISTER_FIELD_MISSING : record[present[0]];
 }
 
-function normalizeDaSamplingPlan(payload, context = "da manifest response.sampling_plan") {
-  if (payload === null || payload === undefined) {
-    return null;
-  }
-  const record = ensureRecord(payload, context);
-  const assignmentHash = normalizeHex32String(
-    record.assignment_hash ?? "",
-    `${context}.assignment_hash`,
-  );
-  const sampleWindow = ToriiClient._normalizeUnsignedInteger(
-    record.sample_window,
-    `${context}.sample_window`,
-    { allowZero: true },
-  );
-  const samples = [];
-  const sampleArray = record.samples ?? [];
-  if (!Array.isArray(sampleArray)) {
-    throw new TypeError(`${context}.samples must be an array`);
-  }
-  for (let idx = 0; idx < sampleArray.length; idx += 1) {
-    const entry = ensureRecord(sampleArray[idx], `${context}.samples[${idx}]`);
-    samples.push({
-      index: ToriiClient._normalizeUnsignedInteger(
-        entry.index,
-        `${context}.samples[${idx}].index`,
-        { allowZero: true },
-      ),
-      role: requireNonEmptyString(
-        entry.role ?? "",
-        `${context}.samples[${idx}].role`,
-      ),
-      group: ToriiClient._normalizeUnsignedInteger(
-        entry.group ?? 0,
-        `${context}.samples[${idx}].group`,
-        { allowZero: true },
-      ),
-    });
-  }
-  return {
-    assignment_hash_hex: assignmentHash,
-    sample_window: sampleWindow,
-    samples,
-  };
-}
-
 function normalizeDaManifestFetchResponse(payload, context = "da manifest response") {
   const record = ensureRecord(payload ?? {}, context);
   const storageTicketHex = normalizeHex32String(
@@ -32595,10 +32543,6 @@ function normalizeDaManifestFetchResponse(payload, context = "da manifest respon
     manifest_json:
       record.manifest ?? null,
     chunk_plan: chunkPlan,
-    sampling_plan: normalizeDaSamplingPlan(
-      record.sampling_plan ?? null,
-      `${context}.sampling_plan`,
-    ),
   };
 }
 
@@ -32623,9 +32567,6 @@ async function persistDaManifestBundle(manifestBundle, outputDir, labelInput) {
   const manifestPath = pathModule.join(outputDir, `manifest_${label}.norito`);
   const manifestJsonPath = pathModule.join(outputDir, `manifest_${label}.json`);
   const chunkPlanPath = pathModule.join(outputDir, `chunk_plan_${label}.json`);
-  const samplingPlanPath = manifestBundle.sampling_plan
-    ? pathModule.join(outputDir, `sampling_plan_${label}.json`)
-    : null;
 
   await fs.mkdir(outputDir, { recursive: true });
   await writeBufferFile(manifestPath, manifestBundle.manifest_bytes);
@@ -32635,15 +32576,11 @@ async function persistDaManifestBundle(manifestBundle, outputDir, labelInput) {
     manifestBundle.blob_hash_hex,
   );
   await writeJsonFile(chunkPlanPath, chunkPlan);
-  if (samplingPlanPath) {
-    await writeJsonFile(samplingPlanPath, manifestBundle.sampling_plan);
-  }
 
   return {
     manifestPath,
     manifestJsonPath,
     chunkPlanPath,
-    samplingPlanPath,
     label,
   };
 }

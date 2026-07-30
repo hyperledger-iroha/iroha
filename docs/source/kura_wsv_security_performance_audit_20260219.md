@@ -24,21 +24,25 @@ Out of scope: unrelated crates and full-system benchmark reruns.
 
 ### High
 
-1. **Kura writer records recoverable I/O faults instead of panicking**
+1. **Kura writer fails the supervised node closed on background I/O faults**
 - Component: Kura
 - Type: Security (DoS), Reliability
 - Status: addressed for background writer fsync failures and synchronous append
   failure propagation.
-- Detail: the writer loop records periodic/shutdown fsync failures through
-  `writer_fault` and returns without unwinding; synchronous append failures
-  continue to propagate as `Result` errors without exposing partial blocks.
+- Detail: the raw writer loop records periodic/shutdown fsync failures through
+  `writer_fault` and returns without unwinding. `Kura::start` exposes that OS
+  thread as a `Supervisor` child, and `irohad` monitors the child, so an
+  unexpected return initiates whole-node shutdown and is reported as
+  `UnexpectedExit`. Synchronous append failures continue to propagate as
+  `Result` errors without exposing partial blocks.
 - Evidence:
   - Writer fault state and recorder: `crates/iroha_core/src/kura.rs:236`, `crates/iroha_core/src/kura.rs:1689`
   - Periodic/shutdown fsync fault capture: `crates/iroha_core/src/kura.rs:2777`, `crates/iroha_core/src/kura.rs:2804`
   - Writer-channel and writer-fault regressions: `crates/iroha_core/src/kura.rs:10854`, `crates/iroha_core/src/kura.rs:10864`
   - Commit-marker and periodic-fsync regressions: `crates/iroha_core/src/kura.rs:16553`, `crates/iroha_core/src/kura.rs:16594`
-- Impact: transient writer fsync faults degrade persistence health instead of
-  killing the process.
+- Impact: the daemon cannot continue serving after losing its canonical
+  background writer; the supervised exit fails the node closed without relying
+  on a process panic.
 
 2. **Kura eviction does full data/index rewrites under `block_store` mutex**
 - Component: Kura

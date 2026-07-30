@@ -374,22 +374,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` Rust、Python をカバー `ToriiClient`
   `decode_pdp_commitment_header` をエクスポートし、`IrohaSwift` には一致するヘルパーが同梱されるため、モバイルになります
   クライアントは、エンコードされたサンプリング スケジュールをすぐに隠しておくことができます。【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii は `GET /v1/da/manifests/{storage_ticket}` も公開するため、SDK とオペレーターはマニフェストをフェッチできます
-  ノードのスプール ディレクトリに触れることなく、チャンク プランを作成できます。応答は Norito バイトを返します
-  (base64)、レンダリングされたマニフェスト JSON、`sorafs fetch` に対応できる `chunk_plan` JSON BLOB、および関連する
-  16 進ダイジェスト (`storage_ticket`、`client_blob_id`、`blob_hash`、`chunk_root`) なので、ダウンストリーム ツールで
-  ダイジェストを再計算せずにオーケストレーターにフィードし、同じ `Sora-PDP-Commitment` ヘッダーを
-  取り込み応答をミラーリングします。 `block_hash=<hex>` をクエリ パラメーターとして渡すと、決定論的な値が返されます。
-  `sampling_plan` は `block_hash || client_blob_id` をルートとし (バリデータ間で共有)、
-  `assignment_hash`、要求された `sample_window`、およびサンプリングされた `(index, role, group)` タプルの範囲
-  2D ストライプ レイアウト全体なので、PoR サンプラーとバリデーターは同じインデックスを再生できます。サンプラー
-  `client_blob_id`、`chunk_root`、および `ipa_commitment` を割り当てハッシュに混合します。 「いろはアプリだゲット」
-  --block-hash ` now writes `sampling_plan_.json` をマニフェスト + チャンク プランの横に追加します。
-  ハッシュは保存され、JS/Swift Torii クライアントは同じ `assignment_hash_hex` を公開するため、バリデーターは
-  そして証明者は単一の決定論的プローブセットを共有します。 Torii がサンプリング計画を返すとき、「iroha app da」
-  代わりに、prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`)
-  オペレーターがバリデーターの割り当てを省略した場合でも、PoR 証人がバリデーターの割り当てと一致するようにアドホック サンプリングを行う
-  `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### 大規模なペイロードのストリーミング フロー構成された単一リクエスト制限を超えるアセットを取り込む必要があるクライアントは、
 `POST /v1/da/ingest/chunk/start` を呼び出してストリーミング セッションを実行します。 Torii は次のように応答します。

@@ -17,11 +17,13 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use mv::storage::StorageReadOnly;
+use norito::codec::{Decode, Encode};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use super::consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_commit_preimage, vrf_reveal_preimage};
+use super::consensus::{NPOS_TAG, v2_vrf_commit_preimage, v2_vrf_reveal_preimage};
 use crate::state::{State, WorldReadOnly};
+use wire::{VrfCommit, VrfReveal};
 
 /// Domain separator for deterministic NPoS VRF input derivation.
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
@@ -31,7 +33,27 @@ fn derive_vrf_material_from_key(
     private_key: &PrivateKey,
     epoch: u64,
     signer: wire::ValidatorIndex,
-) -> Result<([u8; 32], [u8; 32]), String> {
+) -> Result<([u8; 32], [u8; 32], Vec<u8>), String> {
+    if private_key.algorithm() != iroha_crypto::Algorithm::BlsNormal {
+        return Err("NPoS VRF requires a BLS-normal consensus key".to_owned());
+    }
+    let message = vrf_input(chain_hash, epoch, signer);
+    let payload = Zeroizing::new(
+        private_key
+            .try_payload()
+            .map_err(|error| format!("failed to expose BLS key for VRF derivation: {error}"))?,
+    );
+    let secret = iroha_crypto::BlsNormal::parse_private_key(payload.as_slice())
+        .map_err(|error| format!("failed to parse BLS key for VRF derivation: {error}"))?;
+    let (output, proof) =
+        iroha_crypto::vrf::prove_normal_with_chain(&secret, chain_hash.as_ref(), &message)
+            .map_err(|error| format!("failed to derive deterministic BLS VRF material: {error}"))?;
+    let reveal = output.0;
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    Ok((reveal, commitment, proof.encode()))
+}
+
+fn vrf_input(chain_hash: &Hash, epoch: u64, signer: wire::ValidatorIndex) -> Vec<u8> {
     let mut message = Vec::with_capacity(
         VRF_INPUT_DOMAIN.len() + chain_hash.as_ref().len() + core::mem::size_of::<u64>() * 2,
     );
@@ -39,26 +61,7 @@ fn derive_vrf_material_from_key(
     message.extend_from_slice(chain_hash.as_ref());
     message.extend_from_slice(&epoch.to_be_bytes());
     message.extend_from_slice(&u64::from(signer).to_be_bytes());
-    let reveal: [u8; 32] = if private_key.algorithm() == iroha_crypto::Algorithm::BlsNormal {
-        let payload =
-            Zeroizing::new(private_key.try_payload().map_err(|error| {
-                format!("failed to expose BLS key for VRF derivation: {error}")
-            })?);
-        let secret = iroha_crypto::BlsNormal::parse_private_key(payload.as_slice())
-            .map_err(|error| format!("failed to parse BLS key for VRF derivation: {error}"))?;
-        let (output, _proof) =
-            iroha_crypto::vrf::prove_normal_with_chain(&secret, chain_hash.as_ref(), &message)
-                .map_err(|error| {
-                    format!("failed to derive deterministic BLS VRF material: {error}")
-                })?;
-        output.0
-    } else {
-        let signature = Signature::try_new(private_key, &message)
-            .map_err(|error| format!("failed to sign local VRF input material: {error}"))?;
-        Hash::new(signature.payload()).into()
-    };
-    let commitment: [u8; 32] = Hash::new(reveal).into();
-    Ok((reveal, commitment))
+    message
 }
 
 /// Result of admitting one authenticated VRF observation.
@@ -91,6 +94,8 @@ pub(crate) enum V2VrfRejection {
     MalformedSignature,
     /// The signature does not verify under the frozen roster key.
     InvalidSignature,
+    /// The reveal is not the unique VRF output for the frozen key and epoch input.
+    InvalidVrfProof,
     /// A reveal has no retained commitment from the same signer.
     MissingCommitment,
     /// A reveal does not hash to the retained commitment.
@@ -201,8 +206,8 @@ struct ActiveVrfLifecycle {
     penalties_applied: bool,
     penalties_applied_at_height: Option<u64>,
     validator_election: Option<iroha_data_model::consensus::ValidatorElectionOutcome>,
-    outbound: Vec<super::message::BlockMessage>,
-    retransmit: Option<super::message::BlockMessage>,
+    outbound: Vec<wire::ConsensusMessageV2>,
+    retransmit: Option<wire::ConsensusMessageV2>,
 }
 
 /// Per-height NPoS VRF state owned exclusively by the serialized v2 runner.
@@ -343,7 +348,7 @@ impl V2NposVrfLifecycle {
 
     /// Drain locally generated messages for one bounded broadcast to the
     /// frozen voter set.
-    pub(crate) fn take_outbound(&mut self) -> Vec<super::message::BlockMessage> {
+    pub(crate) fn take_outbound(&mut self) -> Vec<wire::ConsensusMessageV2> {
         self.active
             .as_mut()
             .map_or_else(Vec::new, |active| std::mem::take(&mut active.outbound))
@@ -351,7 +356,7 @@ impl V2NposVrfLifecycle {
 
     /// Clone the single locally authenticated message for bounded periodic
     /// retransmission while this height remains active.
-    pub(crate) fn retransmission(&self) -> Vec<super::message::BlockMessage> {
+    pub(crate) fn retransmission(&self) -> Vec<wire::ConsensusMessageV2> {
         self.active
             .as_ref()
             .and_then(|active| active.retransmit.clone())
@@ -517,6 +522,16 @@ impl ActiveVrfLifecycle {
         if actual != commitment {
             return V2VrfIngressOutcome::Rejected(V2VrfRejection::CommitmentMismatch);
         }
+        let Some(signer_peer) = usize::try_from(signer)
+            .ok()
+            .and_then(|index| self.context.roster.get(index))
+            .map(|entry| &entry.validator)
+        else {
+            return V2VrfIngressOutcome::Rejected(V2VrfRejection::SignerOutOfRange);
+        };
+        if !verify_vrf_reveal(&self.context, signer_peer, &reveal) {
+            return V2VrfIngressOutcome::Rejected(V2VrfRejection::InvalidVrfProof);
+        }
         if let Some(existing) = participant.reveal {
             return if existing == reveal.reveal
                 && participant.reveal_proof.as_ref().is_some_and(|proof| {
@@ -554,6 +569,7 @@ impl ActiveVrfLifecycle {
                 epoch: reveal.epoch,
                 reveal: reveal.reveal,
                 signer: reveal.signer,
+                vrf_proof: reveal.vrf_proof.clone(),
                 signature: reveal.bls_sig,
                 observed_at_height: self.context.height,
             });
@@ -570,6 +586,7 @@ impl ActiveVrfLifecycle {
                         epoch: reveal.epoch,
                         reveal: reveal.reveal,
                         signer: reveal.signer,
+                        vrf_proof: reveal.vrf_proof.clone(),
                         signature: reveal.bls_sig,
                         observed_at_height: self.context.height,
                     }),
@@ -623,7 +640,7 @@ impl ActiveVrfLifecycle {
         signature
             .verify(
                 peer.public_key(),
-                &vrf_commit_preimage(&self.context.chain_id, NPOS_TAG, commit),
+                &v2_vrf_commit_preimage(&self.context.chain_id, NPOS_TAG, commit),
             )
             .map_err(|_| V2VrfRejection::InvalidSignature)?;
         Ok(commit.signer)
@@ -646,7 +663,7 @@ impl ActiveVrfLifecycle {
         signature
             .verify(
                 peer.public_key(),
-                &vrf_reveal_preimage(&self.context.chain_id, NPOS_TAG, reveal),
+                &v2_vrf_reveal_preimage(&self.context.chain_id, NPOS_TAG, reveal),
             )
             .map_err(|_| V2VrfRejection::InvalidSignature)?;
         Ok(reveal.signer)
@@ -691,7 +708,7 @@ impl ActiveVrfLifecycle {
             return Err(V2NposError::LocalIdentityMismatch);
         }
         let chain_hash = Hash::new(self.context.chain_id.clone().into_inner().as_bytes());
-        let (reveal, commitment) = derive_vrf_material_from_key(
+        let (reveal, commitment, vrf_proof) = derive_vrf_material_from_key(
             &chain_hash,
             key_pair.private_key(),
             self.context.epoch,
@@ -720,7 +737,7 @@ impl ActiveVrfLifecycle {
                 };
                 commit.bls_sig = Signature::try_new(
                     key_pair.private_key(),
-                    &vrf_commit_preimage(&self.context.chain_id, NPOS_TAG, &commit),
+                    &v2_vrf_commit_preimage(&self.context.chain_id, NPOS_TAG, &commit),
                 )
                 .map_err(|error| V2NposError::LocalSignature(error.to_string()))?
                 .payload()
@@ -729,7 +746,9 @@ impl ActiveVrfLifecycle {
                 if outcome != V2VrfIngressOutcome::Accepted {
                     return Err(V2NposError::LocalAdmission(outcome));
                 }
-                let message = super::message::BlockMessage::VrfCommit(commit);
+                let message = wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::VrfCommit(commit),
+                );
                 self.outbound.push(message.clone());
                 self.retransmit = Some(message);
             }
@@ -749,11 +768,12 @@ impl ActiveVrfLifecycle {
                 epoch: self.context.epoch,
                 reveal,
                 signer: local_validator,
+                vrf_proof,
                 bls_sig: Vec::new(),
             };
             reveal_message.bls_sig = Signature::try_new(
                 key_pair.private_key(),
-                &vrf_reveal_preimage(&self.context.chain_id, NPOS_TAG, &reveal_message),
+                &v2_vrf_reveal_preimage(&self.context.chain_id, NPOS_TAG, &reveal_message),
             )
             .map_err(|error| V2NposError::LocalSignature(error.to_string()))?
             .payload()
@@ -762,7 +782,9 @@ impl ActiveVrfLifecycle {
             if outcome != V2VrfIngressOutcome::Accepted {
                 return Err(V2NposError::LocalAdmission(outcome));
             }
-            let message = super::message::BlockMessage::VrfReveal(reveal_message);
+            let message = wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::VrfReveal(reveal_message),
+            );
             self.outbound.push(message.clone());
             self.retransmit = Some(message);
         }
@@ -826,6 +848,35 @@ impl ActiveVrfLifecycle {
 }
 
 const MAX_VRF_SIGNATURE_BYTES: usize = 512;
+const MAX_VRF_PROOF_BYTES: usize = 128;
+
+fn verify_vrf_reveal(context: &wire::HeightContext, peer: &PeerId, reveal: &VrfReveal) -> bool {
+    if reveal.vrf_proof.is_empty() || reveal.vrf_proof.len() > MAX_VRF_PROOF_BYTES {
+        return false;
+    }
+    let mut cursor = reveal.vrf_proof.as_slice();
+    let Ok(proof) = iroha_crypto::vrf::VrfProof::decode(&mut cursor) else {
+        return false;
+    };
+    if !cursor.is_empty() || proof.encode() != reveal.vrf_proof {
+        return false;
+    }
+    let Ok((algorithm, public_key)) = peer.public_key().try_to_bytes() else {
+        return false;
+    };
+    if algorithm != iroha_crypto::Algorithm::BlsNormal {
+        return false;
+    }
+    let chain_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+    let input = vrf_input(&chain_hash, reveal.epoch, reveal.signer);
+    iroha_crypto::vrf::verify_normal_bytes_with_chain(
+        public_key,
+        chain_hash.as_ref(),
+        &input,
+        &proof,
+    )
+    .is_some_and(|output| output.0 == reveal.reveal)
+}
 
 fn validate_extension_at_candidate_height(
     context: &wire::HeightContext,
@@ -1188,7 +1239,7 @@ fn verify_commit_proof(
     signature
         .verify(
             peer.validator.public_key(),
-            &vrf_commit_preimage(&context.chain_id, NPOS_TAG, &message),
+            &v2_vrf_commit_preimage(&context.chain_id, NPOS_TAG, &message),
         )
         .map_err(|_| V2NposError::InvalidRecord("commit signature verification failed"))
 }
@@ -1214,6 +1265,7 @@ fn verify_reveal_proof(
         epoch: proof.epoch,
         reveal: proof.reveal,
         signer: proof.signer,
+        vrf_proof: proof.vrf_proof.clone(),
         bls_sig: proof.signature.clone(),
     };
     let signature = Signature::try_from_bytes(&proof.signature)
@@ -1221,9 +1273,15 @@ fn verify_reveal_proof(
     signature
         .verify(
             peer.validator.public_key(),
-            &vrf_reveal_preimage(&context.chain_id, NPOS_TAG, &message),
+            &v2_vrf_reveal_preimage(&context.chain_id, NPOS_TAG, &message),
         )
-        .map_err(|_| V2NposError::InvalidRecord("reveal signature verification failed"))
+        .map_err(|_| V2NposError::InvalidRecord("reveal signature verification failed"))?;
+    if !verify_vrf_reveal(context, &peer.validator, &message) {
+        return Err(V2NposError::InvalidRecord(
+            "reveal VRF proof verification failed",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_persisted_record(
@@ -1469,7 +1527,7 @@ mod tests {
     ) -> VrfCommit {
         commit.bls_sig = Signature::try_new(
             key.private_key(),
-            &vrf_commit_preimage(&context.chain_id, NPOS_TAG, &commit),
+            &v2_vrf_commit_preimage(&context.chain_id, NPOS_TAG, &commit),
         )
         .expect("commit signature")
         .payload()
@@ -1477,14 +1535,35 @@ mod tests {
         commit
     }
 
+    fn material(
+        key: &KeyPair,
+        context: &wire::HeightContext,
+        signer: wire::ValidatorIndex,
+    ) -> ([u8; 32], [u8; 32], Vec<u8>) {
+        let chain_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+        derive_vrf_material_from_key(&chain_hash, key.private_key(), context.epoch, signer)
+            .expect("derive fixture VRF material")
+    }
+
     fn sign_reveal(
         key: &KeyPair,
         context: &wire::HeightContext,
         mut reveal: VrfReveal,
     ) -> VrfReveal {
+        if reveal.vrf_proof.is_empty() {
+            let chain_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+            let (_, _, proof) = derive_vrf_material_from_key(
+                &chain_hash,
+                key.private_key(),
+                reveal.epoch,
+                reveal.signer,
+            )
+            .expect("derive reveal proof");
+            reveal.vrf_proof = proof;
+        }
         reveal.bls_sig = Signature::try_new(
             key.private_key(),
-            &vrf_reveal_preimage(&context.chain_id, NPOS_TAG, &reveal),
+            &v2_vrf_reveal_preimage(&context.chain_id, NPOS_TAG, &reveal),
         )
         .expect("reveal signature")
         .payload()
@@ -1670,6 +1749,7 @@ mod tests {
                 epoch: 0,
                 reveal: [0x22; 32],
                 signer: 0,
+                vrf_proof: Vec::new(),
                 bls_sig: Vec::new(),
             },
         );
@@ -1681,6 +1761,7 @@ mod tests {
             epoch: 0,
             reveal: [0x22; 32],
             signer: 0,
+            vrf_proof: Vec::new(),
             bls_sig: vec![0; 96],
         };
         assert_eq!(
@@ -1693,8 +1774,7 @@ mod tests {
     fn reveal_requires_matching_commitment_and_conflicts_are_deduplicated() {
         let keys = keys();
         let commit_context = context(2, &keys);
-        let reveal = [0x52; 32];
-        let commitment: [u8; 32] = Hash::new(reveal).into();
+        let (reveal, commitment, mut proof) = material(&keys[0], &commit_context, 0);
         let commit = sign_commit(
             &keys[0],
             &commit_context,
@@ -1743,6 +1823,7 @@ mod tests {
                 epoch: 0,
                 reveal,
                 signer: 1,
+                vrf_proof: Vec::new(),
                 bls_sig: Vec::new(),
             },
         );
@@ -1757,12 +1838,30 @@ mod tests {
                 epoch: 0,
                 reveal: [0x53; 32],
                 signer: 0,
+                vrf_proof: Vec::new(),
                 bls_sig: Vec::new(),
             },
         );
         assert_eq!(
             reveal_lifecycle.accept_reveal(mismatch, Some(&reveal_context.roster[0].validator)),
             V2VrfIngressOutcome::Rejected(V2VrfRejection::CommitmentMismatch)
+        );
+        *proof.last_mut().expect("encoded proof is non-empty") ^= 1;
+        let forged_output = sign_reveal(
+            &keys[0],
+            &reveal_context,
+            VrfReveal {
+                epoch: 0,
+                reveal,
+                signer: 0,
+                vrf_proof: proof,
+                bls_sig: Vec::new(),
+            },
+        );
+        assert_eq!(
+            reveal_lifecycle
+                .accept_reveal(forged_output, Some(&reveal_context.roster[0].validator)),
+            V2VrfIngressOutcome::Rejected(V2VrfRejection::InvalidVrfProof)
         );
         let valid = sign_reveal(
             &keys[0],
@@ -1771,6 +1870,7 @@ mod tests {
                 epoch: 0,
                 reveal,
                 signer: 0,
+                vrf_proof: Vec::new(),
                 bls_sig: Vec::new(),
             },
         );
@@ -1818,8 +1918,14 @@ mod tests {
         assert_eq!(first_outbound.len(), 1);
         assert!(matches!(
             (first_outbound.as_slice(), first_retransmission.as_slice()),
-            ([super::super::message::BlockMessage::VrfCommit(first)],
-             [super::super::message::BlockMessage::VrfCommit(repeated)])
+            ([wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::VrfCommit(first),
+                ..
+            }],
+             [wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::VrfCommit(repeated),
+                ..
+            }])
                 if first.epoch == repeated.epoch
                     && first.signer == repeated.signer
                     && first.commitment == repeated.commitment
@@ -1862,7 +1968,10 @@ mod tests {
         let mut reveal_height = lifecycle_at(4, 4, Some(committed), Some(0), &keys);
         assert!(matches!(
             reveal_height.take_outbound().as_slice(),
-            [super::super::message::BlockMessage::VrfReveal(_)]
+            [wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::VrfReveal(_),
+                ..
+            }]
         ));
         let record = reveal_height
             .pending_records()
@@ -1875,8 +1984,7 @@ mod tests {
     fn authenticated_late_reveal_relaxes_boundary_penalty_without_changing_entropy_reveal() {
         let keys = keys();
         let commit_context = context(2, &keys);
-        let reveal = [0x72; 32];
-        let commitment: [u8; 32] = Hash::new(reveal).into();
+        let (reveal, commitment, _) = material(&keys[0], &commit_context, 0);
         let mut commit_height = lifecycle_at(2, 2, None, None, &keys);
         let commit = sign_commit(
             &keys[0],
@@ -1906,6 +2014,7 @@ mod tests {
                 epoch: 0,
                 reveal,
                 signer: 0,
+                vrf_proof: Vec::new(),
                 bls_sig: Vec::new(),
             },
         );
@@ -2117,8 +2226,7 @@ mod tests {
     fn reveal_extension_requires_committed_commit_and_current_height_admission() {
         let keys = keys();
         let commit_context = context(2, &keys);
-        let reveal = [0xA4; 32];
-        let commitment: [u8; 32] = Hash::new(reveal).into();
+        let (reveal, commitment, _) = material(&keys[0], &commit_context, 0);
         let mut commit_lifecycle = lifecycle_at(2, 2, None, None, &keys);
         let commit = sign_commit(
             &keys[0],
@@ -2148,6 +2256,7 @@ mod tests {
                 epoch: 0,
                 reveal,
                 signer: 0,
+                vrf_proof: Vec::new(),
                 bls_sig: Vec::new(),
             },
         );

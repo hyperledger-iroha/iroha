@@ -45,6 +45,9 @@ parity/CI dashboards that feed the roadmap and `status.md`.
   `alerts/tests/sorafs_gateway_compliance_rules.test.yml` — Alerting pack and
   promtool coverage for controller error burn, serving failures, catalog
   sequence skew, impending expiry, and unavailable serving policy.
+- `alerts/sorafs_gateway_rules.yml` +
+  `alerts/tests/sorafs_gateway_rules.test.yml` — Alerting pack and promtool
+  coverage for gateway availability, TTFB P95, and proof-failure spikes.
 
 The JSON structure for these dashboards is documented in
 `docs/source/references/ios_metrics.md`. Exporters should populate real feeds in

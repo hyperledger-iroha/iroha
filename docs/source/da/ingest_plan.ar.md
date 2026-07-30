@@ -373,22 +373,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` غطاء الصدأ، بايثون `ToriiClient`
   يقوم الآن بتصدير `decode_pdp_commitment_header`، كما يقوم `IrohaSwift` بشحن المساعدين المطابقين المتنقلين للغاية
   يمكن للعملاء تخزين جدول أخذ العينات المشفر على الفور. 【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- يعرض Torii أيضًا `GET /v1/da/manifests/{storage_ticket}` حتى تتمكن مجموعات SDK والمشغلون من جلب البيانات
-  وخطط القطع دون لمس دليل التخزين المؤقت للعقدة. تقوم الاستجابة بإرجاع البايتات Norito
-  (base64)، تم تقديم بيان JSON، `chunk_plan` JSON blob جاهز لـ `sorafs fetch`، بالإضافة إلى العناصر ذات الصلة
-  الملخصات السداسية (`storage_ticket`، `client_blob_id`، `blob_hash`، `chunk_root`) بحيث يمكن للأدوات النهائية
-  تغذية المنسق دون إعادة حساب الملخصات، وإصدار نفس رأس `Sora-PDP-Commitment` إلى
-  مرآة استيعاب الاستجابات. يؤدي تمرير `block_hash=<hex>` كمعلمة استعلام إلى إرجاع قيمة حتمية
-  `sampling_plan` متجذر في `block_hash || client_blob_id` (مشترك عبر أدوات التحقق من الصحة) يحتوي على
-  `assignment_hash`، و`sample_window` المطلوب، وعينات `(index, role, group)` من الصفوف الممتدة
-  تخطيط الشريط ثنائي الأبعاد بالكامل حتى تتمكن أجهزة أخذ عينات PoR وأجهزة التحقق من الصحة من إعادة تشغيل نفس المؤشرات. أخذ العينات
-  يدمج `client_blob_id`، و`chunk_root`، و`ipa_commitment` في تجزئة المهمة؛ `iroha التطبيق دا الحصول عليه
-  --block-hash ` now writes `sampling_plan_.json` بجوار خطة البيان + القطعة مع
-  تم الحفاظ على التجزئة، ويكشف عملاء JS/Swift Torii عن نفس `assignment_hash_hex` لذلك يقوم المدققون
-  ويشترك الأمثال في مجموعة مسبار حتمية واحدة. عندما يقوم Torii بإرجاع خطة أخذ العينات، `iroha app da
-  إثبات التوفر` now reuses that deterministic probe set (seed derived from `sample_seed`) بدلاً من ذلك
-  من أخذ العينات المخصصة بحيث يصطف شهود إثبات صحة المعلومات مع تعيينات المدقق حتى إذا أغفل المشغل
-  `--block-hash` override.[crates/iroha_torii_shared/src/da/sampling.rs:1]】[crates/iroha_cli/src/commands/da.rs:523] 【javascript/iroha_js/src/toriiClient.js:15903】[IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170]
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### تدفق تدفق الحمولة الكبيرةالعملاء الذين يحتاجون إلى استيعاب أصول أكبر من حد الطلب الفردي الذي تم تكوينه، يبدأون أ
 جلسة البث عن طريق الاتصال بـ `POST /v1/da/ingest/chunk/start`. يستجيب Torii بـ

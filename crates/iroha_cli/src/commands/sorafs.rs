@@ -57,7 +57,7 @@ use iroha_crypto::{
     soranet::{
         blinding::canonical_cache_key,
         certificate::CertificateValidationPhase,
-        directory::GuardDirectorySnapshotV2,
+        directory::{GuardDirectorySnapshotV2, compute_snapshot_digest},
         token::{AdmissionToken, MintError as AdmissionTokenMintError, compute_issuer_fingerprint},
     },
 };
@@ -5004,9 +5004,16 @@ pub struct FetchArgs {
     /// Optional 32-byte hex key used to tag guard caches when persisting to disk.
     #[arg(long = "guard-cache-key", value_name = "HEX")]
     pub guard_cache_key: Option<String>,
-    /// Path to a guard directory JSON payload used to refresh guard selections.
+    /// Path to a Norito guard directory snapshot used to refresh guard selections.
     #[arg(long = "guard-directory", value_name = "PATH")]
     pub guard_directory: Option<PathBuf>,
+    /// Trusted domain-separated BLAKE3 digest of the exact guard directory bytes.
+    #[arg(
+        long = "guard-directory-digest",
+        value_name = "HEX",
+        requires = "guard_directory"
+    )]
+    pub guard_directory_digest: Option<String>,
     /// Target number of entry guards to pin (defaults to 3 when the guard directory is provided).
     #[arg(long = "guard-target", value_name = "COUNT")]
     pub guard_target: Option<usize>,
@@ -5136,6 +5143,11 @@ impl Run for FetchArgs {
 
         if self.guard_retention_days.is_some() && self.guard_directory.is_none() {
             return Err(eyre!("--guard-retention-days requires --guard-directory"));
+        }
+        if self.guard_directory.is_some() && self.guard_directory_digest.is_none() {
+            return Err(eyre!(
+                "--guard-directory requires --guard-directory-digest from an independent trusted source"
+            ));
         }
 
         let guard_cache_key = match self.guard_cache_key.as_deref() {
@@ -5315,12 +5327,18 @@ impl Run for FetchArgs {
         };
         let mut guard_updated = false;
         let relay_directory = if let Some(directory_path) = self.guard_directory.as_ref() {
-            let directory = load_guard_directory(directory_path).wrap_err_with(|| {
-                format!(
-                    "failed to parse guard directory from `{}`",
-                    directory_path.display()
-                )
-            })?;
+            let expected_digest = self
+                .guard_directory_digest
+                .as_deref()
+                .expect("checked guard directory digest above");
+            let now_unix = OffsetDateTime::now_utc().unix_timestamp();
+            let directory = load_guard_directory(directory_path, expected_digest, now_unix)
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to parse guard directory from `{}`",
+                        directory_path.display()
+                    )
+                })?;
             let target = self.guard_target.unwrap_or(3);
             if target == 0 {
                 return Err(eyre!("--guard-target must be at least 1 when provided"));
@@ -5341,7 +5359,6 @@ impl Run for FetchArgs {
                     .ok_or_else(|| eyre!("guard target must be at least 1 when provided"))?,
             )
             .with_retention(retention);
-            let now_unix = OffsetDateTime::now_utc().unix_timestamp();
             let now_unix = u64::try_from(now_unix).unwrap_or(0);
             let policy = anonymity_policy.unwrap_or(AnonymityPolicy::GuardPq);
             let selected = selector.select(&directory, guard_set.as_ref(), now_unix, policy);
@@ -6020,12 +6037,17 @@ fn persist_guard_set(path: &Path, guard_set: &GuardSet, key: Option<&GuardCacheK
     Ok(())
 }
 
-fn load_guard_directory(path: &Path) -> Result<RelayDirectory> {
+fn load_guard_directory(
+    path: &Path,
+    expected_snapshot_digest_hex: &str,
+    at_unix: i64,
+) -> Result<RelayDirectory> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read guard directory from `{}`", path.display()))?;
-    RelayDirectory::from_guard_directory_bytes(&bytes).map_err(|err| {
+    let expected_digest = parse_snapshot_digest_hex(expected_snapshot_digest_hex)?;
+    RelayDirectory::from_guard_directory_bytes_at(&bytes, expected_digest, at_unix).map_err(|err| {
         eyre!(
-            "failed to parse guard directory from `{}`: {err} (expected SRCv2 Norito snapshot)",
+            "failed to authenticate guard directory from `{}`: {err} (expected pinned SRCv2 Norito snapshot)",
             path.display(),
         )
     })
@@ -6034,6 +6056,8 @@ fn load_guard_directory(path: &Path) -> Result<RelayDirectory> {
 #[derive(Debug, Clone, norito::json::JsonSerialize)]
 struct GuardDirectorySummary {
     version: u8,
+    snapshot_digest_hex: String,
+    authentication: &'static str,
     directory_hash_hex: Option<String>,
     published_at_unix: Option<i64>,
     valid_after_unix: Option<i64>,
@@ -6055,6 +6079,8 @@ impl GuardDirectorySummary {
         snapshot: &GuardDirectorySnapshotV2,
         directory: &RelayDirectory,
         snapshot_size_bytes: usize,
+        snapshot_digest_hex: String,
+        authenticated: bool,
     ) -> Self {
         let mut entry_guards = 0usize;
         let mut pq_entry_guards = 0usize;
@@ -6093,6 +6119,12 @@ impl GuardDirectorySummary {
 
         Self {
             version: snapshot.version,
+            snapshot_digest_hex,
+            authentication: if authenticated {
+                "authenticated"
+            } else {
+                "structural_inspection_only"
+            },
             directory_hash_hex: directory.directory_hash().map(hex::encode),
             published_at_unix: directory.published_at(),
             valid_after_unix: directory.valid_after(),
@@ -6112,50 +6144,55 @@ impl GuardDirectorySummary {
 }
 
 fn inspect_guard_directory_bytes(bytes: &[u8]) -> Result<GuardDirectorySummary> {
-    let snapshot = GuardDirectorySnapshotV2::from_bytes(bytes)
+    let snapshot = GuardDirectorySnapshotV2::inspect_bytes(bytes)
         .wrap_err("failed to decode guard directory snapshot")?;
-    let directory = RelayDirectory::from_guard_directory_bytes(bytes)
-        .wrap_err("guard directory verification failed")?;
+    let directory = RelayDirectory::inspect_guard_directory_bytes(bytes)
+        .wrap_err("guard directory structural inspection failed")?;
     Ok(GuardDirectorySummary::from_components(
         &snapshot,
         &directory,
         bytes.len(),
+        hex::encode(compute_snapshot_digest(bytes)),
+        false,
     ))
 }
 
-fn ensure_expected_directory_hash(
-    summary: &GuardDirectorySummary,
-    expected_hex: Option<&str>,
-) -> Result<()> {
-    if let Some(expected) = expected_hex {
-        let expected_normalised = normalise_directory_hash_hex(expected)?;
-        let actual = summary
-            .directory_hash_hex
-            .as_deref()
-            .ok_or_else(|| eyre!("guard directory snapshot did not advertise `directory_hash`"))?;
-        if actual != expected_normalised {
-            return Err(eyre!(
-                "guard directory hash mismatch (expected {expected_normalised}, got {actual})"
-            ));
-        }
-    }
-    Ok(())
+fn authenticate_guard_directory_bytes(
+    bytes: &[u8],
+    expected_snapshot_digest_hex: &str,
+    at_unix: i64,
+) -> Result<GuardDirectorySummary> {
+    let expected_digest = parse_snapshot_digest_hex(expected_snapshot_digest_hex)?;
+    let snapshot = GuardDirectorySnapshotV2::authenticate_bytes_at(bytes, expected_digest, at_unix)
+        .wrap_err("failed to authenticate guard directory snapshot")?;
+    let directory = RelayDirectory::from_guard_directory_bytes_at(bytes, expected_digest, at_unix)
+        .wrap_err("guard directory authentication failed")?;
+    Ok(GuardDirectorySummary::from_components(
+        &snapshot,
+        &directory,
+        bytes.len(),
+        hex::encode(expected_digest),
+        true,
+    ))
 }
 
-fn normalise_directory_hash_hex(value: &str) -> Result<String> {
+fn parse_snapshot_digest_hex(value: &str) -> Result<[u8; 32]> {
     let trimmed = value.trim();
     if trimmed.len() != 64 {
         return Err(eyre!(
-            "directory hash must contain 64 hex characters (got length {})",
+            "snapshot digest must contain 64 hex characters (got length {})",
             trimmed.len()
         ));
     }
     if !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return Err(eyre!(
-            "directory hash `{trimmed}` must only contain hexadecimal characters"
+            "snapshot digest `{trimmed}` must only contain hexadecimal characters"
         ));
     }
-    Ok(trimmed.to_ascii_lowercase())
+    let decoded = hex::decode(trimmed).wrap_err("failed to decode snapshot digest")?;
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&decoded);
+    Ok(digest)
 }
 
 fn validation_phase_label(phase: CertificateValidationPhase) -> &'static str {
@@ -7287,7 +7324,7 @@ fn maybe_download_manifest<C: RunContext>(
         .expect("storage ticket present when fetch is required");
     let normalized_ticket = normalize_ticket_hex(ticket)?;
     let fetcher = DaManifestFetcher::new(context.config(), args.manifest_endpoint.as_deref())?;
-    let bundle = fetcher.fetch(&normalized_ticket, None)?;
+    let bundle = fetcher.fetch(&normalized_ticket)?;
     let persisted = persist_manifest_bundle(
         context,
         &bundle,
@@ -12822,8 +12859,10 @@ impl Run for ToolkitCommand {
 pub enum GuardDirectoryCommand {
     /// Fetch a guard directory snapshot over HTTPS, verify it, and emit a summary.
     Fetch(GuardDirectoryFetchArgs),
-    /// Verify a guard directory snapshot stored on disk.
+    /// Authenticate a guard directory snapshot stored on disk.
     Verify(GuardDirectoryVerifyArgs),
+    /// Inspect snapshot structure without claiming authenticity or freshness.
+    Inspect(GuardDirectoryInspectArgs),
 }
 
 impl Run for GuardDirectoryCommand {
@@ -12831,6 +12870,7 @@ impl Run for GuardDirectoryCommand {
         match self {
             GuardDirectoryCommand::Fetch(args) => args.run(context),
             GuardDirectoryCommand::Verify(args) => args.run(context),
+            GuardDirectoryCommand::Inspect(args) => args.run(context),
         }
     }
 }
@@ -12843,9 +12883,9 @@ pub struct GuardDirectoryFetchArgs {
     /// Path where the verified snapshot will be stored (optional).
     #[arg(long = "output", value_name = "PATH")]
     pub output: Option<PathBuf>,
-    /// Expected directory hash (hex). Command fails when the snapshot hash differs.
-    #[arg(long = "expected-directory-hash", value_name = "HEX")]
-    pub expected_directory_hash: Option<String>,
+    /// Trusted domain-separated BLAKE3 digest of the exact snapshot bytes.
+    #[arg(long = "expected-snapshot-digest", value_name = "HEX")]
+    pub expected_snapshot_digest: String,
     /// HTTP timeout in seconds (defaults to 30s).
     #[arg(long = "timeout-secs", value_name = "SECS", default_value = "30")]
     pub timeout_secs: u64,
@@ -12901,8 +12941,9 @@ impl Run for GuardDirectoryFetchArgs {
             )
         })?;
 
-        let summary = inspect_guard_directory_bytes(&bytes)?;
-        ensure_expected_directory_hash(&summary, self.expected_directory_hash.as_deref())?;
+        let now_unix = OffsetDateTime::now_utc().unix_timestamp();
+        let summary =
+            authenticate_guard_directory_bytes(&bytes, &self.expected_snapshot_digest, now_unix)?;
 
         if let Some(path) = &self.output {
             write_guard_directory_snapshot(path, &bytes, self.overwrite)?;
@@ -12917,9 +12958,9 @@ pub struct GuardDirectoryVerifyArgs {
     /// Path to the guard directory snapshot to verify.
     #[arg(long = "path", value_name = "PATH")]
     pub path: PathBuf,
-    /// Expected directory hash (hex). Command fails when the snapshot hash differs.
-    #[arg(long = "expected-directory-hash", value_name = "HEX")]
-    pub expected_directory_hash: Option<String>,
+    /// Trusted domain-separated BLAKE3 digest of the exact snapshot bytes.
+    #[arg(long = "expected-snapshot-digest", value_name = "HEX")]
+    pub expected_snapshot_digest: String,
 }
 
 impl Run for GuardDirectoryVerifyArgs {
@@ -12930,8 +12971,29 @@ impl Run for GuardDirectoryVerifyArgs {
                 self.path.display()
             )
         })?;
+        let now_unix = OffsetDateTime::now_utc().unix_timestamp();
+        let summary =
+            authenticate_guard_directory_bytes(&bytes, &self.expected_snapshot_digest, now_unix)?;
+        context.print_data(&summary)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct GuardDirectoryInspectArgs {
+    /// Path to the guard directory snapshot to inspect.
+    #[arg(long = "path", value_name = "PATH")]
+    pub path: PathBuf,
+}
+
+impl Run for GuardDirectoryInspectArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let bytes = fs::read(&self.path).wrap_err_with(|| {
+            format!(
+                "failed to read guard directory snapshot from `{}`",
+                self.path.display()
+            )
+        })?;
         let summary = inspect_guard_directory_bytes(&bytes)?;
-        ensure_expected_directory_hash(&summary, self.expected_directory_hash.as_deref())?;
         context.print_data(&summary)
     }
 }
@@ -20607,10 +20669,13 @@ mod tests {
 "#
         );
         write!(file, "{json}").expect("write guard directory");
-        let err = load_guard_directory(file.path()).expect_err("json format must be rejected");
+        let json_bytes = fs::read(file.path()).expect("read fixture");
+        let digest = hex::encode(compute_snapshot_digest(&json_bytes));
+        let err = load_guard_directory(file.path(), &digest, 1_734_000_000)
+            .expect_err("json format must be rejected");
         let msg = err.to_string();
         assert!(
-            msg.contains("failed to parse guard directory"),
+            msg.contains("failed to authenticate guard directory"),
             "unexpected error message: {msg}"
         );
         assert!(
@@ -20625,7 +20690,9 @@ mod tests {
         let mut file = NamedTempFile::new().expect("temp file");
         file.write_all(&bytes).expect("write snapshot");
 
-        let directory = load_guard_directory(file.path()).expect("load directory");
+        let digest = hex::encode(compute_snapshot_digest(&bytes));
+        let directory =
+            load_guard_directory(file.path(), &digest, 1_734_000_000).expect("load directory");
         let entries = directory.entries();
         assert_eq!(entries.len(), 1);
         let descriptor = &entries[0];
@@ -20645,6 +20712,11 @@ mod tests {
         let bytes = sample_guard_directory_snapshot_bytes();
         let summary = inspect_guard_directory_bytes(&bytes).expect("inspect directory");
         assert_eq!(summary.version, 2);
+        assert_eq!(summary.authentication, "structural_inspection_only");
+        assert_eq!(
+            summary.snapshot_digest_hex,
+            hex::encode(compute_snapshot_digest(&bytes))
+        );
         assert_eq!(summary.issuer_count, 1);
         assert_eq!(summary.relay_count, 1);
         assert_eq!(summary.entry_guards, 1);
@@ -20660,19 +20732,23 @@ mod tests {
     }
 
     #[test]
-    fn ensure_expected_directory_hash_accepts_matching_hex() {
+    fn authenticated_directory_accepts_matching_snapshot_digest() {
         let bytes = sample_guard_directory_snapshot_bytes();
-        let summary = inspect_guard_directory_bytes(&bytes).expect("inspect directory");
-        let expected = summary.directory_hash_hex.as_deref().unwrap();
-        ensure_expected_directory_hash(&summary, Some(expected)).expect("hash should match");
+        let expected = hex::encode(compute_snapshot_digest(&bytes));
+        let summary = authenticate_guard_directory_bytes(&bytes, &expected, 1_734_000_000)
+            .expect("digest and time should authenticate");
+        assert_eq!(summary.authentication, "authenticated");
     }
 
     #[test]
-    fn ensure_expected_directory_hash_rejects_mismatch() {
+    fn authenticated_directory_rejects_mismatch_and_expiry() {
         let bytes = sample_guard_directory_snapshot_bytes();
-        let summary = inspect_guard_directory_bytes(&bytes).expect("inspect directory");
-        let result = ensure_expected_directory_hash(&summary, Some("deadbeef"));
-        assert!(result.is_err(), "hash mismatch should fail");
+        let mismatch = authenticate_guard_directory_bytes(&bytes, &"00".repeat(32), 1_734_000_000);
+        assert!(mismatch.is_err(), "snapshot digest mismatch should fail");
+
+        let expected = hex::encode(compute_snapshot_digest(&bytes));
+        let expired = authenticate_guard_directory_bytes(&bytes, &expected, 1_734_086_400);
+        assert!(expired.is_err(), "expired snapshot should fail");
     }
 
     #[test]

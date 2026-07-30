@@ -69,6 +69,7 @@ use super::{
         V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError,
         V2LaneWorkLimits, require_validator_storage_platform,
     },
+    v2_npos::V2NposVrfLifecycle,
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
         RecoveredSuccessorActivationAuthority, SnapshotSuccessorActivationAuthority,
@@ -935,6 +936,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         )?;
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
+        let mut npos_vrf = V2NposVrfLifecycle::open(
+            &context,
+            state.as_ref(),
+            local_validator,
+            &common_config.key_pair,
+        )?;
         let new_block_sync_server = block_sync_server
             .is_none()
             .then(|| V2BlockSyncServer::new(context.chain_id.clone(), certified_request_capacity))
@@ -1228,6 +1235,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let mut next_block_sync_attempt =
             initial_block_sync_deadline(height_started_at, round_timeout, eager_block_sync);
         let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
+        let mut next_npos_vrf_retransmit = deadline_after(height_started_at, retransmit_interval);
         let initial_directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
         let mut local_proposal_state =
             LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive);
@@ -1250,6 +1258,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             &block_rx,
             activation,
         )?;
+        if !recovering_interrupted_tip {
+            broadcast_npos_vrf_messages(
+                npos_vrf.take_outbound(),
+                output_guard.as_ref(),
+                &services,
+            )?;
+        }
 
         let mut block_sync_request = None;
         let mut admitted_discovered_commit_qc = false;
@@ -1269,6 +1284,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // poll. It rebuilds the live overlays only at its next semantic
             // deadline or after the published height owner changes.
             liveness_watchdog.poll(Instant::now());
+            let now = Instant::now();
+            if !recovering_interrupted_tip && now >= next_npos_vrf_retransmit {
+                broadcast_npos_vrf_messages(
+                    npos_vrf.retransmission(),
+                    output_guard.as_ref(),
+                    &services,
+                )?;
+                next_npos_vrf_retransmit = deadline_after(now, retransmit_interval);
+            }
 
             // The network thread installs an exact certified-body ticket before
             // its carrier becomes visible in fair ingress. Give that target a
@@ -1361,6 +1385,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 .expect("block-sync server initialized before ingress"),
                             &mut block_sync,
                             &mut block_sync_request,
+                            &mut npos_vrf,
                             1,
                         )?;
                     }
@@ -1462,6 +1487,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         .expect("block-sync server initialized before ingress"),
                     &mut block_sync,
                     &mut block_sync_request,
+                    &mut npos_vrf,
                     body_queue_capacity,
                 )?;
                 if discovery_was_outstanding && block_sync_request.is_none() {
@@ -1736,6 +1762,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &mut executor,
                 &mut services,
                 &mut lane_work,
+                &npos_vrf,
                 retransmit_interval,
             )?;
             dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
@@ -1898,6 +1925,7 @@ fn schedule_local_proposal(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
+    npos_vrf: &V2NposVrfLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
     let Some(local_validator) = local_validator else {
@@ -2096,6 +2124,7 @@ fn schedule_local_proposal(
             parent,
             directive.tag().view(),
             &carrier_context_header,
+            npos_vrf,
         )?;
         let candidate = if proposal_state.heartbeat_only == Some(owner) {
             assembler.assemble(CandidateRequest {
@@ -2288,6 +2317,23 @@ fn drive_block_sync(
     Ok(())
 }
 
+fn broadcast_npos_vrf_messages(
+    messages: impl IntoIterator<Item = wire::ConsensusMessageV2>,
+    output_guard: &ConsensusOutputGuard,
+    services: &ProductionV2Services,
+) -> Result<(), V2RunnerError> {
+    for message in messages {
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2RunnerError::RestartRequired)?;
+        services
+            .broadcast_to_voters_while_guarded(message, operation.permit())
+            .map_err(V2RunnerError::Service)?;
+        operation.complete();
+    }
+    Ok(())
+}
+
 enum PreparedCertifiedServe {
     Admitted(CertifiedServeAdmission),
     Rejected(String),
@@ -2306,6 +2352,7 @@ fn drain_v2_ingress(
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
+    npos_vrf: &mut V2NposVrfLifecycle,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
     for turn in outer_ingress_turns(limit) {
@@ -2486,6 +2533,20 @@ fn drain_v2_ingress(
             continue;
         }
         match message.payload {
+            wire::ConsensusMessageV2Payload::VrfCommit(commit) => {
+                drop(ingress_ownership);
+                let outcome = npos_vrf.accept_commit(commit, sender.as_ref());
+                if matches!(outcome, super::v2_npos::V2VrfIngressOutcome::Rejected(_)) {
+                    iroha_logger::debug!(?outcome, "rejected NPoS VRF commitment");
+                }
+            }
+            wire::ConsensusMessageV2Payload::VrfReveal(reveal) => {
+                drop(ingress_ownership);
+                let outcome = npos_vrf.accept_reveal(reveal, sender.as_ref());
+                if matches!(outcome, super::v2_npos::V2VrfIngressOutcome::Rejected(_)) {
+                    iroha_logger::debug!(?outcome, "rejected NPoS VRF reveal");
+                }
+            }
             wire::ConsensusMessageV2Payload::Proposal(proposal) => {
                 if !terminal_decision {
                     enqueue_control(
@@ -3201,6 +3262,7 @@ fn candidate_attachments(
     parent: CandidateParent<'_>,
     view: wire::View,
     round_header: &BlockHeader,
+    npos_vrf: &V2NposVrfLifecycle,
 ) -> Result<CandidateAttachments, V2RunnerError> {
     if round_header.height().get() != context.height
         || round_header.prev_block_hash() != Some(parent.hash())
@@ -3235,7 +3297,7 @@ fn candidate_attachments(
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(context.height, std::iter::empty())
+        .derive_npos_consensus_effects(context.height, npos_vrf.pending_records())
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
     } else {
         Default::default()
@@ -3751,6 +3813,9 @@ pub(super) enum V2RunnerError {
     /// Bounded lane-local/merge/Native-AMX adapter failed closed.
     #[error(transparent)]
     LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
+    /// Authenticated NPoS VRF lifecycle failed closed.
+    #[error(transparent)]
+    NposVrf(#[from] super::v2_npos::V2NposError),
     /// Durable lane reservation ownership could not be reconciled exactly.
     #[error(transparent)]
     Reservation(#[from] V2ReservationLifecycleError),

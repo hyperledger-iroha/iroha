@@ -2,12 +2,12 @@
 use std::collections::{BTreeMap, HashMap};
 
 use norito::{
-    Compression,
+    Compression, Error,
     core::{NoritoDeserialize, NoritoSerialize},
-    deserialize_stream, serialize_into, stream_btreeset_collect_from_reader,
-    stream_hashset_collect_from_reader, stream_linkedlist_collect_from_reader,
-    stream_vec_collect_from_reader, stream_vec_fold_from_reader,
-    stream_vecdeque_collect_from_reader,
+    deserialize_stream, inspect_stream_vec_len_bounded_from_reader, serialize_into,
+    stream_btreeset_collect_from_reader, stream_hashset_collect_from_reader,
+    stream_linkedlist_collect_from_reader, stream_vec_collect_from_reader,
+    stream_vec_fold_from_reader, stream_vecdeque_collect_from_reader,
 };
 
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
@@ -57,6 +57,28 @@ fn stream_vec_collect_zstd() {
     serialize_into(&mut buf, &data, Compression::Zstd).unwrap();
     let out: Vec<String> = stream_vec_collect_from_reader(buf.as_slice()).unwrap();
     assert_eq!(out, data);
+}
+
+#[test]
+fn stream_vec_count_preflight_uses_authoritative_layout_and_cap() {
+    let payload = vec![vec![1_u8; 7], vec![2_u8; 11], vec![3_u8; 13]];
+    for compression in [Compression::None, Compression::Zstd] {
+        let mut bytes = Vec::new();
+        serialize_into(&mut bytes, &payload, compression).expect("encode vector");
+
+        assert_eq!(
+            inspect_stream_vec_len_bounded_from_reader::<_, Vec<u8>>(bytes.as_slice(), 3)
+                .expect("exact cap accepts vector"),
+            3
+        );
+        assert!(matches!(
+            inspect_stream_vec_len_bounded_from_reader::<_, Vec<u8>>(bytes.as_slice(), 2),
+            Err(Error::SequenceLengthExceeded {
+                length: 3,
+                limit: 2
+            })
+        ));
+    }
 }
 
 #[test]

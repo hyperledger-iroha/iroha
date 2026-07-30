@@ -15,5 +15,8 @@ tests:
         exp_alerts:
           - exp_labels:
               provider_id: fixture
+              severity: warning
             exp_annotations:
               summary: "Latency stall burst"
+              description: |
+                Provider fixture in region  recorded 10 stall events in 10 minutes (exceeded latency cap).

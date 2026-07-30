@@ -4,7 +4,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Mutex as StdMutex,
+        Arc, Barrier, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering as AtomicOrdering},
     },
 };
@@ -429,6 +429,8 @@ pub struct QueuePlanJournal {
     injected_faults: StdMutex<VecDeque<QueuePlanJournalTestFault>>,
     #[cfg(test)]
     exact_remove_failure_after: Option<usize>,
+    #[cfg(test)]
+    append_handoff: StdMutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
 }
 
 /// Test-only journal phase fault.
@@ -748,6 +750,8 @@ impl QueuePlanJournal {
             injected_faults: StdMutex::new(VecDeque::new()),
             #[cfg(test)]
             exact_remove_failure_after: None,
+            #[cfg(test)]
+            append_handoff: StdMutex::new(None),
         })
     }
 
@@ -1284,6 +1288,15 @@ impl QueuePlanJournal {
         script.extend(faults);
     }
 
+    /// Pause the next append before it touches storage for queue-lock concurrency tests.
+    #[cfg(test)]
+    pub(super) fn install_append_handoff(&self, reached: Arc<Barrier>, resume: Arc<Barrier>) {
+        *self
+            .append_handoff
+            .lock()
+            .expect("queue plan journal append handoff mutex poisoned") = Some((reached, resume));
+    }
+
     /// Fail a strict exact-removal batch after this many tombstones have been durably appended.
     #[cfg(test)]
     pub(super) fn inject_exact_remove_failure_after_durable_tombstones(
@@ -1772,6 +1785,17 @@ impl QueuePlanJournal {
                 });
             }
         };
+
+        #[cfg(test)]
+        if let Some((reached, resume)) = self
+            .append_handoff
+            .lock()
+            .expect("queue plan journal append handoff mutex poisoned")
+            .take()
+        {
+            reached.wait();
+            resume.wait();
+        }
 
         #[cfg(test)]
         if phase == AppendPhase::Replace

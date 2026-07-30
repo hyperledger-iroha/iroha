@@ -52,10 +52,11 @@ verify_mldsa(MlDsaSuite::MlDsa65, dsa_keys.public_key(), b"", message, sig.as_by
   inconsistent secret material before signing draws randomness.
 - ML-KEM and ML-DSA entry points now require explicit hedged RNG objects or the
   fallible `_from_os` convenience helpers.
-- The current backend uses the pqcrypto/PQClean FIPS implementations and calls
-  the PQClean derandomized hooks directly where the Rust wrappers do not expose
-  RNG injection. That keeps seeded and hedged randomness on the public execution
-  path while the backend remains replaceable behind the same API.
+- The low-level backend uses bindings generated from the exact, pinned
+  `pqcrypto-mldsa` PQClean headers. Polynomial dimensions and foreign function
+  signatures are kept in that single generated module; higher layers exchange
+  only canonical FIPS 204 byte encodings and never redeclare PQClean's private
+  C layout.
 
 ## C FFI
 

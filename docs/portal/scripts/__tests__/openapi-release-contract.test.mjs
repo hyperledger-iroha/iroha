@@ -16,7 +16,7 @@ test('OpenAPI CI uses a locked graph and detached-only signing', async () => {
   assert.match(gate, /--signature-envelope/);
 });
 
-test('OpenAPI CI is clean, ancestor/source-bound, and replays complete bundles twice', async () => {
+test('OpenAPI CI replays complete bundles from independent clean sources', async () => {
   const gate = await readFile(join(repoRoot, 'ci', 'check_openapi_spec.sh'), 'utf8');
 
   assert.match(gate, /require_clean_checkout/);
@@ -33,10 +33,45 @@ test('OpenAPI CI is clean, ancestor/source-bound, and replays complete bundles t
     ).length,
     2,
   );
-  const replayInvocation =
-    /build_unsigned_replay_bundle "\$\{REPLAY_WORKTREE\}" "\$\{REPLAY_BUNDLE_(?:FIRST|SECOND)\}"/g;
-  assert.equal(Array.from(gate.matchAll(replayInvocation)).length, 2);
-  assert.match(gate, /create_replay_worktree "\$\{REPLAY_WORKTREE\}"/);
+  assert.match(
+    gate,
+    /build_unsigned_replay_bundle "\$\{REPLAY_WORKTREE_FIRST\}" "\$\{REPLAY_BUNDLE_FIRST\}"/,
+  );
+  assert.match(
+    gate,
+    /build_unsigned_replay_bundle "\$\{REPLAY_WORKTREE_SECOND\}" "\$\{REPLAY_BUNDLE_SECOND\}"/,
+  );
+  assert.match(gate, /create_replay_worktree "\$\{REPLAY_WORKTREE_FIRST\}"/);
+  assert.match(gate, /create_replay_worktree "\$\{REPLAY_WORKTREE_SECOND\}"/);
+  assert.match(
+    gate,
+    /REPLAY_COMMIT="\$\(git -C "\$\{REPO_ROOT\}" rev-parse --verify "HEAD\^\{commit\}"\)"/,
+  );
+  assert.match(
+    gate,
+    /worktree add --quiet --detach "\$\{worktree\}" "\$\{REPLAY_COMMIT\}"/,
+  );
+  assert.match(
+    gate,
+    /const sourcePath = await realpath\(sourceArgument\);/,
+  );
+  assert.match(gate, /provisionOpenApiCargoLock,/);
+  assert.match(gate, /const summary = await provisionOpenApiCargoLock\(\{/);
+  assert.match(gate, /repoRoot: worktreeRoot,/);
+  assert.match(gate, /summary\.status !== 'installed'/);
+  assert.match(gate, /summary\.source !== 'operator'/);
+  assert.match(gate, /summary\.path !== 'Cargo\.lock'/);
+  assert.match(gate, /"\$\{REPO_ROOT\}\/Cargo\.lock"/);
+  assert.doesNotMatch(gate, /cp "\$\{REPO_ROOT\}\/Cargo\.lock"/);
+  assert.match(gate, /REPLAY_CARGO_TARGET_DIR="\$\{TMP_DIR\}\/cargo-target"/);
+  assert.doesNotMatch(gate, /REPLAY_CARGO_TARGET_DIR="\$\{REPO_ROOT\}/);
+  assert.match(gate, /CARGO_TARGET_DIR="\$\{REPLAY_CARGO_TARGET_DIR\}"/);
+  assert.doesNotMatch(
+    gate,
+    /allowedSignersFile: join\(outputDir, 'allowed_signers\.json'\)/,
+  );
+  assert.match(gate, /allowedSignersFile,/);
+  assert.match(gate, /"\$\{ALLOWED_SIGNERS_PATH\}"/);
   assert.match(
     gate,
     /cp -R "\$\{REPLAY_BASELINE\}\/\." "\$\{output_dir\}\/"/,

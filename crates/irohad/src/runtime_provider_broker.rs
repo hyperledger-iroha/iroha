@@ -5872,17 +5872,11 @@ mod protocol {
         signed_transaction: Vec<u8>,
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestCheckpointLoadRequestWireV1;
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestCheckpointCompareAndSwapRequestWireV1 {
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ReputationJournalCheckpointLoadRequestWireV1;
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationJournalCheckpointCompareAndSwapRequestWireV1 {
@@ -10803,7 +10797,7 @@ mod protocol {
             (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1)
                 if slot == reputation_checkpoint_slot =>
             {
-                decode_canonical::<ReputationJournalCheckpointLoadRequestWireV1>(
+                decode_canonical::<()>(
                     &request.payload,
                     MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
                 )?;
@@ -11424,9 +11418,9 @@ mod protocol {
             (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1)
                 if slot == provider_ingest_checkpoint_slot =>
             {
-                decode_canonical::<ProviderIngestCheckpointLoadRequestWireV1>(
+                decode_canonical::<()>(
                     &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
+                    MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
                 )?;
             }
             (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1)
@@ -26016,10 +26010,7 @@ mod protocol {
                 &self,
             ) -> Result<Option<sorafs_node::ProviderIngestSealedCheckpointRecordV1>, BrokerError>
             {
-                let payload = encode_canonical(
-                    &ProviderIngestCheckpointLoadRequestWireV1,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
+                let payload = encode_canonical(&(), MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1)?;
                 let result = self.session.call(
                     &self.binding,
                     self.metadata_digest,
@@ -26825,10 +26816,8 @@ mod protocol {
                 Option<sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1>,
                 BrokerError,
             > {
-                let payload = encode_canonical(
-                    &ReputationJournalCheckpointLoadRequestWireV1,
-                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
-                )?;
+                let payload =
+                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)?;
                 let result = self.provider.session.call(
                     &self.provider.binding,
                     self.provider.metadata_digest,
@@ -41334,11 +41323,9 @@ mod protocol {
                     validate_wire_binding(&wrong_profile),
                     Err(BrokerError::BindingMismatch)
                 );
-                let payload = encode_canonical(
-                    &ReputationJournalCheckpointLoadRequestWireV1,
-                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
-                )
-                .expect("encode checkpoint load request");
+                let payload =
+                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
+                        .expect("encode checkpoint load request");
                 let request = make_operation_request(
                     TEST_SESSION_ID,
                     1,
@@ -41374,7 +41361,7 @@ mod protocol {
                     request.request_digest,
                     "checkpoint load request digest"
                 );
-                decode_canonical::<ReputationJournalCheckpointLoadRequestWireV1>(
+                decode_canonical::<()>(
                     &request.payload,
                     MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
                 )
@@ -41437,11 +41424,8 @@ mod protocol {
                     journal_binding.clone(),
                     observation(&journal_binding).metadata_digest,
                     OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1,
-                    encode_canonical(
-                        &ReputationJournalCheckpointLoadRequestWireV1,
-                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
-                    )
-                    .expect("encode cross-slot checkpoint load"),
+                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
+                        .expect("encode cross-slot checkpoint load"),
                 )
                 .expect("seal cross-slot checkpoint load");
                 assert_eq!(
@@ -42467,6 +42451,37 @@ mod protocol {
                     evidence_viewer_archive_max_bytes: None,
                 };
                 assert_eq!(validate_wire_binding(&checkpoint), Ok(()));
+                let checkpoint_load_payload =
+                    encode_canonical(&(), MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1)
+                        .expect("encode provider-ingest checkpoint load");
+                decode_canonical::<()>(
+                    &checkpoint_load_payload,
+                    MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+                )
+                .expect("decode provider-ingest checkpoint load");
+                let checkpoint_load = make_operation_request(
+                    TEST_SESSION_ID,
+                    3,
+                    checkpoint.clone(),
+                    [0xC7; 32],
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
+                    checkpoint_load_payload.clone(),
+                )
+                .expect("seal provider-ingest checkpoint load");
+                assert_eq!(validate_operation_request(&checkpoint_load), Ok(()));
+                let cross_slot_checkpoint_load = make_operation_request(
+                    TEST_SESSION_ID,
+                    4,
+                    source.clone(),
+                    [0xC8; 32],
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
+                    checkpoint_load_payload,
+                )
+                .expect("seal cross-slot provider-ingest checkpoint load");
+                assert_eq!(
+                    validate_operation_request(&cross_slot_checkpoint_load),
+                    Err(BrokerError::BindingMismatch)
+                );
 
                 let retention = ProviderBindingWireV1 {
                     slot: IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority.wire_id(),

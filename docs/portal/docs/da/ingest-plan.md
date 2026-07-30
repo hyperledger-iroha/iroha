@@ -141,7 +141,15 @@ hashing, chunking, and verifying optional manifests.
    at most 1,024 source chunks.
 4. Require 1–64 data shards, 2–64 parity shards, and at most 64 row-parity
    stripes. Cross-stripe parity is additionally limited to 64 source stripes,
-   bounding the cubic RS16 matrix step.
+   bounding the cubic RS16 matrix step. `rs16::validate_erasure_work_budget`
+   also caps generated parity bytes and transient RS16 workspace at 128 MiB
+   each, closing multiplicative layouts that pass the dimension caps.
+   Signature verification, normalization, chunking, RS16 generation, manifest
+   construction, and PDP construction run on blocking workers behind
+   `torii.da_ingest.max_concurrent_compute_jobs` (default `1`). The owned
+   semaphore permit remains inside the physical worker, so cancelling an HTTP
+   request cannot admit replacement work while its detached computation is
+   still running.
 5. `retention_policy.required_replica_count` must respect governance baseline.
 6. Signature verification against canonical hash (excluding signature field).
 7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
@@ -296,10 +304,11 @@ All previously blocked ingest TODOs have been implemented and verified:
   and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
   (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, the relevant
   hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), and mirrors the
-  `Sora-PDP-Commitment` header from ingest responses for parity. Supplying `block_hash=<hex>` in the
-  query string returns a deterministic `sampling_plan` (assignment hash, `sample_window`, and sampled
-  `(index, role, group)` tuples spanning the full 2D layout) so validators and PoR tools draw the same
-  indices.
+  `Sora-PDP-Commitment` header from ingest responses for parity. Manifest retrieval intentionally
+  has no sampling or challenge query. Explicit local PoR sampling inputs are retrievability
+  diagnostics, not an availability guarantee and not evidence for rewards, slashing, or consensus.
+  A future enforcement path must bind challenges to a committed block and manifest through a
+  provider-independent source such as a governed VRF.
 
 ### Large Payload Streaming Flow
 

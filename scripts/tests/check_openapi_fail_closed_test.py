@@ -56,7 +56,7 @@ def test_portal_version_and_signature_paths_reject_empty_specs() -> None:
         assert "validateReleaseOpenApiDocumentBytes" in source, path
 
 
-def test_release_gate_is_clean_pinned_and_replays_complete_bundles_twice() -> None:
+def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently() -> None:
     gate = OPENAPI_GATE.read_text(encoding="utf-8")
 
     assert "require_clean_checkout" in gate
@@ -68,12 +68,38 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_twice() -> No
         "python3 scripts/check_sorafs_release_version_map.py"
     ) == 2
     assert gate.count(
-        'build_unsigned_replay_bundle "${REPLAY_WORKTREE}" "${REPLAY_BUNDLE_FIRST}"'
+        'build_unsigned_replay_bundle "${REPLAY_WORKTREE_FIRST}" '
+        '"${REPLAY_BUNDLE_FIRST}"'
     ) == 1
     assert gate.count(
-        'build_unsigned_replay_bundle "${REPLAY_WORKTREE}" "${REPLAY_BUNDLE_SECOND}"'
+        'build_unsigned_replay_bundle "${REPLAY_WORKTREE_SECOND}" '
+        '"${REPLAY_BUNDLE_SECOND}"'
     ) == 1
-    assert 'create_replay_worktree "${REPLAY_WORKTREE}"' in gate
+    assert 'create_replay_worktree "${REPLAY_WORKTREE_FIRST}"' in gate
+    assert 'create_replay_worktree "${REPLAY_WORKTREE_SECOND}"' in gate
+    assert (
+        'REPLAY_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify '
+        '"HEAD^{commit}")"'
+    ) in gate
+    assert (
+        'worktree add --quiet --detach "${worktree}" "${REPLAY_COMMIT}"'
+        in gate
+    )
+    assert "const sourcePath = await realpath(sourceArgument);" in gate
+    assert "provisionOpenApiCargoLock," in gate
+    assert "const summary = await provisionOpenApiCargoLock({" in gate
+    assert "repoRoot: worktreeRoot," in gate
+    assert "summary.status !== 'installed'" in gate
+    assert "summary.source !== 'operator'" in gate
+    assert 'summary.path !== \'Cargo.lock\'' in gate
+    assert '"${REPO_ROOT}/Cargo.lock"' in gate
+    assert 'cp "${REPO_ROOT}/Cargo.lock"' not in gate
+    assert 'REPLAY_CARGO_TARGET_DIR="${TMP_DIR}/cargo-target"' in gate
+    assert 'REPLAY_CARGO_TARGET_DIR="${REPO_ROOT}' not in gate
+    assert 'CARGO_TARGET_DIR="${REPLAY_CARGO_TARGET_DIR}"' in gate
+    assert 'allowedSignersFile: join(outputDir, \'allowed_signers.json\')' not in gate
+    assert 'allowedSignersFile,' in gate
+    assert '"${ALLOWED_SIGNERS_PATH}"' in gate
     assert 'cp -R "${REPLAY_BASELINE}/." "${output_dir}/"' in gate
     assert (
         'run_xtask_in_repo "${source_root}" openapi --unsigned-manifest'

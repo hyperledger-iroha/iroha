@@ -186,7 +186,7 @@ whitelists malicious providers, or suppresses alerts.
 | Risk | Likelihood | Impact | Owner | Mitigation Plan |
 | --- | --- | --- | --- | --- |
 | Exhaustion of the configured DA lane/epoch window budget | Possible | Moderate | Core Protocol WG | Alert on capacity rejects, size the global bound for the lane/epoch horizon, and retire obsolete windows only through an explicit governed reset. |
-| Caller-selected DA manifest sampling seed | Possible if promoted beyond diagnostics | High | Core Protocol WG | Keep query-derived plans advisory; before rewards/slashing, bind challenges to a committed block or governed VRF source that providers cannot choose. |
+| No authoritative DA availability challenge source | Possible if local retrievability diagnostics are promoted | High | Core Protocol WG | The manifest API exposes no caller-seeded plan. Before rewards/slashing, bind challenges to a committed block and manifest through a governed VRF source that providers cannot choose. |
 | PDP/PoTR collusion when >f nodes compromise | Unlikely | High | Storage Team | Derive new challenge schedule with cross-provider sampling; validate via simulation harness. |
 | Cold-tier eviction audit gap | Possible | High | SRE / Storage Team | Attach signed audit logs & on-chain receipts for evictions; monitor via dashboards. |
 | Sequencer omission detection latency | Possible | High | Core Protocol WG | Nightly `cargo xtask da-commitment-reconcile` compares receipts vs commitments (SignedBlockWire/`.norito`/JSON) and pages governance on missing or mismatched tickets. |

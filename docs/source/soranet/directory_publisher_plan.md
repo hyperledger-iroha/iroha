@@ -150,8 +150,11 @@ publication and issuer rotation:
   verifies every SRCv2 certificate bundle against the supplied issuer keys,
   enforces directory hash/validity invariants, and emits a Norito-encoded
   `GuardDirectorySnapshotV2`. The JSON config accepts issuer lists (Ed25519 +
-  optional ML-DSA) and bundle paths; the builder prints fingerprint metadata so
-  governance can publish the accompanying manifest.
+  optional ML-DSA) and bundle paths. The builder prints the domain-separated
+  BLAKE3 digest of the exact snapshot bytes alongside fingerprint metadata.
+  Governance must distribute that snapshot digest through a channel independent
+  of the snapshot host; relay and client runtimes fail closed unless the
+  configured digest matches.
   The config now also accepts optional guard-pinning evidence via
   `guard_pinning_proofs` entries pointing at the JSON proofs produced by relays:
   ```json
@@ -174,8 +177,11 @@ publication and issuer rotation:
   writes Ed25519/ML-DSA secrets to `--keys-out` so the governance committee can
   enrol the new issuer in hardware security modules before activation.
 - `soranet-directory inspect --snapshot guard_snapshot.norito` renders snapshot
-  metadata (fingerprints, validity windows, relay stats) to simplify guard
-  directory audits.
+  metadata (exact snapshot digest, fingerprints, validity windows, relay stats)
+  to simplify guard directory audits. This is structural inspection against
+  issuer keys embedded in the snapshot, not authentication; compare the printed
+  digest with the independently distributed governance value before trusting
+  the artefact.
 - `soranet-directory verify-proof --proof /var/lib/soranet/relay/guard_pinning_proof.json
   --snapshot snapshots/mainnet.norito` loads the persisted JSON proof emitted by
   a relay, recomputes the directory hash, validation phase, relay entry fields,

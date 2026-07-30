@@ -7449,6 +7449,7 @@ impl Executor {
         if let Some(kind) = detect_fixture_executor_kind(&loaded_executor) {
             apply_fixture_migration(kind, state_transaction, authority)
                 .map_err(map_migration_fail_to_vm_error)?;
+            purge_legacy_escalation_permissions(state_transaction);
             *self = Self::UserProvided(loaded_executor);
             return Ok(());
         }
@@ -7474,6 +7475,7 @@ impl Executor {
                 .world
                 .apply_executor_data_model(data_model);
         }
+        purge_legacy_escalation_permissions(state_transaction);
 
         *self = Self::UserProvided(loaded_executor);
         Ok(())
@@ -7564,6 +7566,65 @@ fn remove_permissions_by_name(
         permissions.remove(&permission);
     }
     true
+}
+
+/// Permission payloads issued under pre-release rules that admitted authorities which did not
+/// control the effective capability.
+///
+/// Ledger permissions do not retain grant provenance, so a migration cannot distinguish a
+/// legitimate token from one planted through an old escalation rule. The first-release migration
+/// therefore resets these narrow capability families and requires their legitimate roots to issue
+/// fresh grants under the corrected policy.
+const LEGACY_ESCALATION_PERMISSION_NAMES: &[&str] = &[
+    "CanMintAsset",
+    "CanInvokeContractEntrypoint",
+    "CanPublishSpaceDirectoryManifest",
+    "CanPublishSpaceDirectoryManifestForUaid",
+    "CanPublishSpaceDirectoryManifestForAccountDomain",
+];
+
+fn purge_legacy_escalation_permissions(state_transaction: &mut StateTransaction<'_, '_>) {
+    let account_ids: Vec<_> = state_transaction
+        .world
+        .account_permissions
+        .iter()
+        .map(|(account_id, _)| account_id.clone())
+        .collect();
+    for account_id in account_ids {
+        let remove_entry = state_transaction
+            .world
+            .account_permissions
+            .get_mut(&account_id)
+            .is_some_and(|permissions| {
+                permissions.retain(|permission| {
+                    !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
+                });
+                permissions.is_empty()
+            });
+        if remove_entry {
+            state_transaction
+                .world
+                .account_permissions
+                .remove(account_id);
+        }
+    }
+
+    let role_ids: Vec<_> = state_transaction
+        .world
+        .roles
+        .iter()
+        .map(|(role_id, _)| role_id.clone())
+        .collect();
+    for role_id in role_ids {
+        if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
+            role.permissions.retain(|permission| {
+                !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
+            });
+            role.permission_epochs.retain(|permission, _| {
+                !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
+            });
+        }
+    }
 }
 
 fn apply_fixture_permission_migration(
@@ -8718,7 +8779,13 @@ fn initial_trigger_authority(
 }
 
 #[allow(clippy::too_many_lines)]
-fn initial_permission_resource_authority(
+/// Return whether `authority` is a legitimate non-token root for delegating `permission`.
+///
+/// The root must already control the same effective capability at use time, or hold an
+/// explicitly wider parent capability. Merely owning an adjacent component of a compound
+/// permission scope is not a delegation root. Exact holders are handled separately by
+/// [`initial_permission_delegation_allowed`].
+fn initial_permission_capability_root_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
@@ -8850,11 +8917,20 @@ fn initial_permission_resource_authority(
         }
         "CanMintAsset" => {
             let token = decode!(executor_permission::asset::CanMintAsset);
-            token.asset.account() == authority
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                token.asset.definition(),
+            )?
         }
         "CanBurnAsset" => {
             let token = decode!(executor_permission::asset::CanBurnAsset);
             token.asset.account() == authority
+                || authority_owns_asset_definition(
+                    &state_transaction.world,
+                    authority,
+                    token.asset.definition(),
+                )?
         }
         "CanTransferAsset" => {
             let token = decode!(executor_permission::asset::CanTransferAsset);
@@ -8863,6 +8939,11 @@ fn initial_permission_resource_authority(
         "CanModifyAssetMetadata" => {
             let token = decode!(executor_permission::asset::CanModifyAssetMetadata);
             token.asset.account() == authority
+                || authority_owns_asset_definition(
+                    &state_transaction.world,
+                    authority,
+                    token.asset.definition(),
+                )?
         }
         "CanRegisterNft" => {
             let token = decode!(executor_permission::nft::CanRegisterNft);
@@ -8910,12 +8991,8 @@ fn initial_permission_resource_authority(
             }
             let registrar: Permission =
                 executor_permission::smart_contract::CanRegisterSmartContractCode.into();
-            token.contract.subject_id() == *authority
-                || contract_runtime_context.is_some_and(|context| {
-                    context.contract_subject == *authority
-                        && context.contract_address == token.contract
-                })
-                || authority_has_permission(&state_transaction.world, authority, &registrar)?
+            let _ = contract_runtime_context;
+            authority_has_permission(&state_transaction.world, authority, &registrar)?
         }
         "CanExecuteSettlement" => {
             let token = decode!(executor_permission::settlement::CanExecuteSettlement);
@@ -8931,41 +9008,27 @@ fn initial_permission_resource_authority(
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
         "CanPublishSpaceDirectoryManifest" => {
-            let token = decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifest);
-            let exact: Permission = token.clone().into();
-            authority_has_permission(&state_transaction.world, authority, &exact)?
-                || crate::sns::active_dataspace_owner_by_id(
-                    &state_transaction.world,
-                    state_transaction.world.dataspace_catalog(),
-                    token.dataspace,
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .as_ref()
-                    == Some(authority)
+            let _ = decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifest);
+            false
         }
         "CanPublishSpaceDirectoryManifestForUaid" => {
             let token =
                 decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifestForUaid);
-            let exact: Permission = token.clone().into();
             let wide: Permission = executor_permission::nexus::CanPublishSpaceDirectoryManifest {
                 dataspace: token.dataspace,
             }
             .into();
-            authority_has_permission(&state_transaction.world, authority, &exact)?
-                || authority_has_permission(&state_transaction.world, authority, &wide)?
+            authority_has_permission(&state_transaction.world, authority, &wide)?
         }
         "CanPublishSpaceDirectoryManifestForAccountDomain" => {
             let token = decode!(
                 executor_permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain
             );
-            let exact: Permission = token.clone().into();
             let wide: Permission = executor_permission::nexus::CanPublishSpaceDirectoryManifest {
                 dataspace: token.dataspace,
             }
             .into();
-            authority_has_permission(&state_transaction.world, authority, &exact)?
-                || authority_has_permission(&state_transaction.world, authority, &wide)?
-                || authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+            authority_has_permission(&state_transaction.world, authority, &wide)?
         }
         "CanManageFeeSponsorProgram" => {
             let token = decode!(executor_permission::nexus::CanManageFeeSponsorProgram);
@@ -9008,15 +9071,18 @@ fn initial_permission_delegation_allowed(
     if initial_permission_is_genesis_only(permission) {
         return Ok(false);
     }
-    if let Some(allowed) = initial_permission_resource_authority(
+    // Resolve and validate known payloads before consulting stored state. Otherwise a malformed
+    // built-in token already present in state could be copied without ever decoding its scope.
+    let capability_root = initial_permission_capability_root_authority(
         state_transaction,
         authority,
         permission,
         contract_runtime_context,
-    )? {
-        return Ok(allowed);
+    )?;
+    if authority_has_permission(&state_transaction.world, authority, permission)? {
+        return Ok(true);
     }
-    authority_has_permission(&state_transaction.world, authority, permission)
+    Ok(capability_root.unwrap_or(false))
 }
 
 fn validate_initial_account_permission_destination(
@@ -12542,6 +12608,530 @@ mod tests {
             super::Executor::Initial
         ));
         assert!(state_transaction.world.account(&victim).is_ok());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
+        use iroha_data_model::{
+            account::rekey::AccountAliasDomain,
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            nexus::UniversalAccountId,
+            trigger::action::{Action, Repeats},
+        };
+        use iroha_executor_data_model::permission::account::AccountAliasPermissionScope;
+
+        let legitimate_root = checked_account_id();
+        let adjacent_owner = checked_account_id();
+        let governed_domain =
+            DomainId::try_new("grant_policy", "universal").expect("governed domain");
+        let adjacent_domain =
+            DomainId::try_new("adjacent_owner", "universal").expect("adjacent domain");
+        let asset_definition = AssetDefinitionId::new(
+            governed_domain.clone(),
+            "root_asset".parse().expect("asset name"),
+        );
+        let root_asset = AssetId::new(asset_definition.clone(), legitimate_root.clone());
+        // The exact mint permission deliberately names the attacker's balance bucket. Mint
+        // authority belongs to the definition owner, never to the bucket account.
+        let adjacent_asset = AssetId::new(asset_definition.clone(), adjacent_owner.clone());
+        let nft_id = NftId::new(
+            governed_domain.clone(),
+            "root_nft".parse().expect("NFT name"),
+        );
+        let trigger_id: TriggerId = "grant_policy_trigger".parse().expect("trigger id");
+        // The address deliberately embeds the attacker as its subject. Contract subjects are
+        // not registrar authorities and therefore cannot mint invocation permissions.
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &adjacent_owner,
+            77,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let dataspace = DataSpaceId::new(7);
+        let manifest_root: Permission =
+            executor_permission::nexus::CanPublishSpaceDirectoryManifest { dataspace }.into();
+        let mut world = World::with_assets(
+            [
+                Domain::new(governed_domain.clone()).build(&legitimate_root),
+                Domain::new(adjacent_domain.clone()).build(&adjacent_owner),
+            ],
+            [
+                Account::new(legitimate_root.clone()).build(&legitimate_root),
+                Account::new(adjacent_owner.clone()).build(&adjacent_owner),
+            ],
+            [AssetDefinition::numeric(asset_definition.clone())
+                .with_name("root asset".to_owned())
+                .build(&legitimate_root)],
+            [],
+            [Nft::new(nft_id.clone(), Metadata::default()).build(&legitimate_root)],
+        );
+        world.account_permissions.insert(
+            legitimate_root.clone(),
+            BTreeSet::from([
+                executor_permission::smart_contract::CanRegisterSmartContractCode.into(),
+                executor_permission::settlement::CanManageFxCorridors.into(),
+                manifest_root,
+                executor_permission::sccp::CanManageSccpGovernance.into(),
+            ]),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                legitimate_root.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(legitimate_root.clone()),
+            ),
+        ))
+        .execute(&legitimate_root, &mut state_transaction)
+        .expect("seed trigger authority");
+
+        let alias_scope = AccountAliasPermissionScope::Domain(governed_domain.clone());
+        let program_id = FeeSponsorProgramId::new(
+            legitimate_root.clone(),
+            "root_program".parse().expect("program name"),
+        );
+        let policy_id: Name = "root_policy".parse().expect("policy name");
+        // `false` means that the permission intentionally has no ownership-derived root and must
+        // be bootstrapped once, after which only exact holders may propagate it.
+        let cases: Vec<(&str, Permission, bool)> = vec![
+            (
+                "CanUnregisterDomain",
+                executor_permission::domain::CanUnregisterDomain {
+                    domain: governed_domain.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyDomainMetadata",
+                executor_permission::domain::CanModifyDomainMetadata {
+                    domain: governed_domain.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanRegisterAccount",
+                executor_permission::account::CanRegisterAccount {
+                    domain: governed_domain.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanUnregisterAccount",
+                executor_permission::account::CanUnregisterAccount {
+                    account: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyAccountMetadata",
+                executor_permission::account::CanModifyAccountMetadata {
+                    account: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanReplaceAccountController",
+                executor_permission::account::CanReplaceAccountController {
+                    account: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanResolveAccountAlias",
+                executor_permission::account::CanResolveAccountAlias {
+                    scope: alias_scope.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanDelegateAccountAliasResolution",
+                executor_permission::account::CanDelegateAccountAliasResolution {
+                    scope: alias_scope.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanManageAccountAlias",
+                executor_permission::account::CanManageAccountAlias { scope: alias_scope }.into(),
+                true,
+            ),
+            (
+                "CanUnregisterAssetDefinition",
+                executor_permission::asset_definition::CanUnregisterAssetDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyAssetDefinitionMetadata",
+                executor_permission::asset_definition::CanModifyAssetDefinitionMetadata {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanMintAssetWithDefinition",
+                executor_permission::asset::CanMintAssetWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanBurnAssetWithDefinition",
+                executor_permission::asset::CanBurnAssetWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanTransferAssetWithDefinition",
+                executor_permission::asset::CanTransferAssetWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyAssetMetadataWithDefinition",
+                executor_permission::asset::CanModifyAssetMetadataWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSetAssetTransferAvailability",
+                executor_permission::asset::CanSetAssetTransferAvailability {
+                    account: adjacent_owner.clone(),
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSetAssetTransferDailyLimit",
+                executor_permission::asset::CanSetAssetTransferDailyLimit {
+                    asset_definition: asset_definition.clone(),
+                    account_domain: AccountAliasDomain::new(
+                        "retail".parse().expect("account alias domain"),
+                    ),
+                    account_dataspace: dataspace,
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSetAssetHoldingLimit",
+                executor_permission::asset::CanSetAssetHoldingLimit {
+                    account: adjacent_owner.clone(),
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanMintAsset",
+                executor_permission::asset::CanMintAsset {
+                    asset: adjacent_asset,
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanBurnAsset",
+                executor_permission::asset::CanBurnAsset {
+                    asset: root_asset.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanTransferAsset",
+                executor_permission::asset::CanTransferAsset {
+                    asset: root_asset.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyAssetMetadata",
+                executor_permission::asset::CanModifyAssetMetadata {
+                    asset: root_asset.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanRegisterNft",
+                executor_permission::nft::CanRegisterNft {
+                    domain: governed_domain.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanUnregisterNft",
+                executor_permission::nft::CanUnregisterNft {
+                    nft: nft_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanTransferNft",
+                executor_permission::nft::CanTransferNft {
+                    nft: nft_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyNftMetadata",
+                executor_permission::nft::CanModifyNftMetadata {
+                    nft: nft_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanRegisterTrigger",
+                executor_permission::trigger::CanRegisterTrigger {
+                    authority: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanUnregisterTrigger",
+                executor_permission::trigger::CanUnregisterTrigger {
+                    trigger: trigger_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyTrigger",
+                executor_permission::trigger::CanModifyTrigger {
+                    trigger: trigger_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanExecuteTrigger",
+                executor_permission::trigger::CanExecuteTrigger {
+                    trigger: trigger_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyTriggerMetadata",
+                executor_permission::trigger::CanModifyTriggerMetadata {
+                    trigger: trigger_id,
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanInvokeContractEntrypoint",
+                executor_permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract,
+                    entrypoint: "main".to_owned(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanExecuteSettlement",
+                executor_permission::settlement::CanExecuteSettlement {
+                    debited_asset: root_asset,
+                    settlement_id: "grant_policy_settlement".parse().expect("settlement id"),
+                    intent_hash: Hash::new(b"grant-policy-settlement"),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSetFxCorridorPolicy",
+                executor_permission::settlement::CanSetFxCorridorPolicy {
+                    policy_id: policy_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSettleFxCorridor",
+                executor_permission::settlement::CanSettleFxCorridor { policy_id }.into(),
+                true,
+            ),
+            (
+                "CanPublishSpaceDirectoryManifest",
+                executor_permission::nexus::CanPublishSpaceDirectoryManifest { dataspace }.into(),
+                false,
+            ),
+            (
+                "CanPublishSpaceDirectoryManifestForUaid",
+                executor_permission::nexus::CanPublishSpaceDirectoryManifestForUaid {
+                    dataspace,
+                    uaid: UniversalAccountId::from_hash(Hash::new(b"grant-policy-uaid")),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanPublishSpaceDirectoryManifestForAccountDomain",
+                executor_permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain {
+                    dataspace,
+                    // The attacker owns this domain, but only the explicit dataspace-wide parent
+                    // is a delegation root for this permission.
+                    domain: adjacent_domain,
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanManageFeeSponsorProgram",
+                executor_permission::nexus::CanManageFeeSponsorProgram {
+                    sponsor: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanEnrollFeeSponsorProgram",
+                executor_permission::nexus::CanEnrollFeeSponsorProgram {
+                    program_id: program_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanWithdrawFeeSponsorProgram",
+                executor_permission::nexus::CanWithdrawFeeSponsorProgram { program_id }.into(),
+                true,
+            ),
+            (
+                "CanProposeSccpRouteGovernance",
+                executor_permission::sccp::CanProposeSccpRouteGovernance.into(),
+                true,
+            ),
+        ];
+
+        assert_eq!(cases.len(), 42, "update this table for every scoped arm");
+        assert_eq!(
+            cases
+                .iter()
+                .map(|(name, _, _)| *name)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            cases.len(),
+            "permission cases must be unique",
+        );
+
+        for (name, permission, expected_root) in &cases {
+            assert_eq!(permission.name(), *name);
+            assert_eq!(
+                initial_permission_capability_root_authority(
+                    &state_transaction,
+                    &legitimate_root,
+                    permission,
+                    None,
+                )
+                .expect("legitimate root lookup"),
+                Some(*expected_root),
+                "wrong capability root decision for {name}",
+            );
+            assert!(
+                initial_permission_delegation_allowed(
+                    &state_transaction,
+                    &legitimate_root,
+                    permission,
+                    None,
+                )
+                .expect("legitimate delegation lookup"),
+                "legitimate authority must be able to grant {name}",
+            );
+            assert_eq!(
+                initial_permission_capability_root_authority(
+                    &state_transaction,
+                    &adjacent_owner,
+                    permission,
+                    None,
+                )
+                .expect("adjacent-owner root lookup"),
+                Some(false),
+                "adjacent ownership must not root {name}",
+            );
+            assert!(
+                !initial_permission_delegation_allowed(
+                    &state_transaction,
+                    &adjacent_owner,
+                    permission,
+                    None,
+                )
+                .expect("adjacent-owner delegation lookup"),
+                "unprivileged authority must not self-grant {name}",
+            );
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &adjacent_owner,
+                    Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                )
+                .expect_err("adjacent owner must not self-grant a scoped permission");
+        }
+
+        for (name, permission, _) in &cases {
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &legitimate_root,
+                    Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                )
+                .unwrap_or_else(|error| panic!("legitimate root could not grant {name}: {error}"));
+            assert!(
+                initial_permission_delegation_allowed(
+                    &state_transaction,
+                    &adjacent_owner,
+                    permission,
+                    None,
+                )
+                .expect("exact-holder delegation lookup"),
+                "an exact holder must be able to propagate {name}",
+            );
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &legitimate_root,
+                    Revoke::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                )
+                .unwrap_or_else(|error| panic!("legitimate root could not revoke {name}: {error}"));
+        }
     }
 
     #[test]
@@ -20472,8 +21062,29 @@ seiyaku IdentityRequired {
 
     #[test]
     fn migrate_applies_data_model_from_entrypoint() {
-        let mut permissions = BTreeSet::new();
-        permissions.insert("permission.can_control_domain_lives".to_owned());
+        let retained_permission = Permission::new(
+            "permission.can_control_domain_lives".to_owned(),
+            Json::new(()),
+        );
+        let expected_legacy_names = [
+            "CanMintAsset",
+            "CanInvokeContractEntrypoint",
+            "CanPublishSpaceDirectoryManifest",
+            "CanPublishSpaceDirectoryManifestForUaid",
+            "CanPublishSpaceDirectoryManifestForAccountDomain",
+        ];
+        assert_eq!(LEGACY_ESCALATION_PERMISSION_NAMES, expected_legacy_names);
+        let legacy_permissions = expected_legacy_names
+            .into_iter()
+            .map(|name| Permission::new(name.to_owned(), Json::new(())))
+            .collect::<BTreeSet<_>>();
+        let permissions = core::iter::once(retained_permission.name().to_owned())
+            .chain(
+                legacy_permissions
+                    .iter()
+                    .map(|permission| permission.name().to_owned()),
+            )
+            .collect();
         let custom_parameters: BTreeMap<CustomParameterId, CustomParameter> = BTreeMap::new();
         let data_model = ExecutorDataModel::new(
             custom_parameters,
@@ -20487,7 +21098,35 @@ seiyaku IdentityRequired {
 
         let mut executor = super::Executor::Initial;
 
-        let world = World::new();
+        let role_id: RoleId = "legacy_escalation_role".parse().expect("role id");
+        let stored_permissions = core::iter::once(retained_permission.clone())
+            .chain(legacy_permissions.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let mut permission_epochs = BTreeMap::from([(retained_permission.clone(), 8)]);
+        permission_epochs.extend(legacy_permissions.iter().cloned().enumerate().map(
+            |(index, permission)| {
+                (
+                    permission,
+                    9 + u64::try_from(index).expect("legacy permission count fits u64"),
+                )
+            },
+        ));
+        let role = Role {
+            id: role_id.clone(),
+            permissions: stored_permissions.clone(),
+            permission_epochs,
+        };
+        let mut world = World::with_assets_and_roles(
+            [],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+            [],
+            [],
+            [role],
+        );
+        world
+            .account_permissions
+            .insert(ALICE_ID.clone(), stored_permissions);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -20500,6 +21139,25 @@ seiyaku IdentityRequired {
             .expect("migration should succeed");
 
         assert_eq!(*state_tx.world.executor_data_model.get(), data_model);
+        assert_eq!(
+            state_tx
+                .world
+                .account_permissions
+                .get(&ALICE_ID)
+                .expect("retained account permission entry"),
+            &BTreeSet::from([retained_permission.clone()]),
+        );
+        let role = state_tx.world.roles.get(&role_id).expect("retained role");
+        assert_eq!(
+            role.permissions().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from([retained_permission.clone()]),
+        );
+        assert_eq!(role.permission_epochs().get(&retained_permission), Some(&8),);
+        assert!(
+            legacy_permissions
+                .iter()
+                .all(|permission| !role.permission_epochs().contains_key(permission)),
+        );
         match executor {
             super::Executor::UserProvided(_) => {}
             _ => panic!("expected UserProvided executor after migration"),

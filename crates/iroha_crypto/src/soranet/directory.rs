@@ -19,6 +19,7 @@ use crate::{
 };
 
 const SRC_V2_ISSUER_FINGERPRINT_DOMAIN: &[u8] = b"soranet.src.v2.issuer";
+const GUARD_DIRECTORY_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"soranet.guard-directory.snapshot.v2";
 
 type IssuersByFingerprint<'a> = HashMap<[u8; 32], (Ed25519PublicKey, &'a [u8])>;
 
@@ -57,20 +58,57 @@ impl GuardDirectorySnapshotV2 {
         to_bytes(self)
     }
 
-    /// Decode a snapshot from Norito bytes.
+    /// Decode and inspect a snapshot without establishing external trust or freshness.
+    ///
+    /// This verifies schema invariants and the self-consistency of signatures
+    /// against issuer keys embedded in the same snapshot. It must not be used
+    /// as an authentication decision. Use [`Self::authenticate_bytes_at`] at a
+    /// runtime trust boundary.
     ///
     /// # Errors
-    /// Returns an error if decoding fails.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
+    /// Returns an error if decoding or intrinsic validation fails.
+    pub fn inspect_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
         let snapshot: Self = decode_from_bytes(bytes)?;
-        snapshot.validate()?;
+        snapshot.validate(None)?;
         Ok(snapshot)
     }
 
-    fn validate(&self) -> Result<(), norito::Error> {
+    /// Authenticate an exact snapshot artifact and validate it at a supplied time.
+    ///
+    /// `expected_snapshot_digest` must arrive over a trust path independent of
+    /// `bytes`. It is a domain-separated BLAKE3 digest of the exact Norito
+    /// snapshot bytes, so it commits to the embedded issuer set as well as all
+    /// relay certificates. Validity uses a half-open interval:
+    /// `valid_after_unix <= at_unix < valid_until_unix`.
+    ///
+    /// # Errors
+    /// Returns an error when the exact artifact digest differs, decoding or
+    /// signature validation fails, or the snapshot is not active at `at_unix`.
+    pub fn authenticate_bytes_at(
+        bytes: &[u8],
+        expected_snapshot_digest: [u8; 32],
+        at_unix: i64,
+    ) -> Result<Self, norito::Error> {
+        let actual = compute_snapshot_digest(bytes);
+        if actual != expected_snapshot_digest {
+            return Err(norito::Error::Message(format!(
+                "guard directory snapshot digest mismatch (expected {}, got {})",
+                hex::encode(expected_snapshot_digest),
+                hex::encode(actual)
+            )));
+        }
+        let snapshot: Self = decode_from_bytes(bytes)?;
+        snapshot.validate(Some(at_unix))?;
+        Ok(snapshot)
+    }
+
+    fn validate(&self, at_unix: Option<i64>) -> Result<(), norito::Error> {
         let validation_phase = self.validate_header()?;
+        if let Some(at_unix) = at_unix {
+            self.validate_at(at_unix)?;
+        }
         let issuers_by_fingerprint = self.validate_issuers(validation_phase)?;
-        self.validate_relays(validation_phase, &issuers_by_fingerprint)
+        self.validate_relays(validation_phase, &issuers_by_fingerprint, at_unix)
     }
 
     fn validate_header(&self) -> Result<CertificateValidationPhase, norito::Error> {
@@ -103,6 +141,27 @@ impl GuardDirectorySnapshotV2 {
             ));
         }
         Ok(validation_phase)
+    }
+
+    fn validate_at(&self, at_unix: i64) -> Result<(), norito::Error> {
+        if at_unix < 0 {
+            return Err(norito::Error::Message(
+                "guard directory validation time must be non-negative Unix seconds".to_string(),
+            ));
+        }
+        if at_unix < self.valid_after_unix {
+            return Err(norito::Error::Message(format!(
+                "guard directory snapshot is not yet valid at {at_unix} (valid_after_unix {})",
+                self.valid_after_unix
+            )));
+        }
+        if at_unix >= self.valid_until_unix {
+            return Err(norito::Error::Message(format!(
+                "guard directory snapshot is expired at {at_unix} (valid_until_unix {})",
+                self.valid_until_unix
+            )));
+        }
+        Ok(())
     }
 
     fn validate_issuers(
@@ -164,6 +223,7 @@ impl GuardDirectorySnapshotV2 {
         &self,
         validation_phase: CertificateValidationPhase,
         issuers_by_fingerprint: &IssuersByFingerprint<'_>,
+        at_unix: Option<i64>,
     ) -> Result<(), norito::Error> {
         if self.relays.is_empty() {
             return Err(norito::Error::Message(
@@ -198,13 +258,16 @@ impl GuardDirectorySnapshotV2 {
                 ));
             }
             self.validate_relay_certificate_window(&bundle.certificate)?;
-            bundle
-                .verify(&issuer.0, issuer.1, validation_phase)
-                .map_err(|err| {
-                    norito::Error::Message(format!(
-                        "guard directory relay certificate signature verification failed: {err}"
-                    ))
-                })?;
+            let verified = if let Some(at_unix) = at_unix {
+                bundle.verify_at(&issuer.0, issuer.1, validation_phase, at_unix)
+            } else {
+                bundle.verify_signatures(&issuer.0, issuer.1, validation_phase)
+            };
+            verified.map_err(|err| {
+                norito::Error::Message(format!(
+                    "guard directory relay certificate signature verification failed: {err}"
+                ))
+            })?;
         }
         Ok(())
     }
@@ -232,6 +295,15 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(())
     }
+}
+
+/// Compute the domain-separated digest that authenticates exact snapshot bytes.
+#[must_use]
+pub fn compute_snapshot_digest(bytes: &[u8]) -> [u8; 32] {
+    let mut hasher = Blake3Hasher::new();
+    hasher.update(GUARD_DIRECTORY_SNAPSHOT_DIGEST_DOMAIN);
+    hasher.update(bytes);
+    hasher.finalize().into()
 }
 
 /// Governance issuer record embedded in guard directory snapshots.
@@ -387,7 +459,9 @@ mod tests {
     ) -> RelayCertificateV2 {
         RelayCertificateV2 {
             relay_id,
-            identity_ed25519: [0x22; 32],
+            identity_ed25519: SigningKey::from_bytes(&[0x22; SECRET_KEY_LENGTH])
+                .verifying_key()
+                .to_bytes(),
             identity_mldsa65: vec![0x55; MlDsaSuite::MlDsa65.public_key_len()],
             descriptor_commit: [0x33; 32],
             roles: RelayRolesV2 {
@@ -639,8 +713,81 @@ mod tests {
         let snapshot = sample_snapshot();
 
         let bytes = snapshot.to_bytes().expect("serialize");
-        let decoded = GuardDirectorySnapshotV2::from_bytes(&bytes).expect("deserialize");
+        let decoded = GuardDirectorySnapshotV2::inspect_bytes(&bytes).expect("deserialize");
         assert_eq!(snapshot, decoded);
+    }
+
+    #[test]
+    fn exact_snapshot_digest_authenticates_embedded_issuer_set() {
+        let trusted = sample_snapshot();
+        let trusted_bytes = trusted.to_bytes().expect("serialize trusted snapshot");
+        let trusted_digest = compute_snapshot_digest(&trusted_bytes);
+
+        let attacker_signing_key = SigningKey::from_bytes(&[0x13; SECRET_KEY_LENGTH]);
+        let attacker_mldsa = sample_mldsa_keypair(b"directory-snapshot-attacker");
+        let attacker_ed25519 = attacker_signing_key.verifying_key().to_bytes();
+        let attacker_mldsa_public = attacker_mldsa.public_key().to_vec();
+        let attacker_fingerprint =
+            compute_issuer_fingerprint(&attacker_ed25519, &attacker_mldsa_public)
+                .expect("attacker fingerprint");
+        let mut forged = sample_snapshot();
+        forged.issuers = vec![GuardDirectoryIssuerV1 {
+            fingerprint: attacker_fingerprint,
+            ed25519_public: attacker_ed25519,
+            mldsa65_public: attacker_mldsa_public,
+        }];
+        forged.relays[0].certificate = sample_relay_bundle(
+            forged.directory_hash,
+            attacker_fingerprint,
+            [0x99; 32],
+            &attacker_signing_key,
+            attacker_mldsa.secret_key(),
+            true,
+        )
+        .to_cbor();
+        let forged_bytes = forged.to_bytes().expect("serialize forged snapshot");
+
+        GuardDirectorySnapshotV2::inspect_bytes(&forged_bytes)
+            .expect("self-signed snapshot is structurally self-consistent");
+        let err = GuardDirectorySnapshotV2::authenticate_bytes_at(
+            &forged_bytes,
+            trusted_digest,
+            forged.valid_after_unix,
+        )
+        .expect_err("a digest for another artifact must reject substituted issuers");
+        assert!(err.to_string().contains("snapshot digest mismatch"));
+    }
+
+    #[test]
+    fn authenticated_snapshot_enforces_half_open_validity_window() {
+        let snapshot = sample_snapshot();
+        let bytes = snapshot.to_bytes().expect("serialize");
+        let digest = compute_snapshot_digest(&bytes);
+
+        GuardDirectorySnapshotV2::authenticate_bytes_at(&bytes, digest, snapshot.valid_after_unix)
+            .expect("valid_after is inclusive");
+        GuardDirectorySnapshotV2::authenticate_bytes_at(
+            &bytes,
+            digest,
+            snapshot.valid_until_unix - 1,
+        )
+        .expect("last second before valid_until is valid");
+
+        let early = GuardDirectorySnapshotV2::authenticate_bytes_at(
+            &bytes,
+            digest,
+            snapshot.valid_after_unix - 1,
+        )
+        .expect_err("not-yet-valid snapshot must fail");
+        assert!(early.to_string().contains("not yet valid"));
+
+        let expired = GuardDirectorySnapshotV2::authenticate_bytes_at(
+            &bytes,
+            digest,
+            snapshot.valid_until_unix,
+        )
+        .expect_err("valid_until is exclusive");
+        assert!(expired.to_string().contains("expired"));
     }
 
     #[test]
@@ -648,7 +795,7 @@ mod tests {
         let mut snapshot = sample_snapshot();
         snapshot.validation_phase = 0;
         let bytes = snapshot.to_bytes().expect("serialize");
-        assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
+        assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
     }
 
     #[test]
@@ -656,7 +803,7 @@ mod tests {
         let mut snapshot = sample_snapshot();
         snapshot.version = 1;
         let bytes = snapshot.to_bytes().expect("serialize");
-        assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
+        assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
     }
 
     #[test]
@@ -665,8 +812,8 @@ mod tests {
         snapshot.issuers.clear();
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err =
-            GuardDirectorySnapshotV2::from_bytes(&bytes).expect_err("empty issuer set must fail");
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
+            .expect_err("empty issuer set must fail");
         assert!(err.to_string().contains("at least one issuer"));
     }
 
@@ -677,7 +824,7 @@ mod tests {
         let bytes = snapshot.to_bytes().expect("serialize");
 
         let err =
-            GuardDirectorySnapshotV2::from_bytes(&bytes).expect_err("empty relay set must fail");
+            GuardDirectorySnapshotV2::inspect_bytes(&bytes).expect_err("empty relay set must fail");
         assert!(err.to_string().contains("at least one relay"));
     }
 
@@ -686,12 +833,12 @@ mod tests {
         let mut snapshot = sample_snapshot();
         snapshot.valid_until_unix = snapshot.valid_after_unix;
         let bytes = snapshot.to_bytes().expect("serialize");
-        assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
+        assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
 
         let mut snapshot = sample_snapshot();
         snapshot.valid_after_unix = snapshot.valid_until_unix + 1;
         let bytes = snapshot.to_bytes().expect("serialize");
-        assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
+        assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
     }
 
     #[test]
@@ -699,7 +846,7 @@ mod tests {
         let mut snapshot = sample_snapshot();
         snapshot.issuers[0].fingerprint[0] ^= 0xFF;
         let bytes = snapshot.to_bytes().expect("serialize");
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("fingerprint mismatch should fail");
         assert!(err.to_string().contains("fingerprint"));
     }
@@ -710,8 +857,8 @@ mod tests {
         let duplicate = snapshot.issuers[0].clone();
         snapshot.issuers.push(duplicate);
         let bytes = snapshot.to_bytes().expect("serialize");
-        let err =
-            GuardDirectorySnapshotV2::from_bytes(&bytes).expect_err("duplicate issuer should fail");
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
+            .expect_err("duplicate issuer should fail");
         assert!(err.to_string().contains("duplicate"));
     }
 
@@ -721,7 +868,7 @@ mod tests {
         snapshot.issuers[0].mldsa65_public.pop();
         snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("invalid ML-DSA-65 public key length should fail");
         assert!(err.to_string().contains("ML-DSA-65 public key"));
     }
@@ -733,7 +880,7 @@ mod tests {
         snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("issuer ML-DSA-65 key shape must fail before fingerprint");
         let message = err.to_string();
         assert!(
@@ -753,7 +900,7 @@ mod tests {
         snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("all-zero issuer ML-DSA-65 key must fail before fingerprint");
         let message = err.to_string();
         assert!(
@@ -776,7 +923,7 @@ mod tests {
         )
         .expect("sample issuer fingerprint should compute");
         let bytes = snapshot.to_bytes().expect("serialize");
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("phase 2 requires ML-DSA-65 issuer key");
         assert!(err.to_string().contains("required"));
     }
@@ -785,7 +932,7 @@ mod tests {
     fn snapshot_allows_phase1_empty_mldsa65_public_key() {
         let snapshot = sample_phase1_single_signature_snapshot();
         let bytes = snapshot.to_bytes().expect("serialize");
-        GuardDirectorySnapshotV2::from_bytes(&bytes)
+        GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect("phase 1 may carry an issuer without ML-DSA-65 key");
     }
 
@@ -796,7 +943,7 @@ mod tests {
             bundle.signatures.mldsa65 = None;
         });
         let bytes = snapshot.to_bytes().expect("serialize");
-        GuardDirectorySnapshotV2::from_bytes(&bytes)
+        GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect("phase 2 accepts Ed25519-only relay certificates during rollout");
     }
 
@@ -807,7 +954,7 @@ mod tests {
         snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("invalid issuer Ed25519 public key should fail");
         assert!(err.to_string().contains("Ed25519 public key"));
     }
@@ -818,7 +965,7 @@ mod tests {
         snapshot.relays[0].certificate = vec![0x99, 0x00, 0x01];
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("malformed relay certificate bundle should fail");
         assert!(err.to_string().contains("relay certificate bundle"));
     }
@@ -831,7 +978,7 @@ mod tests {
         });
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate with unknown issuer should fail");
         assert!(err.to_string().contains("unknown issuer"));
     }
@@ -844,7 +991,7 @@ mod tests {
         });
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate with mismatched directory hash should fail");
         assert!(err.to_string().contains("directory_hash"));
     }
@@ -857,7 +1004,7 @@ mod tests {
             bundle.certificate.valid_after = snapshot_valid_after + 1;
         });
         let bytes = snapshot.to_bytes().expect("serialize");
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate not valid at snapshot start should fail");
         assert!(err.to_string().contains("valid_after"));
 
@@ -867,7 +1014,7 @@ mod tests {
             bundle.certificate.valid_until = snapshot_valid_until - 1;
         });
         let bytes = snapshot.to_bytes().expect("serialize");
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate expiring inside snapshot window should fail");
         assert!(err.to_string().contains("valid_until"));
 
@@ -877,7 +1024,7 @@ mod tests {
             bundle.certificate.published_at = snapshot_published_at + 1;
         });
         let bytes = snapshot.to_bytes().expect("serialize");
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate published after snapshot should fail");
         assert!(err.to_string().contains("published_at"));
     }
@@ -888,7 +1035,7 @@ mod tests {
         snapshot.relays.push(snapshot.relays[0].clone());
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("duplicate relay id should fail");
         assert!(err.to_string().contains("duplicate relay id"));
     }
@@ -901,7 +1048,7 @@ mod tests {
         });
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("bad relay Ed25519 signature should fail");
         assert!(err.to_string().contains("signature verification"));
     }
@@ -919,7 +1066,7 @@ mod tests {
         });
         let bytes = snapshot.to_bytes().expect("serialize");
 
-        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("bad relay ML-DSA signature should fail");
         assert!(err.to_string().contains("signature verification"));
     }

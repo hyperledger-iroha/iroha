@@ -96,6 +96,8 @@ enum MessageKind {
     CertifiedBodyResponse,
     CommitCertificateRequest,
     CommitCertificateResponse,
+    VrfCommit,
+    VrfReveal,
 }
 
 impl MessageKind {
@@ -120,6 +122,8 @@ impl MessageKind {
             "certified_body_response" => Ok(Self::CertifiedBodyResponse),
             "commit_certificate_request" => Ok(Self::CommitCertificateRequest),
             "commit_certificate_response" => Ok(Self::CommitCertificateResponse),
+            "vrf_commit" => Ok(Self::VrfCommit),
+            "vrf_reveal" => Ok(Self::VrfReveal),
             _ => Err(ControlError::InvalidField("kind")),
         }
     }
@@ -139,6 +143,8 @@ impl MessageKind {
             Self::CertifiedBodyResponse => "certified_body_response",
             Self::CommitCertificateRequest => "commit_certificate_request",
             Self::CommitCertificateResponse => "commit_certificate_response",
+            Self::VrfCommit => "vrf_commit",
+            Self::VrfReveal => "vrf_reveal",
         }
     }
 }
@@ -912,7 +918,10 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
     )?;
     if matches!(
         kind,
-        MessageKind::PayloadChunk | MessageKind::CommitCertificateRequest
+        MessageKind::PayloadChunk
+            | MessageKind::CommitCertificateRequest
+            | MessageKind::VrfCommit
+            | MessageKind::VrfReveal
     ) {
         return Err(ControlError::KindHasNoExactRound);
     }
@@ -1269,6 +1278,22 @@ fn message_meta(
                 None,
                 value.certificate.signers.clone(),
             ),
+            ConsensusMessageV2Payload::VrfCommit(value) => (
+                MessageKind::VrfCommit,
+                None,
+                None,
+                None,
+                Some(value.signer),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::VrfReveal(value) => (
+                MessageKind::VrfReveal,
+                None,
+                None,
+                None,
+                Some(value.signer),
+                Vec::new(),
+            ),
         };
     let cited_responder = match &message.payload {
         ConsensusMessageV2Payload::CertifiedBodyResponse(value) => Some(value.responder),
@@ -1362,7 +1387,7 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && !has_single_signer
                 && !has_certificate_signers
         }
-        MessageKind::PayloadChunk => {
+        MessageKind::PayloadChunk | MessageKind::VrfCommit | MessageKind::VrfReveal => {
             meta.height.is_none()
                 && meta.view.is_none()
                 && has_no_subject_or_execution
@@ -1765,7 +1790,9 @@ mod tests {
                 None,
                 Vec::new(),
             ),
-            MessageKind::PayloadChunk => (None, None, None, None, Some(0), None, Vec::new()),
+            MessageKind::PayloadChunk | MessageKind::VrfCommit | MessageKind::VrfReveal => {
+                (None, None, None, None, Some(0), None, Vec::new())
+            }
             MessageKind::CertifiedBodyResponse => (
                 Some(9),
                 Some(2),
@@ -1899,6 +1926,8 @@ mod tests {
             MessageKind::CertifiedBodyResponse,
             MessageKind::CommitCertificateRequest,
             MessageKind::CommitCertificateResponse,
+            MessageKind::VrfCommit,
+            MessageKind::VrfReveal,
         ] {
             let meta = valid_meta(kind);
             validate_message_meta(&meta)

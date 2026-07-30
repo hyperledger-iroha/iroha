@@ -373,22 +373,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` хамгаалах Rust, Python `ToriiClient`
   одоо `decode_pdp_commitment_header` экспортлож, `IrohaSwift` нь маш хөдөлгөөнт төхөөрөмжид тохирох туслахуудыг илгээдэг.
   үйлчлүүлэгчид кодлогдсон түүвэрлэлтийн хуваарийг нэн даруй хадгалах боломжтой.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】:
-- Torii нь мөн `GET /v1/da/manifests/{storage_ticket}`-г ил гаргадаг тул SDK болон операторууд манифестуудыг татаж авах боломжтой.
-  зангилааны дамар лавлахад хүрэлгүйгээр төлөвлөгөөг хуваах. Хариулт нь Norito байтыг буцаана
-  (base64), үзүүлсэн манифест JSON, `chunk_plan` JSON blob `sorafs fetch`-д бэлэн, дээр нь холбогдох
-  hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) тул доод урсгалын хэрэгслүүд
-  Дахин тооцоолохгүйгээр найруулагчийг тэжээж, ижил `Sora-PDP-Commitment` толгойг гаргана.
-  залгих хариуг толин тусгал. `block_hash=<hex>`-г асуулгын параметр болгон дамжуулах нь детерминистикийг буцаана
-  `sampling_plan` `block_hash || client_blob_id` (баталгаажуулагчид хуваалцсан) дээр үндэслэсэн
-  `assignment_hash`, хүссэн `sample_window`, түүвэрлэсэн `(index, role, group)` хүрээ
-  PoR дээж авагчид болон баталгаажуулагчид ижил индексүүдийг дахин тоглуулах боломжтой тул 2D зураасын бүтцийг бүхэлд нь харуулна. Дээж авагч
-  `client_blob_id`, `chunk_root`, `ipa_commitment`-г даалгаврын хэш болгон холино; `iroha програмыг авах
-  --block-hash ` now writes `sampling_plan_.json` manifest + chunk plan-ын хажууд
-  хэш хадгалагдан үлдсэн бөгөөд JS/Swift Torii үйлчлүүлэгчид ижил `assignment_hash_hex`-ийг илрүүлдэг тул баталгаажуулагч
-  болон судлаачид нэг детерминист шалгалтын багцыг хуваалцдаг. Torii түүврийн төлөвлөгөөг буцаах үед `iroha app da
-  нотлох боломжтой` now reuses that deterministic probe set (seed derived from `sample_seed`) оронд нь
-  түр зуурын дээж авахын тулд PoR гэрчүүд оператор нь орхигдуулсан байсан ч баталгаажуулагчийн даалгаврыг дагаж мөрддөг.
-  `--block-hash` хүчингүй болгох.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Ачаа ихтэй урсгалын урсгалНэг хүсэлтийн тохируулсан хязгаараас их хэмжээний хөрөнгийг залгих шаардлагатай үйлчлүүлэгчид
 `POST /v1/da/ingest/chunk/start` руу залгаж цацах сесс. Torii a гэж хариулна

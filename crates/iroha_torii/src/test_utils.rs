@@ -972,6 +972,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             zk_ivm_prove_job_max_retained_bytes:
                 defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+            transaction_ingress: A::TransactionIngress::default(),
             da_ingest: A::DaIngest::default(),
             connect: A::Connect {
                 enabled: false,

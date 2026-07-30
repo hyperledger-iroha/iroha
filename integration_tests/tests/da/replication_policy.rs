@@ -3,16 +3,13 @@
 //! when callers submit stale values. The manifest fetched from Torii should
 //! always expose the canonical policy, not the caller intent.
 
-use std::{
-    collections::{BTreeMap, HashSet},
-    path::Path,
-};
+use std::{collections::BTreeMap, path::Path};
 
 use eyre::Result;
 use hex::encode as hex_encode;
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha_config::parameters::actual::DaReplicationPolicy;
-use iroha_crypto::{Hash, Signature};
+use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
         ingest::{DaIngestReceipt, DaIngestRequest},
@@ -88,113 +85,13 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
     let http = Client::new();
     let enforced_policy = retention_from_numbers(&override_policy);
     let outcome = ingest_and_fetch_manifest(&network, &http, caller_policy).await?;
+    assert!(
+        outcome.response.get("sampling_plan").is_none(),
+        "manifest retrieval must not synthesize a caller-selectable sampling plan"
+    );
     assert_override_applied(&outcome.manifest, &override_policy);
     assert_rent_quote_consistency(&outcome);
     assert_rent_quote_matches_policy(&outcome, &enforced_policy);
-
-    network.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn da_manifest_sampling_plan_matches_assignment_hash() -> Result<()> {
-    let manifest_dir = tempdir()?;
-    let replay_dir = tempdir()?;
-
-    let default_policy = PolicyNumbers {
-        hot_retention_secs: 900,
-        cold_retention_secs: 3600,
-        required_replicas: 3,
-        storage_class: "warm",
-        governance_tag: "da.test.default",
-    };
-    let override_policy = default_policy;
-
-    let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(stake_amount)
-        .with_config_layer(|layer| {
-            configure_da_ingest_layer(
-                layer,
-                manifest_dir.path(),
-                replay_dir.path(),
-                &default_policy,
-                &override_policy,
-            );
-        });
-    let Some(network) =
-        start_network_async_or_skip(builder, "da_manifest_sampling_plan_matches_assignment_hash")
-            .await?
-    else {
-        return Ok(());
-    };
-    network.ensure_blocks(1).await?;
-
-    let http = Client::new();
-    let caller_policy = retention_from_numbers(&default_policy);
-    let ingest_request = build_da_request(caller_policy);
-    let request_value =
-        json::to_value(&ingest_request).expect("serialize DA ingest request to JSON");
-    let request_json =
-        json::to_string(&request_value).expect("render DA ingest request JSON literal");
-
-    let ingest_url = network
-        .client()
-        .torii_url
-        .join("/v1/da/ingest")
-        .expect("compose DA ingest URL");
-    let response = http
-        .post(ingest_url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(request_json)
-        .send()
-        .await?;
-    assert!(
-        response.status().is_success(),
-        "DA ingest must succeed, got {}",
-        response.status()
-    );
-
-    let response_value: Value = json::from_slice(&response.bytes().await?)?;
-    let receipt_value = response_value
-        .get("receipt")
-        .cloned()
-        .expect("DA ingest response must include a receipt");
-    let receipt: DaIngestReceipt = json::from_value(receipt_value)?;
-    let manifest_ticket_hex = hex_encode(receipt.storage_ticket.as_bytes());
-    let manifest_url = network
-        .client()
-        .torii_url
-        .join(&format!(
-            "/v1/da/manifests/{manifest_ticket_hex}?block_hash={}",
-            hex_encode(Hash::new(b"sample-seed").as_ref())
-        ))
-        .expect("compose manifest fetch URL");
-    let manifest_response = http
-        .get(manifest_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-    assert_eq!(
-        manifest_response.status(),
-        StatusCode::OK,
-        "manifest fetch with sampling plan failed"
-    );
-    let manifest_value: Value = json::from_slice(&manifest_response.bytes().await?)?;
-    let sampling_plan = manifest_value
-        .get("sampling_plan")
-        .cloned()
-        .expect("sampling plan must be present when block_hash is provided");
-    let manifest_obj = manifest_value
-        .get("manifest")
-        .cloned()
-        .unwrap_or_else(|| manifest_value.clone());
-    let manifest: DaManifestV1 = json::from_value(manifest_obj)?;
-
-    assert_sampling_plan_valid(&manifest, &sampling_plan);
 
     network.shutdown().await;
     Ok(())
@@ -230,6 +127,7 @@ fn build_da_request(retention_policy: RetentionPolicy) -> DaIngestRequest {
 struct ManifestFetchOutcome {
     receipt: DaIngestReceipt,
     manifest: DaManifestV1,
+    response: Value,
 }
 
 async fn ingest_and_fetch_manifest(
@@ -291,7 +189,11 @@ async fn ingest_and_fetch_manifest(
         .cloned()
         .unwrap_or_else(|| manifest_value.clone());
     let manifest: DaManifestV1 = json::from_value(manifest_obj)?;
-    Ok(ManifestFetchOutcome { receipt, manifest })
+    Ok(ManifestFetchOutcome {
+        receipt,
+        manifest,
+        response: manifest_value,
+    })
 }
 
 fn assert_override_applied(manifest: &DaManifestV1, override_policy: &PolicyNumbers) {
@@ -316,97 +218,6 @@ fn assert_override_applied(manifest: &DaManifestV1, override_policy: &PolicyNumb
         manifest.retention_policy.governance_tag.0, enforced.governance_tag.0,
         "governance tag must match the configured override"
     );
-}
-
-fn assert_sampling_plan_valid(manifest: &DaManifestV1, sampling_plan: &Value) {
-    let object = sampling_plan
-        .as_object()
-        .expect("sampling_plan must be a JSON object");
-    let assignment_hex = object
-        .get("assignment_hash")
-        .or_else(|| object.get("assignmentHash"))
-        .and_then(Value::as_str)
-        .expect("assignment_hash must be present");
-    let expected_assignment = compute_assignment_hash(manifest, &Hash::new(b"sample-seed"));
-    let assignment_bytes =
-        hex::decode(assignment_hex).expect("assignment_hash must decode from hex");
-    let assignment: BlobDigest = BlobDigest::new(
-        assignment_bytes
-            .as_slice()
-            .try_into()
-            .expect("assignment_hash must be 32 bytes"),
-    );
-    assert_eq!(
-        assignment, expected_assignment,
-        "assignment hash must match derived value"
-    );
-
-    let sample_window = object
-        .get("sample_window")
-        .or_else(|| object.get("sampleWindow"))
-        .and_then(Value::as_u64)
-        .expect("sample_window must be present");
-    let expected_window = compute_sample_window(manifest.total_size);
-    assert_eq!(
-        sample_window,
-        u64::from(expected_window),
-        "sample_window should be derived from payload size"
-    );
-
-    let samples = object
-        .get("samples")
-        .and_then(Value::as_array)
-        .expect("samples must be an array");
-    let mut seen = HashSet::new();
-    let expected_len = usize::min(manifest.chunks.len(), expected_window as usize);
-    assert_eq!(samples.len(), expected_len);
-    for entry in samples {
-        let sample = entry.as_object().expect("sampling entry must be an object");
-        let index = sample
-            .get("index")
-            .and_then(Value::as_u64)
-            .expect("sample index required");
-        assert!(
-            index < manifest.chunks.len() as u64,
-            "sample index {index} out of bounds"
-        );
-        assert!(seen.insert(index), "duplicate sample index {index}");
-        let role = sample
-            .get("role")
-            .and_then(Value::as_str)
-            .expect("sample role required");
-        assert!(
-            !role.is_empty(),
-            "sample role must be non-empty for index {index}"
-        );
-        let _group = sample
-            .get("group")
-            .or_else(|| sample.get("group_id"))
-            .and_then(Value::as_u64)
-            .expect("sample group required");
-    }
-}
-
-fn compute_assignment_hash(manifest: &DaManifestV1, block_hash: &Hash) -> BlobDigest {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(block_hash.as_ref());
-    hasher.update(manifest.client_blob_id.as_bytes());
-    hasher.update(manifest.chunk_root.as_bytes());
-    hasher.update(manifest.ipa_commitment.as_bytes());
-    BlobDigest::from_hash(hasher.finalize())
-}
-
-fn compute_sample_window(total_size: u64) -> u16 {
-    const CHUNK_UNIT: u64 = 64 * 1024 * 1024;
-    const MIN_SAMPLES: u64 = 32;
-    const MAX_SAMPLES: u64 = 256;
-
-    if total_size == 0 {
-        return u16::try_from(MIN_SAMPLES).expect("min sample count fits u16");
-    }
-    let buckets = total_size.div_ceil(CHUNK_UNIT);
-    let clamped = buckets.clamp(MIN_SAMPLES, MAX_SAMPLES);
-    u16::try_from(clamped).expect("sample count fits u16")
 }
 
 fn configure_da_ingest_layer<'a>(

@@ -5,7 +5,7 @@ tests:
   - interval: 5m
     input_series:
       - series: 'sorafs_governance_dag_publish_total{payload_kind="appeal_finance_report",result="failure",sink="filesystem"}'
-        values: '0 0 1 1 1 1 1 1 1 1 1 1'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1'
       - series: 'sorafs_governance_dag_publish_total{payload_kind="appeal_finance_settlement_receipt",result="failure",sink="filesystem"}'
         values: '0 0 0 1 1 1 1 1 1 1 1 1'
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report",sink="filesystem"}'
@@ -26,6 +26,11 @@ tests:
               sink: filesystem
             exp_annotations:
               summary: "SoraFS appeal finance publication failures detected"
+              description: |
+                Appeal finance payload publication failed for appeal_finance_report on
+                sink filesystem within the last 15 minutes. Check the Governance DAG
+                filesystem/runtime publisher, local sidecars, and public mirror before relying on
+                appeal finance dashboard totals.
           - exp_labels:
               payload_kind: appeal_finance_settlement_receipt
               result: failure
@@ -33,6 +38,11 @@ tests:
               sink: filesystem
             exp_annotations:
               summary: "SoraFS appeal finance publication failures detected"
+              description: |
+                Appeal finance payload publication failed for appeal_finance_settlement_receipt on
+                sink filesystem within the last 15 minutes. Check the Governance DAG
+                filesystem/runtime publisher, local sidecars, and public mirror before relying on
+                appeal finance dashboard totals.
       - alertname: SoraFSAppealFinanceReportStale
         eval_time: 2h
         exp_alerts: []
@@ -44,18 +54,22 @@ tests:
               sink: filesystem
             exp_annotations:
               summary: "SoraFS appeal finance reports are stale"
-  - interval: 1h
+              description: |
+                Sink filesystem has not published an appeal finance report for more than
+                two hours. Verify moderation tally automation, operator report ingestion, and
+                Governance DAG publishing before treating appeal finance totals as live.
+  - interval: 5m
     input_series:
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report",sink="filesystem"}'
-        values: '200000+0x80'
+        values: '200000+0x700'
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_weekly_rollup",sink="filesystem"}'
-        values: '0+0x80'
+        values: '0+0x700'
     alert_rule_test:
       - alertname: SoraFSAppealFinanceWeeklyRollupStale
         eval_time: 48h
         exp_alerts: []
       - alertname: SoraFSAppealFinanceWeeklyRollupStale
-        eval_time: 49h
+        eval_time: 48h20m
         exp_alerts: []
       - alertname: SoraFSAppealFinanceWeeklyRollupStale
         eval_time: 50h
@@ -65,6 +79,10 @@ tests:
               sink: filesystem
             exp_annotations:
               summary: "SoraFS appeal finance weekly rollups are stale"
+              description: |
+                Sink filesystem has not published an appeal finance weekly rollup for more
+                than 48 hours. Confirm rollup generation, treasury review inputs, and public DAG
+                publication before using weekly finance summaries.
       - alertname: SoraFSAppealFinanceRollupLaggingReports
         eval_time: 25m
         exp_alerts: []
@@ -76,12 +94,16 @@ tests:
               sink: filesystem
             exp_annotations:
               summary: "SoraFS appeal finance rollups lag reports"
-  - interval: 1h
+              description: |
+                Sink filesystem has appeal finance reports more than 24 hours newer than
+                the latest weekly rollup. Rebuild and publish the weekly rollup before closing
+                treasury reconciliation.
+  - interval: 5m
     input_series:
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_report",sink="filesystem"}'
-        values: '0+3600x12'
+        values: '0+300x120'
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="appeal_finance_settlement_receipt",sink="filesystem"}'
-        values: '0+0x12'
+        values: '0+0x120'
     alert_rule_test:
       - alertname: SoraFSAppealFinanceSettlementReceiptStale
         eval_time: 6h
@@ -94,6 +116,11 @@ tests:
               sink: filesystem
             exp_annotations:
               summary: "SoraFS appeal finance settlement receipts are stale"
+              description: |
+                Sink filesystem has not published an appeal finance settlement receipt
+                for more than six hours while finance reports are still publishing. Verify the
+                configured-signer settlement path, moderation-derived receipt worker, and
+                Governance DAG publisher before treating treasury custody evidence as current.
       - alertname: SoraFSAppealFinanceSettlementReceiptsLagReports
         eval_time: 6h
         exp_alerts: []
@@ -105,6 +132,10 @@ tests:
               sink: filesystem
             exp_annotations:
               summary: "SoraFS appeal finance settlement receipts lag reports"
+              description: |
+                Sink filesystem has appeal finance reports more than six hours newer
+                than the latest settlement receipt. Submit or investigate the pending native
+                settlement step before closing the appeal-finance reconciliation window.
   - interval: 5m
     input_series:
       - series: 'sorafs_governance_dag_publish_total{payload_kind="appeal_finance_report",result="failure",sink="filesystem"}'

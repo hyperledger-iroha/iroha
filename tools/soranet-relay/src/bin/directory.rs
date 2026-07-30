@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use iroha_crypto::soranet::directory::GuardDirectorySnapshotV2;
+use iroha_crypto::soranet::directory::{GuardDirectorySnapshotV2, compute_snapshot_digest};
 use norito::json;
 use soranet_relay::{
     directory::{
@@ -133,6 +133,10 @@ fn command_build(
         .map_err(|err| format!("failed to write snapshot to `{}`: {err}", out.display()))?;
 
     println!("Snapshot written to {}", out.display());
+    println!(
+        " snapshot_digest: {}",
+        hex::encode(compute_snapshot_digest(&bytes))
+    );
     print_metadata(&bundle.metadata);
     Ok(())
 }
@@ -164,6 +168,10 @@ fn command_rotate(
         )
     })?;
     println!("Rotated snapshot written to {}", out.display());
+    println!(
+        " snapshot_digest: {}",
+        hex::encode(compute_snapshot_digest(&encoded))
+    );
     print_metadata(&rotation.bundle.metadata);
 
     if let Some(dir) = keys_out {
@@ -187,7 +195,14 @@ fn command_inspect(snapshot_path: &Path) -> Result<(), String> {
         )
     })?;
     let bundle = inspect_snapshot(&bytes).map_err(|err| rotate_error(snapshot_path, err))?;
-    println!("Snapshot {}", snapshot_path.display());
+    println!(
+        "Snapshot {} (structural inspection only; not authenticated)",
+        snapshot_path.display()
+    );
+    println!(
+        " snapshot_digest: {}",
+        hex::encode(compute_snapshot_digest(&bytes))
+    );
     print_metadata(&bundle.metadata);
     Ok(())
 }
@@ -218,7 +233,7 @@ fn command_verify_proof(proof_path: &Path, snapshot_override: Option<&Path>) -> 
             snapshot_path.display()
         )
     })?;
-    let snapshot = GuardDirectorySnapshotV2::from_bytes(&snapshot_bytes).map_err(|err| {
+    let snapshot = GuardDirectorySnapshotV2::inspect_bytes(&snapshot_bytes).map_err(|err| {
         format!(
             "failed to decode guard directory snapshot `{}`: {err}",
             snapshot_path.display()
@@ -228,7 +243,7 @@ fn command_verify_proof(proof_path: &Path, snapshot_override: Option<&Path>) -> 
         .map_err(|err| format!("guard pinning proof verification failed: {err}"))?;
 
     println!(
-        "Guard pinning proof `{}` verified against `{}`",
+        "Guard pinning proof `{}` is structurally consistent with unauthenticated snapshot `{}`",
         proof_path.display(),
         snapshot_path.display()
     );
@@ -250,7 +265,7 @@ fn command_collect_proofs(
             snapshot_path.display()
         )
     })?;
-    let snapshot = GuardDirectorySnapshotV2::from_bytes(&snapshot_bytes).map_err(|err| {
+    let snapshot = GuardDirectorySnapshotV2::inspect_bytes(&snapshot_bytes).map_err(|err| {
         format!(
             "failed to decode guard directory snapshot `{}`: {err}",
             snapshot_path.display()
@@ -260,7 +275,7 @@ fn command_collect_proofs(
         .map_err(|err| format!("failed to collect guard pinning proofs: {err}"))?;
 
     println!(
-        "Verified {} guard pinning proofs under {}",
+        "Structurally checked {} guard pinning proofs against an unauthenticated snapshot under {}",
         summaries.len(),
         proofs_dir.display()
     );

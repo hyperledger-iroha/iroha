@@ -71,7 +71,7 @@
   },
   "guard_directory": {
     "snapshot_path": "/etc/soranet/relay/guards/current_snapshot.norito",
-    "expected_directory_hash_hex": "fedcba98765432100123456789abcdef0123456789abcdef0123456789abcdef",
+    "expected_snapshot_digest_hex": "fedcba98765432100123456789abcdef0123456789abcdef0123456789abcdef",
     "allow_missing_entry": false,
     "pinning_proof_path": "/var/lib/soranet/relay/guard_pinning_proof.json"
   }

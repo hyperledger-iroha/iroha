@@ -525,6 +525,13 @@ mod tests {
 
     #[test]
     fn exact_norito_length_matches_canonical_payload() {
+        let assert_exact_length = |value: &BigInt| {
+            assert_eq!(
+                value.encoded_len_exact(),
+                Some(norito::core::encoded_payload_len(value).expect("encode bigint payload"))
+            );
+        };
+
         for value in [
             -65_537_i128,
             -32_768,
@@ -538,10 +545,16 @@ mod tests {
             32_767,
         ] {
             let value = BigInt::from_i128(value);
-            assert_eq!(
-                value.encoded_len_exact(),
-                Some(norito::core::encoded_payload_len(&value).expect("encode bigint payload"))
-            );
+            assert_exact_length(&value);
+        }
+
+        let signed_limit = InnerBigInt::one() << (MAX_BITS - 1);
+        for value in [
+            BigInt::from_inner(-signed_limit.clone()).expect("minimum"),
+            BigInt::from_inner(signed_limit - 1_u8).expect("maximum"),
+        ] {
+            assert_eq!(value.twos_byte_len(), MAX_ENCODED_BYTES);
+            assert_exact_length(&value);
         }
     }
 

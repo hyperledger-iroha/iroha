@@ -2342,6 +2342,44 @@ pub struct CommitCertificateResponseSignaturePayload {
     pub responder: PeerId,
 }
 
+/// Authenticated NPoS randomness commitment for one frozen epoch roster.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct VrfCommit {
+    /// Epoch index to which the commitment applies.
+    pub epoch: u64,
+    /// Hiding commitment to the validator's reveal.
+    pub commitment: [u8; 32],
+    /// Signer index in the immutable height-context roster.
+    pub signer: ValidatorIndex,
+    /// Signature over the canonical NPoS VRF-commit preimage.
+    pub bls_sig: Vec<u8>,
+}
+
+/// Authenticated NPoS randomness reveal for one frozen epoch roster.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct VrfReveal {
+    /// Epoch index to which the reveal applies.
+    pub epoch: u64,
+    /// Revealed preimage whose hash must equal the prior commitment.
+    pub reveal: [u8; 32],
+    /// Signer index in the immutable height-context roster.
+    pub signer: ValidatorIndex,
+    /// Canonical Norito-encoded VRF proof whose verified output equals `reveal`.
+    pub vrf_proof: Vec<u8>,
+    /// Signature over the canonical NPoS VRF-reveal preimage.
+    pub bls_sig: Vec<u8>,
+}
+
 /// Payload variants accepted by the Sumeragi v2 network envelope.
 #[expect(
     clippy::large_enum_variant,
@@ -2381,6 +2419,10 @@ pub enum ConsensusMessageV2Payload {
     CommitCertificateRequest(CommitCertificateRequest),
     /// Response carrying the active height context's durable `CommitQC`.
     CommitCertificateResponse(CommitCertificateResponse),
+    /// NPoS epoch-randomness commitment.
+    VrfCommit(VrfCommit),
+    /// NPoS epoch-randomness reveal.
+    VrfReveal(VrfReveal),
 }
 
 /// Explicitly versioned Sumeragi v2 network envelope.
@@ -5088,6 +5130,19 @@ mod tests {
                 certificate: commit,
                 responder: context.roster[0].validator.clone(),
                 signature: vec![4],
+            }),
+            ConsensusMessageV2Payload::VrfCommit(VrfCommit {
+                epoch: context.epoch,
+                commitment: [0x77; 32],
+                signer: 1,
+                bls_sig: vec![5],
+            }),
+            ConsensusMessageV2Payload::VrfReveal(VrfReveal {
+                epoch: context.epoch,
+                reveal: [0x88; 32],
+                signer: 1,
+                vrf_proof: vec![0x99],
+                bls_sig: vec![6],
             }),
         ];
 

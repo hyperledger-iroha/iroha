@@ -1119,6 +1119,118 @@ mod tests {
         exact_alias_quote_guard(state_transaction, ACCOUNT_ALIAS_SUFFIX_ID, quote)
     }
 
+    fn catalogued_dataspace_ensure(owner: AccountId, dataspace: DataSpaceId) -> EnsureAlias {
+        EnsureAlias::new(
+            AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                dataspace: ResolvedDataSpaceV1::new(
+                    "governance".parse().expect("catalogued alias"),
+                    dataspace,
+                ),
+                owner,
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: 0,
+                expected_payment_asset: "61CtjvNd9T3THAR65GsMVHr82Bjc"
+                    .parse()
+                    .expect("syntactic payment asset"),
+                max_amount: Quantity::zero(),
+                valid_until_ms: 0,
+            },
+        )
+    }
+
+    fn governance_dataspace_catalog(dataspace: DataSpaceId) -> DataSpaceCatalog {
+        DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace,
+                alias: "governance".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("governance dataspace catalog")
+    }
+
+    #[test]
+    fn ensure_alias_rejects_public_claim_of_catalogued_dataspace_before_mutation() {
+        let authority = another_owner();
+        let dataspace = DataSpaceId::new(7);
+        let state = State::new_for_testing(
+            World::with([], [Account::new(authority.clone()).build(&authority)], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = governance_dataspace_catalog(dataspace);
+        let ensure = catalogued_dataspace_ensure(authority.clone(), dataspace);
+        let selector =
+            crate::alias_setup::selector_for_resolved_alias_target(&ensure.intent.target())
+                .expect("catalogued selector");
+        let permissions = crate::alias_setup::exact_alias_permission_bundle(&ensure.intent);
+        let mut block = state.block(next_header(&state));
+        let mut transaction = block.transaction();
+
+        let error = ensure
+            .execute(&authority, &mut transaction)
+            .expect_err("a catalog entry must not become a public SNS ownership claim");
+
+        assert!(
+            smart_contract_error_contains(
+                &error,
+                crate::alias_setup::CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE,
+            ),
+            "unexpected error: {error}",
+        );
+        assert!(
+            crate::sns::record_by_selector(transaction.world(), &selector).is_none(),
+            "rejection must not create an SNS ownership record",
+        );
+        assert!(
+            permissions.iter().all(|permission| {
+                !transaction
+                    .world
+                    .account_permissions
+                    .get(&authority)
+                    .is_some_and(|stored| stored.contains(permission))
+            }),
+            "rejection must not auto-grant catalog-scoped alias capabilities",
+        );
+    }
+
+    #[test]
+    fn ensure_alias_repairs_governed_catalogued_dataspace_bootstrap() {
+        let authority = another_owner();
+        let dataspace = DataSpaceId::new(7);
+        let ensure = catalogued_dataspace_ensure(authority.clone(), dataspace);
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        seed_active_dataspace_lease(&mut world, "governance", dataspace, &authority);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = governance_dataspace_catalog(dataspace);
+        let permissions = crate::alias_setup::exact_alias_permission_bundle(&ensure.intent);
+        let mut block = state.block(next_header(&state));
+        let mut transaction = block.transaction();
+
+        ensure
+            .execute(&authority, &mut transaction)
+            .expect("the authenticated bootstrap owner may repair derived permissions");
+
+        assert!(
+            permissions.iter().all(|permission| {
+                transaction
+                    .world
+                    .account_permissions
+                    .get(&authority)
+                    .is_some_and(|stored| stored.contains(permission))
+            }),
+            "repair must restore the exact catalog-scoped alias capability bundle",
+        );
+    }
+
     fn ensure_account_alias_instruction(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &AccountAlias,

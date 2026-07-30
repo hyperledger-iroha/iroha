@@ -30,6 +30,9 @@ use thiserror::Error;
 
 use crate::{sns::SNS_DATASPACE_ID_METADATA_KEY, state::WorldReadOnly};
 
+/// Error code returned when public alias setup tries to claim an operator-catalogued dataspace.
+pub const CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE: &str = "alias.catalog.bootstrap_required";
+
 /// Deterministic conflict or validation failure produced while classifying an alias intent.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{code}: {message}")]
@@ -1108,6 +1111,18 @@ pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
     if let Some(record) = &record {
         validate_existing_record(record, alias_intent_owner(intent), &target)?;
     }
+    if record.is_none()
+        && let AliasIntentV1::Dataspace(value) = intent
+        && catalog.by_id(value.dataspace.dataspace_id).is_some()
+    {
+        return Err(AliasSetupError::new(
+            CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE,
+            format!(
+                "catalogued dataspace `{}` ({}) must be bound by the governed genesis bootstrap before public alias setup",
+                value.dataspace.canonical_name, value.dataspace.dataspace_id
+            ),
+        ));
+    }
 
     let resource_needs_repair = match intent {
         AliasIntentV1::Dataspace(_) => false,
@@ -1135,7 +1150,8 @@ pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
     };
 
     if record.is_none() {
-        // A known mapping without a record is still an absent lease and must be acquired once.
+        // Only a deterministic dynamic mapping reaches this branch. Catalog entries are
+        // operator-governed namespace declarations and must already have a bootstrap record.
         return Ok(AliasPlanDispositionV1::Create);
     }
     if resource_needs_repair || !exact_permissions_present(world, intent) {
@@ -1300,6 +1316,39 @@ mod tests {
         assert_eq!(
             error.code(),
             crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE
+        );
+    }
+
+    #[test]
+    fn catalogued_dataspace_requires_governed_bootstrap_record() {
+        let owner = account(2);
+        let mut world = world_with_accounts(core::slice::from_ref(&owner));
+        let dataspace = DataSpaceId::new(7);
+        let catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: dataspace,
+            alias: "governance".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("catalogued dataspace");
+        let intent = AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+            dataspace: ResolvedDataSpaceV1::new(
+                "governance".parse().expect("dataspace alias"),
+                dataspace,
+            ),
+            owner: owner.clone(),
+        });
+
+        let error = classify_alias_intent(&world.view(), &catalog, &intent, 1)
+            .expect_err("public setup must not claim an operator-catalogued dataspace");
+        assert_eq!(error.code(), CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE,);
+
+        insert_record(&mut world, &intent, owner);
+        assert_eq!(
+            classify_alias_intent(&world.view(), &catalog, &intent, 1)
+                .expect("a governed bootstrap record establishes the owner"),
+            AliasPlanDispositionV1::Repair,
+            "the authenticated bootstrap owner may repair missing derived permissions",
         );
     }
 

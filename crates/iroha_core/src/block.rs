@@ -7023,6 +7023,9 @@ pub(crate) mod valid {
                 &block,
                 state,
                 validation_profile.authoritative_consensus_mode(),
+                validation_profile
+                    .v2_context()
+                    .and_then(SumeragiV2ValidationContext::authenticated_height_context),
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
                 record_timings(&mut timings, stateless_elapsed, None);
@@ -7743,6 +7746,9 @@ pub(crate) mod valid {
             block: &SignedBlock,
             state: &State,
             authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
+            authenticated_height_context: Option<
+                &iroha_data_model::block::consensus_v2::HeightContext,
+            >,
         ) -> Result<(), BlockValidationError> {
             Self::validate_npos_effects_header(block)?;
 
@@ -7767,6 +7773,32 @@ pub(crate) mod valid {
                         "permissioned consensus blocks must not carry NPoS effects",
                     ))
                 };
+            }
+            if authoritative_mode
+                == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
+            {
+                let context = authenticated_height_context.ok_or_else(|| {
+                    Self::npos_effects_error(
+                        "NPoS candidate validation requires its authenticated height context",
+                    )
+                })?;
+                if context.mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+                    || context.height != block_height
+                {
+                    return Err(Self::npos_effects_error(
+                        "NPoS candidate differs from its authenticated height context",
+                    ));
+                }
+                crate::sumeragi::v2_npos::validate_candidate_records(
+                    context,
+                    state,
+                    actual_effects,
+                )
+                .map_err(|error| {
+                    Self::npos_effects_error(format!(
+                        "invalid authenticated NPoS VRF effects: {error}"
+                    ))
+                })?;
             }
             let admission_keys = if let Some(effects) = actual_effects {
                 crate::sumeragi::evidence::validate_v2_evidence_admissions(
@@ -15426,8 +15458,9 @@ pub(crate) mod valid {
             let signatory = usize::try_from(signature.index()).map_err(|_err| UnknownSignatory)?;
             let signatory = topology.as_ref().get(signatory).ok_or(UnknownSignatory)?;
 
-            assert_ne!(Role::Leader, topology.role(signatory));
-            assert_ne!(Role::Undefined, topology.role(signatory));
+            if matches!(topology.role(signatory), Role::Leader | Role::Undefined) {
+                return Err(UnknownSignatory);
+            }
 
             signature
                 .signature()
@@ -18876,6 +18909,27 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn add_signature_rejects_leader_slot_without_panicking() {
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&key_pairs);
+            let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
+            let block_hash = block.as_ref().hash();
+            let leader_signature = BlockSignature::new(
+                0,
+                checked_block_signature(key_pairs[0].private_key(), block_hash),
+            );
+
+            assert_eq!(
+                block.add_signature(leader_signature, &topology),
+                Err(SignatureVerificationError::UnknownSignatory)
+            );
+        }
+
+        #[test]
         fn replace_signatures_rolls_back_on_failure() {
             let key_pairs = core::iter::repeat_with(|| {
                 crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
@@ -19369,6 +19423,7 @@ pub(crate) mod valid {
                 &block,
                 &state,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+                None,
             )
             .expect("permissioned validation must not derive NPoS-only penalties");
         }
@@ -19395,6 +19450,7 @@ pub(crate) mod valid {
                 &block,
                 &state,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+                None,
             )
             .expect_err("permissioned validation must reject NPoS-only effects");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
@@ -19414,12 +19470,104 @@ pub(crate) mod valid {
                 &block,
                 &state,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
+                None,
             )
-            .expect_err("NPoS validation must require signed NPoS parameters");
+            .expect_err("NPoS validation must require an authenticated height context");
             assert!(matches!(
                 err,
                 BlockValidationError::NposEffectsInvalid(message)
-                    if message.contains("requires signed NPoS parameters")
+                    if message.contains("authenticated height context")
+            ));
+        }
+
+        #[test]
+        fn authenticated_npos_validation_rejects_forged_first_epoch_seal() {
+            use iroha_data_model::block::consensus_v2::{
+                ConsensusMode, DataAvailabilityLayout, DualQuorum, HeightContext, PayloadEncoding,
+                SnapshotBootstrapAnchor, ValidatorPower,
+            };
+
+            let mut keys = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let roster = keys
+                .iter()
+                .map(|key| ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+
+            let mut world = World::new();
+            let mut parameters = Parameters::default();
+            let mut npos = SumeragiNposParameters::default();
+            npos.epoch_length_blocks = NonZeroU64::new(10).expect("non-zero epoch");
+            npos.vrf_commit_window_blocks = 3;
+            npos.vrf_reveal_window_blocks = 3;
+            parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+            world.parameters = Cell::new(parameters);
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let parent_hash =
+                HashOf::from_untyped_unchecked(Hash::new(b"forged-first-seal-parent"));
+            let context = HeightContext {
+                chain_id: state.chain_id.clone(),
+                protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+                height: 2,
+                epoch: 0,
+                epoch_end_height: 10,
+                next_epoch_snapshot: None,
+                mode: ConsensusMode::Npos,
+                parent_commit_qc: None,
+                snapshot_bootstrap: Some(SnapshotBootstrapAnchor {
+                    snapshot_height: 1,
+                    snapshot_block_hash: parent_hash,
+                    snapshot_block_creation_time_ms: 1,
+                    snapshot_state_hash: Hash::new(b"forged-first-seal-state"),
+                }),
+                quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"forged-first-seal-nexus"),
+                da_layout: DataAvailabilityLayout {
+                    encoding: PayloadEncoding::Plain,
+                    chunk_size_bytes: 1_024,
+                    data_shards: 0,
+                    parity_shards: 0,
+                    max_payload_size_bytes: 4_096,
+                    max_chunk_count: 4,
+                },
+                leader_seed: [0x42; 32],
+            };
+            context.validate().expect("valid NPoS fixture context");
+
+            let block = npos_effects_block(
+                keys[0].private_key(),
+                context.height,
+                Some(NposConsensusEffects {
+                    // This is the exact malicious shape from R-CON-25: a
+                    // first record with no authenticated commit proof.
+                    vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, context.height)],
+                    v2_evidence_admissions: Vec::new(),
+                    penalty_actions: Vec::new(),
+                }),
+            );
+            let err = ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(ConsensusMode::Npos),
+                Some(&context),
+            )
+            .expect_err("an unsigned first epoch seal must fail closed");
+            assert!(matches!(
+                err,
+                BlockValidationError::NposEffectsInvalid(message)
+                    if message.contains("invalid authenticated NPoS VRF effects")
             ));
         }
 
@@ -19496,7 +19644,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect("monotonic VRF epoch record extension should validate");
         }
 
@@ -19526,7 +19674,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect_err("VRF epoch record rewrite should be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -19567,7 +19715,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect("monotonic VRF epoch record extension should validate");
         }
 
@@ -19599,7 +19747,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect_err("VRF epoch record rewrite must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -19640,12 +19788,8 @@ pub(crate) mod valid {
             );
             let block = npos_effects_block(leader.private_key(), 20, None);
 
-            let err = ValidBlock::validate_npos_effects_with_state(
-                &block,
-                &state,
-                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
-            )
-            .expect_err("missing deterministic NPoS marker must be rejected");
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
+                .expect_err("missing deterministic NPoS marker must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
 
             let exact = npos_effects_block(
@@ -19657,12 +19801,8 @@ pub(crate) mod valid {
                     penalty_actions: vec![npos_marker(7, 20)],
                 }),
             );
-            ValidBlock::validate_npos_effects_with_state(
-                &exact,
-                &state,
-                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
-            )
-            .expect("the exact deterministic NPoS action set must validate");
+            ValidBlock::validate_npos_effects_with_state(&exact, &state, None, None)
+                .expect("the exact deterministic NPoS action set must validate");
         }
 
         #[test]
@@ -19683,7 +19823,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect_err("extra deterministic NPoS action must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -19707,7 +19847,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect_err("duplicate NPoS actions must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }

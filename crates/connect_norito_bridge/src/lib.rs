@@ -128,6 +128,12 @@ const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 1;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
+/// Restores Norito's conservative 32-fold allocation ceiling for schemas with
+/// nested, semantically bounded collections.
+///
+/// Those cardinality checks run after reconstruction, so a flat allowance
+/// cannot safely replace the frame-scaled part of the generic decoder budget.
+const KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER: usize = 28;
 const KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH: usize = 64;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DETACHED_TRANSACTION_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -611,36 +617,216 @@ trait KagemushaSensitiveArchive {
     fn zeroize_sensitive(&mut self);
 }
 
-fn kagemusha_canonical_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
+fn kagemusha_canonical_decode_limits_with_profile(
+    encoded_len: usize,
+    extra_encoded_allocation_multiplier: usize,
+    fixed_allocation_allowance: usize,
+) -> norito::DecodeLimits {
     // Every variable-length member must be represented in the exact
     // uncompressed canonical frame. These limits therefore scale from the
-    // already capped archive instead of inheriting Norito's generic 32-fold
-    // allocation allowance. One fixed 64 KiB allowance covers decoded enum,
+    // already capped archive. One fixed 64 KiB allowance covers decoded enum,
     // collection, and string bookkeeping whose size does not shrink in direct
-    // proportion to a small payload.
+    // proportion to a small payload. Fixed-depth proof schemas pass their
+    // protocol-derived allowance. Schemas with nested collections whose
+    // cardinality is validated after reconstruction restore Norito's generic
+    // 32-fold frame-scaled ceiling through their explicit profile.
     norito::DecodeLimits::new(
         encoded_len,
         encoded_len,
         encoded_len.saturating_mul(2),
         encoded_len
-            .saturating_mul(KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER)
-            .saturating_add(KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE),
+            .saturating_mul(
+                KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                    .saturating_add(extra_encoded_allocation_multiplier),
+            )
+            .saturating_add(fixed_allocation_allowance),
         KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH,
     )
 }
 
-fn decode_canonical_kagemusha_archive_with_cleanup<T, F>(
+fn kagemusha_canonical_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
+    kagemusha_canonical_decode_limits_with_profile(
+        encoded_len,
+        0,
+        KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
+    )
+}
+
+/// Exact allocation profile for one canonical mobile/native archive schema.
+/// There is intentionally no blanket implementation: adding a decoded schema
+/// requires an explicit proof-depth or structural classification.
+trait KagemushaCanonicalDecodeSchema {
+    const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize = 0;
+    const FIXED_ALLOCATION_ALLOWANCE: usize;
+
+    fn preflight_canonical_archive(_bytes: &[u8]) -> Result<(), norito::Error> {
+        Ok(())
+    }
+}
+
+macro_rules! impl_kagemusha_canonical_decode_schema {
+    ($allowance:expr; $($ty:ty),+ $(,)?) => {
+        $(
+            impl KagemushaCanonicalDecodeSchema for $ty {
+                const FIXED_ALLOCATION_ALLOWANCE: usize = $allowance;
+            }
+        )+
+    };
+}
+
+macro_rules! impl_kagemusha_canonical_decode_profile {
+    ($extra:expr, $allowance:expr; $($ty:ty),+ $(,)?) => {
+        $(
+            impl KagemushaCanonicalDecodeSchema for $ty {
+                const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize = $extra;
+                const FIXED_ALLOCATION_ALLOWANCE: usize = $allowance;
+            }
+        )+
+    };
+}
+
+impl_kagemusha_canonical_decode_schema!(
+    KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE;
+    u8,
+    Vec<u8>,
+    Vec<u64>,
+    proto::EnvelopeV1,
+    KagemushaNoteOpeningV2,
+    KagemushaNoteMembershipWitnessV2,
+    KagemushaOutputMembershipPathsV4,
+    KagemushaOutputMembershipFrontierV4,
+    KagemushaRecipientOutputProverMaterialV2,
+    KagemushaRequestAuthorizationPreparationV2,
+    KagemushaRecursiveSpendRedemptionChangePrepareResultV4,
+    KagemushaRecursiveSpendPeerSplitChangePrepareResultV4,
+    KagemushaTopUpShieldBuildRequestV4,
+    iroha_data_model::offline::KagemushaRecipientOutputDerivationRequestV2,
+    iroha_data_model::offline::KagemushaRecipientPaymentRequestSigningPayloadV2,
+    iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+    iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2,
+    iroha_data_model::offline::KagemushaReceiverAcknowledgementV2,
+    iroha_data_model::offline::KagemushaReceiverAcknowledgementVerifyResultV2,
+    iroha_data_model::offline::KagemushaRequestAuthorizationV2,
+    iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
+    iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
+    iroha_torii_shared::offline_api::OfflineActiveTransferVerifier,
+    iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet,
+    iroha_torii_shared::offline_api::OfflineReadiness,
+);
+
+impl_kagemusha_canonical_decode_profile!(
+    KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER,
+    KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE;
+    KagemushaRecursiveSpendInitLocalRequestV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendPromotedReleaseV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendReleaseAttestationV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendReleasePolicyV1,
+    iroha_data_model::offline::KagemushaRecursiveSpendTopUpFinalityEvidenceV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
+    iroha_data_model::offline::KagemushaTopUpFinalityProofV2,
+    iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+    iroha_torii_shared::offline_api::OfflineOperationStatus,
+    iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
+    iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage,
+);
+
+impl_kagemusha_canonical_decode_schema!(
+    iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+    iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendTopUpUnsignedV4,
+);
+
+impl_kagemusha_canonical_decode_schema!(
+    iroha_data_model::offline::KAGEMUSHA_BUNDLE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+    iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
+);
+
+impl_kagemusha_canonical_decode_schema!(
+    iroha_data_model::offline::KAGEMUSHA_SINGLE_RECURSIVE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+    KagemushaRecursiveSpendRedemptionChangePrepareRequestV4,
+    KagemushaRecursiveSpendRedeemLocalRequestV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4,
+    iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
+);
+
+impl_kagemusha_canonical_decode_schema!(
+    iroha_data_model::offline::KAGEMUSHA_SPLIT_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+    iroha_data_model::offline::KagemushaRecursiveSpendSplitResultV4,
+);
+
+impl_kagemusha_canonical_decode_schema!(
+    iroha_data_model::offline::KAGEMUSHA_PEER_SPLIT_PREPARE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+    KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4,
+);
+
+impl_kagemusha_canonical_decode_schema!(
+    iroha_data_model::offline::KAGEMUSHA_APPEND_LOCAL_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+    KagemushaRecursiveSpendAppendLocalRequestV4,
+);
+
+impl_kagemusha_canonical_decode_schema!(
+    iroha_data_model::offline::KAGEMUSHA_VERIFY_LOCAL_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+    KagemushaRecursiveSpendVerifyLocalRequestV4,
+);
+
+impl KagemushaCanonicalDecodeSchema
+    for iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4
+{
+    const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4;
+    const FIXED_ALLOCATION_ALLOWANCE: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+
+    fn preflight_canonical_archive(bytes: &[u8]) -> Result<(), norito::Error> {
+        iroha_data_model::offline::preflight_kagemusha_redeem_request_archive_v4(bytes)
+    }
+}
+
+impl KagemushaCanonicalDecodeSchema
+    for iroha_data_model::offline::KagemushaRecursiveSpendRedeemUnsignedV4
+{
+    const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4;
+    const FIXED_ALLOCATION_ALLOWANCE: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+
+    fn preflight_canonical_archive(bytes: &[u8]) -> Result<(), norito::Error> {
+        iroha_data_model::offline::preflight_kagemusha_redeem_unsigned_archive_v4(bytes)
+    }
+}
+
+impl KagemushaCanonicalDecodeSchema
+    for iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4
+{
+    const EXTRA_ENCODED_ALLOCATION_MULTIPLIER: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4;
+    const FIXED_ALLOCATION_ALLOWANCE: usize =
+        iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
+
+    fn preflight_canonical_archive(bytes: &[u8]) -> Result<(), norito::Error> {
+        iroha_data_model::offline::preflight_kagemusha_redeem_build_result_archive_v4(bytes)
+    }
+}
+
+fn decode_canonical_kagemusha_archive_with_cleanup_and_profile<T, F>(
     bytes: &[u8],
+    extra_encoded_allocation_multiplier: usize,
+    fixed_allocation_allowance: usize,
     mut cleanup: F,
 ) -> BridgeResult<T>
 where
-    T: NoritoSerialize,
+    T: KagemushaCanonicalDecodeSchema + NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
     F: FnMut(&mut T),
 {
     if kagemusha_archive_out_of_bounds(bytes.len()) {
         return Err(BridgeError::KagemushaProve);
     }
+    T::preflight_canonical_archive(bytes).map_err(|_| BridgeError::KagemushaProve)?;
     let header = norito::core::Header::read(std::io::Cursor::new(bytes))
         .map_err(|_| BridgeError::KagemushaProve)?;
     if header.compression != norito::Compression::None
@@ -654,7 +840,11 @@ where
     let _payload_context = norito::core::PayloadCtxGuard::enter(bytes);
     let mut value: T = norito::decode_from_bytes_with_limits(
         bytes,
-        kagemusha_canonical_decode_limits(bytes.len()),
+        kagemusha_canonical_decode_limits_with_profile(
+            bytes.len(),
+            extra_encoded_allocation_multiplier,
+            fixed_allocation_allowance,
+        ),
     )
     .map_err(|_| BridgeError::KagemushaProve)?;
     // Local-only archives can contain transient note openings. Always wipe the
@@ -674,17 +864,50 @@ where
     Ok(value)
 }
 
+fn decode_canonical_kagemusha_archive_with_cleanup<T, F>(
+    bytes: &[u8],
+    cleanup: F,
+) -> BridgeResult<T>
+where
+    T: KagemushaCanonicalDecodeSchema + NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+    F: FnMut(&mut T),
+{
+    decode_canonical_kagemusha_archive_with_cleanup_and_profile(
+        bytes,
+        T::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
+        T::FIXED_ALLOCATION_ALLOWANCE,
+        cleanup,
+    )
+}
+
 fn decode_canonical_kagemusha_archive<T>(bytes: &[u8]) -> BridgeResult<T>
 where
-    T: NoritoSerialize,
+    T: KagemushaCanonicalDecodeSchema + NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     decode_canonical_kagemusha_archive_with_cleanup(bytes, |_| {})
 }
 
+fn decode_canonical_kagemusha_topup_archive<T>(bytes: &[u8]) -> BridgeResult<T>
+where
+    T: KagemushaCanonicalDecodeSchema + NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    decode_canonical_kagemusha_archive(bytes)
+}
+
+fn decode_canonical_kagemusha_recursive_archive<T>(bytes: &[u8]) -> BridgeResult<T>
+where
+    T: KagemushaCanonicalDecodeSchema + NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    decode_canonical_kagemusha_archive(bytes)
+}
+
 fn decode_canonical_kagemusha_sensitive_archive<T>(bytes: &[u8]) -> BridgeResult<T>
 where
-    T: KagemushaSensitiveArchive + NoritoSerialize,
+    T: KagemushaCanonicalDecodeSchema + KagemushaSensitiveArchive + NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     decode_canonical_kagemusha_archive_with_cleanup(bytes, |value: &mut T| {
@@ -10133,7 +10356,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redemption_cha
                 KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4,
             )
         }?);
-        let request = decode_canonical_kagemusha_archive::<
+        let request = decode_canonical_kagemusha_recursive_archive::<
             KagemushaRecursiveSpendRedemptionChangePrepareRequestV4,
         >(request_bytes.as_slice())?;
         request.validate()?;
@@ -10179,7 +10402,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_split_cha
                 KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4,
             )
         }?);
-        let request = decode_canonical_kagemusha_archive::<
+        let request = decode_canonical_kagemusha_recursive_archive::<
             KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4,
         >(request_bytes.as_slice())?;
         if request.version != KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_VERSION_V4 {
@@ -11181,7 +11404,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_paylo
         let request = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
         >(&request_bytes)?;
-        let payment = decode_canonical_kagemusha_archive::<
+        let payment = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
         >(&payment_bytes)?;
         let payload =
@@ -11271,7 +11494,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_creat
         let request = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
         >(&request_bytes)?;
-        let payment = decode_canonical_kagemusha_archive::<
+        let payment = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
         >(&payment_bytes)?;
         payment
@@ -11339,7 +11562,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_verif
         let request = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
         >(&request_bytes)?;
-        let payment = decode_canonical_kagemusha_archive::<
+        let payment = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
         >(&payment_bytes)?;
         payment
@@ -11376,7 +11599,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_payment_f
                 KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_RESULT_MAX_BYTES_V4,
             )
         }?;
-        let split = decode_canonical_kagemusha_archive::<
+        let split = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendSplitResultV4,
         >(&split_bytes)?;
         let payment =
@@ -11416,7 +11639,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_payment_v
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
             )
         }?;
-        let payment = decode_canonical_kagemusha_archive::<
+        let payment = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
         >(&payment_bytes)?;
         payment
@@ -11445,7 +11668,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
             )
         }?;
-        let bundle = decode_canonical_kagemusha_archive::<
+        let bundle = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
         >(&bundle_bytes)?;
         bundle
@@ -11651,7 +11874,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_branch_validat
                 KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
             )
         }?);
-        let bundle = decode_canonical_kagemusha_archive::<
+        let bundle = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
         >(&bundle_bytes)?;
         let provenance = decode_canonical_kagemusha_archive::<
@@ -11740,7 +11963,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
                 iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize,
             )
         }?;
-        let bundle = decode_canonical_kagemusha_archive::<
+        let bundle = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
         >(&bundle_bytes)?;
         let roster = decode_canonical_kagemusha_archive::<
@@ -11801,7 +12024,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4,
             )
         }?;
-        let bundle = decode_canonical_kagemusha_archive::<
+        let bundle = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
         >(&bundle_bytes)?;
         let provenance = decode_canonical_kagemusha_archive::<
@@ -13602,7 +13825,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_unsigned
                 KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4,
             )
         }?;
-        let unsigned = decode_canonical_kagemusha_archive::<
+        let unsigned = decode_canonical_kagemusha_topup_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendTopUpUnsignedV4,
         >(&bytes)?;
         let digest = unsigned.digest().map_err(|_| BridgeError::KagemushaProve)?;
@@ -13637,7 +13860,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_finalize
                 KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
             )
         }?;
-        let unsigned = decode_canonical_kagemusha_archive::<
+        let unsigned = decode_canonical_kagemusha_topup_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendTopUpUnsignedV4,
         >(&unsigned_bytes)?;
         let authorization = decode_canonical_kagemusha_archive::<
@@ -13672,7 +13895,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_unsigne
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
             )
         }?;
-        let unsigned = decode_canonical_kagemusha_archive::<
+        let unsigned = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendRedeemUnsignedV4,
         >(&bytes)?;
         let digest = unsigned.digest().map_err(|_| BridgeError::KagemushaProve)?;
@@ -13711,7 +13934,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_finaliz
                 KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
             )
         }?;
-        let build_result = decode_canonical_kagemusha_archive::<
+        let build_result = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
         >(&build_result_bytes)?;
         let authorization = decode_canonical_kagemusha_archive::<
@@ -13745,7 +13968,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_v4(
                 KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4,
             )
         }?;
-        let request = decode_canonical_kagemusha_archive::<
+        let request = decode_canonical_kagemusha_topup_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
         >(&bytes)?;
         request
@@ -13783,7 +14006,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v4(
         Ok(bytes) => Zeroizing::new(bytes),
         Err(error) => return error.code(),
     };
-    let mut local = match decode_canonical_kagemusha_archive::<
+    let mut local = match decode_canonical_kagemusha_recursive_archive::<
         KagemushaRecursiveSpendInitLocalRequestV4,
     >(&request_bytes)
     {
@@ -13876,7 +14099,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v4(
         Ok(bytes) => bytes,
         Err(error) => return error.code(),
     };
-    let mut local = match decode_canonical_kagemusha_archive::<
+    let mut local = match decode_canonical_kagemusha_recursive_archive::<
         KagemushaRecursiveSpendAppendLocalRequestV4,
     >(&request_bytes)
     {
@@ -13976,7 +14199,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v4(
         Ok(bytes) => bytes,
         Err(error) => return error.code(),
     };
-    let local = match decode_canonical_kagemusha_archive::<
+    let local = match decode_canonical_kagemusha_recursive_archive::<
         KagemushaRecursiveSpendVerifyLocalRequestV4,
     >(&request_bytes)
     {
@@ -14070,7 +14293,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v4(
         Ok(bytes) => Zeroizing::new(bytes),
         Err(error) => return error.code(),
     };
-    let mut local = match decode_canonical_kagemusha_archive::<
+    let mut local = match decode_canonical_kagemusha_recursive_archive::<
         KagemushaRecursiveSpendRedeemLocalRequestV4,
     >(&request_bytes)
     {
@@ -14147,7 +14370,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
         Ok(bytes) => Zeroizing::new(bytes),
         Err(error) => return error.code(),
     };
-    let mut local = match decode_canonical_kagemusha_archive::<
+    let mut local = match decode_canonical_kagemusha_recursive_archive::<
         KagemushaRecursiveSpendInitLocalRequestV4,
     >(&request_bytes)
     {
@@ -14238,7 +14461,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
         Ok(bytes) => bytes,
         Err(error) => return error.code(),
     };
-    let mut local = match decode_canonical_kagemusha_archive::<
+    let mut local = match decode_canonical_kagemusha_recursive_archive::<
         KagemushaRecursiveSpendAppendLocalRequestV4,
     >(&request_bytes)
     {
@@ -14334,7 +14557,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
         Ok(bytes) => bytes,
         Err(error) => return error.code(),
     };
-    let local = match decode_canonical_kagemusha_archive::<
+    let local = match decode_canonical_kagemusha_recursive_archive::<
         KagemushaRecursiveSpendVerifyLocalRequestV4,
     >(&request_bytes)
     {
@@ -14427,7 +14650,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
         Ok(bytes) => Zeroizing::new(bytes),
         Err(error) => return error.code(),
     };
-    let mut local = match decode_canonical_kagemusha_archive::<
+    let mut local = match decode_canonical_kagemusha_recursive_archive::<
         KagemushaRecursiveSpendRedeemLocalRequestV4,
     >(&request_bytes)
     {
@@ -16521,12 +16744,29 @@ mod kagemusha_bridge_tests {
         worst_case
             .validate_structure()
             .expect("one-proof offer fits with a maximum-size publisher envelope");
+        let decoded_worst_case = decode_canonical_kagemusha_archive::<
+            iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
+        >(&worst_case_bytes)
+        .expect("bounded specialized decoder accepts a maximum-envelope peer offer");
+        assert_eq!(decoded_worst_case, worst_case);
 
         let maximum = realistic_recipient_receive_offer_with_envelope_size_v2(64, 2 * 1_024);
         let maximum_bytes = norito::to_bytes(&maximum).expect("encode 64-proof offer");
         assert!(maximum_bytes.len() > OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert!(maximum_bytes.len() <= OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES);
         assert!(maximum.validate_structure().is_err());
+        let decoded_maximum = decode_canonical_kagemusha_archive::<
+            iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
+        >(&maximum_bytes)
+        .expect("bounded specialized decoder accepts a canonical 64-proof offer");
+        assert_eq!(decoded_maximum, maximum);
+        let maximum_lineage_bytes =
+            norito::to_bytes(&maximum.lineage).expect("encode 64-proof lineage");
+        let decoded_maximum_lineage = decode_canonical_kagemusha_archive::<
+            iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage,
+        >(&maximum_lineage_bytes)
+        .expect("bounded specialized decoder accepts a canonical 64-proof lineage");
+        assert_eq!(decoded_maximum_lineage, maximum.lineage);
         eprintln!(
             "receiver offer canonical sizes: one_proof={} one_wire={} max64={} max64_wire={}",
             one_bytes.len(),
@@ -19734,7 +19974,7 @@ mod kagemusha_bridge_tests {
         let init_result_bytes =
             unsafe { slice::from_raw_parts(init_ptr, init_len as usize) }.to_vec();
         connect_norito_free(init_ptr);
-        let init_result = decode_canonical_kagemusha_archive::<
+        let init_result = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4,
         >(&init_result_bytes)
         .expect("decode production SBD init result");
@@ -19843,7 +20083,7 @@ mod kagemusha_bridge_tests {
         let split_result_bytes =
             unsafe { slice::from_raw_parts(split_ptr, split_len as usize) }.to_vec();
         connect_norito_free(split_ptr);
-        let split_result = decode_canonical_kagemusha_archive::<
+        let split_result = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendSplitResultV4,
         >(&split_result_bytes)
         .expect("decode production SBD split result");
@@ -19903,7 +20143,7 @@ mod kagemusha_bridge_tests {
         let verify_result_bytes =
             unsafe { slice::from_raw_parts(verify_ptr, verify_len as usize) }.to_vec();
         connect_norito_free(verify_ptr);
-        let verify_result = decode_canonical_kagemusha_archive::<
+        let verify_result = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
         >(&verify_result_bytes)
         .expect("decode production SBD verify result");
@@ -23542,7 +23782,7 @@ mod kagemusha_bridge_tests {
             Zeroizing::new(unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() });
         unsafe { connect_norito_kagemusha_secret_free_buffer(out_ptr) };
 
-        let result = decode_canonical_kagemusha_archive::<
+        let result = decode_canonical_kagemusha_recursive_archive::<
             KagemushaRecursiveSpendRedemptionChangePrepareResultV4,
         >(result_archive.as_slice())
         .expect("decode canonical result");
@@ -23795,7 +24035,7 @@ mod kagemusha_bridge_tests {
         let result_archive =
             Zeroizing::new(unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() });
         unsafe { connect_norito_kagemusha_secret_free_buffer(out_ptr) };
-        let result = decode_canonical_kagemusha_archive::<
+        let result = decode_canonical_kagemusha_recursive_archive::<
             KagemushaRecursiveSpendPeerSplitChangePrepareResultV4,
         >(result_archive.as_slice())
         .expect("canonical peer-split result");
@@ -34997,7 +35237,7 @@ fn java_native_kagemusha_prepare_peer_split_change_v4(
         let mut decoded_openings = Vec::with_capacity(opening_archives.len());
         for index in 0..bundle_archives.len() {
             decoded_bundles.push(
-                decode_canonical_kagemusha_archive::<
+                decode_canonical_kagemusha_recursive_archive::<
                     iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
                 >(&bundle_archives[index])
                 .map_err(|_| format!("bundles[{index}] is not canonical V4"))?,
@@ -35444,7 +35684,7 @@ fn java_kagemusha_decode_archive<T>(
     field: &str,
 ) -> Result<T, String>
 where
-    T: NoritoSerialize,
+    T: KagemushaCanonicalDecodeSchema + NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let bytes = read_java_byte_array_bounded(
@@ -35474,7 +35714,7 @@ fn java_kagemusha_decode_sensitive_archive<T>(
     field: &str,
 ) -> Result<T, String>
 where
-    T: KagemushaSensitiveArchive + NoritoSerialize,
+    T: KagemushaCanonicalDecodeSchema + KagemushaSensitiveArchive + NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let bytes = Zeroizing::new(
@@ -35507,7 +35747,7 @@ fn java_kagemusha_decode_archive_bounded<T>(
     maximum: usize,
 ) -> Result<T, String>
 where
-    T: NoritoSerialize,
+    T: KagemushaCanonicalDecodeSchema + NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let bytes = read_java_byte_array_bounded(env, archive, field, maximum)
@@ -37212,7 +37452,7 @@ fn java_native_kagemusha_build_append_request_with_policy_v4(
         }
         let mut keyed_inputs = Vec::with_capacity(input_count);
         for index in 0..input_count {
-            let bundle = decode_canonical_kagemusha_archive::<
+            let bundle = decode_canonical_kagemusha_recursive_archive::<
                 iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
             >(&bundle_archives[index])
             .map_err(|_| format!("bundles[{index}] is not a canonical V4 archive"))?;
@@ -38415,7 +38655,7 @@ fn java_native_kagemusha_finalize_redeem_v4(
             .map_err(|_| "authorization does not bind the redeem payload".to_owned())?;
         // Do not make wallet code unwrap an opaque result archive: project the canonical Torii
         // request and stable idempotency key directly.
-        let request = decode_canonical_kagemusha_archive::<
+        let request = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4,
         >(&result.redeem_request_archive)
         .map_err(|_| "native redeem result contains a non-canonical request".to_owned())?;
@@ -48826,6 +49066,63 @@ mod tests {
         assert_eq!(
             limits.max_nesting_depth(),
             KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH
+        );
+
+        let topup_limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            0,
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
+        );
+        assert_eq!(
+            topup_limits.max_total_allocated_bytes(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES * KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                + iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
+        );
+        let recursive_limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
+        );
+        assert_eq!(
+            recursive_limits.max_total_allocated_bytes(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+                * (KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                    + iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4)
+                + iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
+        );
+        let build_result_limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
+        );
+        assert_eq!(
+            build_result_limits.max_total_allocated_bytes(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+                * (KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER
+                    + iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4)
+                + iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
+        );
+        assert_eq!(
+            <iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4 as KagemushaCanonicalDecodeSchema>::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
+            iroha_data_model::offline::KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4
+        );
+        let structural_limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER,
+            KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
+        );
+        assert_eq!(
+            structural_limits.max_total_allocated_bytes(),
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES * 32
+                + KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE
+        );
+        assert_eq!(
+            <iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage as KagemushaCanonicalDecodeSchema>::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
+            KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER
+        );
+        assert_eq!(
+            <iroha_torii_shared::offline_api::OfflineOperationStatus as KagemushaCanonicalDecodeSchema>::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
+            KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER
         );
     }
 

@@ -120,6 +120,12 @@ impl RuntimeLifecycleOrdinalSource {
         self.lock_next().map(|next| *next)
     }
 
+    /// Inspect the next actor-global lifecycle ordinal in tests.
+    #[cfg(test)]
+    pub(crate) fn next_ordinal_for_test(&self) -> Result<Option<u128>, String> {
+        self.next_ordinal()
+    }
+
     fn recognizes_minted(&self, ordinal: u128) -> Result<bool, String> {
         if ordinal == 0 {
             return Ok(false);
@@ -6304,7 +6310,9 @@ fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<Co
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => None,
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
     }
 }
 

@@ -373,22 +373,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` ծածկոց Rust, Python `ToriiClient`
   այժմ արտահանում է `decode_pdp_commitment_header`, իսկ `IrohaSwift`-ն ուղարկում է համապատասխան օգնականներ այնքան շարժական
   հաճախորդները կարող են անմիջապես թաքցնել կոդավորված նմուշառման ժամանակացույցը:【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1
-- Torii-ը նաև բացահայտում է `GET /v1/da/manifests/{storage_ticket}`-ը, որպեսզի SDK-ները և օպերատորները կարողանան առբերել մանիֆեստները
-  և բլոկների պլանները՝ առանց հանգույցի կծիկի գրացուցակին դիպչելու: Պատասխանը վերադարձնում է Norito բայթ
-  (base64), ներկայացվել է JSON մանիֆեստը, `chunk_plan` JSON բլբը, որը պատրաստ է `sorafs fetch`-ի համար, գումարած համապատասխանը
-  վեցանկյուն մարսողություն (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), այնպես որ ներքևում գտնվող գործիքավորումը կարող է
-  սնուցում է նվագախմբին առանց վերահաշվարկի ամփոփումների և թողարկում է նույն `Sora-PDP-Commitment` վերնագիրը
-  հայելային կուլ տալու պատասխանները: `block_hash=<hex>`-ը որպես հարցման պարամետր փոխանցելը վերադարձնում է որոշիչ
-  `sampling_plan` արմատավորված է `block_hash || client_blob_id`-ում (համօգտագործվում է վավերացնողների միջոցով), որը պարունակում է
-  `assignment_hash`, հայցվող `sample_window` և նմուշառված `(index, role, group)` զուգարաններ
-  ամբողջ 2D գծերի դասավորությունը, որպեսզի PoR նմուշները և վավերացնողները կարողանան վերարտադրել նույն ցուցանիշները: Նմուշառիչը
-  խառնում է `client_blob_id`, `chunk_root` և `ipa_commitment` հանձնարարությունների հեշի մեջ; «iroha հավելվածը ստանալու համար
-  --block-hash ` now writes `sampling_plan_.json` մանիֆեստի կողքին + chunk plan with
-  հեշը պահպանված է, և JS/Swift Torii հաճախորդները բացահայտում են նույն `assignment_hash_hex`-ը, որպեսզի վավերացնողները
-  և պրովերները կիսում են մեկ դետերմինիստական զոնդերի հավաքածու: Երբ Torii-ը վերադարձնում է նմուշառման պլան, «iroha app da»
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) փոխարեն
-  ժամանակավոր նմուշառում, որպեսզի PoR-ի վկաները հերթագրվեն վավերացնողի հանձնարարականներով, նույնիսկ եթե օպերատորը բաց է թողնում
-  `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Մեծ բեռի հոսքային հոսքՀաճախորդները, որոնք պետք է ներծծեն ավելի մեծ ակտիվներ, քան կազմաձևված մեկ հարցման սահմանաչափը, նախաձեռնում են a
 հոսքային նիստ՝ զանգահարելով `POST /v1/da/ingest/chunk/start`: Torii-ը պատասխանում է a

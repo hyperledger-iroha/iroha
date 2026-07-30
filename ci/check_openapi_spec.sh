@@ -9,7 +9,15 @@ SPEC_PATH="${OPENAPI_DIR}/torii.json"
 CURRENT_SPEC_PATH="${OPENAPI_DIR}/versions/current/torii.json"
 MANIFEST_PATH="${OPENAPI_DIR}/manifest.json"
 CURRENT_MANIFEST_PATH="${OPENAPI_DIR}/versions/current/manifest.json"
-ALLOWED_SIGNERS_PATH="${OPENAPI_ALLOWED_SIGNERS_FILE:-${OPENAPI_DIR}/allowed_signers.json}"
+CONFIGURED_ALLOWED_SIGNERS_PATH="${OPENAPI_ALLOWED_SIGNERS_FILE:-${OPENAPI_DIR}/allowed_signers.json}"
+case "${CONFIGURED_ALLOWED_SIGNERS_PATH}" in
+  /*)
+    ALLOWED_SIGNERS_PATH="${CONFIGURED_ALLOWED_SIGNERS_PATH}"
+    ;;
+  *)
+    ALLOWED_SIGNERS_PATH="${REPO_ROOT}/${CONFIGURED_ALLOWED_SIGNERS_PATH}"
+    ;;
+esac
 REQUIRE_SIGNED="${OPENAPI_REQUIRE_SIGNED:-0}"
 
 case "${REQUIRE_SIGNED}" in
@@ -34,31 +42,24 @@ cleanup() {
   for worktree in "${REPLAY_WORKTREES[@]}"; do
     git -C "${REPO_ROOT}" worktree remove --force "${worktree}" >/dev/null 2>&1 || true
   done
-  rm -rf "${TMP_DIR}"
+  rm -rf -- "${TMP_DIR}"
 }
 trap cleanup EXIT
 
-case "${CARGO_TARGET_DIR:-}" in
-  "")
-    REPLAY_CARGO_TARGET_DIR="${REPO_ROOT}/target"
-    ;;
-  /*)
-    REPLAY_CARGO_TARGET_DIR="${CARGO_TARGET_DIR}"
-    ;;
-  *)
-    REPLAY_CARGO_TARGET_DIR="${REPO_ROOT}/${CARGO_TARGET_DIR}"
-    ;;
-esac
+REPLAY_CARGO_TARGET_DIR="${TMP_DIR}/cargo-target"
+mkdir -p "${REPLAY_CARGO_TARGET_DIR}"
 
 run_xtask() {
   local -a args=("$@")
-  NORITO_SKIP_BINDINGS_SYNC=1 cargo run \
-    --locked \
-    --offline \
-    -p xtask \
-    --bin xtask \
-    -- \
-    "${args[@]}"
+  NORITO_SKIP_BINDINGS_SYNC=1 \
+    CARGO_TARGET_DIR="${REPLAY_CARGO_TARGET_DIR}" \
+    cargo run \
+      --locked \
+      --offline \
+      -p xtask \
+      --bin xtask \
+      -- \
+      "${args[@]}"
 }
 
 run_xtask_in_repo() {
@@ -89,17 +90,51 @@ require_clean_checkout() {
 
 create_replay_worktree() {
   local worktree="$1"
-  if [[ ! -f "${REPO_ROOT}/Cargo.lock" || -L "${REPO_ROOT}/Cargo.lock" ]]; then
-    echo "error: complete OpenAPI replay requires the provisioned regular root Cargo.lock." >&2
-    exit 1
-  fi
   REPLAY_WORKTREES+=("${worktree}")
-  git -C "${REPO_ROOT}" worktree add --quiet --detach "${worktree}" HEAD
-  cp "${REPO_ROOT}/Cargo.lock" "${worktree}/Cargo.lock"
-  if ! cmp -s "${REPO_ROOT}/Cargo.lock" "${worktree}/Cargo.lock"; then
-    echo "error: isolated OpenAPI replay Cargo.lock copy changed bytes." >&2
-    exit 1
-  fi
+  git -C "${REPO_ROOT}" worktree add --quiet --detach "${worktree}" "${REPLAY_COMMIT}"
+  node --input-type=module - \
+    "${worktree}" \
+    "${REPO_ROOT}/Cargo.lock" <<'NODE'
+import {realpath} from 'node:fs/promises';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+
+const [worktreeArgument, sourceArgument] = process.argv.slice(2);
+if (!worktreeArgument || !sourceArgument) {
+  throw new Error('replay worktree and Cargo.lock source paths are required');
+}
+const worktreeRoot = await realpath(worktreeArgument);
+const sourcePath = await realpath(sourceArgument);
+const provisionModule = pathToFileURL(
+  join(
+    worktreeRoot,
+    'docs',
+    'portal',
+    'scripts',
+    'provision-openapi-cargo-lock.mjs',
+  ),
+).href;
+const {
+  OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
+  OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
+  OPENAPI_CARGO_LOCK_PROVISION_SCHEMA,
+  provisionOpenApiCargoLock,
+} = await import(provisionModule);
+const summary = await provisionOpenApiCargoLock({
+  repoRoot: worktreeRoot,
+  sourcePath,
+});
+if (
+  summary.schema !== OPENAPI_CARGO_LOCK_PROVISION_SCHEMA ||
+  summary.status !== 'installed' ||
+  summary.source !== 'operator' ||
+  summary.path !== 'Cargo.lock' ||
+  summary.bytes !== OPENAPI_CARGO_LOCK_EXPECTED_BYTES ||
+  summary.sha256_hex !== OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX
+) {
+  throw new Error('isolated OpenAPI replay Cargo.lock provisioning was not exact');
+}
+NODE
   if [[ -n "$(git -C "${worktree}" status --porcelain=v1 --untracked-files=all)" ]]; then
     echo "error: isolated OpenAPI replay worktree is not clean after Cargo.lock provisioning." >&2
     exit 1
@@ -109,17 +144,32 @@ create_replay_worktree() {
 sync_unsigned_replay_bundle() {
   local source_root="$1"
   local output_dir="$2"
-  node --input-type=module - "${source_root}" "${output_dir}" <<'NODE'
+  local allowed_signers_path="$3"
+  node --input-type=module - \
+    "${source_root}" \
+    "${output_dir}" \
+    "${allowed_signers_path}" <<'NODE'
 import {copyFile, readFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
-const [sourceRootArgument, outputDirArgument] = process.argv.slice(2);
-if (!sourceRootArgument || !outputDirArgument) {
-  throw new Error('isolated OpenAPI replay source and output roots are required');
+const [
+  sourceRootArgument,
+  outputDirArgument,
+  allowedSignersFileArgument,
+] = process.argv.slice(2);
+if (
+  !sourceRootArgument ||
+  !outputDirArgument ||
+  !allowedSignersFileArgument
+) {
+  throw new Error(
+    'isolated OpenAPI replay source, output, and allowed-signers paths are required',
+  );
 }
 const sourceRoot = resolve(sourceRootArgument);
 const outputDir = resolve(outputDirArgument);
+const allowedSignersFile = resolve(allowedSignersFileArgument);
 const versionsDir = join(outputDir, 'versions');
 const generatedSpec = join(outputDir, 'torii.json');
 const syncModule = pathToFileURL(
@@ -138,7 +188,7 @@ await syncOpenApi(
     repoRoot: sourceRoot,
     outputDir,
     versionsDir,
-    allowedSignersFile: join(outputDir, 'allowed_signers.json'),
+    allowedSignersFile,
     async generateSpec(_repoRoot, outputFile) {
       await copyFile(generatedSpec, outputFile);
     },
@@ -173,10 +223,14 @@ build_unsigned_replay_bundle() {
   cp -R "${REPLAY_BASELINE}/." "${output_dir}/"
   cp "${source_root}/docs/portal/static/openapi/torii.json" "${output_dir}/torii.json"
   cp "${source_root}/docs/portal/static/openapi/manifest.json" "${output_dir}/manifest.json"
-  sync_unsigned_replay_bundle "${source_root}" "${output_dir}"
+  sync_unsigned_replay_bundle \
+    "${source_root}" \
+    "${output_dir}" \
+    "${ALLOWED_SIGNERS_PATH}"
 }
 
-REPLAY_WORKTREE="${TMP_DIR}/openapi-replay-source"
+REPLAY_WORKTREE_FIRST="${TMP_DIR}/openapi-replay-source-first"
+REPLAY_WORKTREE_SECOND="${TMP_DIR}/openapi-replay-source-second"
 REPLAY_BASELINE="${TMP_DIR}/openapi-replay-baseline"
 REPLAY_BUNDLE_FIRST="${TMP_DIR}/openapi-replay-first"
 REPLAY_BUNDLE_SECOND="${TMP_DIR}/openapi-replay-second"
@@ -220,6 +274,7 @@ EOF
 }
 
 require_clean_checkout
+REPLAY_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "HEAD^{commit}")"
 
 if ! diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" >/dev/null; then
   diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" || true
@@ -238,13 +293,14 @@ fi
 )
 
 # xtask intentionally emits manifests only beside the canonical spec path.
-# Generate there in a detached worktree, then assemble each replay from the
-# same immutable checked-in baseline so the caller's tree remains read-only.
+# Generate in two pristine detached worktrees, then assemble each replay from
+# the same immutable checked-in baseline so the caller's tree remains read-only.
 mkdir -p "${REPLAY_BASELINE}"
 cp -R "${OPENAPI_DIR}/." "${REPLAY_BASELINE}/"
-create_replay_worktree "${REPLAY_WORKTREE}"
-build_unsigned_replay_bundle "${REPLAY_WORKTREE}" "${REPLAY_BUNDLE_FIRST}"
-build_unsigned_replay_bundle "${REPLAY_WORKTREE}" "${REPLAY_BUNDLE_SECOND}"
+create_replay_worktree "${REPLAY_WORKTREE_FIRST}"
+create_replay_worktree "${REPLAY_WORKTREE_SECOND}"
+build_unsigned_replay_bundle "${REPLAY_WORKTREE_FIRST}" "${REPLAY_BUNDLE_FIRST}"
+build_unsigned_replay_bundle "${REPLAY_WORKTREE_SECOND}" "${REPLAY_BUNDLE_SECOND}"
 
 for artifact in "${GENERATED_RELEASE_ARTIFACTS[@]}"; do
   first="${REPLAY_BUNDLE_FIRST}/${artifact}"

@@ -7357,6 +7357,8 @@ pub struct Torii {
     pub connect: Connect,
     /// ISO 20022 bridge configuration.
     pub iso_bridge: IsoBridge,
+    /// Transaction-ingress compute and HTTP batch limits.
+    pub transaction_ingress: TransactionIngress,
     /// Data-availability ingest configuration.
     pub da_ingest: DaIngest,
     /// SoraFS discovery cache configuration.
@@ -8223,6 +8225,26 @@ impl Default for DaReplicationPolicy {
     }
 }
 
+/// Torii transaction-ingress resource corridor.
+#[derive(Debug, Clone, Copy)]
+pub struct TransactionIngress {
+    /// Maximum number of physical decode, verification, and admission jobs.
+    pub max_concurrent_compute_jobs: NonZeroUsize,
+    /// Maximum number of signed transactions in one HTTP batch.
+    pub max_batch_transactions: NonZeroUsize,
+}
+
+impl Default for TransactionIngress {
+    fn default() -> Self {
+        Self {
+            max_concurrent_compute_jobs:
+                super::defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS,
+            max_batch_transactions:
+                super::defaults::torii::TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS,
+        }
+    }
+}
+
 /// Data-availability ingest configuration.
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]
@@ -8239,6 +8261,8 @@ pub struct DaIngest {
     pub replay_cache_store_dir: PathBuf,
     /// Directory where canonical DA manifests are queued for SoraFS orchestration.
     pub manifest_store_dir: PathBuf,
+    /// Maximum number of concurrent CPU-intensive DA ingest jobs.
+    pub max_concurrent_compute_jobs: NonZeroUsize,
     /// Maximum number of DA spool batches queued for async disk persistence.
     pub spool_queue_capacity: NonZeroUsize,
     /// Maximum number of DA spool batches flushed by one worker write pass.
@@ -8277,6 +8301,7 @@ impl Default for DaIngest {
             replay_cache_max_sequence_lag: super::defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: super::defaults::torii::da_replay_cache_store_dir(),
             manifest_store_dir: super::defaults::torii::da_manifest_store_dir(),
+            max_concurrent_compute_jobs: super::defaults::torii::DA_MAX_CONCURRENT_COMPUTE_JOBS,
             spool_queue_capacity: super::defaults::torii::DA_SPOOL_QUEUE_CAPACITY,
             spool_batch_max: super::defaults::torii::DA_SPOOL_BATCH_MAX,
             governance_metadata_key: defaults::torii::da_governance_metadata_key(),

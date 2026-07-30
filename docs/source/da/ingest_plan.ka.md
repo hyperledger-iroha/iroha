@@ -373,22 +373,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` საფარი Rust, Python `ToriiClient`
   ახლა ექსპორტს ახორციელებს `decode_pdp_commitment_header` და `IrohaSwift` აგზავნის შესაბამის დამხმარეებს ასე მობილურზე
   კლიენტებს შეუძლიათ დაუყონებლივ შეინახონ შერჩევის კოდირებული განრიგი.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1
-- Torii ასევე ამჟღავნებს `GET /v1/da/manifests/{storage_ticket}`-ს, რათა SDK-ებმა და ოპერატორებმა შეძლონ მანიფესტების მიღება
-  და ბლოკის გეგმები კვანძის კოჭის დირექტორიაში შეხების გარეშე. პასუხი აბრუნებს Norito ბაიტს
-  (base64), გამოსახულია მანიფესტი JSON, `chunk_plan` JSON blob მზად `sorafs fetch`-ისთვის, პლუს შესაბამისი
-  ექვსკუთხედი დაიჯესტები (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) ასე რომ, ქვემო დინების ინსტრუმენტები შეიძლება
-  კვებავს ორკესტრატორს დისჯესტების ხელახალი გამოთვლის გარეშე და გამოსცემს იგივე `Sora-PDP-Commitment` სათაურს
-  სარკისებური გადაყლაპვის პასუხები. `block_hash=<hex>` მოთხოვნის პარამეტრად გადაცემა აბრუნებს დეტერმინისტიკას
-  `sampling_plan` დაფუძნებულია `block_hash || client_blob_id`-ში (გაზიარებული ვალიდატორებში), რომელიც შეიცავს
-  `assignment_hash`, მოთხოვნილი `sample_window` და ნიმუში `(index, role, group)` ტოპები, რომლებიც მოიცავს
-  მთელი 2D ზოლის განლაგება, რათა PoR სემპლერებმა და ვალიდატორებმა შეძლონ იგივე ინდექსების გამეორება. სემპლერი
-  აერთიანებს `client_blob_id`, `chunk_root` და `ipa_commitment` დავალების ჰეშში; `იროჰა აპლიკაცია მიიღეთ
-  --block-hash ` now writes `sampling_plan_.json` manifest-ის გვერდით + ნაჭერი გეგმა
-  ჰეში შენახულია და JS/Swift Torii კლიენტები ავლენენ იმავე `assignment_hash_hex`-ის ვალიდატორებს
-  და პროვერები იზიარებენ ერთი დეტერმინისტული გამოძიების კომპლექტს. როდესაც Torii დააბრუნებს შერჩევის გეგმას, `iroha app da
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) ნაცვლად
-  ad-hoc შერჩევისას, ასე რომ PoR მოწმეები ასრულებენ ვალიდატორის დავალებებს, მაშინაც კი, თუ ოპერატორი გამოტოვებს
-  `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### დიდი დატვირთვის ნაკადის ნაკადიკლიენტები, რომლებსაც სჭირდებათ კონფიგურირებული მოთხოვნის ლიმიტზე მეტი აქტივების მიღება, იწყებენ ა
 სტრიმინგის სესიის დარეკვით `POST /v1/da/ingest/chunk/start`. Torii პასუხობს a

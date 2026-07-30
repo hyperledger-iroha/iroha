@@ -93,23 +93,76 @@ pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
 
 /// Build the canonical preimage for a VRF commit signature under the given chain and mode tag.
 pub fn vrf_commit_preimage(chain_id: &ChainId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
+    vrf_commit_preimage_fields(chain_id, mode_tag, c.epoch, c.signer, &c.commitment)
+}
+
+/// Build the canonical preimage for a versioned-v2 VRF commitment.
+pub fn v2_vrf_commit_preimage(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    commit: &iroha_data_model::block::consensus_v2::VrfCommit,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
+    let domain = consensus_domain(chain_id, "VrfCommit", b"v2", mode_tag);
+    out.extend_from_slice(&domain);
+    out.extend_from_slice(&commit.epoch.to_be_bytes());
+    out.extend_from_slice(&commit.signer.to_be_bytes());
+    out.extend_from_slice(&commit.commitment);
+    out
+}
+
+fn vrf_commit_preimage_fields(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    epoch: u64,
+    signer: u32,
+    commitment: &[u8; 32],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
     let domain = consensus_domain(chain_id, "VrfCommit", b"v1", mode_tag);
     out.extend_from_slice(&domain);
-    out.extend_from_slice(&c.epoch.to_be_bytes());
-    out.extend_from_slice(&c.signer.to_be_bytes());
-    out.extend_from_slice(&c.commitment);
+    out.extend_from_slice(&epoch.to_be_bytes());
+    out.extend_from_slice(&signer.to_be_bytes());
+    out.extend_from_slice(commitment);
     out
 }
 
 /// Build the canonical preimage for a VRF reveal signature under the given chain and mode tag.
 pub fn vrf_reveal_preimage(chain_id: &ChainId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
+    vrf_reveal_preimage_fields(chain_id, mode_tag, r.epoch, r.signer, &r.reveal)
+}
+
+/// Build the canonical preimage for a versioned-v2 VRF reveal.
+pub fn v2_vrf_reveal_preimage(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    reveal: &iroha_data_model::block::consensus_v2::VrfReveal,
+) -> Vec<u8> {
+    let proof_len = u64::try_from(reveal.vrf_proof.len()).unwrap_or(u64::MAX);
+    let mut out = Vec::with_capacity(32 + 8 + 4 + 32 + 8 + reveal.vrf_proof.len());
+    let domain = consensus_domain(chain_id, "VrfReveal", b"v2", mode_tag);
+    out.extend_from_slice(&domain);
+    out.extend_from_slice(&reveal.epoch.to_be_bytes());
+    out.extend_from_slice(&reveal.signer.to_be_bytes());
+    out.extend_from_slice(&reveal.reveal);
+    out.extend_from_slice(&proof_len.to_be_bytes());
+    out.extend_from_slice(&reveal.vrf_proof);
+    out
+}
+
+fn vrf_reveal_preimage_fields(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    epoch: u64,
+    signer: u32,
+    reveal: &[u8; 32],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
     let domain = consensus_domain(chain_id, "VrfReveal", b"v1", mode_tag);
     out.extend_from_slice(&domain);
-    out.extend_from_slice(&r.epoch.to_be_bytes());
-    out.extend_from_slice(&r.signer.to_be_bytes());
-    out.extend_from_slice(&r.reveal);
+    out.extend_from_slice(&epoch.to_be_bytes());
+    out.extend_from_slice(&signer.to_be_bytes());
+    out.extend_from_slice(reveal);
     out
 }
 
@@ -809,12 +862,39 @@ mod tests {
             vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit),
             expected_commit
         );
+        let mut v2_commit = iroha_data_model::block::consensus_v2::VrfCommit {
+            epoch: commit.epoch,
+            commitment: commit.commitment,
+            signer: commit.signer,
+            bls_sig: vec![0xFE],
+        };
+        let mut expected_v2_commit = Vec::new();
+        expected_v2_commit.extend_from_slice(&consensus_domain(
+            &chain,
+            "VrfCommit",
+            b"v2",
+            PERMISSIONED_TAG,
+        ));
+        expected_v2_commit.extend_from_slice(&v2_commit.epoch.to_be_bytes());
+        expected_v2_commit.extend_from_slice(&v2_commit.signer.to_be_bytes());
+        expected_v2_commit.extend_from_slice(&v2_commit.commitment);
+        assert_eq!(
+            v2_vrf_commit_preimage(&chain, PERMISSIONED_TAG, &v2_commit),
+            expected_v2_commit,
+            "the versioned carrier must bind its own domain and canonical fields",
+        );
 
         commit.bls_sig = vec![0x10, 0x11, 0x12];
+        v2_commit.bls_sig = vec![0x13, 0x14];
         assert_eq!(
             vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit),
             expected_commit,
             "VRF commit signatures must stay outside the commit preimage"
+        );
+        assert_eq!(
+            v2_vrf_commit_preimage(&chain, PERMISSIONED_TAG, &v2_commit),
+            expected_v2_commit,
+            "versioned VRF commit signatures must stay outside the commit preimage",
         );
 
         let mut expected_reveal = Vec::new();
@@ -831,16 +911,50 @@ mod tests {
             vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal),
             expected_reveal
         );
+        let mut v2_reveal = iroha_data_model::block::consensus_v2::VrfReveal {
+            epoch: reveal.epoch,
+            reveal: reveal.reveal,
+            signer: reveal.signer,
+            vrf_proof: vec![0x31, 0x32],
+            bls_sig: vec![0xFD],
+        };
+        let mut expected_v2_reveal = Vec::new();
+        expected_v2_reveal.extend_from_slice(&consensus_domain(
+            &chain,
+            "VrfReveal",
+            b"v2",
+            PERMISSIONED_TAG,
+        ));
+        expected_v2_reveal.extend_from_slice(&v2_reveal.epoch.to_be_bytes());
+        expected_v2_reveal.extend_from_slice(&v2_reveal.signer.to_be_bytes());
+        expected_v2_reveal.extend_from_slice(&v2_reveal.reveal);
+        expected_v2_reveal.extend_from_slice(
+            &u64::try_from(v2_reveal.vrf_proof.len())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        expected_v2_reveal.extend_from_slice(&v2_reveal.vrf_proof);
+        assert_eq!(
+            v2_vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &v2_reveal),
+            expected_v2_reveal,
+            "the versioned carrier must bind its proof and canonical fields",
+        );
         assert_ne!(
             expected_commit, expected_reveal,
             "VRF commit and reveal preimages must remain type-separated"
         );
 
         reveal.bls_sig = vec![0x20, 0x21, 0x22];
+        v2_reveal.bls_sig = vec![0x23, 0x24];
         assert_eq!(
             vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal),
             expected_reveal,
             "VRF reveal signatures must stay outside the reveal preimage"
+        );
+        assert_eq!(
+            v2_vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &v2_reveal),
+            expected_v2_reveal,
+            "versioned VRF reveal signatures must stay outside the reveal preimage",
         );
     }
 

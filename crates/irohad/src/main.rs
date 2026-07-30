@@ -2946,12 +2946,33 @@ enum SumeragiRelayAttempt {
     Retry(PreparedSumeragiRelayWork),
     Fatal {
         source: SumeragiRelaySource,
-        reason: &'static str,
+        reason: SumeragiRelayFatalReason,
         exact_item: Option<PreparedSumeragiRelayItem>,
         reply_route: iroha_p2p::network::NetworkReplyRoute,
         retention_guard: SumeragiRelayRetention,
         completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SumeragiRelayFatalReason {
+    IngressClosed,
+    FailStop,
+    BlockingTaskPanicked,
+    BlockingTaskCancelled,
+    BlockingTaskFailed,
+}
+
+impl SumeragiRelayFatalReason {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::IngressClosed => "closed",
+            Self::FailStop => "fail_stop",
+            Self::BlockingTaskPanicked => "blocking_task_panicked",
+            Self::BlockingTaskCancelled => "blocking_task_cancelled",
+            Self::BlockingTaskFailed => "blocking_task_failed",
+        }
+    }
 }
 
 /// Maximum number of consecutive high-priority messages before yielding to an ordinary lane.
@@ -3133,9 +3154,9 @@ impl ConsensusIngressLimiter {
                         | ConsensusMessageV2Payload::PayloadManifest(_)
                         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
                         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
-                        | ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
-                            IngressPolicy::critical()
-                        }
+                        | ConsensusMessageV2Payload::CommitCertificateResponse(_)
+                        | ConsensusMessageV2Payload::VrfCommit(_)
+                        | ConsensusMessageV2Payload::VrfReveal(_) => IngressPolicy::critical(),
                     }
                 }
                 // All other block messages are decode-only v1 artifacts. The relay
@@ -4245,7 +4266,7 @@ fn finish_sumeragi_block_ingress_attempt(
         }
         SumeragiIngressDisposition::Closed(inbound) => SumeragiRelayAttempt::Fatal {
             source,
-            reason: "closed",
+            reason: SumeragiRelayFatalReason::IngressClosed,
             exact_item: Some(PreparedSumeragiRelayItem::Block(Box::new(inbound))),
             reply_route,
             retention_guard,
@@ -4253,7 +4274,7 @@ fn finish_sumeragi_block_ingress_attempt(
         },
         SumeragiIngressDisposition::FailStop(inbound) => SumeragiRelayAttempt::Fatal {
             source,
-            reason: "fail_stop",
+            reason: SumeragiRelayFatalReason::FailStop,
             exact_item: Some(PreparedSumeragiRelayItem::Block(Box::new(inbound))),
             reply_route,
             retention_guard,
@@ -4339,7 +4360,7 @@ fn attempt_sumeragi_lane_relay_work(
         }
         SumeragiIngressDisposition::Closed(message) => SumeragiRelayAttempt::Fatal {
             source,
-            reason: "closed",
+            reason: SumeragiRelayFatalReason::IngressClosed,
             exact_item: Some(PreparedSumeragiRelayItem::Lane(Box::new(message))),
             reply_route,
             retention_guard,
@@ -4347,7 +4368,7 @@ fn attempt_sumeragi_lane_relay_work(
         },
         SumeragiIngressDisposition::FailStop(message) => SumeragiRelayAttempt::Fatal {
             source,
-            reason: "fail_stop",
+            reason: SumeragiRelayFatalReason::FailStop,
             exact_item: Some(PreparedSumeragiRelayItem::Lane(Box::new(message))),
             reply_route,
             retention_guard,
@@ -4359,6 +4380,7 @@ fn attempt_sumeragi_lane_relay_work(
 async fn attempt_sumeragi_relay_work(
     shared: &NetworkRelayShared,
     work: PreparedSumeragiRelayWork,
+    shutdown_signal: &ShutdownSignal,
 ) -> SumeragiRelayAttempt {
     let PreparedSumeragiRelayWork {
         source,
@@ -4400,14 +4422,33 @@ async fn attempt_sumeragi_relay_work(
                     disposition,
                 ),
                 Err(error) => {
-                    iroha_logger::error!(
-                        ?error,
-                        class = class.label(),
-                        "blocking Sumeragi ingress panicked; exact message ownership is unrecoverable"
-                    );
+                    let reason = if error.is_panic() {
+                        SumeragiRelayFatalReason::BlockingTaskPanicked
+                    } else if error.is_cancelled() {
+                        SumeragiRelayFatalReason::BlockingTaskCancelled
+                    } else {
+                        SumeragiRelayFatalReason::BlockingTaskFailed
+                    };
+                    if sumeragi_relay_failure_disposition(reason, shutdown_signal.is_sent())
+                        == SumeragiRelayFailureDisposition::RetireForShutdown
+                    {
+                        iroha_logger::debug!(
+                            ?error,
+                            class = class.label(),
+                            reason = reason.label(),
+                            "blocking Sumeragi ingress stopped during node shutdown"
+                        );
+                    } else {
+                        iroha_logger::error!(
+                            ?error,
+                            class = class.label(),
+                            reason = reason.label(),
+                            "blocking Sumeragi ingress failed; exact message ownership is unrecoverable"
+                        );
+                    }
                     SumeragiRelayAttempt::Fatal {
                         source,
-                        reason: "blocking_task_failed",
+                        reason,
                         exact_item: None,
                         reply_route,
                         retention_guard,
@@ -4679,6 +4720,55 @@ fn sumeragi_relay_dispatcher_capacity(class_capacity: usize) -> Option<usize> {
         .filter(|capacity| *capacity >= 2)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SumeragiRelayDispatcherLifecycle {
+    Running,
+    GracefulShutdown,
+    UnexpectedClosure,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SumeragiRelayFailureDisposition {
+    RetireForShutdown,
+    FailStop,
+}
+
+fn sumeragi_relay_dispatcher_lifecycle(
+    shutdown_requested: bool,
+    v2_open: bool,
+    lane_open: bool,
+    retained_empty: bool,
+) -> SumeragiRelayDispatcherLifecycle {
+    // Do not close the receiver merely because shutdown was requested: detached
+    // worker generations still own senders and interpret receiver loss as a
+    // live-node fail-stop. Their closure plus an empty exact queue is the
+    // dispatcher subtree's teardown acknowledgement.
+    if v2_open || lane_open || !retained_empty {
+        SumeragiRelayDispatcherLifecycle::Running
+    } else if shutdown_requested {
+        SumeragiRelayDispatcherLifecycle::GracefulShutdown
+    } else {
+        SumeragiRelayDispatcherLifecycle::UnexpectedClosure
+    }
+}
+
+fn sumeragi_relay_failure_disposition(
+    reason: SumeragiRelayFatalReason,
+    shutdown_requested: bool,
+) -> SumeragiRelayFailureDisposition {
+    if shutdown_requested
+        && matches!(
+            reason,
+            SumeragiRelayFatalReason::IngressClosed
+                | SumeragiRelayFatalReason::BlockingTaskCancelled
+        )
+    {
+        SumeragiRelayFailureDisposition::RetireForShutdown
+    } else {
+        SumeragiRelayFailureDisposition::FailStop
+    }
+}
+
 fn sumeragi_relay_class_capacity(class_capacity: usize) -> Option<usize> {
     (class_capacity != 0).then_some(class_capacity)
 }
@@ -4732,6 +4822,7 @@ fn sumeragi_relay_retained_refinement_fatal(reason: &'static str) -> ! {
 async fn attempt_retained_sumeragi_relay_work(
     shared: &NetworkRelayShared,
     retained: &mut FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork>,
+    shutdown_signal: &ShutdownSignal,
 ) -> bool {
     let now = Instant::now();
     let Some(selection) =
@@ -4740,7 +4831,7 @@ async fn attempt_retained_sumeragi_relay_work(
         return false;
     };
     let FairRetainedSelection { trace, item } = selection;
-    match attempt_sumeragi_relay_work(shared, item).await {
+    match attempt_sumeragi_relay_work(shared, item, shutdown_signal).await {
         SumeragiRelayAttempt::Terminal {
             outcome,
             retention_guard,
@@ -4760,15 +4851,27 @@ async fn attempt_retained_sumeragi_relay_work(
         SumeragiRelayAttempt::Fatal {
             source,
             reason,
-            exact_item: _exact_unadmitted_item,
-            reply_route: _exact_reply_route,
-            retention_guard: _retention_guard,
-            completion: _completion,
+            exact_item,
+            reply_route,
+            retention_guard,
+            completion,
         } => {
+            if sumeragi_relay_failure_disposition(reason, shutdown_signal.is_sent())
+                == SumeragiRelayFailureDisposition::RetireForShutdown
+            {
+                let _exact_shutdown_item = (exact_item, reply_route, retention_guard, completion);
+                iroha_logger::debug!(
+                    class = source.class.label(),
+                    via = %source.via,
+                    reason = reason.label(),
+                    "retiring retained Sumeragi ingress during node shutdown"
+                );
+                return true;
+            }
             iroha_logger::error!(
                 class = source.class.label(),
                 via = %source.via,
-                reason,
+                reason = reason.label(),
                 "retained Sumeragi ingress entered fail-stop mode"
             );
             std::process::exit(1);
@@ -4783,6 +4886,7 @@ async fn run_sumeragi_relay_dispatcher(
     mut lane_rx: mpsc::Receiver<CreditedSumeragiRelayWorkItem>,
     retained_capacity: usize,
     source_capacity: usize,
+    shutdown_signal: ShutdownSignal,
 ) {
     let mut retained = new_sumeragi_relay_retained_queue(retained_capacity, source_capacity);
     let mut next = SumeragiRelayClass::V2;
@@ -4828,11 +4932,26 @@ async fn run_sumeragi_relay_dispatcher(
             }
         }
 
-        let attempted = attempt_retained_sumeragi_relay_work(&shared, &mut retained).await;
+        let attempted =
+            attempt_retained_sumeragi_relay_work(&shared, &mut retained, &shutdown_signal).await;
 
-        if !v2_open && !lane_open && retained.is_empty() {
-            iroha_logger::error!("retained Sumeragi relay channels closed");
-            std::process::exit(1);
+        match sumeragi_relay_dispatcher_lifecycle(
+            shutdown_signal.is_sent(),
+            v2_open,
+            lane_open,
+            retained.is_empty(),
+        ) {
+            SumeragiRelayDispatcherLifecycle::Running => {}
+            SumeragiRelayDispatcherLifecycle::GracefulShutdown => {
+                iroha_logger::debug!(
+                    "retained Sumeragi relay drained after shutdown; dispatcher exiting"
+                );
+                return;
+            }
+            SumeragiRelayDispatcherLifecycle::UnexpectedClosure => {
+                iroha_logger::error!("retained Sumeragi relay channels closed");
+                std::process::exit(1);
+            }
         }
         if !admitted_input && !attempted {
             tokio::time::sleep(SUMERAGI_RELAY_RETRY_CADENCE).await;
@@ -4843,6 +4962,7 @@ async fn run_sumeragi_relay_dispatcher(
 fn spawn_sumeragi_relay_dispatcher(
     shared: Arc<NetworkRelayShared>,
     geometry: SumeragiRelayCapacityGeometry,
+    shutdown_signal: ShutdownSignal,
 ) -> SumeragiRelayIngress {
     assert!(geometry.daemon_source_capacity_matches_two_upstream_lanes());
     assert!(geometry.class_corridor_covers_authenticated_sources());
@@ -4864,6 +4984,7 @@ fn spawn_sumeragi_relay_dispatcher(
         lane_rx,
         retained_capacity,
         source_capacity,
+        shutdown_signal,
     ));
 
     SumeragiRelayIngress {
@@ -5091,7 +5212,7 @@ impl NetworkRelay {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn run(self) {
+    async fn run(self, shutdown_signal: ShutdownSignal) {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
 
         let shared = Arc::new(self.into_shared());
@@ -5106,8 +5227,11 @@ impl NetworkRelay {
         .expect(
             "Sumeragi relay corridor cannot reserve both upstream lanes for every authenticated source",
         );
-        let sumeragi_ingress =
-            spawn_sumeragi_relay_dispatcher(Arc::clone(&shared), sumeragi_geometry);
+        let sumeragi_ingress = spawn_sumeragi_relay_dispatcher(
+            Arc::clone(&shared),
+            sumeragi_geometry,
+            shutdown_signal,
+        );
         #[cfg(feature = "test-network-message-control")]
         if let Some(controller) = shared.test_message_control.clone() {
             let sumeragi_ingress = sumeragi_ingress.clone();
@@ -5970,6 +6094,8 @@ impl NetworkRelayShared {
                 Some(response.certificate.round.height),
                 Some(response.certificate.round.view),
             ),
+            ConsensusMessageV2Payload::VrfCommit(_) => ("SumeragiV2VrfCommit", None, None),
+            ConsensusMessageV2Payload::VrfReveal(_) => ("SumeragiV2VrfReveal", None, None),
         }
     }
 
@@ -9158,6 +9284,21 @@ impl Iroha {
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             {
                 Some(artifact) => {
+                    let signed_genesis = effective_genesis.ok_or_else(|| {
+                        Report::new(StartError::InitKura).attach(
+                            "stored height-one finality has no signed genesis authority root",
+                        )
+                    })?;
+                    iroha_core::sumeragi::validate_signed_genesis_v2_authority(
+                        signed_genesis,
+                        &artifact.height_context,
+                        &artifact.validator_set_pops,
+                    )
+                    .map_err(|error| {
+                        Report::new(StartError::InitKura).attach(format!(
+                            "stored Sumeragi v2 genesis finality authority is not rooted in signed genesis: {error}"
+                        ))
+                    })?;
                     let context = &artifact.height_context;
                     if context.chain_id != config.common.chain
                         || context.height != 1
@@ -9274,19 +9415,11 @@ impl Iroha {
                 pending_v2_tip = ?v2_replay_plan.pending_tip_height(),
                 "Replaying authenticated complete Kura prefix"
             );
-            let trusted = config.common.trusted_peers.value();
-            let mut commit_topology = filter_validators_from_trusted(trusted);
-            if commit_topology.is_empty() {
-                commit_topology = trusted.clone().into_non_empty_vec().into_iter().collect();
-            }
-            let topology = Topology::new(commit_topology);
             iroha_core::state::replay_blocks_from_kura_range(
                 &kura,
                 &mut state,
-                &topology,
                 generic_replay_start,
                 generic_replay_height,
-                signed_consensus_mode,
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
@@ -11301,6 +11434,7 @@ impl Iroha {
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
 
+        let network_relay_shutdown = supervisor.shutdown_signal();
         supervisor.monitor(task::spawn(
             NetworkRelay {
                 sumeragi,
@@ -11316,7 +11450,7 @@ impl Iroha {
                 #[cfg(feature = "test-network-message-control")]
                 test_message_control,
             }
-            .run(),
+            .run(network_relay_shutdown),
         ));
         // Start Network Time Service sampler with config parameters
         let (_nts_peers_tx, nts_peers_rx) =
@@ -11331,6 +11465,10 @@ impl Iroha {
         // serve queries without proposing or voting. Validators retain the full duties.
 
         let net_for_relay = network.clone();
+        // The relay retains `kiso`, so its watch senders cannot close through ordinary
+        // handle loss. Any pre-shutdown return means the supervised configuration
+        // authority failed; restarting only this relay would preserve stale ACL or
+        // handshake policy and is therefore deliberately not recoverable.
         supervisor.monitor(tokio::task::spawn(async move {
             if let Err(err) = config_updates_relay(kiso, logger, net_for_relay).await {
                 iroha_logger::error!(?err, "Config updates relay exited");
@@ -17936,7 +18074,10 @@ mod tests {
                     panic!("open real ingress unexpectedly retained the selected owner for retry")
                 }
                 SumeragiRelayAttempt::Fatal { reason, .. } => {
-                    panic!("open real ingress failed the selected owner: {reason}")
+                    panic!(
+                        "open real ingress failed the selected owner: {}",
+                        reason.label()
+                    )
                 }
             }
         }
@@ -18075,6 +18216,51 @@ mod tests {
                 &relay_source(SumeragiRelayClass::V2),
                 geometry,
             ));
+        }
+
+        #[test]
+        fn retained_sumeragi_dispatcher_only_exits_after_drained_shutdown() {
+            assert_eq!(
+                sumeragi_relay_dispatcher_lifecycle(false, false, false, true),
+                SumeragiRelayDispatcherLifecycle::UnexpectedClosure
+            );
+            assert_eq!(
+                sumeragi_relay_dispatcher_lifecycle(true, false, false, true),
+                SumeragiRelayDispatcherLifecycle::GracefulShutdown
+            );
+            assert_eq!(
+                sumeragi_relay_dispatcher_lifecycle(true, true, false, true),
+                SumeragiRelayDispatcherLifecycle::Running
+            );
+            assert_eq!(
+                sumeragi_relay_dispatcher_lifecycle(true, false, false, false),
+                SumeragiRelayDispatcherLifecycle::Running
+            );
+            assert_eq!(
+                sumeragi_relay_failure_disposition(SumeragiRelayFatalReason::IngressClosed, false),
+                SumeragiRelayFailureDisposition::FailStop
+            );
+            assert_eq!(
+                sumeragi_relay_failure_disposition(SumeragiRelayFatalReason::IngressClosed, true),
+                SumeragiRelayFailureDisposition::RetireForShutdown
+            );
+            assert_eq!(
+                sumeragi_relay_failure_disposition(
+                    SumeragiRelayFatalReason::BlockingTaskCancelled,
+                    true
+                ),
+                SumeragiRelayFailureDisposition::RetireForShutdown
+            );
+            for reason in [
+                SumeragiRelayFatalReason::FailStop,
+                SumeragiRelayFatalReason::BlockingTaskPanicked,
+                SumeragiRelayFatalReason::BlockingTaskFailed,
+            ] {
+                assert_eq!(
+                    sumeragi_relay_failure_disposition(reason, true),
+                    SumeragiRelayFailureDisposition::FailStop
+                );
+            }
         }
 
         #[test]

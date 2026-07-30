@@ -372,22 +372,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` གིས་ རསཊ་ པའི་ཐོན་ `ToriiClient` གི་ཁ་བསྡམས།
   ད་ལྟ་ `decode_pdp_commitment_header` དང་ `IrohaSwift` མཐུན་སྒྲིག་རོགས་རམ་ཚུ་ ཕྱིར་གཏོང་འབདཝ་ཨིན།
   མཁོ་མངགས་འབད་མི་ཚུ་གིས་ འཕྲལ་མགྱོགས་རང་ དཔེ་ཚད་བཏོན་ནིའི་ལས་རིམ་འདི་ བརྡལ་བཀོལ་འབད་ཚུགས།
-- Torii གིས་ `GET /v1/da/manifests/{storage_ticket}` ཡང་གསལ་སྟོན་འབདཝ་ལས་ SDKs དང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསལ་སྟོན་ཚུ་འཐོབ་ཚུགས།
-  དང་ མཛུབ་གནོན་གྱི་ སྣོད་ཐོ་ལུ་ མ་ཐུག་པར་ འཆར་གཞི་བཟོ་ནི། ལན་འདི་ Norito བཱའིཊིསི་སླར་ལོག་འབདཝ་ཨིན།
-  (base64), redendered venuse JSON, `chunk_plan` JSON blob འདི་ `sorafs fetch` གི་དོན་ལུ་གྲ་སྒྲིག་ཡོདཔ་ཨིན།
-  hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) དེ་འདྲའི་མར་འབབ་ལག་ཆས་ཀྱི་དམ་སྦྱོར།
-  བཞུ་བཅུད་ཚུ་ ལོག་སྟེ་རྩིས་མ་བཏབ་པར་ སྙན་ཆའི་སྡེ་ཚན་ལུ་ ལྟོ་བྱིན་ཞིནམ་ལས་ `Sora-PDP-Commitment` གི་མགོ་ཡིག་འདི་ ༡ ལུ་ བཏོནམ་ཨིན།
-  མེ་ལོང་གིས་ ལན་འདེབས་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། འདྲི་དཔྱད་ཚད་བཟུང་གིས་ གཏན་འབེབས་ཅིག་སླར་ལོག་འབདཝ་ཨིན།
-  `sampling_plan` `block_hash || client_blob_id` ནང་ལུ་ རྩ་བ་བཙུགས་ཡོདཔ་ཨིན།
-  `assignment_hash` དང་ `sample_window` ཞུ་བ་འབད་དེ་ དཔེ་ཚད་ `(index, role, group)` གི་ཊུཔ་ལི་ཚུ་ རྒྱ་བསྐྱེད་འབད་ཡོདཔ་ཨིན།
-  2D stripe བཀོད་སྒྲིག་ཆ་ཚང་དེ་ དེ་འབདཝ་ལས་ POR དཔེ་ཚད་དང་ བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ ཟུར་ཐོ་གཅིག་མཚུངས་ཚུ་ ལོག་རྩེད་ཚུགས། དཔེ་ཚད་འདི།
-  `client_blob_id`, `chunk_root`, དང་ `ipa_commitment` ལས་འགན་ཧེཤ་ལུ་; `iroha མཉེན་ཆས་ད་གེམ།
-  --block-hash` now writes `mpling_plan_.json` དང་བཅས་ གསལ་སྟོན་ + ཅངཀ་འཆར་གཞི་གི་ཤུལ་མ།
-  ཧཤ་ཉམས་སྲུང་འབད་ཡོདཔ་དང་ ཇེ་ཨེསི་/སུའིཕཊི་ Torii མཁོ་སྤྲོད་པ་ཚུ་ `assignment_hash_hex` དེ་བཟུམ་མའི་ཕྱིར་གསལ་སྟོནམ་ཨིན།
-  དང་ provers གིས་ ཐག་གཅོད་ཀྱི་འཚོལ་ཞིབ་ཆ་ཚན་གཅིག་བགོ་བཤའ་རྐྱབ་ཨིན། Torii དཔེ་ཚད་འཆར་གཞི་ཅིག་སླར་ལོག་འབད་བའི་སྐབས་ `iroha གློག་རིག་ཌ་གིས་
-  དེ་གི་ཚབ་ལུ་ འཐོབ་ཚུགས་པའི་-ཐོབ་ཚུགསཔ་` now reuses that deterministic probe set (seed derived from ` དཔེ་ཚད་_སིཌ་`)
-  འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡) འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ཀྱིས་ འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ལུ་ བརྡ་དོན་འཕྲུལ་རིག་དང་འབྲེལ་བའི་ ལས་རིམ་ཚུ་ འགོ་འདྲེན་འཐབ་སྟེ་ཡོདཔ་ཨིན།
-  `--block-hash` ཨོ་ཝར་རིཌ།【ཀརེ་ཊི།/ཨི་རོ་ཧ་_ཊོ་རི།_ཤ་རས/ཌ/ཌ/དཔེ་ཚད་.༡】 】 】  】 ཨི་རོ་ཧ་_ཀི་ལི/ཤརཅ/ཀམམན་སི/ད.r.s:523】 α
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### གླ་ཆ་སྦོམ་གྱི་རྒྱུན་འབབ་འཕྲོ་མཐུད།རིམ་སྒྲིག་འབད་ཡོད་པའི་ ཞུ་བ་རྐྱང་པའི་ཚད་གཞི་འགོ་བཙུགས་མི་ལས་སྦོམ་པའི་རྒྱུ་དངོས་ཚུ་ བླུགས་དགོཔ་ཡོད་མི་ མཁོ་སྤྲོད་འབད་མི་ཚུ།
 `POST /v1/da/ingest/chunk/start` འབོད་བརྡ་འབད་དེ་ རྒྱུན་སྤེལ་གྱི་ལཱ་ཡུན་། Norito གིས་ a དང་བཅས་ལན་འདེབས་འབདཝ་ཨིན།

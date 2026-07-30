@@ -10733,8 +10733,8 @@ redistributable schemas, and official trust/revocation bundles.
     regressions consume them;
     integration App API canonical request and DA/Taikai ingest fixtures now use
     checked `Signature::try_new`, with canonical GET/POST auth, Taikai missing
-    metadata/malformed-SSM rejection, replication/proof tags, DA retention, and
-    sampling-plan manifest regressions rerun;
+    metadata/malformed-SSM rejection, replication/proof tags, and the DA
+    retention manifest regression rerun;
     Torii hot-path benchmark account/authority fixtures now use checked
     `KeyPair::try_from_seed`, with the benchmark target checked and linted under
     `app_api`;

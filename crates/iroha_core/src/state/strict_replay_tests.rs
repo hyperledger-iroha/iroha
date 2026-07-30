@@ -35,7 +35,6 @@ use crate::{
     query::store::LiveQueryStore,
     queue::Queue,
     sumeragi::{
-        network_topology::Topology,
         v2_apply::V2ApplyService,
         v2_body_store::{BlockSignaturePolicy, V2BodyStore},
         v2_effects::ApplyTask,
@@ -686,16 +685,6 @@ impl StrictReplayFixture {
         Self::new_state(kura, self.chain_id.clone(), self.genesis_account.clone())
     }
 
-    fn topology(&self) -> Topology {
-        Topology::new(
-            self.context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>(),
-        )
-    }
-
     fn resign_certificate(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) {
         let signatures = certificate
             .signers
@@ -882,15 +871,8 @@ impl StrictReplayFixture {
     fn assert_rejected_without_mutation(&self, kura: Arc<Kura>, expected_error: &str) {
         let mut replay_state = self.replay_state(Arc::clone(&kura));
         let before = StateFingerprint::capture(&replay_state);
-        let error = super::replay_blocks_from_kura_range(
-            &kura,
-            &mut replay_state,
-            &self.topology(),
-            1,
-            1,
-            wire::ConsensusMode::Permissioned,
-        )
-        .expect_err("strict replay must reject the corrupted tuple");
+        let error = super::replay_blocks_from_kura_range(&kura, &mut replay_state, 1, 1)
+            .expect_err("strict replay must reject the corrupted tuple");
         let diagnostic = format!("{error:?}");
         assert!(
             diagnostic.contains(expected_error),
@@ -920,15 +902,8 @@ macro_rules! strict_replay_test {
 strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
     let fixture = StrictReplayFixture::new();
     let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
-    super::replay_blocks_from_kura_range(
-        &fixture.kura,
-        &mut replay_state,
-        &fixture.topology(),
-        1,
-        1,
-        wire::ConsensusMode::Permissioned,
-    )
-    .expect("the exact production tuple replays");
+    super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+        .expect("the exact production tuple replays");
 
     assert_eq!(replay_state.committed_height(), 1);
     assert_eq!(
@@ -1023,15 +998,8 @@ strict_replay_test!(
         replay_state.install_lane_manifests(&Arc::new(LaneManifestRegistry::empty()));
         let before = StateFingerprint::capture(&replay_state);
 
-        let error = super::replay_blocks_from_kura_range(
-            &fixture.kura,
-            &mut replay_state,
-            &fixture.topology(),
-            1,
-            1,
-            wire::ConsensusMode::Permissioned,
-        )
-        .expect_err("replay must reject a durable block when its lane is absent");
+        let error = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+            .expect_err("replay must reject a durable block when its lane is absent");
         let diagnostic = format!("{error:?}");
         assert!(
             diagnostic.contains("first transaction error: tx#0"),
@@ -1047,15 +1015,8 @@ strict_replay_test!(
         let frozen =
             Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
         replay_state.install_lane_manifests(&frozen);
-        super::replay_blocks_from_kura_range(
-            &fixture.kura,
-            &mut replay_state,
-            &fixture.topology(),
-            1,
-            1,
-            wire::ConsensusMode::Permissioned,
-        )
-        .expect("the identical durable block replays after the lane snapshot is installed");
+        super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+            .expect("the identical durable block replays after the lane snapshot is installed");
 
         assert_eq!(replay_state.committed_height(), 1);
         assert_eq!(
@@ -1322,15 +1283,9 @@ strict_replay_test!(
         drop(isolated_probe);
 
         let before = StateFingerprint::capture(&replay_state);
-        let error = super::replay_blocks_from_kura_range(
-            &fixture.first.kura,
-            &mut replay_state,
-            &fixture.first.topology(),
-            1,
-            2,
-            wire::ConsensusMode::Permissioned,
-        )
-        .expect_err("late height-two corruption must reject the complete replay range");
+        let error =
+            super::replay_blocks_from_kura_range(&fixture.first.kura, &mut replay_state, 1, 2)
+                .expect_err("late height-two corruption must reject the complete replay range");
         let diagnostic = format!("{error:?}");
         assert!(
             diagnostic.contains("block #2 WSV checkpoint mismatch"),

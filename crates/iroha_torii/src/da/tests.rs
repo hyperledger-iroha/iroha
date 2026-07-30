@@ -9,7 +9,11 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Barrier, LazyLock},
+    sync::{
+        Arc, Barrier, LazyLock,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 
@@ -111,6 +115,112 @@ fn checked_random_keypair() -> KeyPair {
 fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("test fixture algorithm-specific random key generation should succeed")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn da_ingest_compute_jobs_respect_configured_parallelism() {
+    const LIMIT: usize = 2;
+    const JOBS: usize = 3;
+
+    let limiter = Arc::new(tokio::sync::Semaphore::new(LIMIT));
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started_rx) = mpsc::channel();
+    let mut release_senders = Vec::with_capacity(JOBS);
+    let mut tasks = Vec::with_capacity(JOBS);
+
+    for id in 0..JOBS {
+        let (release_tx, release_rx) = mpsc::channel();
+        release_senders.push(Some(release_tx));
+        let limiter = Arc::clone(&limiter);
+        let active = Arc::clone(&active);
+        let peak = Arc::clone(&peak);
+        let started_tx = started_tx.clone();
+        tasks.push(tokio::spawn(run_da_ingest_compute_job(
+            limiter,
+            move || {
+                let active_now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(active_now, Ordering::SeqCst);
+                started_tx.send(id).expect("report started compute job");
+                release_rx.recv().expect("release compute job");
+                active.fetch_sub(1, Ordering::SeqCst);
+                Ok::<_, (StatusCode, String)>(id)
+            },
+        )));
+    }
+    drop(started_tx);
+
+    let first = started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first compute job should start");
+    let second = started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("second compute job should start");
+    assert_ne!(first, second);
+    assert_eq!(peak.load(Ordering::SeqCst), LIMIT);
+    assert!(
+        matches!(
+            started_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "a third physical compute job must wait for configured capacity"
+    );
+
+    release_senders[first]
+        .take()
+        .expect("first release sender")
+        .send(())
+        .expect("release first compute job");
+    let third = started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("third compute job should start after capacity is released");
+    assert_ne!(third, first);
+    assert_ne!(third, second);
+
+    for sender in release_senders.into_iter().flatten() {
+        let _ = sender.send(());
+    }
+    for task in tasks {
+        task.await
+            .expect("compute task should join")
+            .expect("compute job should succeed");
+    }
+
+    assert_eq!(active.load(Ordering::SeqCst), 0);
+    assert_eq!(peak.load(Ordering::SeqCst), LIMIT);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_da_ingest_keeps_compute_permit_until_physical_worker_exits() {
+    let limiter = Arc::new(tokio::sync::Semaphore::new(1));
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+
+    let task = tokio::spawn(run_da_ingest_compute_job(Arc::clone(&limiter), move || {
+        started_tx.send(()).expect("report started compute job");
+        release_rx.recv().expect("release physical compute job");
+        Ok::<_, (StatusCode, String)>(())
+    }));
+    started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("physical compute job should start");
+
+    task.abort();
+    let join_error = task
+        .await
+        .expect_err("aborted request task should not complete normally");
+    assert!(join_error.is_cancelled());
+    assert!(
+        limiter.clone().try_acquire_owned().is_err(),
+        "request cancellation must not release capacity while physical work continues"
+    );
+
+    release_tx.send(()).expect("release physical compute job");
+    let permit = tokio::time::timeout(Duration::from_secs(2), limiter.clone().acquire_owned())
+        .await
+        .expect("physical worker should release capacity")
+        .expect("compute limiter should remain open");
+    drop(permit);
 }
 
 #[test]
@@ -1297,6 +1407,95 @@ fn sample_request() -> DaIngestRequest {
     }
     .try_sign(&keypair)
     .expect("sign canonical DA request fixture")
+}
+
+#[test]
+fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
+    let mut request = sample_request();
+    request.blob_class = BlobClass::NexusLaneSidecar;
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    request.signature = checked_signature(keypair.private_key(), &request.signing_digest());
+    let replication_policy = DaReplicationPolicy::default();
+    let rent_policy = DaRentPolicyV1::default();
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::KzgBls12_381);
+
+    let computed = compute_da_manifest_artifacts(
+        &request,
+        &nexus,
+        1,
+        None,
+        None,
+        &replication_policy,
+        &rent_policy,
+        None,
+    )
+    .expect("canonical DA compute pipeline");
+
+    assert_eq!(computed.proof_scheme, DaProofScheme::KzgBls12_381);
+    assert_eq!(computed.canonical_payload, request.payload);
+    assert_eq!(
+        computed.manifest.manifest.retention_policy,
+        computed.enforced_retention
+    );
+    assert_eq!(
+        computed.manifest.manifest.total_size,
+        computed.canonical_payload.len() as u64
+    );
+    assert_eq!(
+        computed.chunk_store.payload_len(),
+        computed.canonical_payload.len() as u64
+    );
+    assert!(computed.taikai_ssm_payload.is_none());
+    assert!(computed.taikai_trm_payload.is_none());
+    assert!(computed.queued_at_secs > 0);
+}
+
+#[test]
+fn compute_da_manifest_artifacts_authenticates_before_lane_lookup() {
+    let nexus = nexus_with_scheme(LaneId::new(1), DaProofScheme::KzgBls12_381);
+    let replication_policy = DaReplicationPolicy::default();
+    let rent_policy = DaRentPolicyV1::default();
+
+    let mut invalid_signature_valid_lane = sample_request();
+    invalid_signature_valid_lane.sequence += 1;
+    let mut invalid_signature_unknown_lane = invalid_signature_valid_lane.clone();
+    invalid_signature_unknown_lane.lane_id = LaneId::new(99);
+
+    let compute_error = |request: &DaIngestRequest| {
+        compute_da_manifest_artifacts(
+            request,
+            &nexus,
+            1,
+            None,
+            None,
+            &replication_policy,
+            &rent_policy,
+            None,
+        )
+        .err()
+        .expect("request must be rejected")
+    };
+
+    let valid_lane_error = compute_error(&invalid_signature_valid_lane);
+    let unknown_lane_error = compute_error(&invalid_signature_unknown_lane);
+    assert_eq!(
+        unknown_lane_error, valid_lane_error,
+        "an invalid signature must not reveal whether its lane is active"
+    );
+    assert_eq!(unknown_lane_error.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        unknown_lane_error.1,
+        "DA ingest request signature is invalid"
+    );
+
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    invalid_signature_unknown_lane.signature = checked_signature(
+        keypair.private_key(),
+        &invalid_signature_unknown_lane.signing_digest(),
+    );
+    let authenticated_error = compute_error(&invalid_signature_unknown_lane);
+    assert_eq!(authenticated_error.0, StatusCode::BAD_REQUEST);
+    assert!(authenticated_error.1.contains("active lane catalog"));
 }
 
 fn lane_catalog_with_lanes(lanes: Vec<ModelLaneConfig>) -> LaneCatalog {

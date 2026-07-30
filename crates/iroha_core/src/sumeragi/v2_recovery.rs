@@ -258,7 +258,7 @@ fn plan_v2_startup_replay_inner(
     let durable_height_u64 = u64::try_from(durable_height)?;
     let mut complete_prefix_height = 0_usize;
     let mut audited_bootstrap_prefix_height = 0_usize;
-    let mut previous_finality: Option<(u64, Hash)> = None;
+    let mut previous_finality: Option<(u64, Hash, Option<Hash>)> = None;
 
     for height_index in 1..=durable_height {
         let nonzero = NonZeroUsize::new(height_index)
@@ -328,11 +328,19 @@ fn plan_v2_startup_replay_inner(
                         reason: "snapshot bootstrap anchor appears outside the first executable height",
                     });
                 }
-                if let Some((parent_height, parent_commit_qc_hash)) = previous_finality
+                if let Some((parent_height, parent_commit_qc_hash, parent_successor_authority_hash)) =
+                    previous_finality
                     && parent_height.checked_add(1) == Some(height)
-                    && finality.parent_commit_qc_hash() != Some(parent_commit_qc_hash)
                 {
-                    return Err(V2StartupReplayError::FinalityChainMismatch { height });
+                    if finality.parent_commit_qc_hash() != Some(parent_commit_qc_hash) {
+                        return Err(V2StartupReplayError::FinalityChainMismatch { height });
+                    }
+                    if parent_successor_authority_hash != Some(finality.inherited_authority_hash())
+                    {
+                        return Err(V2StartupReplayError::FinalityAuthorityLineageMismatch {
+                            height,
+                        });
+                    }
                 }
                 // Lane sidecars for historical incarnations may be retired by
                 // canonical lifecycle changes. Only the durable tip is the
@@ -366,7 +374,11 @@ fn plan_v2_startup_replay_inner(
                     }
                 }
                 complete_prefix_height = height_index;
-                previous_finality = Some((height, finality.commit_qc_hash()));
+                previous_finality = Some((
+                    height,
+                    finality.commit_qc_hash(),
+                    finality.successor_authority_hash(),
+                ));
             }
             (_, _, Some(_)) => {
                 return Err(V2StartupReplayError::InvalidReplayMetadata {
@@ -879,6 +891,12 @@ pub enum V2StartupReplayError {
     #[error("Sumeragi v2 finality chain mismatch at height {height}")]
     FinalityChainMismatch {
         /// Child height whose frozen context names another parent.
+        height: u64,
+    },
+    /// Consecutive artifacts disagree on the complete predecessor-authenticated authority.
+    #[error("Sumeragi v2 finality authority lineage mismatch at height {height}")]
+    FinalityAuthorityLineageMismatch {
+        /// Child height whose election authority does not descend from its parent artifact.
         height: u64,
     },
     /// Restored WSV cannot be reached by replaying the authenticated prefix plus at most one tip.
@@ -2597,6 +2615,103 @@ mod tests {
             tree_before,
             "attacker artifact must be rejected before any storage publication"
         );
+    }
+
+    #[test]
+    fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
+        let (verified, current_keys) = verified_context();
+        let kura = Kura::blank_kura_for_testing();
+        let state =
+            state_with_consensus_keys(&kura, verified.context().chain_id.clone(), &current_keys);
+        let mut transitioned_keys = (21_u8..=24)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic transitioned BLS key")
+            })
+            .collect::<Vec<_>>();
+        transitioned_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let transitioned_roster = transitioned_keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let transitioned_pops = transitioned_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("transitioned validator PoP")
+            })
+            .collect::<Vec<_>>();
+        let transitioned_quorum =
+            wire::DualQuorum::from_roster(&transitioned_roster).expect("transitioned quorum");
+        let transitioned_leader_seed = [0x62; 32];
+
+        let mut parent_context = verified.context().clone();
+        parent_context.mode = wire::ConsensusMode::Npos;
+        parent_context.epoch_end_height = 1;
+        parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+            epoch: 1,
+            epoch_end_height: 10,
+            mode: wire::ConsensusMode::Npos,
+            roster: transitioned_roster,
+            validator_set_pops: transitioned_pops,
+            quorum: transitioned_quorum,
+            leader_seed: transitioned_leader_seed,
+        });
+        let block_one = dummy_block(&current_keys[0], 1, None);
+        kura.store_block(block_one.clone())
+            .expect("persist canonical parent block");
+        commit_to_state(&state, &block_one, &parent_context);
+        let parent_artifact =
+            authenticated_artifact_for(parent_context.clone(), block_one.as_ref(), &current_keys);
+        persist_complete_height(kura.as_ref(), &state, &parent_artifact);
+
+        let mut attacker_keys = (81_u8..=84)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic attacker BLS key")
+            })
+            .collect::<Vec<_>>();
+        attacker_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let attacker_roster = attacker_keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let attacker_quorum =
+            wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
+        let child_context = wire::HeightContext {
+            chain_id: parent_context.chain_id.clone(),
+            protocol_version: parent_context.protocol_version,
+            height: 2,
+            epoch: 1,
+            epoch_end_height: 10,
+            next_epoch_snapshot: None,
+            mode: wire::ConsensusMode::Npos,
+            parent_commit_qc: Some(parent_artifact.commit_qc.clone()),
+            snapshot_bootstrap: None,
+            quorum: attacker_quorum,
+            roster: attacker_roster,
+            nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
+            da_layout: parent_context.da_layout,
+            leader_seed: transitioned_leader_seed,
+        };
+        let block_two = dummy_block(&attacker_keys[0], 2, Some(block_one.as_ref().hash()));
+        kura.store_block(block_two.clone())
+            .expect("persist poisoned child block");
+        commit_to_state(&state, &block_two, &child_context);
+        let child_artifact =
+            authenticated_artifact_for(child_context, block_two.as_ref(), &attacker_keys);
+        persist_complete_height(kura.as_ref(), &state, &child_artifact);
+
+        assert!(matches!(
+            plan_v2_startup_replay(kura.as_ref()),
+            Err(V2StartupReplayError::FinalityAuthorityLineageMismatch { height: 2 })
+        ));
     }
 
     #[test]

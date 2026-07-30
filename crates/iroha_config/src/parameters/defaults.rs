@@ -2182,6 +2182,10 @@ pub mod torii {
 
     /// Maximum request payload size accepted by Torii (bytes).
     pub const MAX_CONTENT_LEN: Bytes<u64> = Bytes(64_000_000);
+    /// Maximum concurrent physical transaction-ingress compute jobs.
+    pub const TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS: NonZeroUsize = nonzero!(4usize);
+    /// Maximum signed transactions accepted by one HTTP batch submission.
+    pub const TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS: NonZeroUsize = nonzero!(512usize);
     /// Idle time before closing unused query subscriptions.
     pub const QUERY_IDLE_TIME: Duration = Duration::from_secs(10);
     /// Capacity of in-memory query result cache for all authorities.
@@ -2603,6 +2607,8 @@ pub mod torii {
     pub const DA_REPLAY_CACHE_TTL_SECS: u64 = 15 * 60;
     /// Maximum sequence lag tolerated before rejecting manifests.
     pub const DA_REPLAY_CACHE_MAX_SEQUENCE_LAG: u64 = 4_096;
+    /// Maximum number of concurrent CPU-intensive DA ingest jobs.
+    pub const DA_MAX_CONCURRENT_COMPUTE_JOBS: NonZeroUsize = nonzero!(1usize);
     /// Maximum number of DA spool batches queued for async disk persistence.
     pub const DA_SPOOL_QUEUE_CAPACITY: NonZeroUsize = nonzero!(1024usize);
     /// Maximum number of DA spool batches flushed by one worker write pass.

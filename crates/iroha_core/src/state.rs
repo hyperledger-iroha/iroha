@@ -22538,7 +22538,8 @@ impl<'world> WorldBlock<'world> {
 }
 
 impl<'block, 'world> WorldTransaction<'block, 'world> {
-    /// Update the executor data model and synchronize derived parameter defaults.
+    /// Update the executor data model, purge permissions it no longer declares, and synchronize
+    /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         executor_data_model
             .parameters
@@ -22547,6 +22548,45 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .get_mut()
             .custom
             .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
+        let declared_permissions = executor_data_model.permissions().clone();
+        let permission_is_declared = |permission: &Permission| {
+            declared_permissions
+                .iter()
+                .any(|declared| declared.as_str() == permission.name())
+        };
+
+        let account_ids: Vec<_> = self
+            .account_permissions
+            .iter()
+            .map(|(account_id, _)| account_id.clone())
+            .collect();
+        for account_id in account_ids {
+            let remove_entry =
+                self.account_permissions
+                    .get_mut(&account_id)
+                    .is_some_and(|permissions| {
+                        permissions.retain(|permission| permission_is_declared(permission));
+                        permissions.is_empty()
+                    });
+            if remove_entry {
+                self.account_permissions.remove(account_id);
+            }
+        }
+
+        let role_ids: Vec<_> = self
+            .roles
+            .iter()
+            .map(|(role_id, _)| role_id.clone())
+            .collect();
+        for role_id in role_ids {
+            if let Some(role) = self.roles.get_mut(&role_id) {
+                role.permissions
+                    .retain(|permission| permission_is_declared(permission));
+                role.permission_epochs
+                    .retain(|permission, _| permission_is_declared(permission));
+            }
+        }
+
         let prev = core::mem::replace(self.executor_data_model.get_mut(), executor_data_model);
         self.update_parameters_from_executor(&prev);
     }
@@ -49731,6 +49771,22 @@ impl<'state> StateBlock<'state> {
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
         let signed_block = block.as_ref();
+        if matches!(commit_roster_authority, CommitRosterAuthority::V2Finality)
+            && !signed_block.header().is_genesis()
+        {
+            let height = signed_block.header().height().get();
+            let context = self
+                .state_ref
+                .sumeragi_v2_height_context(height)
+                .expect("committed v2 block must have a readable finality context")
+                .expect("committed v2 block must have an exact finality context");
+            crate::sumeragi::v2_npos::validate_candidate_records(
+                &context,
+                self.state_ref,
+                signed_block.npos_consensus_effects(),
+            )
+            .expect("committed v2 block must carry valid NPoS consensus effects");
+        }
         let transactions: std::collections::HashSet<_> = if let Some(entrypoints) =
             signed_block.external_entrypoints_slice()
         {
@@ -56921,7 +56977,6 @@ fn ensure_replayed_results_match_committed(
 
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
-/// Uses the genesis-selected consensus mode when resolving topology rotation.
 ///
 /// # Errors
 /// Returns an error if retrieval, validation, deterministic execution parity, checkpoint
@@ -56929,18 +56984,9 @@ fn ensure_replayed_results_match_committed(
 pub fn replay_blocks_from_kura(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
-    topology: &crate::sumeragi::network_topology::Topology,
     block_count: usize,
-    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
-    replay_blocks_from_kura_range(
-        kura,
-        state,
-        topology,
-        1,
-        block_count,
-        fallback_consensus_mode,
-    )
+    replay_blocks_from_kura_range(kura, state, 1, block_count)
 }
 
 #[derive(Debug, Default)]
@@ -57321,10 +57367,11 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
 
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
 /// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
-/// Uses the genesis-selected consensus mode when resolving topology rotation.
 /// Every full-body block must have an exact WSV checkpoint, every block signature is verified,
 /// and re-executed transaction results must match their durable commitments exactly. Audited
 /// hash-only hard-fork snapshot prefixes are exempt because they do not contain executable bodies.
+/// Validator ordering, voting power, and mode come only from the genesis- or snapshot-rooted
+/// finality lineage; caller-supplied topology is not a replay authority.
 /// Every non-empty range, including a single block, is first executed against an isolated exact
 /// State snapshot with all external publication suppressed. The block bodies, checkpoints,
 /// manifests, finality artifacts, and merge carriers are authenticated once into an immutable
@@ -57341,10 +57388,8 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
 pub fn replay_blocks_from_kura_range(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
-    topology: &crate::sumeragi::network_topology::Topology,
     start_height: usize,
     block_count: usize,
-    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
     if block_count == 0 || start_height > block_count {
         return Ok(());
@@ -57368,8 +57413,6 @@ pub fn replay_blocks_from_kura_range(
     let dry_run = replay_blocks_from_kura_range_inner(
         &bundle,
         &mut isolated,
-        topology,
-        fallback_consensus_mode,
         &replay_time_source,
         &mut geometry,
     );
@@ -57685,8 +57728,6 @@ fn publish_replay_receipt(
 fn replay_blocks_from_kura_range_inner(
     bundle: &ReplayBundle,
     state: &mut State,
-    _topology: &crate::sumeragi::network_topology::Topology,
-    _fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     time_source: &TimeSource,
     geometry: &mut Vec<PendingAutoscaleLaneLifecycle>,
 ) -> Result<()> {
@@ -57832,6 +57873,19 @@ fn replay_blocks_from_kura_range_inner(
                 });
             }
         };
+        if signed_block.header().is_genesis() {
+            crate::sumeragi::v2_context::validate_staged_genesis_v2_authority(
+                &iroha_genesis::GenesisBlock(signed_block.clone()),
+                &state_block,
+                &finality.height_context,
+                &finality.validator_set_pops,
+            )
+            .map_err(|error| {
+                eyre!(
+                    "replayed genesis finality authority differs from deterministic signed genesis state: {error}"
+                )
+            })?;
+        }
         let witness = state_block.take_exec_witness().ok_or_else(|| {
             eyre!("replayed block #{height} did not produce a v2 execution witness")
         })?;
@@ -72127,6 +72181,71 @@ seiyaku SequentialNfts {
                 .custom()
                 .get(&retired_id)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn executor_data_model_reconciliation_purges_undeclared_permissions_statefully() {
+        let retained: Permission =
+            iroha_executor_data_model::permission::parameter::CanSetParameters.into();
+        let retired = Permission::new("RetiredPermission".to_owned(), Json::new(()));
+        let role_id: RoleId = "executor_reconciliation_role".parse().expect("role id");
+        let role = Role {
+            id: role_id.clone(),
+            permissions: BTreeSet::from([retained.clone(), retired.clone()]),
+            permission_epochs: BTreeMap::from([(retained.clone(), 4), (retired.clone(), 5)]),
+        };
+        let mut world = World::with_assets_and_roles(
+            [],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+            [],
+            [],
+            [role],
+        );
+        world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([retained.clone(), retired.clone()]),
+        );
+        let data_model = ExecutorDataModel::new(
+            BTreeMap::new(),
+            BTreeSet::new(),
+            BTreeSet::from([retained.name().to_owned()]),
+            Json::new(()),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+
+        transaction
+            .world
+            .apply_executor_data_model(data_model.clone());
+
+        let account_permissions = transaction
+            .world
+            .account_permissions
+            .get(&ALICE_ID)
+            .expect("retained account permission entry");
+        assert_eq!(account_permissions, &BTreeSet::from([retained.clone()]));
+        let role = transaction
+            .world
+            .roles
+            .get(&role_id)
+            .expect("reconciled role");
+        assert_eq!(
+            role.permissions().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from([retained.clone()]),
+        );
+        assert_eq!(role.permission_epochs().get(&retained), Some(&4));
+        assert!(!role.permission_epochs().contains_key(&retired));
+        assert_eq!(
+            transaction.world.executor_data_model.get(),
+            &data_model,
+            "the permission purge and model update must be one stateful operation",
         );
     }
 
@@ -123237,6 +123356,60 @@ seiyaku IdentitylessRawCallback {
         assert!(
             kura.read_roster_metadata(1).is_none(),
             "v2 authority must not populate the legacy roster sidecar"
+        );
+    }
+
+    #[test]
+    fn v2_authority_requires_exact_context_before_post_execution_mutation() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypairs = configure_commit_topology(&state, 4);
+        let topology = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let genesis: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {})
+            .into();
+        let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, Some(&genesis))
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {})
+            .into();
+        let block_hash = block.hash();
+        let mut state_block = state.block(block.header());
+        let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ =
+                state_block.apply_without_execution_with_verified_v2_finality(&committed, topology);
+        }));
+
+        let panic = match failure {
+            Ok(_) => panic!("v2 apply without an exact context must fail closed"),
+            Err(payload) => panic_payload_text(payload),
+        };
+        assert!(
+            panic.contains("committed v2 block must have an exact finality context"),
+            "unexpected v2 context failure: {panic}"
+        );
+        assert!(
+            state_block
+                .block_hashes
+                .iter()
+                .all(|hash| *hash != block_hash),
+            "failed v2 pre-apply validation must not publish the block hash"
+        );
+        assert!(
+            !state_block.transactions.has_staged_block(),
+            "failed v2 pre-apply validation must not publish transaction history"
         );
     }
 

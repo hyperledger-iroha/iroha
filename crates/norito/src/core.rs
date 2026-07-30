@@ -5585,8 +5585,7 @@ where
     } else {
         bytes
     };
-    let archived =
-        ArchiveSlice::new_owned(decode_bytes, core::mem::align_of::<Archived<T>>())?;
+    let archived = ArchiveSlice::new_owned(decode_bytes, core::mem::align_of::<Archived<T>>())?;
     let archived_bytes = archived.as_slice();
     let _payload_guard = PayloadCtxGuard::enter_with_len(archived_bytes, logical_len);
     let archived_ptr = if archived_bytes.is_empty() {
@@ -6865,6 +6864,43 @@ pub mod stream {
         header_flags,
     };
     use crate::guarded_try_deserialize;
+
+    pub(crate) fn inspect_sequence_len_from_reader<R>(
+        mut reader: R,
+        expected_schema: [u8; 16],
+        padding: usize,
+        max_elements: usize,
+    ) -> Result<usize, Error>
+    where
+        R: Read,
+    {
+        let header = Header::read(&mut reader)?;
+        super::prepare_header_decode(header.flags, header.minor, false)?;
+        if header.schema != expected_schema {
+            return Err(Error::SchemaMismatch);
+        }
+        let payload_len = super::payload_len_to_usize(header.length)?;
+        let padding = match header.compression {
+            Compression::None => padding,
+            Compression::Zstd => 0,
+        };
+        if padding != 0 {
+            skip_padding(&mut reader, padding)?;
+        }
+        let _flags = DecodeFlagsGuard::enter(header.flags);
+        let limits = super::DecodeLimits::new(
+            max_elements,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            super::MAX_OWNED_VALUE_DECODE_DEPTH,
+        );
+        super::with_decode_limits(limits, || {
+            let mut payload = DigestingReader::new(PayloadStream::new(reader, header.compression)?);
+            let decoder = SeqLenDecoder::new(&mut payload, header.flags, payload_len)?;
+            Ok(decoder.total_len())
+        })
+    }
 
     pub(crate) fn fold_sequence_from_reader<R, T, Acc, Init, F>(
         mut reader: R,
@@ -10347,9 +10383,8 @@ mod tests {
             digest: [u8; 32],
         }
 
-        let flags = header_flags::PACKED_STRUCT
-            | header_flags::FIELD_BITSET
-            | header_flags::COMPACT_LEN;
+        let flags =
+            header_flags::PACKED_STRUCT | header_flags::FIELD_BITSET | header_flags::COMPACT_LEN;
         let _flags = DecodeFlagsGuard::enter(flags);
         let error = decode_archived_field::<BitsetRecord>(&[])
             .expect_err("a packed struct archive without its bitset must be rejected");

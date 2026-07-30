@@ -22,7 +22,7 @@ All manifests consume the same Norito JSON configuration file and rely on the
   descriptor commitment, congestion limits, and compliance logging target
   before use. The `guard_directory` block points at the current
   `GuardDirectorySnapshotV2` emitted by the directory publisher; update the
-  `snapshot_path` and `expected_directory_hash_hex` whenever a new consensus
+  `snapshot_path` and `expected_snapshot_digest_hex` whenever a new consensus
   bundle is promoted so the relay can fail fast if its pinned descriptor
   diverges from the published directory.
 - `config/relay-descriptor-manifest.sample.json` – companion manifest that
@@ -49,8 +49,10 @@ All manifests consume the same Norito JSON configuration file and rely on the
     `/etc/soranet/relay/guards/current_snapshot.norito`) and set the
     `guard_directory` block so the runtime can verify that the descriptor
     commitment and ML-KEM key published by the directory match the local
-    configuration. Use the `expected_directory_hash_hex` field to pin the
-    snapshot digest that the directory committee published.
+    configuration. Use the required `expected_snapshot_digest_hex` field to pin
+    the domain-separated BLAKE3 digest printed by `soranet-directory build`.
+    Distribute that digest over an independent governance channel; the
+    snapshot's embedded `directory_hash` does not authenticate its issuer set.
   - Configure `guard_directory.pinning_proof_path` to a writable location
     (e.g., `/var/lib/soranet/relay/guard_pinning_proof.json`). After every
     successful validation the relay rewrites this JSON proof with the relay id,
@@ -106,7 +108,7 @@ behind a ClusterIP service. Before applying it:
      and `ml_kem_public_hex`) so the runtime can advertise PQ capabilities.
 3. Mount the guard directory snapshot (for example via an additional `Secret`
    or CSI driver) at the path referenced by `guard_directory.snapshot_path` and
-   update `expected_directory_hash_hex` whenever the committee publishes a new
+   update `expected_snapshot_digest_hex` whenever the committee publishes a new
    consensus bundle. This ensures kube-managed relays refuse to start if the
    pinned descriptor (and ML-KEM key) diverge from the directory publisher’s
    artefacts. Point `guard_directory.pinning_proof_path` at a persistent volume

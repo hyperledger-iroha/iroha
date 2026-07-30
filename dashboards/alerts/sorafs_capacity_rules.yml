@@ -21,7 +21,7 @@ groups:
         annotations:
           summary: "SoraFS provider utilisation over 90%"
           description: |
-            Provider {{ $labels.provider }} is consuming {{ printf "%.1f" (100 * $value) }}% of
+            Provider {{ $labels.provider }} is consuming {{ humanizePercentage $value }} of
             its effective capacity for 5 minutes. Add headroom or pause new
             replication orders for the provider before saturation causes SLA
             misses.
@@ -34,7 +34,7 @@ groups:
           summary: "SoraFS outstanding reservations exceed 40% of declaration"
           description: |
             Provider {{ $labels.provider }} has more than 40% of its declared
-            GiB tied up in outstanding reservations (value={{ printf "%.2f" (100 * $value) }}%).
+            GiB tied up in outstanding reservations (value={{ humanizePercentage $value }}).
             Audit replication scheduler backlog and confirm incentives before
             accepting additional capacity from this provider.
       - alert: SoraFSReplicationExpiredOrders

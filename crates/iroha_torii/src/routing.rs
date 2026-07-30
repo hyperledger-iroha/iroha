@@ -56144,11 +56144,12 @@ mod validation_fee_torii_ingress_tests {
         let payloads = transactions
             .iter()
             .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-            .collect();
+            .collect::<Vec<_>>();
+        let body = norito::to_bytes(&payloads).expect("encode transaction batch payloads");
         crate::handler_post_transactions_batch(
             AxumState(app),
             axum::http::HeaderMap::new(),
-            crate::utils::extractors::Norito(payloads),
+            crate::utils::extractors::NoritoBytes(axum::body::Bytes::from(body)),
         )
         .await
         .expect("public transaction batch handler should accept statelessly valid transactions")
@@ -63984,11 +63985,23 @@ impl AccountOnboardingPlanReceiptDto {
     #[must_use]
     pub fn verify(&self) -> bool {
         self.plan_hash == self.body.canonical_hash()
-            && self
-                .signature
-                .verify(self.body.authority.signatory(), self.plan_hash.as_ref())
-                .is_ok()
+            && account_onboarding_receipt_signature_is_valid(
+                &self.body.authority,
+                &self.signature,
+                &self.plan_hash,
+            )
     }
+}
+
+#[cfg(feature = "app_api")]
+fn account_onboarding_receipt_signature_is_valid(
+    authority: &AccountId,
+    signature: &Signature,
+    plan_hash: &Hash,
+) -> bool {
+    authority
+        .try_signatory()
+        .is_some_and(|signatory| signature.verify(signatory, plan_hash.as_ref()).is_ok())
 }
 
 /// Apply request containing only a previously issued stateless receipt.
@@ -64019,11 +64032,14 @@ pub struct AccountOnboardingResponseDto {
 
 #[cfg(all(test, feature = "app_api"))]
 mod sponsored_onboarding_dto_tests {
-    use iroha_data_model::alias_setup::{AliasFramedInstructionV1, AliasPlanDispositionV1};
+    use iroha_data_model::{
+        account::{AccountId, MultisigMember, MultisigPolicy},
+        alias_setup::{AliasFramedInstructionV1, AliasPlanDispositionV1},
+    };
 
     use super::{
-        AccountOnboardingPlanRequestDto, onboarding_disposition_transition_allowed,
-        onboarding_frames_are_ordered_subset,
+        AccountOnboardingPlanRequestDto, account_onboarding_receipt_signature_is_valid,
+        onboarding_disposition_transition_allowed, onboarding_frames_are_ordered_subset,
     };
 
     #[test]
@@ -64096,6 +64112,26 @@ mod sponsored_onboarding_dto_tests {
         assert!(!onboarding_frames_are_ordered_subset(
             &[grant_b, frame("iroha.alias.ensure", 1)],
             &planned,
+        ));
+    }
+
+    #[test]
+    fn receipt_signature_rejects_multisig_authority_without_panicking() {
+        let signer = checked_routing_fixture_keypair(
+            0xa9,
+            Algorithm::Ed25519,
+            "derive onboarding receipt multisig fixture key",
+        );
+        let plan_hash = Hash::new(b"onboarding receipt multisig rejection");
+        let signature = Signature::try_new(signer.private_key(), plan_hash.as_ref())
+            .expect("sign onboarding receipt fixture");
+        let member =
+            MultisigMember::new(signer.public_key().clone(), 1).expect("valid multisig member");
+        let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
+        let authority = AccountId::new_multisig(policy);
+
+        assert!(!account_onboarding_receipt_signature_is_valid(
+            &authority, &signature, &plan_hash,
         ));
     }
 }

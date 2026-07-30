@@ -2527,7 +2527,7 @@ fn transaction_paths() -> Map {
         Value::Object(binary_post_operation(
             "Transactions",
             "Submit a batch of versioned signed transactions.",
-            "Submit a Norito-encoded batch of SignedTransaction payloads.",
+            "Submit a non-empty Norito-encoded batch of SignedTransaction payloads. The encoded and declared-decoded byte size is bounded by `torii.max_content_len`, the exact top-level count is bounded by `torii.transaction_ingress.max_batch_transactions`, and queue admission is atomic for the whole batch.",
             "#/components/schemas/JsonValue",
         )),
     );

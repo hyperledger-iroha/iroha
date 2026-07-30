@@ -384,7 +384,7 @@ fn inbound_consensus_v2_topic(
         return Ok(Topic::Other);
     }
     match tag {
-        0..=4 | 10 => Ok(Topic::ConsensusSafety),
+        0..=4 | 10..=12 => Ok(Topic::ConsensusSafety),
         5 | 8 => Ok(Topic::ConsensusPayload),
         6 => Ok(Topic::ConsensusChunk),
         7 | 9 => Ok(Topic::Consensus),
@@ -615,9 +615,9 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                             | ConsensusMessageV2Payload::QuorumCertificate(_)
                             | ConsensusMessageV2Payload::TimeoutVote(_)
                             | ConsensusMessageV2Payload::TimeoutCertificate(_)
-                            | ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
-                                T::ConsensusSafety
-                            }
+                            | ConsensusMessageV2Payload::CommitCertificateResponse(_)
+                            | ConsensusMessageV2Payload::VrfCommit(_)
+                            | ConsensusMessageV2Payload::VrfReveal(_) => T::ConsensusSafety,
                             ConsensusMessageV2Payload::CertifiedBodyRequest(_)
                             | ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
                                 T::Consensus
@@ -1885,7 +1885,24 @@ mod tests {
         );
         assert_eq!(raw_network_topic(&message), NetworkTopic::ConsensusSafety);
 
-        let vrf = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
+        let v2_vrf = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::VrfCommit(wire::VrfCommit {
+                    epoch: 3,
+                    commitment: [0xA5; 32],
+                    signer: 0,
+                    bls_sig: vec![0x5A],
+                }),
+            )),
+        )));
+        assert_eq!(v2_vrf.topic(), NetworkTopic::ConsensusSafety);
+        assert_eq!(raw_network_topic(&v2_vrf), NetworkTopic::ConsensusSafety);
+        assert!(
+            v2_vrf.is_outbound_allowed(),
+            "versioned VRF frames must use the authenticated v2 safety corridor"
+        );
+
+        let legacy_vrf = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::VrfCommit(crate::sumeragi::consensus::VrfCommit {
                 epoch: 3,
                 commitment: [0xA5; 32],
@@ -1893,10 +1910,10 @@ mod tests {
                 bls_sig: vec![0x5A],
             }),
         )));
-        assert_eq!(vrf.topic(), NetworkTopic::Other);
+        assert_eq!(legacy_vrf.topic(), NetworkTopic::Other);
         assert!(
-            !vrf.is_outbound_allowed(),
-            "first-release VRF frames remain decode-only"
+            !legacy_vrf.is_outbound_allowed(),
+            "legacy unversioned VRF frames remain decode-only"
         );
     }
 

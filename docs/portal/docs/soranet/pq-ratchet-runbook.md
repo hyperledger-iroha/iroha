@@ -22,10 +22,10 @@ This runbook guides the fire-drill sequence for SoraNet's staged post-quantum (P
 sorafs_cli guard-directory fetch \
   --url https://directory.soranet.dev/mainnet_snapshot.norito \
   --output ./artefacts/guard_directory_pre_drill.norito \
-  --expected-directory-hash <directory-hash-hex>
+  --expected-snapshot-digest <snapshot-digest-hex>
 ```
 
-If the source directory only publishes JSON, re-encode it to Norito binary with `soranet-directory build` before running the rotation helpers.
+Obtain the exact snapshot digest through the independent governance channel, not from the download endpoint. The command authenticates that artefact, verifies every SRCv2 bundle, and checks the current validity window before persisting it. If the source directory only publishes JSON, re-encode it to Norito binary with `soranet-directory build` before running the rotation helpers.
 
 - Capture metadata and pre-stage issuer rotation artefacts with the CLI:
 
@@ -37,6 +37,8 @@ soranet-directory rotate \
   --out ./artefacts/guard_directory_post_drill.norito \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
+
+`soranet-directory inspect` is a structural diagnostic and does not authenticate the snapshot; retain the governance digest alongside the rotation artefacts.
 
 - Change window approved by networking and observability on-call teams.
 

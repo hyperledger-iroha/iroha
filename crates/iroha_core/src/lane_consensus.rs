@@ -57,6 +57,7 @@ pub(crate) const MAX_LANE_DRAIN_CERTIFICATE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_LANE_DRAIN_VOTE_BYTES: usize = 16 * 1024;
 /// Maximum UTF-8 bytes retained for the READY consensus-domain tag.
 const MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES: usize = 256;
+const MAX_LANE_NEW_VIEW_QC_MODE_TAG_BYTES: usize = 256;
 
 /// Bytes reserved below the default consensus frame cap for the authenticated
 /// view/QC envelope and the later globally certified merge transcript.
@@ -216,14 +217,18 @@ pub struct LaneBlockNewViewBodyV1 {
 
 impl LaneBlockNewViewBodyV1 {
     /// Canonical, chain-bound BLS signature preimage.
-    #[must_use]
-    pub(crate) fn signature_preimage(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneAutonomousArtifactError::InvalidNewViewBody`] if the
+    /// canonical encoder rejects the body.
+    pub(crate) fn signature_preimage(&self) -> Result<Vec<u8>, LaneAutonomousArtifactError> {
         let mut out = Vec::with_capacity(512);
         out.extend_from_slice(b"iroha:nexus:lane-new-view:v1");
-        out.extend_from_slice(
-            &norito::encode_canonical(self).expect("lane NewView body must encode canonically"),
-        );
-        out
+        let encoded = norito::encode_canonical(self)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
+        out.extend_from_slice(&encoded);
+        Ok(out)
     }
 }
 
@@ -1697,6 +1702,7 @@ fn validate_lane_block_new_view_body(
         || body.lane_block_height == 0
         || protocol_hash_bytes_are_zero(body.lane_incarnation.as_ref())
         || body.qc_mode_tag.trim().is_empty()
+        || body.qc_mode_tag.len() > MAX_LANE_NEW_VIEW_QC_MODE_TAG_BYTES
         || body.from_view.checked_add(1) != Some(body.target_view)
         || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || body.validator_count == 0
@@ -1721,7 +1727,8 @@ impl LaneBlockNewViewVoteV1 {
         if !peer_uses_bls_normal(&signer) {
             return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
         }
-        let bls_signature = Signature::try_new(private_key, &body.signature_preimage())
+        let preimage = body.signature_preimage()?;
+        let bls_signature = Signature::try_new(private_key, &preimage)
             .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewSignature)?
             .payload()
             .to_vec();
@@ -1740,9 +1747,10 @@ impl LaneBlockNewViewVoteV1 {
         if !peer_uses_bls_normal(&self.signer) {
             return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
         }
+        let preimage = self.body.signature_preimage()?;
         Signature::try_from_bytes(&self.bls_signature)
             .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewSignature)?
-            .verify(self.signer.public_key(), &self.body.signature_preimage())
+            .verify(self.signer.public_key(), &preimage)
             .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewSignature)
     }
 }
@@ -2221,8 +2229,9 @@ pub(crate) fn validate_lane_block_new_view_certificate(
     if selected_keys != signer_pops.keys().cloned().collect::<BTreeSet<_>>() {
         return Err(LaneAutonomousArtifactError::InvalidNewViewPop);
     }
+    let preimage = body.signature_preimage()?;
     iroha_crypto::bls_normal_verify_preaggregated_same_message(
-        &body.signature_preimage(),
+        &preimage,
         &certificate.bls_aggregate_signature,
         &public_keys,
         &pop_refs,
@@ -6628,6 +6637,13 @@ mod tests {
             .saturating_sub(1);
         validate_lane_block_new_view_body(&lane_height_above_proposal)
             .expect("NewView coordinates use independent global and lane-local heights");
+        let mut oversized_mode_tag = new_view.certificate.body.clone();
+        oversized_mode_tag.qc_mode_tag =
+            "x".repeat(MAX_LANE_NEW_VIEW_QC_MODE_TAG_BYTES.saturating_add(1));
+        assert_eq!(
+            validate_lane_block_new_view_body(&oversized_mode_tag),
+            Err(LaneAutonomousArtifactError::InvalidNewViewBody)
+        );
         validate_lane_block_new_view_transition(
             &source,
             &target,
