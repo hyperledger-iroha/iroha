@@ -8004,6 +8004,7 @@ mod protocol {
         })
     }
 
+    #[cfg(test)]
     fn validate_operation_request(request: &OperationRequestV1) -> Result<(), BrokerError> {
         validate_operation_request_with_session_chain(request, None)
     }
@@ -14446,6 +14447,7 @@ mod protocol {
             Ok(())
         }
 
+        #[cfg(test)]
         fn prepare_server_state(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,

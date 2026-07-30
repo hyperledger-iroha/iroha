@@ -17,9 +17,7 @@ use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_data_model::{
     ChainId,
-    query::sorafs::prelude::{
-        FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
-    },
+    query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
     sorafs::{capacity::ProviderId, reputation::PorTerminalOutcomeV1},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -37,9 +35,8 @@ use sorafs_node::reputation::{
         ReputationJournalDeliveryFinalizedViewV1, ReputationJournalDeliveryMetricsV1,
         ReputationJournalDeliveryPolicyV1, ReputationJournalDeliveryWorkerV1,
         ReputationJournalProducerOutboxV1, ReputationJournalProducerPolicyV1,
-        ReputationJournalSourceFinalizedViewV1, ReputationJournalTransactionSubmitterV1,
-        ReputationNativeOutcomeAdmissionApiV1, ReputationPublicationPolicyV1,
-        ReputationPublicationReconcilerV1, ReputationRuntimeError,
+        ReputationJournalTransactionSubmitterV1, ReputationNativeOutcomeAdmissionApiV1,
+        ReputationPublicationPolicyV1, ReputationPublicationReconcilerV1, ReputationRuntimeError,
         ReputationRuntimeProviderQualificationV1, ReputationRuntimeStatusV1,
         ReputationRuntimeSupervisorV1, ReputationThresholdSignerClientV1,
         reputation_journal_submitter_policy_digest_v1,
@@ -1269,6 +1266,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
+        query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId,
         sorafs::{
             capacity::ProviderId,
             moderation_ledger::{RepairFinalizedEventCursorV1, RepairFinalizedEventPageV1},
@@ -1298,9 +1296,10 @@ mod tests {
         REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
         ReputationFinalizedAnchorV1, ReputationGovernanceDagPublicationRequestV1,
         ReputationGovernanceDagReadbackV1, ReputationJournalDeliveryFinalizedViewV1,
-        ReputationJournalTransactionRequestV1, ReputationJournalTransactionSubmitOutcomeV1,
-        ReputationRuntimeProviderV1, ReputationThresholdSigningRequestV1,
-        reputation_governance_dag_policy_digest_v1, reputation_journal_submitter_policy_digest_v1,
+        ReputationJournalSourceFinalizedViewV1, ReputationJournalTransactionRequestV1,
+        ReputationJournalTransactionSubmitOutcomeV1, ReputationRuntimeProviderV1,
+        ReputationThresholdSigningRequestV1, reputation_governance_dag_policy_digest_v1,
+        reputation_journal_submitter_policy_digest_v1,
     };
     use tempfile::TempDir;
 

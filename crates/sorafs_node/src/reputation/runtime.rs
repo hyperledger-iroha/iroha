@@ -2546,6 +2546,7 @@ impl ReputationJournalProducerOutboxV1 {
         Ok(ReputationJournalDeliveryOutcomeV1::Committed)
     }
 
+    #[cfg(test)]
     fn enqueue_payload(
         &self,
         provider_id: ProviderId,
