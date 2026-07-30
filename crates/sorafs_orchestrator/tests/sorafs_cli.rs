@@ -4050,22 +4050,23 @@ fn compute_chunk_digest_hex(plan_path: &Path) -> String {
 
 fn write_proof_stream_manifest(dir: &Path, file_name: &str) -> PathBuf {
     let payload = canonical_por_payload();
-    let digest = blake3_hash(&payload);
     let plan = CarBuildPlan::single_file(&payload).expect("proof-stream manifest plan");
+    let car_stats = CarWriter::new(&plan, &payload)
+        .expect("proof-stream manifest CAR writer")
+        .write_to(std::io::sink())
+        .expect("derive proof-stream manifest CAR archive stats");
     let manifest = ManifestBuilder::new()
-        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
-            *digest.as_bytes(),
-        ))
-        .dag_codec(DagCodecId(0x71))
+        .root_cid(car_stats.root_cids[0].clone())
+        .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .por_root(compute_por_root(&payload, &plan).expect("derive canonical fixture PoR root"))
-        .content_length(payload.len() as u64)
-        .car_digest(digest.into())
-        .car_size(payload.len() as u64)
+        .content_length(plan.content_length)
+        .car_digest(car_stats.car_archive_digest.into())
+        .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,

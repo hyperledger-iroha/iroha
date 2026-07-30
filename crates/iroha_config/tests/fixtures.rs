@@ -1809,11 +1809,17 @@ fn minimal_config_snapshot() {
                     max_concurrent_vms: 8,
                     enabled: false,
                     proxy_only: false,
+                    bundle_archive_max_compressed_bytes: 536870912,
+                    bundle_archive_max_decoded_bytes: 3221225472,
+                    bundle_archive_max_entries: 4096,
+                    bundle_archive_max_file_bytes: 536870912,
+                    bundle_archive_max_total_file_bytes: 2147483648,
                     start_grace: 30s,
                     stop_grace: 10s,
                 },
                 submission: SoracloudRuntimeSubmission {
                     fee_payer: Authority,
+                    signer: None,
                 },
                 egress: SoracloudRuntimeEgress {
                     default_allow: false,
@@ -1834,6 +1840,8 @@ fn minimal_config_snapshot() {
                     import_max_files: 32,
                     import_max_file_bytes: 268435456,
                     import_max_total_bytes: 2147483648,
+                    model_info_max_response_bytes: 8388608,
+                    inference_max_response_bytes: 67108864,
                     import_file_allowlist: [
                         "*.gguf",
                         "*.safetensors",

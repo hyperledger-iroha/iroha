@@ -36,6 +36,9 @@ MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
 its manifest dirty bit and exact dependency-closure fingerprint match.
 MOBILE_SDK_APPLE_ARTIFACT_DIR may point Apple validation at a staged artifact
 directory; it defaults to <root>/dist.
+MOBILE_SDK_APPLE_CARGO_LOCK_PATH may select the absolute canonical Cargo.lock
+whose digest and dependency closure the Apple artifact records; it defaults to
+<root>/Cargo.lock when that file is present.
 The builder alone may set MOBILE_SDK_STAGED_BUILD_VALIDATION=1 together with a
 private prospective-loader path. Final certification always checks the tracked
 Swift loader.
@@ -105,6 +108,11 @@ ROOT_DIR="$(cd "$ROOT_ARG" && pwd -P)"
 APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-$ROOT_DIR/dist}"
 if [[ "$APPLE_ARTIFACT_DIR" != /* ]]; then
   APPLE_ARTIFACT_DIR="$ROOT_DIR/$APPLE_ARTIFACT_DIR"
+fi
+APPLE_CARGO_LOCKFILE="${MOBILE_SDK_APPLE_CARGO_LOCK_PATH:-}"
+if [[ -z "$APPLE_CARGO_LOCKFILE" \
+  && ( -e "$ROOT_DIR/Cargo.lock" || -L "$ROOT_DIR/Cargo.lock" ) ]]; then
+  APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
 fi
 
 resolve_trusted_python312() {
@@ -439,6 +447,10 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  connect_norito_sorafs_reference_validate_bundle_json
+  connect_norito_sorafs_reference_validate_governance_json
+  connect_norito_sorafs_reference_validate_governance_dag_block_json
+  connect_norito_sorafs_reference_validate_governance_dag_head_chain_json
   connect_norito_validation_fee_current_policy_proof_request_v1
   connect_norito_validation_fee_current_policy_proof_verify_v1
   "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}"
@@ -739,6 +751,41 @@ hash_file() {
   fi
 }
 
+canonical_cargo_lock_sha256() {
+  local lock_file="$1"
+  run_isolated_checker_python - "$lock_file" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+if not candidate.is_absolute():
+    raise SystemExit("selected Cargo lock path must be absolute")
+if candidate != Path(os.path.abspath(candidate)):
+    raise SystemExit("selected Cargo lock path must be canonical")
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit(
+        "selected Cargo lock must be a non-symbolic regular file"
+    ) from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISREG(metadata.st_mode)
+):
+    raise SystemExit("selected Cargo lock must be a non-symbolic regular file")
+digest = hashlib.sha256()
+with candidate.open("rb") as handle:
+    while chunk := handle.read(1024 * 1024):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
 hash_zip_entry() {
   local archive="$1"
   local entry="$2"
@@ -768,7 +815,19 @@ PY
 }
 
 bridge_source_fingerprint() {
-  run_bridge_source_seal fingerprint --root "$ROOT_DIR"
+  local arguments=(fingerprint --root "$ROOT_DIR" --platform apple)
+  if [[ -n "$APPLE_CARGO_LOCKFILE" ]]; then
+    arguments+=(--lockfile-path "$APPLE_CARGO_LOCKFILE")
+  fi
+  run_bridge_source_seal "${arguments[@]}"
+}
+
+bridge_source_status() {
+  local arguments=(status --root "$ROOT_DIR" --platform apple)
+  if [[ -n "$APPLE_CARGO_LOCKFILE" ]]; then
+    arguments+=(--lockfile-path "$APPLE_CARGO_LOCKFILE")
+  fi
+  run_bridge_source_seal "${arguments[@]}"
 }
 
 check_bridge_source_contract() {
@@ -1662,6 +1721,7 @@ common = {
     "NORITO_SKIP_BINDINGS_SYNC",
     "PATH",
     "RUSTC",
+    "RUSTC_BOOTSTRAP",
     "RUSTUP_HOME",
     "TMPDIR",
 }
@@ -1813,7 +1873,17 @@ PY
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
+    require_regex "$manifest" '"cargo_lock_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "NoritoBridge selected Cargo lock hash"
     require_regex "$manifest" '"bridge_header_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge header hash"
+    local manifest_lock_hash selected_lock_hash
+    manifest_lock_hash="$(manifest_json_value "$manifest" cargo_lock_sha256 2>/dev/null || true)"
+    if [[ -n "$APPLE_CARGO_LOCKFILE" ]]; then
+      if ! selected_lock_hash="$(canonical_cargo_lock_sha256 "$APPLE_CARGO_LOCKFILE")"; then
+        fail "selected Apple Cargo lock is not an absolute canonical non-symbolic regular file"
+      elif [[ "$manifest_lock_hash" != "$selected_lock_hash" ]]; then
+        fail "NoritoBridge artifact selected Cargo lock digest does not match checkout"
+      fi
+    fi
     local manifest_dirty
     manifest_dirty="$(manifest_json_value "$manifest" source_tree_dirty 2>/dev/null || true)"
     if [[ "$manifest_dirty" != "false" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
@@ -1831,6 +1901,37 @@ raise SystemExit(0 if actual == expected else 1)
 PY
     then
       fail "NoritoBridge artifact required symbol inventory is missing or non-canonical"
+    fi
+    if [[ -f "$swift_loader" ]] \
+      && ! run_isolated_checker_python - "$swift_loader" "${REQUIRED_BRIDGE_SYMBOLS[@]}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+contents = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(
+    r"private static let requiredSymbols\s*=\s*\[\n(?P<body>.*?)^\s*\]",
+    contents,
+    re.MULTILINE | re.DOTALL,
+)
+if match is None:
+    raise SystemExit(1)
+loader_symbols = []
+for raw in match.group("body").splitlines():
+    line = raw.strip()
+    if not line:
+        continue
+    item = re.fullmatch(r'"([^"]+)",?', line)
+    if item is None:
+        raise SystemExit(1)
+    loader_symbols.append(item.group(1))
+if not loader_symbols or len(loader_symbols) != len(set(loader_symbols)):
+    raise SystemExit(1)
+release_symbols = set(sys.argv[2:])
+raise SystemExit(0 if set(loader_symbols) <= release_symbols else 1)
+PY
+    then
+      fail "NoritoBridge required symbol policy does not cover the Swift loader"
     fi
 
     local canonical_header="$xcframework/ios-arm64/Headers/connect_norito_bridge.h"
@@ -1869,7 +1970,7 @@ PY
         fail "NoritoBridge artifact source commit is neither HEAD nor its authenticated pin-only parent"
       fi
       source_dirty=false
-      if [[ -n "$(run_bridge_source_seal status --root "$ROOT_DIR")" ]]; then
+      if [[ -n "$(bridge_source_status)" ]]; then
         source_dirty=true
       fi
       if [[ "$manifest_dirty" != "$source_dirty" ]]; then

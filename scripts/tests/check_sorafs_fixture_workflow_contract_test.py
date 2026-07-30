@@ -219,6 +219,47 @@ def test_appeal_finance_fixture_directory_has_the_exact_eight_payloads() -> None
     assert actual == set(APPEAL_FINANCE_FIXTURE_PATHS)
 
 
+def test_por_generator_closed_set_count_matches_checked_in_managed_outputs() -> None:
+    """Keep the generator tripwire synchronized with its closed output tree."""
+
+    generator = read("crates/sorafs_manifest/src/bin/generate_por_fixtures.rs")
+    count_match = re.search(
+        r"EXPECTED_MANAGED_FIXTURE_COUNT:\s*usize\s*=\s*(\d+);",
+        generator,
+    )
+    assert count_match is not None
+
+    fixture_root = REPO_ROOT / "fixtures" / "sorafs_manifest"
+    managed_directories = (
+        "governance",
+        "moderation",
+        "por",
+        "potr",
+        "reference_sdk",
+        "repair",
+    )
+    managed_paths = {
+        path.relative_to(fixture_root).as_posix()
+        for directory in managed_directories
+        for path in (fixture_root / directory).rglob("*")
+        if path.is_file() and path.name != "README.md"
+    }
+    managed_paths.add("reference_sdk_validation_inventory_v1.json")
+
+    assert int(count_match.group(1)) == len(managed_paths) == 55
+    assert {
+        (
+            "reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        (
+            "reference_sdk/"
+            "appeal_finance_cancel_asset_lock_zero_expected_negative_"
+            "validation_outcome_v1.json"
+        ),
+    } <= managed_paths
+
+
 def test_fixture_workflow_covers_closed_reference_sdk_inputs() -> None:
     """The nightly fixture job cannot miss wire, fixture, or checker changes."""
 

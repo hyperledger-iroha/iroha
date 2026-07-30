@@ -548,7 +548,7 @@ impl ReputationJournalAuthorityPolicyV1 {
     /// Returns a policy validation or canonical encoding error.
     pub fn canonical_digest(&self) -> Result<[u8; 32], ReputationJournalValidationError> {
         self.validate()?;
-        let bytes = norito::to_bytes(self)
+        let bytes = norito::encode_canonical(self)
             .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
         Ok(domain_digest(
             REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1,
@@ -1384,7 +1384,7 @@ impl ReputationJournalEntryV1 {
         if self.event_id != self.expected_event_id()? {
             return Err(ReputationJournalValidationError::EventIdMismatch);
         }
-        let encoded = norito::to_bytes(self)
+        let encoded = norito::encode_canonical(self)
             .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
         if encoded.len() > REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1 {
             return Err(ReputationJournalValidationError::EntryTooLarge {
@@ -1450,7 +1450,7 @@ impl ReputationJournalEntryV1 {
     ) -> Result<ReputationJournalEventIdV1, ReputationJournalValidationError> {
         let mut material = self.clone();
         material.event_id = ReputationJournalEventIdV1::ZERO;
-        let bytes = norito::to_bytes(&material)
+        let bytes = norito::encode_canonical(&material)
             .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
         Ok(ReputationJournalEventIdV1(domain_digest(
             REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1,
@@ -1793,7 +1793,7 @@ impl ReputationJournalFinalizedEventPageV1 {
             previous = Some(event);
         }
 
-        let encoded = norito::to_bytes(self)
+        let encoded = norito::encode_canonical(self)
             .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
         if encoded.len() > REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
             return Err(ReputationJournalValidationError::EncodedPageTooLarge {
@@ -2146,6 +2146,13 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout reputation value")
+    }
+
     fn policy() -> ReputationJournalAuthorityPolicyV1 {
         ReputationJournalAuthorityPolicyV1 {
             version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
@@ -2156,6 +2163,28 @@ mod tests {
             token_recorder_authority: account(3),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
+    }
+
+    #[test]
+    fn authority_policy_digest_ignores_ambient_norito_layout() {
+        let policy = policy();
+        let canonical_digest = policy.canonical_digest().expect("valid policy digest");
+        let canonical_bytes =
+            norito::encode_canonical(&policy).expect("encode canonical authority policy");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&policy).expect("encode alternate-layout authority policy"),
+            canonical_bytes,
+            "fixture must exercise a distinct ambient Norito layout"
+        );
+        assert_eq!(
+            policy
+                .canonical_digest()
+                .expect("digest policy under alternate ambient layout"),
+            canonical_digest
+        );
     }
 
     fn digest_from_u32(value: u32) -> [u8; 32] {
@@ -2775,7 +2804,7 @@ mod tests {
             ReputationJournalEntryV1::try_new(
                 ProviderId::new([0x22; 32]),
                 policy.canonical_digest().expect("policy digest"),
-                policy.token_recorder_authority,
+                policy.token_recorder_authority.clone(),
                 SOURCE_TIME,
                 None,
                 ReputationJournalPayloadV1::StreamTokenValidation(malformed),
@@ -3117,22 +3146,81 @@ mod tests {
     #[test]
     fn canonical_norito_and_json_round_trip() {
         let value = page(vec![finalized_event(1, 0, 1)]);
-        let bytes = norito::to_bytes(&value).expect("encode canonical journal page");
+        let bytes = norito::encode_canonical(&value).expect("encode canonical journal page");
+        #[cfg(feature = "json")]
+        let canonical_json = norito::json::to_string(&value).expect("encode journal JSON");
+        let expected_event_id = value.events[0].entry.event_id;
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            value
+                .validate()
+                .expect("page size gate ignores ambient layout");
+            assert_eq!(
+                value.events[0]
+                    .entry
+                    .expected_event_id()
+                    .expect("derive event id under alternate ambient layout"),
+                expected_event_id
+            );
+            assert_eq!(
+                norito::encode_canonical(&value)
+                    .expect("encode page under alternate ambient layout"),
+                bytes
+            );
+            #[cfg(feature = "json")]
+            assert_eq!(
+                norito::json::to_string(&value).expect("encode ambient-independent journal JSON"),
+                canonical_json
+            );
+        }
         let decoded: ReputationJournalFinalizedEventPageV1 =
-            norito::decode_from_bytes(&bytes).expect("decode canonical journal page");
+            norito::decode_canonical(&bytes).expect("decode canonical journal page");
         assert_eq!(decoded, value);
         assert_eq!(
-            norito::to_bytes(&decoded).expect("re-encode canonical journal page"),
+            norito::encode_canonical(&decoded).expect("re-encode canonical journal page"),
             bytes
         );
+        let alternate = encode_with_alternate_norito_layout(&value);
+        let alternate_decoded: ReputationJournalFinalizedEventPageV1 =
+            norito::decode_from_bytes(&alternate)
+                .expect("alternate-layout journal page remains structurally decodable");
+        assert_eq!(alternate_decoded, value);
+        assert!(matches!(
+            norito::decode_canonical::<ReputationJournalFinalizedEventPageV1>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
 
         #[cfg(feature = "json")]
         {
-            let json = norito::json::to_string(&value).expect("encode journal JSON");
             let decoded: ReputationJournalFinalizedEventPageV1 =
-                norito::json::from_slice(json.as_bytes()).expect("decode journal JSON");
+                norito::json::from_slice(canonical_json.as_bytes()).expect("decode journal JSON");
             assert_eq!(decoded, value);
         }
+
+        let persisted = ReputationJournalCommittedEventRecordV1 {
+            sequence: 1,
+            target_block_height: 5,
+            event_index: 0,
+            recorded_at_unix_ms: RECORDED_AT,
+            entry: value.events[0].entry.clone(),
+        };
+        persisted
+            .validate()
+            .expect("valid persisted journal record");
+        let persisted_bytes =
+            norito::encode_canonical(&persisted).expect("encode persisted journal record");
+        let persisted_decoded: ReputationJournalCommittedEventRecordV1 =
+            norito::decode_canonical(&persisted_bytes).expect("decode persisted journal record");
+        assert_eq!(persisted_decoded, persisted);
+        let persisted_alternate = encode_with_alternate_norito_layout(&persisted);
+        assert!(matches!(
+            norito::decode_canonical::<ReputationJournalCommittedEventRecordV1>(
+                &persisted_alternate
+            ),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
     }
 
     #[test]
@@ -3143,14 +3231,22 @@ mod tests {
             decision_digest: [0xD4; 32],
             rationale: Some("governance upheld the dispute".to_owned()),
         });
-        let bytes = norito::to_bytes(&value).expect("encode provider-dispute resolution");
+        let bytes = norito::encode_canonical(&value).expect("encode provider-dispute resolution");
         let decoded: ProviderDisputeStatusV1 =
-            norito::decode_from_bytes(&bytes).expect("decode provider-dispute resolution");
+            norito::decode_canonical(&bytes).expect("decode provider-dispute resolution");
         assert_eq!(decoded, value);
         assert_eq!(
-            norito::to_bytes(&decoded).expect("re-encode provider-dispute resolution"),
+            norito::encode_canonical(&decoded).expect("re-encode provider-dispute resolution"),
             bytes
         );
+        let alternate = encode_with_alternate_norito_layout(&value);
+        let alternate_decoded: ProviderDisputeStatusV1 = norito::decode_from_bytes(&alternate)
+            .expect("alternate-layout dispute resolution remains structurally decodable");
+        assert_eq!(alternate_decoded, value);
+        assert!(matches!(
+            norito::decode_canonical::<ProviderDisputeStatusV1>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
 
         #[cfg(feature = "json")]
         {

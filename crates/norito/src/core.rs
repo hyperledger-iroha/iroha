@@ -820,6 +820,12 @@ pub(crate) fn check_decode_sequence_length(length: u64) -> Result<(), Error> {
 
 #[inline]
 pub(crate) fn enforce_decode_field_length(length: u64) -> Result<(), Error> {
+    check_decode_field_length(length)?;
+    reserve_decode_allocation_u64(length)
+}
+
+#[inline]
+fn check_decode_field_length(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
         for layer in slot.borrow().iter() {
             let limit = limit_to_u64(layer.budget.limits.max_field_bytes());
@@ -828,12 +834,12 @@ pub(crate) fn enforce_decode_field_length(length: u64) -> Result<(), Error> {
             }
         }
         Ok(())
-    })?;
-    reserve_decode_allocation_u64(length)
+    })
 }
 
 #[inline]
-pub(crate) fn reserve_decode_allocation(length: usize) -> Result<(), Error> {
+#[doc(hidden)]
+pub fn reserve_decode_allocation(length: usize) -> Result<(), Error> {
     reserve_decode_allocation_u64(limit_to_u64(length))
 }
 
@@ -1148,6 +1154,7 @@ struct DecodeStateSnapshot {
     flags: u8,
     flags_hint: u8,
     flags_active: bool,
+    field_boundary: FieldDecodeBoundary,
     payload_ctx: Option<PayloadCtxState>,
     root_span: Option<(usize, usize)>,
 }
@@ -1158,6 +1165,7 @@ impl DecodeStateSnapshot {
             flags: get_decode_flags(),
             flags_hint: decode_flags_hint(),
             flags_active: decode_flags_active(),
+            field_boundary: FIELD_DECODE_BOUNDARY.with(Cell::get),
             payload_ctx: payload_ctx_state(),
             root_span: payload_root_span(),
         }
@@ -1167,6 +1175,7 @@ impl DecodeStateSnapshot {
         set_decode_flags_raw(self.flags);
         set_decode_flags_hint(self.flags_hint);
         set_decode_flags_active(self.flags_active);
+        FIELD_DECODE_BOUNDARY.with(|slot| slot.set(self.field_boundary));
         DECODE_PAYLOAD_CTX.with(|slot| *slot.borrow_mut() = self.payload_ctx);
         DECODE_ROOT_SPAN.with(|slot| *slot.borrow_mut() = self.root_span);
     }
@@ -1181,6 +1190,7 @@ impl IsolatedDecodeGuard {
         let snapshot = DecodeStateSnapshot::capture();
         reset_decode_state();
         clear_decode_root();
+        FIELD_DECODE_BOUNDARY.with(|slot| slot.set(FieldDecodeBoundary::Canonical));
         Self {
             snapshot: Some(snapshot),
         }
@@ -3306,6 +3316,20 @@ pub fn read_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_len_from_slice_with_flags(bytes, effective_layout_flags())
 }
 
+/// Inspect a length prefix without charging an allocation for the referenced
+/// bytes.
+///
+/// This is for bounded zero-copy decoders that retain a borrowed subslice
+/// instead of materializing the declared field. The per-field byte limit is
+/// still enforced.
+#[doc(hidden)]
+pub fn inspect_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
+    let (value, used) = read_raw_len_from_slice_with_flags(bytes, effective_layout_flags())?;
+    check_decode_field_length(value)?;
+    let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
+    Ok((len, used))
+}
+
 /// Read a length prefix from a slice using an explicit Norito flag snapshot.
 /// Returns (value, bytes consumed).
 #[doc(hidden)]
@@ -3354,7 +3378,13 @@ pub fn read_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_seq_len_slice_impl(bytes, true)
 }
 
-fn inspect_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
+/// Inspect a sequence count without charging cumulative elements or an
+/// allocation.
+///
+/// This is for bounded zero-copy decoders that borrow an already-accounted
+/// byte sequence. The per-sequence element limit is still enforced.
+#[doc(hidden)]
+pub fn inspect_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_seq_len_slice_impl(bytes, false)
 }
 
@@ -5031,6 +5061,10 @@ pub enum Error {
         active_flags: u8,
         active_hint: u8,
     },
+    /// The frame is not the one canonical V1 representation accepted by an
+    /// exact-encoding boundary.
+    #[error("non-canonical encoding")]
+    NonCanonicalEncoding,
     /// Invalid UTF-8 in string-like value.
     #[error("invalid utf8")]
     InvalidUtf8,
@@ -8618,19 +8652,12 @@ impl<'a> ArchiveView<'a> {
         self.schema
     }
 
-    fn decode_inner<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
+    fn decode_inner<T: DecodeFromSlice<'a>>(&self, allow_zero_padding: bool) -> Result<T, Error> {
         let _ctx = PayloadCtxGuard::enter_with_flags_hint(self.bytes, self.flags, self.flags_hint);
         let effective = combine_flags(self.flags, self.flags_hint);
         let _flags = DecodeFlagsGuard::enter_with_hint(self.flags, effective);
         let (value, used) = <T as DecodeFromSlice>::decode_from_slice(self.bytes)?;
-        if used != self.bytes.len() {
-            // Some payloads carry trailing zero alignment bytes after the logical
-            // decode boundary. Accept those, while still rejecting non-zero tails.
-            let tail = self.bytes.get(used..).ok_or(Error::LengthMismatch)?;
-            if tail.iter().any(|byte| *byte != 0) {
-                return Err(Error::LengthMismatch);
-            }
-        }
+        validate_decode_consumption(self.bytes, used, allow_zero_padding)?;
         Ok(value)
     }
 
@@ -8646,13 +8673,51 @@ impl<'a> ArchiveView<'a> {
         if self.padding_len != payload_alignment_padding_for::<T>() {
             return Err(Error::LengthMismatch);
         }
-        self.decode_inner()
+        self.decode_inner(true)
+    }
+
+    /// Decode a value while requiring the slice decoder to consume the complete payload.
+    ///
+    /// This is intended for custom codecs whose payload decoder itself enforces one
+    /// canonical representation. Unlike [`Self::decode`], it does not accept a
+    /// zero-filled logical tail inside the checksummed payload.
+    pub fn decode_exact<T>(&self) -> Result<T, Error>
+    where
+        T: DecodeFromSlice<'a> + NoritoDeserialize<'a>,
+    {
+        if self.schema != T::schema_hash() {
+            return Err(Error::SchemaMismatch);
+        }
+        if self.padding_len != payload_alignment_padding_for::<T>() {
+            return Err(Error::LengthMismatch);
+        }
+        self.decode_inner(false)
     }
 
     /// Decode a value from the payload without enforcing the schema hash.
     pub fn decode_unchecked<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
-        self.decode_inner()
+        self.decode_inner(true)
     }
+}
+
+fn validate_decode_consumption(
+    bytes: &[u8],
+    used: usize,
+    allow_zero_padding: bool,
+) -> Result<(), Error> {
+    if used == bytes.len() {
+        return Ok(());
+    }
+    if !allow_zero_padding {
+        return Err(Error::LengthMismatch);
+    }
+    // Some payloads carry trailing zero alignment bytes after the logical
+    // decode boundary. Accept those, while still rejecting non-zero tails.
+    let tail = bytes.get(used..).ok_or(Error::LengthMismatch)?;
+    if tail.iter().any(|byte| *byte != 0) {
+        return Err(Error::LengthMismatch);
+    }
+    Ok(())
 }
 
 /// Validate bytes and return an archive view over the payload slice.
@@ -8714,7 +8779,8 @@ where
     if needs_slice {
         return crate::guarded_try_deserialize(|| {
             let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
-            let (value, _used) = <T as DecodeFromSlice>::decode_from_slice(payload_src)?;
+            let (value, used) = <T as DecodeFromSlice>::decode_from_slice(payload_src)?;
+            validate_decode_consumption(payload_src, used, true)?;
             Ok(value)
         });
     }
@@ -8750,10 +8816,32 @@ where
     with_decode_limits(limits, || decode_from_bytes(bytes))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum FieldDecodeBoundary {
     Canonical,
     Prefix,
+}
+
+thread_local! {
+    static FIELD_DECODE_BOUNDARY: Cell<FieldDecodeBoundary> =
+        const { Cell::new(FieldDecodeBoundary::Canonical) };
+}
+
+struct FieldDecodeBoundaryGuard {
+    previous: FieldDecodeBoundary,
+}
+
+impl FieldDecodeBoundaryGuard {
+    fn enter(boundary: FieldDecodeBoundary) -> Self {
+        let previous = FIELD_DECODE_BOUNDARY.with(|slot| slot.replace(boundary));
+        Self { previous }
+    }
+}
+
+impl Drop for FieldDecodeBoundaryGuard {
+    fn drop(&mut self) {
+        FIELD_DECODE_BOUNDARY.with(|slot| slot.set(self.previous));
+    }
 }
 
 trait ErasedFieldSlot {
@@ -8947,6 +9035,7 @@ fn decode_field_erased(
     }
 
     let payload_guard = PayloadCtxGuard::enter(payload);
+    let _boundary_guard = FieldDecodeBoundaryGuard::enter(boundary);
     invoke_erased_field_decoder(slot, payload.as_ptr())?;
     let used_ctx = payload_ctx_max_access();
     drop(payload_guard);
@@ -9233,12 +9322,18 @@ where
     }
 }
 
-/// Require a derive-generated field sequence to consume its complete payload.
+/// Finish a derive-generated field sequence at the active decode boundary.
+///
+/// Canonical field decodes must consume the complete payload. Prefix decodes
+/// may leave bytes for the next packed field and report their exact offset.
 #[doc(hidden)]
 #[inline(never)]
 pub fn finish_context_fields(ptr: *const u8, offset: usize) -> Result<(), Error> {
     let payload = payload_slice_from_ptr(ptr)?;
-    if offset != payload.len() {
+    let boundary = FIELD_DECODE_BOUNDARY.with(Cell::get);
+    if offset > payload.len()
+        || (boundary == FieldDecodeBoundary::Canonical && offset != payload.len())
+    {
         return Err(Error::LengthMismatch);
     }
     note_payload_access(payload, offset);
@@ -9458,6 +9553,81 @@ mod tests {
             decode_field_prefix::<String>(&encoded).expect("decode string prefix");
         assert_eq!(decoded, expected);
         assert_eq!(used, encoded_len);
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+    #[norito(decode_from_slice)]
+    struct PrefixRecord {
+        label: String,
+        count: u32,
+    }
+
+    #[test]
+    fn decode_field_prefix_allows_trailing_bytes_after_a_struct() {
+        reset_decode_state();
+        let expected = PrefixRecord {
+            label: "prefix record".to_owned(),
+            count: 17,
+        };
+        let mut encoded = encode_adaptive(&expected);
+        let encoded_len = encoded.len();
+        encoded.extend_from_slice(&[0xAA, 0xBB]);
+
+        let (decoded, used) =
+            decode_field_prefix::<PrefixRecord>(&encoded).expect("decode struct prefix");
+
+        assert_eq!(decoded, expected);
+        assert_eq!(used, encoded_len);
+        assert!(matches!(
+            decode_field_canonical::<PrefixRecord>(&encoded),
+            Err(Error::LengthMismatch)
+        ));
+    }
+
+    #[test]
+    fn isolated_frame_decode_resets_and_restores_the_prefix_boundary() {
+        reset_decode_state();
+        let expected = PrefixRecord {
+            label: "isolated record".repeat(32),
+            count: 23,
+        };
+        let (mut payload, flags) = encode_with_header_flags(&expected);
+        assert!(
+            payload.len() >= core::mem::size_of::<Archived<PrefixRecord>>(),
+            "test payload must exercise direct archived deserialization"
+        );
+        payload.push(0xAA);
+        let frame = frame_bare_with_header_flags::<PrefixRecord>(&payload, flags)
+            .expect("frame struct payload with a nonzero tail");
+
+        let _prefix_boundary = FieldDecodeBoundaryGuard::enter(FieldDecodeBoundary::Prefix);
+        assert!(matches!(
+            decode_from_bytes::<PrefixRecord>(&frame),
+            Err(Error::LengthMismatch)
+        ));
+        assert!(FIELD_DECODE_BOUNDARY.with(|slot| slot.get() == FieldDecodeBoundary::Prefix));
+    }
+
+    #[test]
+    fn slice_frame_decode_rejects_a_nonzero_logical_tail() {
+        reset_decode_state();
+        let expected = PrefixRecord {
+            label: String::new(),
+            count: 29,
+        };
+        let (mut payload, flags) = encode_with_header_flags(&expected);
+        payload.push(0xAA);
+        assert!(
+            payload.len() < core::mem::size_of::<Archived<PrefixRecord>>(),
+            "test payload must exercise slice-based deserialization"
+        );
+        let frame = frame_bare_with_header_flags::<PrefixRecord>(&payload, flags)
+            .expect("frame short struct payload with a nonzero tail");
+
+        assert!(matches!(
+            decode_from_bytes::<PrefixRecord>(&frame),
+            Err(Error::LengthMismatch)
+        ));
     }
 
     static FIELD_SLOT_DROPS: AtomicUsize = AtomicUsize::new(0);
@@ -11219,6 +11389,25 @@ mod tests {
         let view = from_bytes_view(&bytes).unwrap();
         let decoded: Vec<u32> = view.decode().unwrap();
         assert_eq!(decoded, v);
+    }
+
+    #[test]
+    fn view_decode_exact_rejects_a_zero_filled_logical_tail() {
+        let value = 7_u8;
+        let payload = [value, 0];
+        let frame = frame_bare_with_header_flags::<u8>(&payload, V1_LAYOUT_FLAGS)
+            .expect("frame scalar payload with a zero tail");
+        let view = from_bytes_view(&frame).expect("validate tailed frame");
+
+        assert_eq!(
+            view.decode::<u8>()
+                .expect("compatibility decode accepts a zero tail"),
+            value
+        );
+        assert!(matches!(
+            view.decode_exact::<u8>(),
+            Err(Error::LengthMismatch)
+        ));
     }
 
     #[test]

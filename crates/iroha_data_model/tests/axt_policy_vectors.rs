@@ -37,7 +37,7 @@ fn sample_descriptor() -> AxtDescriptor {
         touches: vec![
             AxtTouchSpec {
                 dsid: ds_a,
-                read: vec!["orders/".into(), "audit/".into()],
+                read: vec!["audit/".into(), "orders/".into()],
                 write: vec!["ledger/".into()],
             },
             AxtTouchSpec {
@@ -50,6 +50,7 @@ fn sample_descriptor() -> AxtDescriptor {
 }
 
 fn sample_binding(descriptor: &AxtDescriptor) -> AxtBinding {
+    validate_descriptor(descriptor).expect("sample descriptor must be canonical");
     let ivm_descriptor = axt::AxtDescriptor {
         dsids: descriptor.dsids.clone(),
         touches: descriptor
@@ -73,7 +74,7 @@ fn encoded_account(public_key_hex: &str) -> String {
 
 fn sample_handle(binding: AxtBinding) -> AssetHandle {
     AssetHandle {
-        scope: vec!["transfer".into(), "register".into()],
+        scope: vec!["register".into(), "transfer".into()],
         subject: HandleSubject {
             account: encoded_account(
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",

@@ -62,6 +62,23 @@ const DEFAULT_MODERATION_EVENT_PAGE_SIZE_V1: u32 = 256;
 const MODERATION_TRANSACTION_TTL_V1: Duration =
     Duration::from_millis(MODERATION_TRANSACTION_TTL_MS_V1);
 const MODERATION_TRANSACTION_PAYLOAD_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+/// Fixed identity of the in-process V1 Torii strict-durable ingress.
+pub(crate) const TORII_MODERATION_STRICT_INGRESS_HANDLE_V1: &str =
+    "torii.sorafs.moderation-strict-ingress.v1";
+/// Revision of the in-process V1 Torii strict-durable ingress policy.
+pub(crate) const TORII_MODERATION_STRICT_INGRESS_REVISION_V1: u64 = 1;
+/// BLAKE3 digest of `sorafs.moderation.strict-ingress.torii.v1\0`.
+pub(crate) const TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1: [u8; 32] = [
+    0xcc, 0x0c, 0xea, 0xc1, 0x8b, 0x93, 0xfa, 0x97, 0x05, 0xc0, 0xef, 0x86, 0xf6, 0x57, 0xa9, 0xed,
+    0x94, 0xc5, 0xdd, 0x65, 0x31, 0x57, 0x84, 0x96, 0xa2, 0xd6, 0x4e, 0x8e, 0xc5, 0x21, 0x6d, 0x2e,
+];
+
+fn torii_moderation_strict_ingress_qualification_v1() -> ModerationRuntimeProviderQualificationV1 {
+    ModerationRuntimeProviderQualificationV1::new(
+        TORII_MODERATION_STRICT_INGRESS_REVISION_V1,
+        TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1,
+    )
+}
 
 /// Fail-closed reason that prevents serving a cached moderation projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -713,8 +730,6 @@ impl ModerationFeeQuoterV1 for ToriiModerationFeeQuoterV1 {
 
 /// Canonical local strict-durable ingress and exact finalized transaction observer.
 pub(crate) struct ToriiModerationStrictTransactionIngressV1 {
-    provider_handle: String,
-    provider_qualification: ModerationRuntimeProviderQualificationV1,
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<State>,
@@ -726,8 +741,14 @@ impl core::fmt::Debug for ToriiModerationStrictTransactionIngressV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ToriiModerationStrictTransactionIngressV1")
-            .field("provider_handle", &self.provider_handle)
-            .field("provider_qualification", &self.provider_qualification)
+            .field(
+                "provider_handle",
+                &TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+            )
+            .field(
+                "provider_qualification",
+                &torii_moderation_strict_ingress_qualification_v1(),
+            )
             .field("chain_id", &self.chain_id)
             .field("queue", &"<strict-durable>")
             .field("state", &"<authoritative>")
@@ -739,8 +760,6 @@ impl core::fmt::Debug for ToriiModerationStrictTransactionIngressV1 {
 impl ToriiModerationStrictTransactionIngressV1 {
     #[must_use]
     pub(crate) fn new(
-        provider_handle: String,
-        provider_qualification: ModerationRuntimeProviderQualificationV1,
         chain_id: Arc<ChainId>,
         queue: Arc<Queue>,
         state: Arc<State>,
@@ -748,8 +767,6 @@ impl ToriiModerationStrictTransactionIngressV1 {
         pipeline_status_cache: Arc<crate::PipelineStatusCache>,
     ) -> Self {
         Self {
-            provider_handle,
-            provider_qualification,
             chain_id,
             queue,
             state,
@@ -801,14 +818,14 @@ impl ToriiModerationStrictTransactionIngressV1 {
 
 impl ModerationRuntimeProviderV1 for ToriiModerationStrictTransactionIngressV1 {
     fn handle(&self) -> &str {
-        &self.provider_handle
+        TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
     }
 
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
     {
-        Ok(self.provider_qualification)
+        Ok(torii_moderation_strict_ingress_qualification_v1())
     }
 }
 
@@ -1646,6 +1663,30 @@ mod tests {
         ModerationRuntimeProviderQualificationV1::new(1, [0xA3; 32]);
     const TEST_NOTIFICATION_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
+
+    #[test]
+    fn local_strict_ingress_identity_is_implementation_derived() {
+        assert_eq!(
+            TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1,
+            *blake3::hash(b"sorafs.moderation.strict-ingress.torii.v1\0").as_bytes()
+        );
+        let qualification = torii_moderation_strict_ingress_qualification_v1();
+        assert_eq!(
+            qualification.revision(),
+            TORII_MODERATION_STRICT_INGRESS_REVISION_V1
+        );
+        assert_eq!(
+            qualification.policy_digest(),
+            TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1
+        );
+        assert_eq!(
+            TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+            "torii.sorafs.moderation-strict-ingress.v1"
+        );
+        assert!(iroha_config::parameters::is_production_runtime_handle(
+            TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
+        ));
+    }
 
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 key")

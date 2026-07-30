@@ -324,16 +324,13 @@ canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 ### Offline peer transport V1
 
 `IrohaPeerWireMessageV1` is the only first-release request/payment/ACK envelope.
-Profile `1` requires schema `1` and allows a 24,576-byte encoded body; profile
-`2` requires schema `0x0102` and allows a 24,576-byte bounded whole-offer body
-(24,660 bytes including the fixed 84-byte IPM1 header). Canonical
-bytes are capped at 32 KiB. Offline Note bytes remain opaque. Its text-based
-apps can use `IrohaPeerCanonicalTextPayloadCodecV1` for an exact UTF-8 round
-trip; the codec rejects profile `2`, whose bytes must instead be a kind-matched
-ABI21 archive. Profile-2 construction and decode validate NRT0 v0.0, no
-compression, exact compact-length flags, CRC64, the authoritative
-fully-qualified schema, and static padding (request/payment 8, ACK 0) without
-requiring the native bridge. The typed adapter performs deeper semantics.
+Its sole profile code `2` requires schema `0x0102` and allows a 24,576-byte
+bounded whole-offer body (24,660 bytes including the fixed 84-byte IPM1
+header). Canonical bytes are capped at 32 KiB and must be a kind-matched ABI21
+archive. Construction and decode validate NRT0 v0.0, no compression, exact
+compact-length flags, CRC64, the authoritative fully-qualified schema, and
+static padding (request/payment 8, ACK 0) without requiring the native bridge.
+The typed adapter performs deeper semantics.
 The shared `fixtures/offline/kagemusha_peer_transport_v2.json` vector pins the
 same qualified 49-byte structural archive through IPM1, IQR1, NFC, and an
 authenticated Nearby record. Its one-byte body is structural-only and must not
@@ -371,9 +368,9 @@ runner validates it before BEGIN_PAYMENT. `updateDurableCheckpoint` separately
 installs the ACK-bearing ISC1 before CONFIRM_ACK. Failure at either durability
 boundary emits neither the command it gates nor a replacement debit.
 
-Wire limits are hard-capped at 32 KiB canonical, 24,576 Offline Note encoded,
-and 24,576 bounded Kagemusha encoded bytes. NFC messages cannot exceed 24,660
-bytes. Nearby timeouts must be finite, positive, and at most 300 seconds; its
+Wire limits are hard-capped at 32 KiB canonical and 24,576 bounded Kagemusha
+encoded bytes. NFC messages cannot exceed 24,660 bytes. Nearby timeouts must
+be finite, positive, and at most 300 seconds; its
 receive budget admits the four-record V1 transcript and fails closed on a
 fifth. Epoch invalidation suppresses callbacks not yet admitted; an
 already-admitted application callback may finish.
@@ -441,7 +438,8 @@ sidecar or demo encoding.
 
 This transport hardening is client-side and requires no backend API change.
 
-The canonical cross-SDK vectors live in `../fixtures/offline/peer_*.json`.
+The canonical cross-SDK vector lives in
+`../fixtures/offline/kagemusha_peer_transport_v2.json`.
 From this directory, run the portable/mobile suites and the mainline Kagemusha
 adapter boundary with:
 
@@ -1111,42 +1109,30 @@ archive. Do not reconstruct or mutate proof material outside the typed codecs.
 
 ### Native privacy bridge
 
-`PrivacyNativeBridge` exposes the privacy FFI surface as generic raw Norito
-archives: `capabilitiesV1()`, `buildProofV1(requestArchive:)`, and
-`verifyProofV1(requestArchive:)`. Approved typed proof-builder aliases for
-admitted production privacy entrypoints, including
-`buildZkAceAuthorizationProofV1(requestArchive:)`, dispatch through the same
-production archive paths and remain fail-closed while the privacy rows are
-gated. Planned catalog entrypoints stay unexported until their production gates
-pass. Native availability in the first release requires exact ABI 21, the privacy
-capability/build/verify symbols, and successful Norito probe outputs whose
-operation-specific result schema bytes match the called entry point.
+`PrivacyNativeBridge` is capability-only.
+`capabilitiesArchiveV1()` returns the canonical typed
+`PrivacyCapabilitySnapshotV1` Norito archive, while `protocolsV1` exposes the
+closed `PrivacyProtocolIdV1` enum in exact wire order. ABI 21 availability
+requires only the capability and zeroizing-free symbols plus a valid capability
+probe. Generic request/build/verify dispatch and free-form selectors are absent;
+proofs use protocol-specific typed APIs.
 
-All privacy request and response payloads must stay as raw Norito archives.
-Swift validates archive magic, length, CRC, the 64 MiB native size cap, and the
-operation-specific result schema before returning bytes to callers. Capability
-metadata reports `privacy-production-gate-v1`, keeps `productionReady = false`,
-and remains fail-closed with missing production gates and no audit references
-until real proving, verification, chain admission, witness privacy checks,
-deterministic testing, negative/adversarial testing, replay/nullifier rejection
-testing, parser/verifier fuzzing, performance gates, and external audit signoff
-are complete.
-
-Swift also exposes the deterministic privacy FFI status/error-code contract for
-diagnostics and cross-language parity: `ffiStatusError`, `ffiErrorNullPointer`,
-`ffiErrorMalformedNorito`, `ffiErrorUnsupportedAlgorithm`,
-`ffiErrorProductionDisabled`, and `ffiErrorInvalidRequest`. The stable wire
-values are `status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
-`unsupported_algorithm = 3`, `production_disabled = 4`, and
-`invalid_request = 5`; treat them as sanitized status metadata, not proof success.
+The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
+`anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
+`iroha-zk-x509-stark-p256-v0`,
+`iroha-jindo-polynomial-commitment-v0`,
+`iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
+`monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
+`pq-masp-stark-v0`. Exact initialization rejects aliases, retired IDs, case
+changes, and whitespace normalization.
 The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteOpening`, `ConfidentialNoteCommitment.deriveFromOpening`,
 `ConfidentialNoteNullifier`, `ConfidentialOwnerTag`,
 `ConfidentialNoteEncryption.encryptNote`,
 `ConfidentialNoteDecryption.decryptNote`,
 `ConfidentialNoteDecryption.decryptNoteWithOwnerTag`,
-`PrivacyConfidentialWitnessV1`, `buildConfidentialTransferProofRequestV1`,
-`buildConfidentialUnshieldProofRequestV1`,
+`PrivacyConfidentialWitnessV1`, typed witness encoders,
 `LocalZkAssetMerklePathProvider`, and
 `ToriiClient.getMerklePathForCommitment(asset:commitment:)`. Default note
 decryption derives the expected owner tag from the supplied spend key;

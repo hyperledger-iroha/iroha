@@ -26,7 +26,8 @@ json = [
     "norito_derive",
     "mv",
 ]
-test-fixtures = []
+# Expose deterministic fixture constructors to non-shipping release tooling.
+test-fixtures = ["iroha_crypto/rand"]
 gost = ["iroha_crypto/gost"]
 bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]

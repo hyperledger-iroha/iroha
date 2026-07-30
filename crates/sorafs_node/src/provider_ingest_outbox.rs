@@ -24,7 +24,10 @@ use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 
-use iroha_config::parameters::is_production_runtime_handle;
+use iroha_config::parameters::{
+    defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
+    is_production_runtime_handle,
+};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -61,14 +64,17 @@ const PROVIDER_INGEST_SEALED_CHECKPOINT_NAMESPACE_V1: [u8; 32] =
     *b"sorafs.provider.ingest.outbox.v1";
 const PROVIDER_INGEST_SEALED_CHECKPOINT_REVISION_DOMAIN_V1: &[u8] =
     b"sorafs.provider.ingest.sealed-checkpoint.revision.v1\0";
-const PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 1_024;
+/// Maximum canonical sealed-record bytes surrounding one provider-ingest checkpoint.
+///
+/// Runtime transports use this public V1 bound in addition to the configured
+/// checkpoint limit so a maximum-sized valid record is never rejected at the
+/// deployment-provider boundary.
+pub const PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 1_024;
 const PROVIDER_INGEST_CHECKPOINT_REQUEST_CAPACITY_V1: usize = 1;
 const PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
 const MAX_MANIFEST_CID_BYTES_V1: usize = 256;
 const MAX_CHUNKER_HANDLE_BYTES_V1: usize = 128;
 const MAX_MANIFEST_ID_BYTES_V1: usize = 128;
-const ACTIVE_ENTRY_STRUCTURAL_OVERHEAD_BYTES_V1: u64 = 2 * 1024;
-const TERMINAL_ENTRY_STRUCTURAL_OVERHEAD_BYTES_V1: u64 = 2 * 1024;
 
 static PROVIDER_INGEST_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 
@@ -378,17 +384,19 @@ pub struct ProviderIngestOutboxPolicyV1 {
 impl Default for ProviderIngestOutboxPolicyV1 {
     fn default() -> Self {
         Self {
-            max_active_entries: 128,
-            max_terminal_entries: 4_096,
-            max_attempts: 8,
-            checkpoint_max_bytes: 64 * 1024 * 1024,
-            checkpoint_operation_timeout_ms: 30_000,
-            source_lease_ttl_ms: 60_000,
-            retry_base_delay_ms: 1_000,
-            retry_max_delay_ms: 5 * 60_000,
-            terminal_retention_blocks: 100_000,
-            max_signed_transaction_bytes: 256 * 1024,
-            max_status_page_size: 256,
+            max_active_entries: provider_ingest_outbox_defaults::MAX_ACTIVE_ENTRIES,
+            max_terminal_entries: provider_ingest_outbox_defaults::MAX_TERMINAL_ENTRIES,
+            max_attempts: provider_ingest_outbox_defaults::MAX_ATTEMPTS,
+            checkpoint_max_bytes: provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES.0,
+            checkpoint_operation_timeout_ms:
+                provider_ingest_outbox_defaults::CHECKPOINT_OPERATION_TIMEOUT_MS,
+            source_lease_ttl_ms: provider_ingest_outbox_defaults::SOURCE_LEASE_TTL_MS,
+            retry_base_delay_ms: provider_ingest_outbox_defaults::RETRY_BASE_DELAY_MS,
+            retry_max_delay_ms: provider_ingest_outbox_defaults::RETRY_MAX_DELAY_MS,
+            terminal_retention_blocks: provider_ingest_outbox_defaults::TERMINAL_RETENTION_BLOCKS,
+            max_signed_transaction_bytes:
+                provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES.0,
+            max_status_page_size: provider_ingest_outbox_defaults::MAX_STATUS_PAGE_SIZE,
         }
     }
 }
@@ -402,25 +410,19 @@ impl ProviderIngestOutboxPolicyV1 {
             .max_active_entries
             .checked_add(self.max_terminal_entries)
             .ok_or(ProviderIngestOutboxError::InvalidPolicy)?;
-        let active_capacity = u64::try_from(self.max_active_entries)
-            .map_err(|_| ProviderIngestOutboxError::InvalidPolicy)?
-            .checked_mul(
-                self.max_signed_transaction_bytes
-                    .checked_add(ACTIVE_ENTRY_STRUCTURAL_OVERHEAD_BYTES_V1)
-                    .ok_or(ProviderIngestOutboxError::InvalidPolicy)?,
+        let worst_case_checkpoint_bytes =
+            provider_ingest_outbox_defaults::worst_case_checkpoint_bytes_v1(
+                self.max_active_entries,
+                self.max_terminal_entries,
+                self.max_signed_transaction_bytes,
             )
-            .ok_or(ProviderIngestOutboxError::InvalidPolicy)?;
-        let terminal_capacity = u64::try_from(self.max_terminal_entries)
-            .map_err(|_| ProviderIngestOutboxError::InvalidPolicy)?
-            .checked_mul(TERMINAL_ENTRY_STRUCTURAL_OVERHEAD_BYTES_V1)
-            .ok_or(ProviderIngestOutboxError::InvalidPolicy)?;
-        let worst_case_checkpoint_bytes = active_capacity
-            .checked_add(terminal_capacity)
             .ok_or(ProviderIngestOutboxError::InvalidPolicy)?;
         if self.max_active_entries == 0
             || self.max_terminal_entries == 0
             || self.max_attempts == 0
             || self.checkpoint_max_bytes == 0
+            || self.checkpoint_max_bytes
+                > provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT
             || self.checkpoint_operation_timeout_ms == 0
             || self.checkpoint_operation_timeout_ms
                 > PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1
@@ -429,7 +431,10 @@ impl ProviderIngestOutboxPolicyV1 {
             || self.retry_base_delay_ms == 0
             || self.retry_max_delay_ms < self.retry_base_delay_ms
             || self.terminal_retention_blocks == 0
-            || self.max_signed_transaction_bytes == 0
+            || self.max_signed_transaction_bytes
+                < provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
+            || self.max_signed_transaction_bytes
+                > provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
             || self.max_signed_transaction_bytes > self.checkpoint_max_bytes
             || self.max_status_page_size == 0
             || self.max_status_page_size > PROVIDER_INGEST_STATUS_PAGE_MAX_V1
@@ -5212,6 +5217,10 @@ fn validate_completion_signing_context(
     validate_completion_signer_policy(context.signer_policy)?;
     if context.assignment_revision == 0
         || context.completion_epoch == 0
+        || context.chain_id.as_str().is_empty()
+        || context.chain_id.as_str().len()
+            > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+        || !completion_account_id_fits_canonical_bound(&context.provider_owner)
         || context.expected_payload.chain() != &context.chain_id
         || context.expected_payload.authority() != &context.provider_owner
         || context.expected_payload.time_to_live().is_none()
@@ -5231,6 +5240,16 @@ fn validate_completion_signing_context(
         context.expected_payload.instructions(),
     )
     .map_err(|_| ProviderIngestOutboxError::InvalidSigningContext)
+}
+
+fn completion_account_id_fits_canonical_bound(account_id: &AccountId) -> bool {
+    norito::to_bytes(account_id).is_ok_and(|encoded| {
+        !encoded.is_empty()
+            && u64::try_from(encoded.len()).is_ok_and(|length| {
+                length
+                    <= provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1
+            })
+    })
 }
 
 fn validate_signer_policy_progress(
@@ -5354,8 +5373,12 @@ fn validate_finalized_completion_authority_observation(
         .cursor
         .validate()
         .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
-    if observation.provider_owner.is_none()
-        && observation.signer_policy != ProviderIngestSignerPolicyObservationV1::NotChecked
+    if observation
+        .provider_owner
+        .as_ref()
+        .is_some_and(|owner| !completion_account_id_fits_canonical_bound(owner))
+        || (observation.provider_owner.is_none()
+            && observation.signer_policy != ProviderIngestSignerPolicyObservationV1::NotChecked)
     {
         return Err(ProviderIngestOutboxError::InvalidCheckpoint);
     }
@@ -5892,6 +5915,13 @@ fn validate_completion_delivery(
     if !durable::validate_delivery(completion, policy.max_attempts) {
         return Err(ProviderIngestOutboxError::InvalidCheckpoint);
     }
+    if completion
+        .signer_policy_owner
+        .as_ref()
+        .is_some_and(|owner| !completion_account_id_fits_canonical_bound(owner))
+    {
+        return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+    }
     let is_exposed = matches!(
         completion.state,
         StoredDeliveryStateV1::Ambiguous | StoredDeliveryStateV1::Submitted
@@ -6046,15 +6076,16 @@ fn validate_terminal(
         StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
             manifest_id,
             completion_epoch,
+            completed_by,
             committed_transaction_hash,
             finalized_cursor,
-            ..
         } => {
             if let Some(manifest_id) = manifest_id {
                 validate_manifest_id(&entry.authorization, manifest_id)?;
             }
             validate_cursor_after_admission(&entry.authorization, *finalized_cursor)?;
             if *completion_epoch == 0
+                || !completion_account_id_fits_canonical_bound(completed_by)
                 || committed_transaction_hash.is_some_and(|hash| hash == [0; 32])
             {
                 return Err(ProviderIngestOutboxError::InvalidCheckpoint);
@@ -6325,7 +6356,7 @@ mod tests {
             max_active_entries: 16,
             max_terminal_entries: 4,
             max_attempts: 4,
-            checkpoint_max_bytes: 4 * 1024 * 1024,
+            checkpoint_max_bytes: 8 * 1024 * 1024,
             checkpoint_operation_timeout_ms: 250,
             source_lease_ttl_ms: 10,
             retry_base_delay_ms: 10,
@@ -7688,6 +7719,7 @@ mod tests {
     fn policy_bounds_worst_case_checkpoint_capacity() {
         let defaults = ProviderIngestOutboxPolicyV1::default();
         assert_eq!(defaults.max_active_entries, 128);
+        assert_eq!(defaults.checkpoint_max_bytes, 160 * 1024 * 1024);
         assert_eq!(defaults.checkpoint_operation_timeout_ms, 30_000);
         defaults.validate().expect("default capacity fits");
 
@@ -7707,10 +7739,22 @@ mod tests {
         let mut exact = policy();
         exact.max_active_entries = 1;
         exact.max_terminal_entries = 1;
-        exact.max_signed_transaction_bytes = 1;
-        exact.checkpoint_max_bytes = ACTIVE_ENTRY_STRUCTURAL_OVERHEAD_BYTES_V1
-            + TERMINAL_ENTRY_STRUCTURAL_OVERHEAD_BYTES_V1
-            + 1;
+        exact.max_signed_transaction_bytes =
+            provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN;
+        exact.checkpoint_max_bytes =
+            provider_ingest_outbox_defaults::worst_case_checkpoint_bytes_v1(
+                exact.max_active_entries,
+                exact.max_terminal_entries,
+                exact.max_signed_transaction_bytes,
+            )
+            .expect("exact checked capacity");
+        assert_eq!(
+            exact.checkpoint_max_bytes,
+            provider_ingest_outbox_defaults::CHECKPOINT_CANONICAL_OVERHEAD_BYTES_V1
+                + 2 * exact.max_signed_transaction_bytes
+                + provider_ingest_outbox_defaults::ACTIVE_ENTRY_CANONICAL_OVERHEAD_BYTES_V1
+                + provider_ingest_outbox_defaults::TERMINAL_ENTRY_CANONICAL_OVERHEAD_BYTES_V1
+        );
         exact.validate().expect("exact capacity boundary fits");
 
         exact.checkpoint_max_bytes -= 1;
@@ -7724,6 +7768,154 @@ mod tests {
         overflow.checkpoint_max_bytes = u64::MAX;
         assert_eq!(
             overflow.validate(),
+            Err(ProviderIngestOutboxError::InvalidPolicy)
+        );
+    }
+
+    #[test]
+    fn canonical_active_fixture_fits_payload_and_structural_capacity_budgets() {
+        let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
+        let authorization = authorization(0x50, 7);
+        let job_id = authorization.job_id();
+        enqueue_and_store_local(&outbox, &authorization, 100);
+        let transaction = signed_completion(&authorization, 8, 8);
+        let expected_payload_bytes =
+            norito::to_bytes(transaction.payload()).expect("encode expected payload fixture");
+        let signed_transaction_bytes =
+            norito::to_bytes(&transaction).expect("encode signed transaction fixture");
+        let signing_claim = claim_for_transaction(&outbox, job_id, &transaction, 8, 102, cursor(8));
+        outbox
+            .store_completion_transaction(&signing_claim, transaction)
+            .expect("store signed completion fixture");
+
+        let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
+        let active_bytes =
+            norito::to_bytes(&checkpoint.active[0]).expect("encode canonical active entry");
+        let retained_payload_bytes = expected_payload_bytes
+            .len()
+            .checked_add(signed_transaction_bytes.len())
+            .expect("fixture retained payload bytes");
+        assert!(
+            active_bytes.len()
+                <= retained_payload_bytes
+                    + usize::try_from(
+                        provider_ingest_outbox_defaults::ACTIVE_ENTRY_CANONICAL_OVERHEAD_BYTES_V1,
+                    )
+                    .expect("active overhead fits usize")
+        );
+        encode_provider_ingest_checkpoint(&checkpoint, policy())
+            .expect("canonical active fixture fits configured checkpoint");
+    }
+
+    #[test]
+    fn canonical_terminal_fixture_fits_derived_structural_charge_and_capacity_boundary() {
+        let authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_state(
+            7,
+            cursor(7).block_hash,
+            [0x11; 32],
+            [0x51; 32],
+            [0x71; 32],
+            vec![0xA5; MAX_MANIFEST_CID_BYTES_V1],
+            "x".repeat(MAX_CHUNKER_HANDLE_BYTES_V1),
+            [0x81; 32],
+            [0x91; 32],
+            u64::MAX,
+        )
+        .expect("maximum-field authorization");
+        let completed_by = completed_by(0xA1);
+        let outcome = StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
+            manifest_id: Some(manifest_id(&authorization)),
+            completion_epoch: u64::MAX,
+            completed_by: completed_by.clone(),
+            committed_transaction_hash: Some([0xB1; 32]),
+            finalized_cursor: cursor(8),
+        };
+        let terminal = StoredTerminalProviderIngestV1 {
+            sequence: 1,
+            authorization: authorization.clone(),
+            outcome: outcome.clone(),
+        };
+
+        let authorization_bytes =
+            norito::to_bytes(&authorization).expect("encode maximum-field authorization");
+        let completed_by_bytes =
+            norito::to_bytes(&completed_by).expect("encode terminal completion account");
+        let outcome_bytes = norito::to_bytes(&outcome).expect("encode largest terminal outcome");
+        let terminal_bytes = norito::to_bytes(&terminal).expect("encode terminal entry");
+        let authorization_len =
+            u64::try_from(authorization_bytes.len()).expect("authorization length fits u64");
+        let completed_by_len =
+            u64::try_from(completed_by_bytes.len()).expect("account length fits u64");
+        let outcome_len = u64::try_from(outcome_bytes.len()).expect("outcome length fits u64");
+        let terminal_len = u64::try_from(terminal_bytes.len()).expect("terminal length fits u64");
+        assert!(
+            authorization_len
+                <= provider_ingest_outbox_defaults::TERMINAL_AUTHORIZATION_CANONICAL_RESERVE_BYTES_V1
+        );
+        assert!(
+            completed_by_len
+                <= provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1
+        );
+        assert!(
+            outcome_len
+                <= completed_by_len
+                    .checked_add(
+                        provider_ingest_outbox_defaults::TERMINAL_OUTCOME_FIXED_CANONICAL_RESERVE_BYTES_V1,
+                    )
+                    .expect("outcome component budget")
+        );
+        assert!(
+            terminal_len
+                <= authorization_len
+                    .checked_add(outcome_len)
+                    .and_then(|bytes| {
+                        bytes.checked_add(
+                            provider_ingest_outbox_defaults::TERMINAL_ENTRY_CANONICAL_FRAMING_RESERVE_BYTES_V1,
+                        )
+                    })
+                    .expect("terminal component budget")
+        );
+        assert!(
+            terminal_len
+                <= provider_ingest_outbox_defaults::TERMINAL_ENTRY_CANONICAL_OVERHEAD_BYTES_V1
+        );
+
+        let checkpoint = ProviderIngestOutboxCheckpointV1 {
+            next_sequence: 2,
+            finalized_cursor_high_water: Some(cursor(8)),
+            finalized_block_time_ms_high_water: Some(finalized_block_time_ms(cursor(8))),
+            terminal: vec![terminal],
+            ..ProviderIngestOutboxCheckpointV1::default()
+        };
+        let checkpoint_bytes = encode_provider_ingest_checkpoint(&checkpoint, policy())
+            .expect("canonical terminal fixture fits configured checkpoint");
+        assert!(
+            u64::try_from(checkpoint_bytes.len()).expect("checkpoint length fits u64")
+                <= provider_ingest_outbox_defaults::CHECKPOINT_CANONICAL_OVERHEAD_BYTES_V1
+                    + provider_ingest_outbox_defaults::TERMINAL_ENTRY_CANONICAL_OVERHEAD_BYTES_V1
+        );
+
+        let mut boundary = policy();
+        boundary.max_active_entries = 1;
+        boundary.max_terminal_entries = 1;
+        boundary.max_signed_transaction_bytes =
+            provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN;
+        boundary.checkpoint_max_bytes =
+            provider_ingest_outbox_defaults::worst_case_checkpoint_bytes_v1(
+                boundary.max_active_entries,
+                boundary.max_terminal_entries,
+                boundary.max_signed_transaction_bytes,
+            )
+            .expect("checked terminal capacity boundary");
+        boundary
+            .validate()
+            .expect("full terminal structural charge fits at exact boundary");
+        boundary.checkpoint_max_bytes = boundary
+            .checkpoint_max_bytes
+            .checked_sub(1)
+            .expect("non-zero capacity boundary");
+        assert_eq!(
+            boundary.validate(),
             Err(ProviderIngestOutboxError::InvalidPolicy)
         );
     }
@@ -8735,11 +8927,26 @@ mod tests {
         ));
 
         let mut tiny = policy();
-        tiny.checkpoint_max_bytes = 4_097;
-        tiny.max_signed_transaction_bytes = 1;
         tiny.max_active_entries = 1;
         tiny.max_terminal_entries = 1;
-        fs::write(&path, vec![0_u8; 4_098]).unwrap();
+        tiny.max_signed_transaction_bytes =
+            provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN;
+        tiny.checkpoint_max_bytes =
+            provider_ingest_outbox_defaults::worst_case_checkpoint_bytes_v1(
+                tiny.max_active_entries,
+                tiny.max_terminal_entries,
+                tiny.max_signed_transaction_bytes,
+            )
+            .expect("tiny checked capacity");
+        fs::write(
+            &path,
+            vec![
+                0_u8;
+                usize::try_from(tiny.checkpoint_max_bytes + 1)
+                    .expect("tiny checkpoint bound fits usize")
+            ],
+        )
+        .unwrap();
         assert!(matches!(
             ProviderIngestOutbox::open(&path, tiny),
             Err(ProviderIngestOutboxError::Checkpoint(_))
@@ -8941,6 +9148,15 @@ mod tests {
         wrong_chain.chain_id = ChainId::from("wrong-chain");
         assert_eq!(
             outbox.claim_completion_signing(job_id, wrong_chain, 102),
+            Err(ProviderIngestOutboxError::InvalidSigningContext)
+        );
+        let mut oversized_chain = valid.clone();
+        oversized_chain.chain_id = ChainId::from(
+            "x".repeat(provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1 + 1),
+        );
+        oversized_chain.expected_payload.chain = oversized_chain.chain_id.clone();
+        assert_eq!(
+            outbox.claim_completion_signing(job_id, oversized_chain, 102),
             Err(ProviderIngestOutboxError::InvalidSigningContext)
         );
         let mut wrong_owner = valid.clone();

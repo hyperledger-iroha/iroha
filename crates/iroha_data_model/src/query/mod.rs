@@ -549,9 +549,7 @@ pub mod json;
 #[cfg(feature = "fault_injection")]
 use crate::{
     ValidationFail,
-    prelude::{
-        InstructionBox, TransactionEntrypoint, TransactionRejectionReason, TransactionResult,
-    },
+    prelude::{InstructionBox, TransactionEntrypoint, TransactionRejectionReason},
 };
 
 /// Builder helpers for constructing query instances.
@@ -2505,7 +2503,7 @@ impl CommittedTransaction {
     ///
     /// Only available when the `fault_injection` feature is enabled.
     pub fn swap_result(&mut self) {
-        let TransactionResult(result) = &mut self.result;
+        let result = &mut self.result.0;
         *result = if result.is_ok() {
             Err(TransactionRejectionReason::Validation(
                 ValidationFail::InternalError("result swapped".into()),
@@ -7231,12 +7229,13 @@ mod fault_injection_tests {
     use super::*;
     use crate::{
         AssetDefinitionId, Level,
+        events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferOutcome},
         isi::{InstructionBox, Log},
         kaigi::{
             KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
             KaigiRoomPolicy,
         },
-        prelude::{DataTriggerSequence, TimeTriggerEntrypoint},
+        prelude::{DataTriggerSequence, Quantity, TimeTriggerEntrypoint, TransactionResult},
         transaction::{
             PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
             PrivateKaigiTemplate, PrivateKaigiTransaction,
@@ -7260,7 +7259,7 @@ mod fault_injection_tests {
             .expect("valid authority"),
         });
 
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
             entrypoint_hash: entry.hash(),
@@ -7323,7 +7322,7 @@ mod fault_injection_tests {
             },
         });
 
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
             entrypoint_hash: entry.hash(),
@@ -7393,6 +7392,41 @@ mod fault_injection_tests {
             overlay[0],
             BASE64_STANDARD.encode(norito::to_bytes(&injected).expect("encode overlay payload"))
         );
+    }
+
+    #[test]
+    fn result_swap_preserves_independent_batch_receipts() {
+        let mut tx = make_time_committed_tx();
+        let authority = match &tx.entrypoint {
+            TransactionEntrypoint::Time(entrypoint) => entrypoint.authority.clone(),
+            _ => panic!("expected time entrypoint"),
+        };
+        let outcome = AssetBatchTransferOutcome {
+            leg_index: 0,
+            leg_id: "fault-injection-leg".to_owned(),
+            asset: AssetId::new(
+                AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
+                    Name::from_str("rose").expect("asset name"),
+                ),
+                authority.clone(),
+            ),
+            destination: authority,
+            amount: Quantity::from(1_u32),
+            status: AssetBatchTransferLegStatus::Applied,
+        };
+        tx.result.set_batch_transfer_outcomes(vec![outcome.clone()]);
+        tx.result_hash = tx.result.hash();
+
+        let original_result_hash = tx.result_hash.clone();
+        let original_result_proof = tx.result_proof.clone();
+        tx.swap_result();
+
+        assert!(tx.result.0.is_err());
+        assert_eq!(tx.result.batch_transfer_outcomes(), &[outcome]);
+        assert_eq!(tx.result_hash, tx.result.hash());
+        assert_ne!(tx.result_hash, original_result_hash);
+        assert_eq!(tx.result_proof, original_result_proof);
     }
 }
 
@@ -7473,7 +7507,7 @@ mod tests {
                 proof: vec![0x44],
             },
         });
-        let result = TransactionResult(Ok(crate::trigger::DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(crate::trigger::DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
             entrypoint_hash: entrypoint.hash(),

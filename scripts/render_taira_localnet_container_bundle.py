@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -148,6 +149,13 @@ def _discover_peers(bundle_dir: Path) -> list[PeerConfig]:
         raise ValueError(
             f"{bundle_dir} must contain at least {MIN_VALIDATORS} peer*.toml files for a representative Taira rollout"
         )
+    indices = [peer.index for peer in peers]
+    expected_indices = list(range(len(peers)))
+    if indices != expected_indices:
+        raise ValueError(
+            "localnet peer indices must be contiguous and start at zero; "
+            f"expected {expected_indices}, found {indices}"
+        )
     return peers
 
 
@@ -200,7 +208,7 @@ def _write_env_file(
     *,
     container_name: str,
     image: str,
-    config_path: Path,
+    config_bundle_path: Path,
     storage_path: Path,
     bundle_dir: Path,
     network: str,
@@ -208,19 +216,28 @@ def _write_env_file(
     torii_port: int,
     rust_log: str,
 ) -> None:
+    def assignment(name: str, value: object) -> str:
+        return f"{name}={shlex.quote(str(value))}"
+
     path.write_text(
         "\n".join(
             [
-                f"TAIRA_CONTAINER_NAME={container_name}",
-                f"TAIRA_IMAGE={image}",
-                f"TAIRA_CONFIG_PATH={config_path.resolve()}",
-                f"TAIRA_STORAGE_PATH={storage_path.resolve()}",
-                f"TAIRA_P2P_PORT={p2p_port}",
-                f"TAIRA_TORII_PORT={torii_port}",
-                f"TAIRA_RUST_LOG={rust_log}",
-                f"TAIRA_DOCKER_NETWORK={network}",
-                f"TAIRA_GENESIS_PATH={(bundle_dir / 'genesis.json').resolve()}",
-                f"TAIRA_SIGNED_GENESIS_PATH={(bundle_dir / 'genesis.signed.nrt').resolve()}",
+                assignment("TAIRA_CONTAINER_NAME", container_name),
+                assignment("TAIRA_IMAGE", image),
+                "TAIRA_RUNTIME_PROFILE=localnet",
+                assignment("TAIRA_CONFIG_BUNDLE_PATH", config_bundle_path.resolve()),
+                assignment("TAIRA_STORAGE_PATH", storage_path.resolve()),
+                assignment("TAIRA_P2P_PORT", p2p_port),
+                assignment("TAIRA_TORII_PORT", torii_port),
+                assignment("TAIRA_RUST_LOG", rust_log),
+                assignment("TAIRA_DOCKER_NETWORK", network),
+                assignment(
+                    "TAIRA_GENESIS_PATH", (bundle_dir / "genesis.json").resolve()
+                ),
+                assignment(
+                    "TAIRA_SIGNED_GENESIS_PATH",
+                    (bundle_dir / "genesis.signed.nrt").resolve(),
+                ),
                 "",
             ]
         ),
@@ -242,6 +259,29 @@ def render_bundle(args: argparse.Namespace) -> list[Path]:
         raise ValueError(f"missing signed genesis at {genesis_signed}")
 
     peers = _discover_peers(bundle_dir)
+    highest_peer_index = peers[-1].index
+    for label, base_port in (
+        ("base P2P port", args.base_p2p_port),
+        ("base Torii port", args.base_torii_port),
+    ):
+        if base_port <= 0 or base_port + highest_peer_index > 65535:
+            raise ValueError(
+                f"{label} range must remain within 1..65535 for every peer"
+            )
+    p2p_ports = {
+        args.base_p2p_port + peer.index
+        for peer in peers
+    }
+    torii_ports = {
+        args.base_torii_port + peer.index
+        for peer in peers
+    }
+    overlap = sorted(p2p_ports.intersection(torii_ports))
+    if overlap:
+        raise ValueError(
+            "localnet host P2P and Torii port ranges must not overlap; "
+            f"conflicting ports: {overlap}"
+        )
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +290,9 @@ def render_bundle(args: argparse.Namespace) -> list[Path]:
 
     for peer in peers:
         hostname = hostnames[peer.index]
-        config_path = output_dir / f"{peer.stem}.toml"
+        config_bundle_path = output_dir / peer.stem
+        config_bundle_path.mkdir(parents=True, exist_ok=True)
+        config_path = config_bundle_path / "config.toml"
         storage_path = output_dir / f"{peer.stem}-storage"
         env_path = output_dir / f"{peer.stem}.env"
         storage_path.mkdir(parents=True, exist_ok=True)
@@ -261,7 +303,7 @@ def render_bundle(args: argparse.Namespace) -> list[Path]:
             env_path,
             container_name=hostname,
             image=args.image,
-            config_path=config_path,
+            config_bundle_path=config_bundle_path,
             storage_path=storage_path,
             bundle_dir=bundle_dir,
             network=args.network,

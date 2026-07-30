@@ -48,7 +48,9 @@ use crate::{
     asset::AssetDefinitionId,
     name::Name,
     proof::ProofAttachment,
-    sorafs::pin_registry::{ManifestDigest, StorageClass},
+    sorafs::pin_registry::{
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
+    },
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 
@@ -259,6 +261,11 @@ pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
 pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouHostCapabilityRecordV1`].
 pub const SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
+/// Fixed signature-domain tag for Soracloud runtime provenance preimages.
+pub const SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1: &[u8] =
+    b"iroha:soracloud:runtime-provenance:v1\x00";
+/// Canonical Soracloud runtime provenance preimage version.
+pub const SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_VERSION_V1: u8 = 1;
 /// Schema version for [`SoraHfPlacementRecordV1`].
 pub const SORA_HF_PLACEMENT_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouServicePlacementRecordV1`].
@@ -610,7 +617,7 @@ pub struct SoraPublishedInrouGuestImageArtifactV1 {
     /// Optional storage manifest identifier returned by the storage pin endpoint.
     #[norito(default)]
     pub manifest_id_hex: Option<String>,
-    /// Distribution/hydration policy for host-side replication.
+    /// Exact copy of the parent guest image's authoritative distribution policy.
     #[norito(default)]
     pub distribution: SoraArtifactDistributionPolicyV1,
 }
@@ -621,22 +628,29 @@ impl SoraPublishedInrouGuestImageArtifactV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the artifact reference is malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_nonempty_no_control(
+        let manifest_digest = validate_canonical_lower_hex_32(
             "sora published inrou guest image artifact",
             "manifest_digest_hex",
             &self.manifest_digest_hex,
         )?;
-        validate_nonempty_no_control(
+        validate_canonical_sorafs_content_cid(
             "sora published inrou guest image artifact",
             "content_cid",
             &self.content_cid,
         )?;
         if let Some(manifest_id_hex) = self.manifest_id_hex.as_ref() {
-            validate_nonempty_no_control(
+            let manifest_id = validate_canonical_lower_hex_32(
                 "sora published inrou guest image artifact",
                 "manifest_id_hex",
                 manifest_id_hex,
             )?;
+            if manifest_id != manifest_digest {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora published inrou guest image artifact",
+                    field: "manifest_id_hex",
+                    reason: "must exactly equal `manifest_digest_hex`".to_string(),
+                });
+            }
         }
         self.distribution.validate()
     }
@@ -653,7 +667,7 @@ pub struct SoraInrouGuestImageV1 {
     /// Optional initrd image member path inside the signed Soracloud VM artifact bundle.
     #[norito(default)]
     pub initrd_image_path: Option<String>,
-    /// Requested distribution policy for the published guest-image artifact.
+    /// Authoritative distribution policy for the published guest-image artifact.
     #[norito(default)]
     pub distribution: SoraArtifactDistributionPolicyV1,
     /// Immutable `SoraFS` artifact that carries the guest image members after release.
@@ -733,26 +747,40 @@ impl SoraInrouGuestImageV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when one or more image paths are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_bundle_absolute_path(
-            "sora inrou guest image",
-            "kernel_image_path",
-            &self.kernel_image_path,
-        )?;
-        validate_bundle_absolute_path(
-            "sora inrou guest image",
-            "rootfs_image_path",
-            &self.rootfs_image_path,
-        )?;
+        validate_inrou_image_member_path("kernel_image_path", &self.kernel_image_path)?;
+        validate_inrou_image_member_path("rootfs_image_path", &self.rootfs_image_path)?;
         if let Some(initrd_image_path) = self.initrd_image_path.as_ref() {
-            validate_bundle_absolute_path(
-                "sora inrou guest image",
-                "initrd_image_path",
-                initrd_image_path,
-            )?;
+            validate_inrou_image_member_path("initrd_image_path", initrd_image_path)?;
+        }
+        let mut case_folded_member_paths = BTreeSet::new();
+        for (field, path) in [
+            ("kernel_image_path", Some(self.kernel_image_path.as_str())),
+            ("rootfs_image_path", Some(self.rootfs_image_path.as_str())),
+            ("initrd_image_path", self.initrd_image_path.as_deref()),
+        ] {
+            let Some(path) = path else {
+                continue;
+            };
+            if !case_folded_member_paths.insert(path.to_ascii_lowercase()) {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora inrou guest image",
+                    field,
+                    reason:
+                        "must not collide case-insensitively with another guest-image member path"
+                            .to_string(),
+                });
+            }
         }
         self.distribution.validate()?;
         if let Some(published_artifact) = self.published_artifact.as_ref() {
             published_artifact.validate()?;
+            if published_artifact.distribution != self.distribution {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora inrou guest image",
+                    field: "published_artifact.distribution",
+                    reason: "must exactly match the image distribution policy".to_string(),
+                });
+            }
         }
         Ok(())
     }
@@ -1260,6 +1288,9 @@ pub struct SoraContainerManifestV1 {
     #[norito(default)]
     pub args: Vec<String>,
     /// Environment variables supplied at launch.
+    ///
+    /// Keys must use canonical POSIX environment-variable name syntax:
+    /// `[A-Za-z_][A-Za-z0-9_]*`.
     #[norito(default)]
     pub env: std::collections::BTreeMap<String, String>,
     /// Optional Inrou microVM metadata required for hosted HTTP VM workloads.
@@ -1397,7 +1428,16 @@ impl SoraContainerManifestV1 {
             });
         }
 
+        for name in self.env.keys() {
+            validate_environment_variable_name("env", name)?;
+        }
+
         if self.runtime == SoraContainerRuntimeV1::Inrou {
+            validate_bundle_absolute_path(
+                "sora container manifest",
+                "entrypoint",
+                &self.entrypoint,
+            )?;
             let Some(inrou) = self.inrou.as_ref() else {
                 return Err(SoracloudManifestError::InvalidField {
                     manifest: "sora container manifest",
@@ -1466,7 +1506,7 @@ impl SoraContainerManifestV1 {
             }
             match &export.target {
                 SoraConfigExportTargetV1::Env(var_name) => {
-                    validate_config_export_env_var_name(var_name)?;
+                    validate_environment_variable_name("config_exports", var_name)?;
                     if !config_export_env_targets.insert(var_name.clone()) {
                         return Err(SoracloudManifestError::InvalidField {
                             manifest: "sora container manifest",
@@ -5411,7 +5451,7 @@ fn validate_soracloud_fhe_input_admission_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe input admission proof",
             field: "proof.proof.bytes",
@@ -5453,7 +5493,7 @@ fn validate_soracloud_fhe_input_admission_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe input admission proof",
             field: "proof.proof.bytes",
@@ -5500,7 +5540,7 @@ fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe public-key proof",
             field: "proof.proof.bytes",
@@ -5542,7 +5582,7 @@ fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe public-key proof",
             field: "proof.proof.bytes",
@@ -5589,7 +5629,7 @@ fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe bootstrap key proof",
             field: "proof.proof.bytes",
@@ -5631,7 +5671,7 @@ fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe bootstrap key proof",
             field: "proof.proof.bytes",
@@ -5678,7 +5718,7 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe full-bootstrap material proof",
             field: "proof.proof.bytes",
@@ -5721,7 +5761,7 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe full-bootstrap material proof",
             field: "proof.proof.bytes",
@@ -5768,7 +5808,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe full-bootstrap execution proof",
             field: "proof.proof.bytes",
@@ -5812,7 +5852,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe full-bootstrap execution proof",
             field: "proof.proof.bytes",
@@ -8167,9 +8207,11 @@ fn validate_distribution_geography_tag(
     Ok(())
 }
 
-fn validate_config_export_env_var_name(value: &str) -> Result<(), SoracloudManifestError> {
+fn validate_environment_variable_name(
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
     let manifest = "sora container manifest";
-    let field = "config_exports";
     if value.trim().is_empty() {
         return Err(SoracloudManifestError::EmptyField { manifest, field });
     }
@@ -8177,7 +8219,7 @@ fn validate_config_export_env_var_name(value: &str) -> Result<(), SoracloudManif
         return Err(SoracloudManifestError::InvalidField {
             manifest,
             field,
-            reason: "config export env var must not include surrounding whitespace".to_string(),
+            reason: "environment variable name must not include surrounding whitespace".to_string(),
         });
     }
     let mut chars = value.chars();
@@ -8189,7 +8231,7 @@ fn validate_config_export_env_var_name(value: &str) -> Result<(), SoracloudManif
             manifest,
             field,
             reason: format!(
-                "config export env var `{value}` must start with an ASCII letter or '_'"
+                "environment variable name `{value}` must start with an ASCII letter or '_'"
             ),
         });
     }
@@ -8198,7 +8240,7 @@ fn validate_config_export_env_var_name(value: &str) -> Result<(), SoracloudManif
             manifest,
             field,
             reason: format!(
-                "config export env var `{value}` must use only ASCII letters, digits, and '_'"
+                "environment variable name `{value}` must use only ASCII letters, digits, and '_'"
             ),
         });
     }
@@ -8263,6 +8305,220 @@ fn validate_config_export_relative_path(value: &str) -> Result<(), SoracloudMani
     Ok(())
 }
 
+fn validate_canonical_lower_hex_32(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<[u8; 32], SoracloudManifestError> {
+    if value.len() != 64 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!(
+                "must contain exactly 64 lowercase hexadecimal characters (found {})",
+                value.len()
+            ),
+        });
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must use canonical lowercase hexadecimal".to_string(),
+        });
+    }
+    let bytes = hex::decode(value).map_err(|error| SoracloudManifestError::InvalidField {
+        manifest,
+        field,
+        reason: format!("must decode as hexadecimal: {error}"),
+    })?;
+    bytes
+        .try_into()
+        .map_err(|bytes: Vec<u8>| SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!("must decode to exactly 32 bytes (found {})", bytes.len()),
+        })
+}
+
+fn validate_canonical_sorafs_content_cid(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    let expected_text_len = 1 + (MANIFEST_ROOT_CID_LENGTH * 8).div_ceil(5);
+    if value.len() != expected_text_len || !value.starts_with('b') {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!(
+                "must be the canonical {expected_text_len}-byte lowercase multibase base32 rendering of a SoraFS manifest root CID"
+            ),
+        });
+    }
+    let bytes = decode_lowercase_multibase_base32(value).ok_or_else(|| {
+        SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must use canonical lowercase multibase base32 without padding".to_string(),
+        }
+    })?;
+    ManifestRootCid::try_from_slice(&bytes).map_err(|error| {
+        SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!("must encode a canonical SoraFS manifest root CID: {error}"),
+        }
+    })?;
+    if encode_lowercase_multibase_base32(&bytes) != value {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must use the exact canonical lowercase multibase base32 spelling".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn encode_lowercase_multibase_base32(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+    let mut accumulator = 0_u32;
+    let mut bits = 0_u32;
+    let mut encoded = Vec::with_capacity(1 + (bytes.len() * 8).div_ceil(5));
+    encoded.push(b'b');
+    for byte in bytes {
+        accumulator = (accumulator << 8) | u32::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            let index = usize::try_from((accumulator >> (bits - 5)) & 0x1f)
+                .expect("base32 alphabet index fits usize");
+            encoded.push(ALPHABET[index]);
+            bits -= 5;
+        }
+    }
+    if bits > 0 {
+        let index = usize::try_from((accumulator << (5 - bits)) & 0x1f)
+            .expect("base32 alphabet index fits usize");
+        encoded.push(ALPHABET[index]);
+    }
+    String::from_utf8(encoded).expect("lowercase base32 alphabet is UTF-8")
+}
+
+fn decode_lowercase_multibase_base32(value: &str) -> Option<Vec<u8>> {
+    let encoded = value.strip_prefix('b')?;
+    if encoded.is_empty() {
+        return None;
+    }
+    let mut accumulator = 0_u32;
+    let mut bits = 0_u32;
+    let mut decoded = Vec::with_capacity((encoded.len() * 5) / 8);
+    for byte in encoded.bytes() {
+        let value = match byte {
+            b'a'..=b'z' => u32::from(byte - b'a'),
+            b'2'..=b'7' => 26 + u32::from(byte - b'2'),
+            _ => return None,
+        };
+        accumulator = (accumulator << 5) | value;
+        bits += 5;
+        while bits >= 8 {
+            decoded.push(((accumulator >> (bits - 8)) & 0xff) as u8);
+            bits -= 8;
+        }
+    }
+    if bits > 0 {
+        let padding_mask = (1_u32 << bits) - 1;
+        if accumulator & padding_mask != 0 {
+            return None;
+        }
+    }
+    Some(decoded)
+}
+
+fn validate_inrou_image_member_path(
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    let manifest = "sora inrou guest image";
+    if value.is_empty() {
+        return Err(SoracloudManifestError::EmptyField { manifest, field });
+    }
+    if value.trim() != value {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not include surrounding whitespace".to_string(),
+        });
+    }
+    if value.len() > 512 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not exceed 512 bytes".to_string(),
+        });
+    }
+    let Some(relative_path) = value.strip_prefix("/inrou/") else {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must be a canonical absolute member path below `/inrou/`".to_string(),
+        });
+    };
+    if relative_path.is_empty() || value.ends_with('/') || value.contains('\\') {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must use canonical `/`-separated portable path components".to_string(),
+        });
+    }
+    for component in relative_path.split('/') {
+        if !is_portable_inrou_path_component(component) {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason: format!("contains non-portable path component `{component}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn is_portable_inrou_path_component(component: &str) -> bool {
+    if component.is_empty()
+        || component == "."
+        || component == ".."
+        || !component.is_ascii()
+        || component.len() > 255
+        || component
+            .bytes()
+            .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(byte, b'.' | b'_' | b'-'))
+        || component.ends_with('.')
+    {
+        return false;
+    }
+    let Some(basename) = component.split('.').next() else {
+        return false;
+    };
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
+        .iter()
+        .any(|reserved| basename.eq_ignore_ascii_case(reserved))
+    {
+        return false;
+    }
+    if let (Some(prefix), Some(suffix)) = (basename.get(..3), basename.get(3..)) {
+        let reserved_prefix =
+            prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT");
+        let reserved_digit = suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9');
+        if reserved_prefix && reserved_digit {
+            return false;
+        }
+    }
+    true
+}
+
 fn validate_bundle_absolute_path(
     manifest: &'static str,
     field: &'static str,
@@ -8279,33 +8535,35 @@ fn validate_bundle_absolute_path(
             reason: "must not include surrounding whitespace".to_string(),
         });
     }
-    if !value.starts_with('/') {
+    if value.len() > 256 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not exceed 256 bytes including its leading slash".to_string(),
+        });
+    }
+    let Some(relative_path) = value.strip_prefix('/') else {
         return Err(SoracloudManifestError::InvalidField {
             manifest,
             field,
             reason: "must be an absolute path within the signed Soracloud bundle".to_string(),
         });
-    }
-    if value.contains('\\') {
+    };
+    if relative_path.is_empty() || value.ends_with('/') || value.contains('\\') {
         return Err(SoracloudManifestError::InvalidField {
             manifest,
             field,
-            reason: "must use '/' separators only".to_string(),
+            reason: "must use a canonical nonempty `/`-separated path".to_string(),
         });
     }
-    if value.contains("..") {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason: "must not contain '..' path traversal segments".to_string(),
-        });
-    }
-    if value.chars().any(char::is_control) {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason: "must not contain control characters".to_string(),
-        });
+    for component in relative_path.split('/') {
+        if !is_portable_inrou_path_component(component) {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason: format!("contains non-portable path component `{component}`"),
+            });
+        }
     }
     Ok(())
 }
@@ -14693,6 +14951,121 @@ fn validate_soracloud_host_found_payload(
     Ok(())
 }
 
+/// Purpose bound into a V1 Soracloud runtime provenance signature.
+///
+/// The discriminants are immutable wire identifiers used by external signing
+/// adapters. Unknown identifiers must never be interpreted as aliases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum SoracloudRuntimeProvenancePurposeV1 {
+    /// Sign a canonical model-host heartbeat.
+    ModelHostHeartbeat = 1,
+    /// Sign a canonical Inrou host advertisement.
+    InrouHostAdvert = 2,
+}
+
+impl SoracloudRuntimeProvenancePurposeV1 {
+    /// Return the immutable V1 wire identifier.
+    #[must_use]
+    pub const fn wire_id(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one immutable V1 wire identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SoracloudRuntimeProvenancePurposeErrorV1`] for an unknown
+    /// purpose. Unknown identifiers are never accepted as aliases.
+    pub const fn try_from_wire_id(
+        value: u8,
+    ) -> Result<Self, SoracloudRuntimeProvenancePurposeErrorV1> {
+        match value {
+            1 => Ok(Self::ModelHostHeartbeat),
+            2 => Ok(Self::InrouHostAdvert),
+            _ => Err(SoracloudRuntimeProvenancePurposeErrorV1),
+        }
+    }
+}
+
+/// An unknown Soracloud runtime provenance-purpose identifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[error("unknown Soracloud runtime provenance purpose V1")]
+pub struct SoracloudRuntimeProvenancePurposeErrorV1;
+
+/// Encode one versioned, domain- and purpose-separated runtime provenance preimage.
+///
+/// The returned bytes are the canonical Norito encoding of this exact tuple:
+/// `(domain_tag_bytes, version, purpose_wire_id, canonical_payload_bytes)`.
+/// Both byte strings are length-delimited by Norito, so no purpose or payload
+/// boundary can be reinterpreted. Callers must sign the returned preimage,
+/// never `canonical_payload` directly.
+///
+/// # Errors
+///
+/// Returns an encoding error when canonical Norito serialization fails.
+pub fn encode_soracloud_runtime_provenance_preimage_v1(
+    purpose: SoracloudRuntimeProvenancePurposeV1,
+    canonical_payload: &[u8],
+) -> Result<Vec<u8>, norito::Error> {
+    norito::encode_canonical(&(
+        SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1.to_vec(),
+        SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_VERSION_V1,
+        purpose.wire_id(),
+        canonical_payload.to_vec(),
+    ))
+}
+
+/// Invalid canonical Soracloud runtime provenance preimage.
+///
+/// Variants intentionally carry no input bytes or decoded values so callers
+/// can report failures without exposing a signing payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum SoracloudRuntimeProvenancePreimageErrorV1 {
+    /// The preimage is not one exact canonical V1 Norito tuple.
+    #[error("malformed Soracloud runtime provenance preimage V1")]
+    Malformed,
+    /// The signature-domain tag is not the fixed V1 value.
+    #[error("Soracloud runtime provenance domain mismatch")]
+    DomainMismatch,
+    /// The preimage version is not the fixed V1 value.
+    #[error("Soracloud runtime provenance version mismatch")]
+    VersionMismatch,
+    /// The embedded purpose does not equal the caller's expected purpose.
+    #[error("Soracloud runtime provenance purpose mismatch")]
+    PurposeMismatch,
+}
+
+/// Validate one canonical runtime provenance preimage against an expected purpose.
+///
+/// Decoding uses Norito's canonical decode limits derived from `preimage.len()`;
+/// transport callers must additionally enforce their deployment-owned byte
+/// ceiling before invoking this function. No decoded payload bytes are returned
+/// or included in errors.
+///
+/// # Errors
+///
+/// Returns a payload-free error when the tuple is malformed or its domain,
+/// version, or purpose differs from the exact V1 expectation.
+pub fn validate_soracloud_runtime_provenance_preimage_v1(
+    expected_purpose: SoracloudRuntimeProvenancePurposeV1,
+    preimage: &[u8],
+) -> Result<(), SoracloudRuntimeProvenancePreimageErrorV1> {
+    let (domain, version, purpose, _payload): (Vec<u8>, u8, u8, Vec<u8>) =
+        norito::decode_canonical(preimage)
+            .map_err(|_| SoracloudRuntimeProvenancePreimageErrorV1::Malformed)?;
+    if domain.as_slice() != SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1 {
+        return Err(SoracloudRuntimeProvenancePreimageErrorV1::DomainMismatch);
+    }
+    if version != SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_VERSION_V1 {
+        return Err(SoracloudRuntimeProvenancePreimageErrorV1::VersionMismatch);
+    }
+    if purpose != expected_purpose.wire_id() {
+        return Err(SoracloudRuntimeProvenancePreimageErrorV1::PurposeMismatch);
+    }
+    Ok(())
+}
+
 /// Encode the canonical provenance signature payload for deployment bundles.
 ///
 /// The payload layout is the canonical Norito encoding of
@@ -14703,7 +15076,7 @@ fn validate_soracloud_host_found_payload(
 pub fn encode_bundle_provenance_payload(
     bundle: &SoraDeploymentBundleV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(bundle)
+    norito::encode_canonical(bundle)
 }
 
 /// Encode the canonical provenance signature payload for app-level infrastructure manifests.
@@ -14716,7 +15089,7 @@ pub fn encode_bundle_provenance_payload(
 pub fn encode_app_infra_provenance_payload(
     manifest: &SoraAppInfraManifestV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(manifest)
+    norito::encode_canonical(manifest)
 }
 
 /// Encode the canonical provenance signature payload for deployment bundles plus inline materials.
@@ -14731,7 +15104,7 @@ pub fn encode_bundle_with_materials_provenance_payload(
     initial_service_configs: &BTreeMap<String, Json>,
     initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         bundle.clone(),
         initial_service_configs.clone(),
         initial_service_secrets.clone(),
@@ -14749,7 +15122,7 @@ pub fn encode_rollback_provenance_payload(
     service_name: &str,
     target_version: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, target_version))
+    norito::encode_canonical(&(service_name, target_version))
 }
 
 /// Encode the canonical provenance signature payload for service config upserts.
@@ -14764,7 +15137,7 @@ pub fn encode_set_service_config_provenance_payload(
     config_name: &str,
     value_json: &Json,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, config_name, value_json.clone()))
+    norito::encode_canonical(&(service_name, config_name, value_json.clone()))
 }
 
 /// Encode the canonical provenance signature payload for service config deletions.
@@ -14778,7 +15151,7 @@ pub fn encode_delete_service_config_provenance_payload(
     service_name: &str,
     config_name: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, config_name))
+    norito::encode_canonical(&(service_name, config_name))
 }
 
 /// Encode the canonical provenance signature payload for service secret upserts.
@@ -14793,7 +15166,7 @@ pub fn encode_set_service_secret_provenance_payload(
     secret_name: &str,
     secret: &SecretEnvelopeV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, secret_name, secret.clone()))
+    norito::encode_canonical(&(service_name, secret_name, secret.clone()))
 }
 
 /// Encode the canonical provenance signature payload for service secret deletions.
@@ -14807,7 +15180,7 @@ pub fn encode_delete_service_secret_provenance_payload(
     service_name: &str,
     secret_name: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, secret_name))
+    norito::encode_canonical(&(service_name, secret_name))
 }
 
 /// Encode the canonical provenance signature payload for state mutations.
@@ -14834,7 +15207,7 @@ pub fn encode_state_mutation_provenance_payload(
     governance_tx_hash: Hash,
     fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         binding_name,
         key,
@@ -14955,7 +15328,7 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
     bound_mode: BfvCiphertextBoundModeV1,
 ) -> Result<Hash, norito::Error> {
     let ciphertext_proof_statement_digests = ciphertext_proof_statement_digests.to_vec();
-    let payload = norito::to_bytes(&(
+    let payload = norito::encode_canonical(&(
         (
             service_name,
             binding_name,
@@ -14992,7 +15365,7 @@ pub fn encode_rollout_provenance_payload(
     promote_to_percent: Option<u8>,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         rollout_handle,
         healthy,
@@ -15013,7 +15386,7 @@ pub fn encode_agent_deploy_provenance_payload(
     lease_ticks: u64,
     autonomy_budget_units: Option<u64>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(manifest, lease_ticks, autonomy_budget_units))
+    norito::encode_canonical(&(manifest, lease_ticks, autonomy_budget_units))
 }
 
 /// Encode the canonical provenance signature payload for apartment lease renewal.
@@ -15027,7 +15400,7 @@ pub fn encode_agent_lease_renew_provenance_payload(
     apartment_name: &str,
     lease_ticks: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, lease_ticks))
+    norito::encode_canonical(&(apartment_name, lease_ticks))
 }
 
 /// Encode the canonical provenance signature payload for apartment restart requests.
@@ -15041,7 +15414,7 @@ pub fn encode_agent_restart_provenance_payload(
     apartment_name: &str,
     reason: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, reason))
+    norito::encode_canonical(&(apartment_name, reason))
 }
 
 /// Encode the canonical provenance signature payload for apartment policy revocation.
@@ -15056,7 +15429,7 @@ pub fn encode_agent_policy_revoke_provenance_payload(
     capability: &str,
     reason: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, capability, reason))
+    norito::encode_canonical(&(apartment_name, capability, reason))
 }
 
 /// Encode the canonical provenance signature payload for apartment wallet spend requests.
@@ -15071,7 +15444,7 @@ pub fn encode_agent_wallet_spend_provenance_payload(
     asset_definition: &str,
     amount: &Quantity,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, asset_definition, amount.clone()))
+    norito::encode_canonical(&(apartment_name, asset_definition, amount.clone()))
 }
 
 /// Encode the canonical provenance signature payload for apartment wallet approvals.
@@ -15085,7 +15458,7 @@ pub fn encode_agent_wallet_approve_provenance_payload(
     apartment_name: &str,
     request_id: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, request_id))
+    norito::encode_canonical(&(apartment_name, request_id))
 }
 
 /// Encode the canonical provenance signature payload for apartment mailbox send requests.
@@ -15101,7 +15474,7 @@ pub fn encode_agent_message_send_provenance_payload(
     channel: &str,
     payload: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(from_apartment, to_apartment, channel, payload))
+    norito::encode_canonical(&(from_apartment, to_apartment, channel, payload))
 }
 
 /// Encode the canonical provenance signature payload for apartment mailbox acknowledgements.
@@ -15115,7 +15488,7 @@ pub fn encode_agent_message_ack_provenance_payload(
     apartment_name: &str,
     message_id: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, message_id))
+    norito::encode_canonical(&(apartment_name, message_id))
 }
 
 /// Encode the canonical provenance signature payload for apartment artifact allowlists.
@@ -15130,7 +15503,7 @@ pub fn encode_agent_artifact_allow_provenance_payload(
     artifact_hash: &str,
     provenance_hash: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, artifact_hash, provenance_hash))
+    norito::encode_canonical(&(apartment_name, artifact_hash, provenance_hash))
 }
 
 /// Encode the canonical provenance signature payload for apartment autonomy runs.
@@ -15152,7 +15525,7 @@ pub fn encode_agent_autonomy_run_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     let canonical_workflow_input_json =
         canonical_agent_workflow_input_json_for_payload(workflow_input_json);
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         apartment_name,
         artifact_hash,
         provenance_hash,
@@ -15223,7 +15596,7 @@ pub fn encode_training_job_start_provenance_payload(
     compute_budget_units: u64,
     storage_budget_bytes: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         job_id,
@@ -15251,7 +15624,7 @@ pub fn encode_training_job_checkpoint_provenance_payload(
     checkpoint_size_bytes: u64,
     metrics_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         job_id,
         completed_step,
@@ -15272,7 +15645,7 @@ pub fn encode_training_job_retry_provenance_payload(
     job_id: &str,
     reason: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, job_id, reason))
+    norito::encode_canonical(&(service_name, job_id, reason))
 }
 
 /// Encode the canonical provenance signature payload for model-artifact registration.
@@ -15293,7 +15666,7 @@ pub fn encode_model_artifact_register_provenance_payload(
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         training_job_id,
@@ -15325,7 +15698,7 @@ pub fn encode_model_weight_register_provenance_payload(
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         weight_version,
@@ -15353,7 +15726,7 @@ pub fn encode_model_weight_promote_provenance_payload(
     gate_approved: bool,
     gate_report_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         weight_version,
@@ -15375,7 +15748,7 @@ pub fn encode_model_weight_rollback_provenance_payload(
     target_version: &str,
     reason: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, model_name, target_version, reason))
+    norito::encode_canonical(&(service_name, model_name, target_version, reason))
 }
 
 /// Encode the canonical provenance signature payload for uploaded-model bundle registration.
@@ -15388,7 +15761,7 @@ pub fn encode_model_weight_rollback_provenance_payload(
 pub fn encode_uploaded_model_bundle_register_provenance_payload(
     bundle: SoraUploadedModelBundleV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&bundle)
+    norito::encode_canonical(&bundle)
 }
 
 /// Encode the canonical provenance signature payload for uploaded-model bundle finalization.
@@ -15412,7 +15785,7 @@ pub fn encode_uploaded_model_finalize_provenance_payload(
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         model_id,
@@ -15446,7 +15819,7 @@ pub fn encode_hf_shared_lease_join_provenance_payload(
     lease_asset_definition_id: &AssetDefinitionId,
     base_fee: &Quantity,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         repo_id,
         resolved_revision,
         model_name,
@@ -15474,7 +15847,7 @@ pub fn encode_hf_shared_lease_leave_provenance_payload(
     service_name: Option<&str>,
     apartment_name: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         repo_id,
         resolved_revision,
         storage_class,
@@ -15503,7 +15876,7 @@ pub fn encode_hf_shared_lease_renew_provenance_payload(
     lease_asset_definition_id: &AssetDefinitionId,
     base_fee: &Quantity,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         repo_id,
         resolved_revision,
         model_name,
@@ -15526,13 +15899,16 @@ pub fn encode_hf_shared_lease_renew_provenance_payload(
 pub fn encode_model_host_advertise_provenance_payload(
     capability: &SoraModelHostCapabilityRecordV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(capability)
+    norito::encode_canonical(capability)
 }
 
 /// Encode the canonical provenance signature payload for model-host heartbeats.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(validator_account_id, heartbeat_expires_at_ms)`.
+/// The semantic payload is the canonical Norito tuple
+/// `(validator_account_id, heartbeat_expires_at_ms)`. The returned signature
+/// preimage wraps those bytes with
+/// [`SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat`] through
+/// [`encode_soracloud_runtime_provenance_preimage_v1`].
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -15540,7 +15916,12 @@ pub fn encode_model_host_heartbeat_provenance_payload(
     validator_account_id: &AccountId,
     heartbeat_expires_at_ms: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(validator_account_id.clone(), heartbeat_expires_at_ms))
+    let canonical_payload =
+        norito::encode_canonical(&(validator_account_id.clone(), heartbeat_expires_at_ms))?;
+    encode_soracloud_runtime_provenance_preimage_v1(
+        SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
+        &canonical_payload,
+    )
 }
 
 /// Encode the canonical provenance signature payload for model-host withdrawals.
@@ -15552,20 +15933,26 @@ pub fn encode_model_host_heartbeat_provenance_payload(
 pub fn encode_model_host_withdraw_provenance_payload(
     validator_account_id: &AccountId,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(validator_account_id)
+    norito::encode_canonical(validator_account_id)
 }
 
 /// Encode the canonical provenance signature payload for Inrou host adverts.
 ///
-/// The payload layout is the canonical Norito encoding of
-/// [`SoraInrouHostCapabilityRecordV1`].
+/// The semantic payload is the canonical Norito encoding of
+/// [`SoraInrouHostCapabilityRecordV1`]. The returned signature preimage wraps
+/// those bytes with [`SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert`]
+/// through [`encode_soracloud_runtime_provenance_preimage_v1`].
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_inrou_host_advertise_provenance_payload(
     capability: &SoraInrouHostCapabilityRecordV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(capability)
+    let canonical_payload = norito::encode_canonical(capability)?;
+    encode_soracloud_runtime_provenance_preimage_v1(
+        SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+        &canonical_payload,
+    )
 }
 
 /// Encode the canonical provenance signature payload for Inrou host withdrawals.
@@ -15577,7 +15964,7 @@ pub fn encode_inrou_host_advertise_provenance_payload(
 pub fn encode_inrou_host_withdraw_provenance_payload(
     validator_account_id: &AccountId,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(validator_account_id)
+    norito::encode_canonical(validator_account_id)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -15625,7 +16012,7 @@ pub fn encode_fhe_job_run_provenance_payload(
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+    norito::encode_canonical(&FheJobRunProvenancePayloadV1 {
         service_name,
         binding_name,
         job,
@@ -15654,7 +16041,7 @@ pub fn encode_decryption_request_provenance_payload(
     policy: DecryptionAuthorityPolicyV1,
     request: DecryptionRequestV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, policy, request))
+    norito::encode_canonical(&(service_name, policy, request))
 }
 
 /// Encode the canonical provenance signature payload for ciphertext queries.
@@ -15666,7 +16053,7 @@ pub fn encode_decryption_request_provenance_payload(
 pub fn encode_ciphertext_query_provenance_payload(
     query: &CiphertextQuerySpecV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(query)
+    norito::encode_canonical(query)
 }
 
 /// Re-export commonly used `Soracloud` schema types.
@@ -16596,11 +16983,13 @@ mod tests {
             SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof).expect("encode FHE input admission STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE input admission STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope).expect("encode FHE input admission OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE input admission OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16627,8 +17016,8 @@ mod tests {
         admission: &mut SoracloudFheInputAdmissionProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        admission.proof.proof.bytes =
-            norito::to_bytes(envelope).expect("encode FHE input admission OpenVerifyEnvelope");
+        admission.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE input admission OpenVerifyEnvelope");
         admission.proof.envelope_hash =
             Some(<[u8; 32]>::from(Hash::new(&admission.proof.proof.bytes)));
     }
@@ -16646,11 +17035,13 @@ mod tests {
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof).expect("encode FHE public-key STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE public-key STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope).expect("encode FHE public-key OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE public-key OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16673,8 +17064,8 @@ mod tests {
         proof: &mut SoracloudFhePublicKeyProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes =
-            norito::to_bytes(envelope).expect("encode FHE public-key OpenVerifyEnvelope");
+        proof.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE public-key OpenVerifyEnvelope");
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
     }
 
@@ -16691,11 +17082,13 @@ mod tests {
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof).expect("encode FHE bootstrap-key STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE bootstrap-key STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope).expect("encode FHE bootstrap-key OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE bootstrap-key OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16718,8 +17111,8 @@ mod tests {
         proof: &mut SoracloudFheBootstrapKeyProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes =
-            norito::to_bytes(envelope).expect("encode FHE bootstrap-key OpenVerifyEnvelope");
+        proof.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE bootstrap-key OpenVerifyEnvelope");
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
     }
 
@@ -16736,13 +17129,13 @@ mod tests {
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof)
-                .expect("encode FHE full-bootstrap material STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE full-bootstrap material STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope)
-                .expect("encode FHE full-bootstrap material OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE full-bootstrap material OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16779,13 +17172,13 @@ mod tests {
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof)
-                .expect("encode FHE full-bootstrap execution STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE full-bootstrap execution STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope)
-                .expect("encode FHE full-bootstrap execution OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE full-bootstrap execution OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16953,8 +17346,8 @@ mod tests {
         proof: &mut SoracloudFheFullBootstrapMaterialProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes = norito::to_bytes(envelope)
-            .expect("encode FHE full-bootstrap material OpenVerifyEnvelope");
+        proof.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE full-bootstrap material OpenVerifyEnvelope");
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
     }
 
@@ -16962,9 +17355,115 @@ mod tests {
         proof: &mut SoracloudFheFullBootstrapExecutionProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes = norito::to_bytes(envelope)
-            .expect("encode FHE full-bootstrap execution OpenVerifyEnvelope");
+        proof.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE full-bootstrap execution OpenVerifyEnvelope");
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
+    }
+
+    fn encode_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(value).expect("encode alternate-layout Norito frame")
+        };
+        let canonical = norito::encode_canonical(value).expect("encode canonical comparison frame");
+        assert_ne!(
+            alternate, canonical,
+            "adversarial fixture must use a distinct Norito layout"
+        );
+        alternate
+    }
+
+    fn alternate_open_verify_layouts(proof_bytes: &[u8]) -> [Vec<u8>; 2] {
+        let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes)
+            .expect("decode canonical sample OpenVerifyEnvelope");
+        let alternate_outer = encode_alternate_norito_layout(&envelope);
+
+        let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+            .expect("decode canonical sample STARK wrapper");
+        let mut canonical_outer_with_alternate_inner = envelope;
+        canonical_outer_with_alternate_inner.proof_bytes =
+            encode_alternate_norito_layout(&open_proof);
+        let alternate_inner = norito::encode_canonical(&canonical_outer_with_alternate_inner)
+            .expect("encode canonical outer envelope with alternate-layout STARK wrapper");
+
+        [alternate_outer, alternate_inner]
+    }
+
+    fn assert_alternate_open_verify_layouts_rejected<T>(
+        sample: T,
+        attachment: impl for<'a> Fn(&'a mut T) -> &'a mut ProofAttachment + Copy,
+        validate: impl Fn(&T) -> Result<(), SoracloudManifestError>,
+        proof_family: &str,
+    ) where
+        T: Clone,
+    {
+        let canonical_bytes = {
+            let mut sample = sample.clone();
+            attachment(&mut sample).proof.bytes.clone()
+        };
+        for (layout, bytes) in ["outer", "inner"]
+            .into_iter()
+            .zip(alternate_open_verify_layouts(&canonical_bytes))
+        {
+            let mut candidate = sample.clone();
+            let proof = attachment(&mut candidate);
+            proof.proof.bytes = bytes;
+            proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.bytes)));
+
+            let err = validate(&candidate).expect_err(
+                "alternate-layout proof frame must be rejected before verifier execution",
+            );
+            assert!(
+                matches!(
+                    err,
+                    SoracloudManifestError::InvalidField {
+                        field: "proof.proof.bytes",
+                        ..
+                    }
+                ),
+                "{proof_family} {layout} alternate layout returned the wrong field: {err}"
+            );
+            assert!(
+                err.to_string().contains("non-canonical"),
+                "{proof_family} {layout} alternate layout returned the wrong reason: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn fhe_proof_admission_rejects_alternate_outer_and_nested_norito_layouts() {
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_input_admission_proof(),
+            |proof: &mut SoracloudFheInputAdmissionProofV1| &mut proof.proof,
+            SoracloudFheInputAdmissionProofV1::validate,
+            "input admission",
+        );
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_public_key_proof(),
+            |proof: &mut SoracloudFhePublicKeyProofV1| &mut proof.proof,
+            SoracloudFhePublicKeyProofV1::validate,
+            "public key",
+        );
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_bootstrap_key_proof(),
+            |proof: &mut SoracloudFheBootstrapKeyProofV1| &mut proof.proof,
+            SoracloudFheBootstrapKeyProofV1::validate,
+            "bootstrap key",
+        );
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_full_bootstrap_material_proof(),
+            |proof: &mut SoracloudFheFullBootstrapMaterialProofV1| &mut proof.proof,
+            SoracloudFheFullBootstrapMaterialProofV1::validate,
+            "full-bootstrap material",
+        );
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_full_bootstrap_execution_proof(),
+            |proof: &mut SoracloudFheFullBootstrapExecutionProofV1| &mut proof.proof,
+            SoracloudFheFullBootstrapExecutionProofV1::validate,
+            "full-bootstrap execution",
+        );
     }
 
     fn zero_prehash_statement_hash() -> Hash {
@@ -16975,14 +17474,14 @@ mod tests {
         proof_bytes: &[u8],
         statement_hash: Hash,
     ) -> OpenVerifyEnvelope {
-        let mut envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes)
+        let mut envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes)
             .expect("decode sample OpenVerifyEnvelope");
         let mut open_proof =
-            norito::decode_from_bytes::<StarkFriOpenProofV1>(envelope.proof_bytes.as_slice())
+            norito::decode_canonical::<StarkFriOpenProofV1>(envelope.proof_bytes.as_slice())
                 .expect("decode sample STARK public-input wrapper");
         open_proof.public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-        envelope.proof_bytes =
-            norito::to_bytes(&open_proof).expect("encode rewritten STARK wrapper");
+        envelope.proof_bytes = norito::encode_canonical(&open_proof)
+            .expect("encode canonical rewritten STARK wrapper");
         envelope
     }
 
@@ -16990,14 +17489,14 @@ mod tests {
         proof_bytes: &[u8],
         native_envelope_bytes: Vec<u8>,
     ) -> OpenVerifyEnvelope {
-        let mut envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes)
+        let mut envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes)
             .expect("decode sample OpenVerifyEnvelope");
         let mut open_proof =
-            norito::decode_from_bytes::<StarkFriOpenProofV1>(envelope.proof_bytes.as_slice())
+            norito::decode_canonical::<StarkFriOpenProofV1>(envelope.proof_bytes.as_slice())
                 .expect("decode sample STARK public-input wrapper");
         open_proof.envelope_bytes = native_envelope_bytes;
-        envelope.proof_bytes =
-            norito::to_bytes(&open_proof).expect("encode rewritten STARK wrapper");
+        envelope.proof_bytes = norito::encode_canonical(&open_proof)
+            .expect("encode canonical rewritten STARK wrapper");
         envelope
     }
 
@@ -23448,13 +23947,26 @@ mod tests {
     }
 
     #[test]
-    fn model_host_heartbeat_provenance_payload_encodes_canonical_tuple() {
+    fn model_host_heartbeat_provenance_payload_encodes_purpose_bound_preimage() {
         let validator_account_id = sample_account_id(0xC3);
         let encoded =
             encode_model_host_heartbeat_provenance_payload(&validator_account_id, 160_000)
                 .expect("encode payload");
-        let expected = norito::to_bytes(&(validator_account_id, 160_000u64)).expect("encode tuple");
+        let semantic_payload =
+            norito::encode_canonical(&(validator_account_id, 160_000u64)).expect("encode tuple");
+        let expected = norito::encode_canonical(&(
+            SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1.to_vec(),
+            SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_VERSION_V1,
+            SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat.wire_id(),
+            semantic_payload,
+        ))
+        .expect("encode expected provenance preimage");
         assert_eq!(encoded, expected);
+        validate_soracloud_runtime_provenance_preimage_v1(
+            SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
+            &encoded,
+        )
+        .expect("heartbeat purpose must validate");
     }
 
     #[test]
@@ -23467,12 +23979,117 @@ mod tests {
     }
 
     #[test]
-    fn inrou_host_advertise_provenance_payload_encodes_canonical_layout() {
+    fn inrou_host_advertise_provenance_payload_encodes_purpose_bound_preimage() {
         let capability = sample_inrou_host_capability_record();
         let encoded =
             encode_inrou_host_advertise_provenance_payload(&capability).expect("encode payload");
-        let expected = norito::to_bytes(&capability).expect("encode capability");
+        let semantic_payload =
+            norito::encode_canonical(&capability).expect("encode capability payload");
+        let expected = norito::encode_canonical(&(
+            SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1.to_vec(),
+            SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_VERSION_V1,
+            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert.wire_id(),
+            semantic_payload,
+        ))
+        .expect("encode expected provenance preimage");
         assert_eq!(encoded, expected);
+        validate_soracloud_runtime_provenance_preimage_v1(
+            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+            &encoded,
+        )
+        .expect("Inrou advert purpose must validate");
+    }
+
+    #[test]
+    fn runtime_provenance_signature_cannot_replay_across_purposes() {
+        let canonical_payload = norito::encode_canonical(&("same-payload", 7u64))
+            .expect("encode shared semantic payload");
+        let heartbeat_preimage = encode_soracloud_runtime_provenance_preimage_v1(
+            SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
+            &canonical_payload,
+        )
+        .expect("encode heartbeat preimage");
+        let inrou_preimage = encode_soracloud_runtime_provenance_preimage_v1(
+            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+            &canonical_payload,
+        )
+        .expect("encode Inrou preimage");
+        assert_ne!(heartbeat_preimage, inrou_preimage);
+        assert_eq!(
+            validate_soracloud_runtime_provenance_preimage_v1(
+                SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+                &heartbeat_preimage,
+            ),
+            Err(SoracloudRuntimeProvenancePreimageErrorV1::PurposeMismatch)
+        );
+
+        let signer = sample_ed25519_keypair(0x9A);
+        let signature = Signature::try_new(signer.private_key(), &heartbeat_preimage)
+            .expect("sign heartbeat preimage");
+        signature
+            .verify(signer.public_key(), &heartbeat_preimage)
+            .expect("same-purpose signature must verify");
+        assert!(
+            signature
+                .verify(signer.public_key(), &inrou_preimage)
+                .is_err(),
+            "a heartbeat signature must not verify as an Inrou advert"
+        );
+    }
+
+    #[test]
+    fn runtime_provenance_preimage_validator_rejects_non_v1_framing() {
+        let expected_purpose = SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat;
+        assert_eq!(
+            validate_soracloud_runtime_provenance_preimage_v1(
+                expected_purpose,
+                b"not-a-norito-preimage",
+            ),
+            Err(SoracloudRuntimeProvenancePreimageErrorV1::Malformed)
+        );
+
+        let wrong_domain = norito::encode_canonical(&(
+            b"iroha:soracloud:other-domain:v1\x00".to_vec(),
+            SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_VERSION_V1,
+            expected_purpose.wire_id(),
+            b"payload".to_vec(),
+        ))
+        .expect("encode wrong-domain preimage");
+        assert_eq!(
+            validate_soracloud_runtime_provenance_preimage_v1(expected_purpose, &wrong_domain,),
+            Err(SoracloudRuntimeProvenancePreimageErrorV1::DomainMismatch)
+        );
+
+        let wrong_version = norito::encode_canonical(&(
+            SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1.to_vec(),
+            2u8,
+            expected_purpose.wire_id(),
+            b"payload".to_vec(),
+        ))
+        .expect("encode wrong-version preimage");
+        assert_eq!(
+            validate_soracloud_runtime_provenance_preimage_v1(expected_purpose, &wrong_version,),
+            Err(SoracloudRuntimeProvenancePreimageErrorV1::VersionMismatch)
+        );
+
+        let mut trailing =
+            encode_soracloud_runtime_provenance_preimage_v1(expected_purpose, b"payload")
+                .expect("encode canonical preimage");
+        trailing.push(0);
+        assert_eq!(
+            validate_soracloud_runtime_provenance_preimage_v1(expected_purpose, &trailing,),
+            Err(SoracloudRuntimeProvenancePreimageErrorV1::Malformed)
+        );
+    }
+
+    #[test]
+    fn runtime_provenance_purpose_rejects_unknown_wire_ids() {
+        for unknown in [0, 3, u8::MAX] {
+            assert_eq!(
+                SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(unknown),
+                Err(SoracloudRuntimeProvenancePurposeErrorV1)
+            );
+        }
     }
 
     #[test]
@@ -23922,16 +24539,34 @@ mod tests {
             request.clone(),
         )
         .expect("encode payload");
-        let expected = norito::to_bytes(&("health_portal", policy, request)).expect("encode tuple");
+        let expected =
+            norito::encode_canonical(&("health_portal", policy.clone(), request.clone()))
+                .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+        let _ambient = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(
+            encode_decryption_request_provenance_payload("health_portal", policy, request)
+                .expect("encode payload under alternate ambient layout"),
+            expected
+        );
     }
 
     #[test]
     fn ciphertext_query_provenance_payload_encodes_canonical_layout() {
         let query = sample_ciphertext_query_spec();
         let encoded = encode_ciphertext_query_provenance_payload(&query).expect("encode payload");
-        let expected = norito::to_bytes(&query).expect("encode query");
+        let expected = norito::encode_canonical(&query).expect("encode canonical query");
         assert_eq!(encoded, expected);
+        let _ambient = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(
+            encode_ciphertext_query_provenance_payload(&query)
+                .expect("encode query under alternate ambient layout"),
+            expected
+        );
     }
 
     #[test]
@@ -23945,8 +24580,16 @@ mod tests {
             service,
         };
         let encoded = encode_bundle_provenance_payload(&bundle).expect("encode payload");
-        let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
+        let expected = norito::encode_canonical(&bundle).expect("encode canonical layout");
         assert_eq!(encoded, expected);
+        let _ambient = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(
+            encode_bundle_provenance_payload(&bundle)
+                .expect("encode bundle under alternate ambient layout"),
+            expected
+        );
     }
 
     fn sample_binding(name: &str) -> SoraStateBindingV1 {
@@ -24028,6 +24671,29 @@ mod tests {
             ]),
             bootstrap_user_data_path: None,
             ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
+        }
+    }
+
+    fn sample_published_inrou_guest_image_artifact(
+        seed: u8,
+    ) -> SoraPublishedInrouGuestImageArtifactV1 {
+        let manifest_digest_hex = hex::encode([seed; 32]);
+        SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: manifest_digest_hex.clone(),
+            content_cid: encode_lowercase_multibase_base32(
+                &sorafs_manifest::canonical_manifest_root_cid([seed; 32]),
+            ),
+            manifest_id_hex: Some(manifest_digest_hex),
+            distribution: SoraArtifactDistributionPolicyV1::default(),
+        }
+    }
+
+    fn assert_soracloud_invalid_field(error: SoracloudManifestError, expected_field: &'static str) {
+        match error {
+            SoracloudManifestError::InvalidField { field, .. } => {
+                assert_eq!(field, expected_field);
+            }
+            other => panic!("expected invalid `{expected_field}` field, got {other:?}"),
         }
     }
 
@@ -25228,14 +25894,127 @@ mod tests {
     }
 
     #[test]
+    fn container_validate_accepts_canonical_environment_variable_names() {
+        let mut container = sample_container();
+        container.env = BTreeMap::from([
+            ("A".to_string(), "single-letter".to_string()),
+            ("APP_ENV_2".to_string(), "alphanumeric".to_string()),
+            ("_".to_string(), "underscore".to_string()),
+            ("_PRIVATE".to_string(), "prefixed".to_string()),
+        ]);
+
+        assert!(
+            container.validate().is_ok(),
+            "canonical POSIX environment-variable names should validate"
+        );
+    }
+
+    #[test]
+    fn container_validate_rejects_noncanonical_environment_variable_names() {
+        for invalid_name in [
+            "",
+            "1APP_ENV",
+            "APP-ENV",
+            "APP.ENV",
+            "APP ENV",
+            "APP=ENV",
+            "APP;touch /tmp/injected",
+            " APP_ENV",
+            "APP_ENV ",
+            "ÉNV",
+        ] {
+            let mut container = sample_container();
+            container.env = BTreeMap::from([(invalid_name.to_string(), "value".to_string())]);
+
+            let error = container
+                .validate()
+                .expect_err("noncanonical environment-variable name must fail admission");
+            assert!(
+                matches!(
+                    &error,
+                    SoracloudManifestError::EmptyField { field: "env", .. }
+                        | SoracloudManifestError::InvalidField { field: "env", .. }
+                ),
+                "unexpected error for environment-variable name {invalid_name:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn container_validate_accepts_inrou_runtime() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = "/app/bin/service".to_string();
         container.inrou = Some(sample_inrou_manifest());
         assert!(
             container.validate().is_ok(),
             "Inrou Soracloud manifests should be admitted by the data model"
         );
+    }
+
+    #[test]
+    fn container_validate_rejects_nonportable_inrou_bundle_paths() {
+        for invalid_entrypoint in [
+            "app/bin/service",
+            "/",
+            "//app/bin/service",
+            "/app/bin/service/",
+            "/app/../service",
+            "/app/./service",
+            "/app/servicé",
+            "/app/CON",
+            "/app/service:stream",
+            "/app/service name",
+            "/app/service!",
+            "/app/service.",
+        ] {
+            let mut container = sample_container();
+            container.runtime = SoraContainerRuntimeV1::Inrou;
+            container.entrypoint = invalid_entrypoint.to_string();
+            container.inrou = Some(sample_inrou_manifest());
+            let error = container
+                .validate()
+                .expect_err("nonportable Inrou entrypoint must fail admission");
+            assert!(matches!(
+                error,
+                SoracloudManifestError::InvalidField {
+                    field: "entrypoint",
+                    ..
+                }
+            ));
+        }
+
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = format!("/{}", "a".repeat(256));
+        container.inrou = Some(sample_inrou_manifest());
+        let error = container
+            .validate()
+            .expect_err("an Inrou entrypoint beyond the USTAR path bound must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "entrypoint",
+                ..
+            }
+        ));
+
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = "/app/bin/service".to_string();
+        let mut inrou = sample_inrou_manifest();
+        inrou.bootstrap_user_data_path = Some("/cloud//user-data".to_string());
+        container.inrou = Some(inrou);
+        let error = container
+            .validate()
+            .expect_err("nonportable bootstrap member path must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_user_data_path",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -25699,24 +26478,219 @@ mod tests {
             .get(&SoraInrouGuestIsaV1::X8664)
             .cloned()
             .expect("x86_64 fixture");
-        image.published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
-            manifest_digest_hex: "a".repeat(64),
-            content_cid: "bafyguestimage".to_string(),
-            manifest_id_hex: Some("b".repeat(64)),
-            distribution: SoraArtifactDistributionPolicyV1 {
-                target: SoraArtifactDistributionTargetV1::Geographies(BTreeSet::from([
-                    "ae-dxb".to_string(),
-                    "us-east".to_string(),
-                ])),
-                prefer_low_latency: true,
-                fallback_to_low_latency_when_geography_unknown: true,
-            },
-        });
+        let distribution = SoraArtifactDistributionPolicyV1 {
+            target: SoraArtifactDistributionTargetV1::Geographies(BTreeSet::from([
+                "ae-dxb".to_string(),
+                "us-east".to_string(),
+            ])),
+            prefer_low_latency: true,
+            fallback_to_low_latency_when_geography_unknown: true,
+        };
+        image.distribution = distribution.clone();
+        let mut artifact = sample_published_inrou_guest_image_artifact(0xAA);
+        artifact.distribution = distribution;
+        image.published_artifact = Some(artifact);
 
         assert!(
             image.validate().is_ok(),
             "published artifact refs with geo targets should validate"
         );
+    }
+
+    #[test]
+    fn inrou_guest_image_accepts_distinct_ascii_member_paths() {
+        let mut image = sample_inrou_manifest()
+            .guest_images
+            .get(&SoraInrouGuestIsaV1::X8664)
+            .cloned()
+            .expect("x86_64 fixture");
+        image.kernel_image_path = "/inrou/x86_64/KERNEL-v1.2.bin".to_string();
+        image.rootfs_image_path = "/inrou/x86_64/rootfs_01.ext4".to_string();
+        image.initrd_image_path = Some("/inrou/x86_64/initrd-01.img".to_string());
+
+        assert!(
+            image.validate().is_ok(),
+            "distinct portable ASCII member paths should validate"
+        );
+    }
+
+    #[test]
+    fn inrou_content_cid_codec_matches_canonical_lowercase_multibase_base32() {
+        let bytes = [0x01, 0x71, 0x1f, 0x20, 0xf3, 0x09, 0x6a, 0xe2];
+        let encoded = encode_lowercase_multibase_base32(&bytes);
+        assert_eq!(encoded, "bafyr6ihtbfvoe");
+        assert_eq!(
+            decode_lowercase_multibase_base32(&encoded),
+            Some(bytes.to_vec())
+        );
+    }
+
+    #[test]
+    fn published_inrou_artifact_rejects_noncanonical_manifest_digest_hex() {
+        for invalid in [
+            "A".repeat(64),
+            format!("{}g", "a".repeat(63)),
+            "a".repeat(62),
+            "a".repeat(66),
+        ] {
+            let mut artifact = sample_published_inrou_guest_image_artifact(0x21);
+            artifact.manifest_digest_hex = invalid;
+            let error = artifact
+                .validate()
+                .expect_err("noncanonical manifest digest must fail");
+            assert_soracloud_invalid_field(error, "manifest_digest_hex");
+        }
+    }
+
+    #[test]
+    fn published_inrou_artifact_rejects_noncanonical_or_mismatched_manifest_id_hex() {
+        for invalid in [
+            "A".repeat(64),
+            format!("{}g", "a".repeat(63)),
+            "a".repeat(62),
+            "a".repeat(66),
+            "b".repeat(64),
+        ] {
+            let mut artifact = sample_published_inrou_guest_image_artifact(0x22);
+            artifact.manifest_id_hex = Some(invalid);
+            let error = artifact
+                .validate()
+                .expect_err("noncanonical or mismatched manifest identifier must fail");
+            assert_soracloud_invalid_field(error, "manifest_id_hex");
+        }
+    }
+
+    #[test]
+    fn published_inrou_artifact_rejects_noncanonical_content_cid() {
+        let artifact = sample_published_inrou_guest_image_artifact(0x23);
+        let mut uppercase_prefix = artifact.content_cid.clone();
+        uppercase_prefix.replace_range(..1, "B");
+
+        let mut wrong_codec = sorafs_manifest::canonical_manifest_root_cid([0x24; 32]);
+        wrong_codec[1] = 0x55;
+
+        let mut nonzero_padding = artifact.content_cid.clone().into_bytes();
+        let alphabet = b"abcdefghijklmnopqrstuvwxyz234567";
+        let last = nonzero_padding
+            .last_mut()
+            .expect("canonical content CID has a final base32 character");
+        let index = alphabet
+            .iter()
+            .position(|candidate| candidate == last)
+            .expect("canonical content CID uses the lowercase base32 alphabet");
+        assert_eq!(index % 4, 0, "canonical padding bits must be zero");
+        *last = alphabet[index + 1];
+        let nonzero_padding =
+            String::from_utf8(nonzero_padding).expect("base32 fixture remains UTF-8");
+
+        for invalid in [
+            uppercase_prefix,
+            "bafyguestimage".to_string(),
+            encode_lowercase_multibase_base32(&wrong_codec),
+            nonzero_padding,
+        ] {
+            let mut artifact = artifact.clone();
+            artifact.content_cid = invalid;
+            let error = artifact
+                .validate()
+                .expect_err("noncanonical content CID must fail");
+            assert_soracloud_invalid_field(error, "content_cid");
+        }
+    }
+
+    #[test]
+    fn inrou_guest_image_rejects_published_artifact_distribution_mismatch() {
+        let mut image = sample_inrou_manifest()
+            .guest_images
+            .get(&SoraInrouGuestIsaV1::X8664)
+            .cloned()
+            .expect("x86_64 fixture");
+        let mut artifact = sample_published_inrou_guest_image_artifact(0x25);
+        artifact.distribution.target =
+            SoraArtifactDistributionTargetV1::Geographies(BTreeSet::from(["ae-dxb".to_string()]));
+        image.published_artifact = Some(artifact);
+
+        let error = image
+            .validate()
+            .expect_err("artifact distribution drift must fail");
+        assert_soracloud_invalid_field(error, "published_artifact.distribution");
+    }
+
+    #[test]
+    fn inrou_guest_image_rejects_noncanonical_member_paths_and_aliases() {
+        for invalid in [
+            "/outside/x86_64/vmlinux",
+            "/inrou//vmlinux",
+            "/inrou/./vmlinux",
+            "/inrou/x86_64/../vmlinux",
+            "/inrou/x86_64/vmlinux/",
+            "/inrou/x86_64/bad:name",
+            "/inrou/x86_64/CON",
+        ] {
+            let mut image = sample_inrou_manifest()
+                .guest_images
+                .get(&SoraInrouGuestIsaV1::X8664)
+                .cloned()
+                .expect("x86_64 fixture");
+            image.kernel_image_path = invalid.to_string();
+            let error = image
+                .validate()
+                .expect_err("noncanonical Inrou member path must fail");
+            assert_soracloud_invalid_field(error, "kernel_image_path");
+        }
+
+        let mut image = sample_inrou_manifest()
+            .guest_images
+            .get(&SoraInrouGuestIsaV1::X8664)
+            .cloned()
+            .expect("x86_64 fixture");
+        image.rootfs_image_path = image.kernel_image_path.clone();
+        let error = image
+            .validate()
+            .expect_err("duplicate Inrou member paths must fail");
+        assert_soracloud_invalid_field(error, "rootfs_image_path");
+    }
+
+    #[test]
+    fn inrou_guest_image_rejects_non_ascii_member_components() {
+        for invalid in ["/inrou/x86_64/vmlinüx", "/inrou/架構/rootfs.ext4"] {
+            let mut image = sample_inrou_manifest()
+                .guest_images
+                .get(&SoraInrouGuestIsaV1::X8664)
+                .cloned()
+                .expect("x86_64 fixture");
+            image.kernel_image_path = invalid.to_string();
+
+            let error = image
+                .validate()
+                .expect_err("non-ASCII Inrou member path component must fail");
+            assert_soracloud_invalid_field(error, "kernel_image_path");
+        }
+    }
+
+    #[test]
+    fn inrou_guest_image_rejects_ascii_case_insensitive_member_path_collisions() {
+        let mut rootfs_collision = sample_inrou_manifest()
+            .guest_images
+            .get(&SoraInrouGuestIsaV1::X8664)
+            .cloned()
+            .expect("x86_64 fixture");
+        rootfs_collision.rootfs_image_path = "/inrou/x86_64/VMLINUX".to_string();
+        let error = rootfs_collision
+            .validate()
+            .expect_err("case-insensitive rootfs member-path collision must fail");
+        assert_soracloud_invalid_field(error, "rootfs_image_path");
+
+        let mut initrd_collision = sample_inrou_manifest()
+            .guest_images
+            .get(&SoraInrouGuestIsaV1::X8664)
+            .cloned()
+            .expect("x86_64 fixture");
+        initrd_collision.initrd_image_path = Some("/inrou/X86_64/VMLINUX".to_string());
+        let error = initrd_collision
+            .validate()
+            .expect_err("case-insensitive initrd member-path collision must fail");
+        assert_soracloud_invalid_field(error, "initrd_image_path");
     }
 
     #[test]
@@ -25781,6 +26755,12 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn inrou_manifest_json_deserialize_accepts_published_guest_image_artifact() {
+        let x86_content_cid = encode_lowercase_multibase_base32(
+            &sorafs_manifest::canonical_manifest_root_cid([0x31; 32]),
+        );
+        let aarch64_content_cid = encode_lowercase_multibase_base32(
+            &sorafs_manifest::canonical_manifest_root_cid([0x32; 32]),
+        );
         let json = r#"{
           "schema_version": 1,
           "guest_os": "DebianSlim",
@@ -25791,7 +26771,7 @@ mod tests {
               "initrd_image_path": null,
               "published_artifact": {
                 "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "content_cid": "bafyguestx86",
+                "content_cid": "__X86_CONTENT_CID__",
                 "manifest_id_hex": null
               }
             },
@@ -25801,22 +26781,24 @@ mod tests {
               "initrd_image_path": null,
               "published_artifact": {
                 "manifest_digest_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                "content_cid": "bafyguestaarch64",
-                "manifest_id_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                "content_cid": "__AARCH64_CONTENT_CID__",
+                "manifest_id_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
               }
             }
           },
           "ssh_authorized_keys": ["ssh-ed25519 AAAA real"]
-        }"#;
+        }"#
+        .replace("__X86_CONTENT_CID__", &x86_content_cid)
+        .replace("__AARCH64_CONTENT_CID__", &aarch64_content_cid);
 
         let manifest: SoraInrouManifestV1 =
-            norito::json::from_str(json).expect("published guest artifact JSON should parse");
+            norito::json::from_str(&json).expect("published guest artifact JSON should parse");
 
         let artifact = manifest.guest_images[&SoraInrouGuestIsaV1::X8664]
             .published_artifact
             .as_ref()
             .expect("published artifact");
-        assert_eq!(artifact.content_cid, "bafyguestx86");
+        assert_eq!(artifact.content_cid, x86_content_cid);
         assert_eq!(
             artifact.distribution,
             SoraArtifactDistributionPolicyV1::default()

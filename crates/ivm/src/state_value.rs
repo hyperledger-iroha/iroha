@@ -10,13 +10,17 @@ use iroha_primitives::{
     json::Json,
     numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
 };
-use ivm_abi::list::ListLayoutV1;
 use ivm_abi::state_value::{
     MAX_STATE_VALUE_RECORD_BYTES, MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS,
     StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
-    state_value_schema_hash_v1,
+    state_value_schema_for_embedded_type_v1, state_value_schema_hash_v1,
 };
 use ivm_abi::sum::SumLayoutV1;
+use ivm_abi::{
+    codec::{decode_canonical_norito as decode_abi_canonical_norito, encode_canonical_norito},
+    list::ListLayoutV1,
+};
+#[cfg(test)]
 use norito::{decode_from_bytes, to_bytes};
 
 use crate::{
@@ -89,14 +93,8 @@ fn decode_schema(
     if tlv.payload.len() > MAX_STATE_VALUE_SCHEMA_BYTES {
         return Err(VMError::NoritoInvalid);
     }
-    let schema: StateValueSchemaV1 =
-        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-    if !schema.validate()
-        || to_bytes(&schema)
-            .map_err(|_| VMError::DecodeError)?
-            .as_slice()
-            != tlv.payload
-    {
+    let schema: StateValueSchemaV1 = decode_canonical_norito(tlv.payload)?;
+    if !schema.validate() {
         return Err(VMError::DecodeError);
     }
     Ok((schema, tlv.payload))
@@ -106,11 +104,7 @@ fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: norito::codec::Decode + norito::codec::Encode,
 {
-    let value = decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
-    if to_bytes(&value).map_err(|_| VMError::DecodeError)? != payload {
-        return Err(VMError::DecodeError);
-    }
-    Ok(value)
+    decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
 
 fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<(), VMError> {
@@ -155,13 +149,15 @@ fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<()
         }
         StateValueKindV1::AxtDescriptor => {
             let value: crate::axt::AxtDescriptor = decode_canonical_norito(payload)?;
-            crate::axt::validate_descriptor(&value)?;
+            crate::axt::validate_descriptor(&value).map_err(|_| VMError::DecodeError)?;
         }
         StateValueKindV1::AssetHandle => {
-            let _: crate::axt::AssetHandle = decode_canonical_norito(payload)?;
+            let value: crate::axt::AssetHandle = decode_canonical_norito(payload)?;
+            crate::axt::validate_asset_handle(&value).map_err(|_| VMError::DecodeError)?;
         }
         StateValueKindV1::ProofBlob => {
-            let _: crate::axt::ProofBlob = decode_canonical_norito(payload)?;
+            let value: crate::axt::ProofBlob = decode_canonical_norito(payload)?;
+            crate::axt::validate_proof_blob(&value).map_err(|_| VMError::DecodeError)?;
         }
         StateValueKindV1::SoracloudRequest => {
             let value: SoracloudHostRequestEnvelopeV1 = decode_canonical_norito(payload)?;
@@ -209,25 +205,19 @@ fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError
 }
 
 fn skip_state_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> Result<(), VMError> {
-    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-    *node_index = node_index.saturating_add(1);
-    match node {
-        StateValueNodeV1::Struct { fields, .. } => {
-            for _ in fields {
-                skip_state_node(nodes, node_index)?;
-            }
-        }
-        StateValueNodeV1::Tuple { arity } => {
-            for _ in 0..*arity {
-                skip_state_node(nodes, node_index)?;
-            }
-        }
-        StateValueNodeV1::Option => skip_state_node(nodes, node_index)?,
-        StateValueNodeV1::Result => {
-            skip_state_node(nodes, node_index)?;
-            skip_state_node(nodes, node_index)?;
-        }
-        StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => {}
+    let mut pending = 1_usize;
+    while pending != 0 {
+        pending -= 1;
+        let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
+        *node_index = node_index.checked_add(1).ok_or(VMError::DecodeError)?;
+        let children = match node {
+            StateValueNodeV1::Struct { fields, .. } => fields.len(),
+            StateValueNodeV1::Tuple { arity } => usize::from(*arity),
+            StateValueNodeV1::Option => 1,
+            StateValueNodeV1::Result => 2,
+            StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => 0,
+        };
+        pending = pending.checked_add(children).ok_or(VMError::DecodeError)?;
     }
     Ok(())
 }
@@ -236,38 +226,38 @@ fn state_node_word_count(
     nodes: &[StateValueNodeV1],
     node_index: &mut usize,
 ) -> Result<usize, VMError> {
-    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-    *node_index = node_index.saturating_add(1);
-    match node {
-        StateValueNodeV1::Struct { fields, .. } => {
-            let mut words = 0_usize;
-            for _ in fields {
-                words = words
-                    .checked_add(state_node_word_count(nodes, node_index)?)
+    let mut pending = 1_usize;
+    let mut words = 0_usize;
+    while pending != 0 {
+        pending -= 1;
+        let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
+        *node_index = node_index.checked_add(1).ok_or(VMError::DecodeError)?;
+        match node {
+            StateValueNodeV1::Struct { fields, .. } => {
+                pending = pending
+                    .checked_add(fields.len())
                     .ok_or(VMError::DecodeError)?;
             }
-            Ok(words)
-        }
-        StateValueNodeV1::Tuple { arity } => {
-            let mut words = 0_usize;
-            for _ in 0..*arity {
-                words = words
-                    .checked_add(state_node_word_count(nodes, node_index)?)
+            StateValueNodeV1::Tuple { arity } => {
+                pending = pending
+                    .checked_add(usize::from(*arity))
                     .ok_or(VMError::DecodeError)?;
             }
-            Ok(words)
+            StateValueNodeV1::Option => {
+                words = words.checked_add(1).ok_or(VMError::DecodeError)?;
+                skip_state_node(nodes, node_index)?;
+            }
+            StateValueNodeV1::Result => {
+                words = words.checked_add(1).ok_or(VMError::DecodeError)?;
+                skip_state_node(nodes, node_index)?;
+                skip_state_node(nodes, node_index)?;
+            }
+            StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => {
+                words = words.checked_add(1).ok_or(VMError::DecodeError)?;
+            }
         }
-        StateValueNodeV1::Option => {
-            state_node_word_count(nodes, node_index)?;
-            Ok(1)
-        }
-        StateValueNodeV1::Result => {
-            state_node_word_count(nodes, node_index)?;
-            state_node_word_count(nodes, node_index)?;
-            Ok(1)
-        }
-        StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => Ok(1),
     }
+    Ok(words)
 }
 
 fn validate_state_pointer_atom(
@@ -292,86 +282,157 @@ fn validate_state_atoms_recursive(
     node_index: &mut usize,
     atom_index: &mut usize,
 ) -> Result<(), VMError> {
-    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-    *node_index = node_index.saturating_add(1);
-    match node {
-        StateValueNodeV1::Struct { fields, .. } => {
-            for _ in fields {
-                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
+    struct Cursor<'a> {
+        nodes: &'a [StateValueNodeV1],
+        atoms: &'a [StateValueAtomV1],
+        node_index: usize,
+        atom_index: usize,
+    }
+
+    enum Work {
+        Validate(usize),
+        Skip(usize),
+        FinishStream(usize),
+    }
+
+    let mut cursors = vec![Cursor {
+        nodes,
+        atoms,
+        node_index: *node_index,
+        atom_index: *atom_index,
+    }];
+    let mut work = vec![Work::Validate(0)];
+    while let Some(task) = work.pop() {
+        match task {
+            Work::Skip(cursor_id) => {
+                let cursor = cursors.get_mut(cursor_id).ok_or(VMError::DecodeError)?;
+                skip_state_node(cursor.nodes, &mut cursor.node_index)?;
             }
-        }
-        StateValueNodeV1::Tuple { arity } => {
-            for _ in 0..*arity {
-                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
-            }
-        }
-        StateValueNodeV1::Option => {
-            let StateValueAtomV1::Tag(tag) = atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            if *tag {
-                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
-            } else {
-                skip_state_node(nodes, node_index)?;
-            }
-        }
-        StateValueNodeV1::Result => {
-            let StateValueAtomV1::Tag(tag) = atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            if *tag {
-                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
-                skip_state_node(nodes, node_index)?;
-            } else {
-                skip_state_node(nodes, node_index)?;
-                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
-            }
-        }
-        StateValueNodeV1::List { element, capacity } => {
-            let StateValueAtomV1::List(items) =
-                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            if items.len() > usize::from(*capacity) {
-                return Err(VMError::DecodeError);
-            }
-            for item in items {
-                let mut item_node = 0;
-                let mut item_atom = 0;
-                validate_state_atoms_recursive(
-                    policy,
-                    &element.nodes,
-                    item,
-                    &mut item_node,
-                    &mut item_atom,
-                )?;
-                if item_node != element.nodes.len() || item_atom != item.len() {
+            Work::FinishStream(cursor_id) => {
+                let cursor = cursors.get(cursor_id).ok_or(VMError::DecodeError)?;
+                if cursor.node_index != cursor.nodes.len()
+                    || cursor.atom_index != cursor.atoms.len()
+                {
                     return Err(VMError::DecodeError);
                 }
             }
-        }
-        StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
-            if !matches!(atoms.get(*atom_index), Some(StateValueAtomV1::Bool(_))) {
-                return Err(VMError::DecodeError);
+            Work::Validate(cursor_id) => {
+                let cursor = cursors.get_mut(cursor_id).ok_or(VMError::DecodeError)?;
+                let cursor_nodes = cursor.nodes;
+                let cursor_atoms = cursor.atoms;
+                let node = cursor_nodes
+                    .get(cursor.node_index)
+                    .ok_or(VMError::DecodeError)?;
+                cursor.node_index = cursor
+                    .node_index
+                    .checked_add(1)
+                    .ok_or(VMError::DecodeError)?;
+                match node {
+                    StateValueNodeV1::Struct { fields, .. } => {
+                        work.extend(
+                            std::iter::repeat_with(|| Work::Validate(cursor_id)).take(fields.len()),
+                        );
+                    }
+                    StateValueNodeV1::Tuple { arity } => {
+                        work.extend(
+                            std::iter::repeat_with(|| Work::Validate(cursor_id))
+                                .take(usize::from(*arity)),
+                        );
+                    }
+                    StateValueNodeV1::Option => {
+                        let StateValueAtomV1::Tag(tag) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        work.push(if *tag {
+                            Work::Validate(cursor_id)
+                        } else {
+                            Work::Skip(cursor_id)
+                        });
+                    }
+                    StateValueNodeV1::Result => {
+                        let StateValueAtomV1::Tag(tag) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        if *tag {
+                            work.push(Work::Skip(cursor_id));
+                            work.push(Work::Validate(cursor_id));
+                        } else {
+                            work.push(Work::Validate(cursor_id));
+                            work.push(Work::Skip(cursor_id));
+                        }
+                    }
+                    StateValueNodeV1::List { element, capacity } => {
+                        let StateValueAtomV1::List(items) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        if items.len() > usize::from(*capacity) {
+                            return Err(VMError::DecodeError);
+                        }
+                        let first_cursor = cursors.len();
+                        cursors.extend(items.iter().map(|item| Cursor {
+                            nodes: &element.nodes,
+                            atoms: item,
+                            node_index: 0,
+                            atom_index: 0,
+                        }));
+                        for item_cursor in (first_cursor..cursors.len()).rev() {
+                            work.push(Work::FinishStream(item_cursor));
+                            work.push(Work::Validate(item_cursor));
+                        }
+                    }
+                    StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
+                        if !matches!(
+                            cursor_atoms.get(cursor.atom_index),
+                            Some(StateValueAtomV1::Bool(_))
+                        ) {
+                            return Err(VMError::DecodeError);
+                        }
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                    }
+                    StateValueNodeV1::Leaf(kind) => {
+                        let StateValueAtomV1::Pointer(envelope) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        validate_state_pointer_atom(policy, *kind, envelope)?;
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                    }
+                }
             }
-            *atom_index = atom_index.saturating_add(1);
-        }
-        StateValueNodeV1::Leaf(kind) => {
-            let StateValueAtomV1::Pointer(envelope) =
-                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            validate_state_pointer_atom(policy, *kind, envelope)?;
-            *atom_index = atom_index.saturating_add(1);
         }
     }
+    let root = cursors.first().ok_or(VMError::DecodeError)?;
+    *node_index = root.node_index;
+    *atom_index = root.atom_index;
     Ok(())
 }
 
@@ -395,85 +456,11 @@ fn validate_state_atom_stream(
     Ok(())
 }
 
-fn append_embedded_state_schema_nodes(
-    ty: &crate::metadata::EmbeddedStateType,
-    nodes: &mut Vec<StateValueNodeV1>,
-) -> Result<(), VMError> {
-    use crate::metadata::EmbeddedStateType as Embedded;
-    use StateValueKindV1 as Kind;
-
-    match ty {
-        Embedded::Int => nodes.push(StateValueNodeV1::Leaf(Kind::Int)),
-        Embedded::Decimal => nodes.push(StateValueNodeV1::Leaf(Kind::Decimal)),
-        Embedded::Quantity => nodes.push(StateValueNodeV1::Leaf(Kind::Quantity)),
-        Embedded::Bool => nodes.push(StateValueNodeV1::Leaf(Kind::Bool)),
-        Embedded::String => nodes.push(StateValueNodeV1::Leaf(Kind::String)),
-        Embedded::Bytes => nodes.push(StateValueNodeV1::Leaf(Kind::Bytes)),
-        Embedded::DataSpaceId => nodes.push(StateValueNodeV1::Leaf(Kind::DataSpaceId)),
-        Embedded::AccountId => nodes.push(StateValueNodeV1::Leaf(Kind::AccountId)),
-        Embedded::AssetDefinitionId => {
-            nodes.push(StateValueNodeV1::Leaf(Kind::AssetDefinitionId));
-        }
-        Embedded::AssetId => nodes.push(StateValueNodeV1::Leaf(Kind::AssetId)),
-        Embedded::NftId => nodes.push(StateValueNodeV1::Leaf(Kind::NftId)),
-        Embedded::DomainId => nodes.push(StateValueNodeV1::Leaf(Kind::DomainId)),
-        Embedded::Name => nodes.push(StateValueNodeV1::Leaf(Kind::Name)),
-        Embedded::Json => nodes.push(StateValueNodeV1::Leaf(Kind::Json)),
-        Embedded::Tuple(items) => {
-            let arity = u16::try_from(items.len()).map_err(|_| VMError::NoritoInvalid)?;
-            nodes.push(StateValueNodeV1::Tuple { arity });
-            for item in items {
-                append_embedded_state_schema_nodes(item, nodes)?;
-            }
-        }
-        Embedded::Struct { name, fields } => {
-            nodes.push(StateValueNodeV1::Struct {
-                name: name.clone(),
-                fields: fields.iter().map(|field| field.name.clone()).collect(),
-            });
-            for field in fields {
-                append_embedded_state_schema_nodes(&field.ty, nodes)?;
-            }
-        }
-        Embedded::Option(inner) => {
-            nodes.push(StateValueNodeV1::Option);
-            append_embedded_state_schema_nodes(inner, nodes)?;
-        }
-        Embedded::Result { ok, err } => {
-            nodes.push(StateValueNodeV1::Result);
-            append_embedded_state_schema_nodes(ok, nodes)?;
-            append_embedded_state_schema_nodes(err, nodes)?;
-        }
-        Embedded::List { element, capacity } => {
-            let mut element_nodes = Vec::new();
-            append_embedded_state_schema_nodes(element, &mut element_nodes)?;
-            let element = StateValueSchemaV1 {
-                nodes: element_nodes,
-            };
-            if !element.validate() {
-                return Err(VMError::NoritoInvalid);
-            }
-            nodes.push(StateValueNodeV1::List {
-                element: Box::new(element),
-                capacity: *capacity,
-            });
-        }
-        Embedded::StateMap { .. } => return Err(VMError::NoritoInvalid),
-    }
-    Ok(())
-}
-
 /// Reconstruct the exact compiler-owned durable-value schema embedded in CNTR.
 pub(crate) fn schema_for_embedded_state_type(
     ty: &crate::metadata::EmbeddedStateType,
 ) -> Result<StateValueSchemaV1, VMError> {
-    let mut nodes = Vec::new();
-    append_embedded_state_schema_nodes(ty, &mut nodes)?;
-    let schema = StateValueSchemaV1 { nodes };
-    if !schema.validate() {
-        return Err(VMError::NoritoInvalid);
-    }
-    Ok(schema)
+    state_value_schema_for_embedded_type_v1(ty).ok_or(VMError::NoritoInvalid)
 }
 
 fn decode_validated_state_value_record(
@@ -488,14 +475,8 @@ fn decode_validated_state_value_record(
     {
         return Err(VMError::NoritoInvalid);
     }
-    let record: StateValueRecordV1 =
-        decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
-    if record.schema_hash != state_value_schema_hash_v1(schema_payload)
-        || to_bytes(&record)
-            .map_err(|_| VMError::DecodeError)?
-            .as_slice()
-            != payload
-    {
+    let record: StateValueRecordV1 = decode_canonical_norito(payload)?;
+    if record.schema_hash != state_value_schema_hash_v1(schema_payload) {
         return Err(VMError::DecodeError);
     }
     validate_state_atom_stream(policy, schema, &record.atoms)?;
@@ -508,7 +489,7 @@ pub(crate) fn validate_state_value_record(
     schema: &StateValueSchemaV1,
     payload: &[u8],
 ) -> Result<(), VMError> {
-    let schema_payload = to_bytes(schema).map_err(|_| VMError::DecodeError)?;
+    let schema_payload = encode_canonical_norito(schema).map_err(|_| VMError::DecodeError)?;
     decode_validated_state_value_record(vm.syscall_policy(), schema, &schema_payload, payload)
         .map(drop)
 }
@@ -525,6 +506,31 @@ impl StateEncodeContext<'_> {
     }
 }
 
+struct StateAtomOutputArena {
+    streams: Vec<Vec<StateValueAtomV1>>,
+}
+
+impl StateAtomOutputArena {
+    fn new() -> Self {
+        Self {
+            streams: vec![Vec::new()],
+        }
+    }
+}
+
+impl Drop for StateAtomOutputArena {
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.streams);
+        while let Some(mut stream) = pending.pop() {
+            while let Some(atom) = stream.pop() {
+                if let StateValueAtomV1::List(items) = atom {
+                    pending.extend(items);
+                }
+            }
+        }
+    }
+}
+
 fn encode_state_node(
     nodes: &[StateValueNodeV1],
     node_index: &mut usize,
@@ -534,211 +540,382 @@ fn encode_state_node(
     atoms: &mut Vec<StateValueAtomV1>,
     pointer_bytes: &mut usize,
 ) -> Result<(), VMError> {
-    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-    *node_index = node_index.saturating_add(1);
-    match node {
-        StateValueNodeV1::Struct { fields, .. } => {
-            for _ in fields {
-                encode_state_node(
-                    nodes,
-                    node_index,
-                    words,
-                    word_index,
-                    context,
-                    atoms,
-                    pointer_bytes,
-                )?;
+    enum WordStream<'a> {
+        Borrowed(&'a [u64]),
+        Owned(Vec<u64>),
+    }
+
+    impl WordStream<'_> {
+        fn as_slice(&self) -> &[u64] {
+            match self {
+                Self::Borrowed(words) => words,
+                Self::Owned(words) => words,
             }
-        }
-        StateValueNodeV1::Tuple { arity } => {
-            for _ in 0..*arity {
-                encode_state_node(
-                    nodes,
-                    node_index,
-                    words,
-                    word_index,
-                    context,
-                    atoms,
-                    pointer_bytes,
-                )?;
-            }
-        }
-        StateValueNodeV1::Option => {
-            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            *word_index = word_index.saturating_add(1);
-            if pointer == 0 {
-                return Err(VMError::DecodeError);
-            }
-            let mut child_end = *node_index;
-            let child_words = state_node_word_count(nodes, &mut child_end)?;
-            let layout =
-                SumLayoutV1::option(u64::try_from(child_words).map_err(|_| VMError::DecodeError)?)
-                    .map_err(|_| VMError::DecodeError)?;
-            let (tag, payload) =
-                crate::sum::read_words(context.vm, context.resolve(pointer), layout)?;
-            atoms.push(StateValueAtomV1::Tag(tag));
-            let mut active_word = 0;
-            if tag {
-                encode_state_node(
-                    nodes,
-                    node_index,
-                    &payload,
-                    &mut active_word,
-                    context,
-                    atoms,
-                    pointer_bytes,
-                )?;
-            } else {
-                skip_state_node(nodes, node_index)?;
-            }
-            if *node_index != child_end || active_word != payload.len() {
-                return Err(VMError::DecodeError);
-            }
-            *pointer_bytes = pointer_bytes.saturating_add(
-                usize::try_from(
-                    layout
-                        .allocation_bytes()
-                        .map_err(|_| VMError::DecodeError)?,
-                )
-                .unwrap_or(usize::MAX),
-            );
-        }
-        StateValueNodeV1::Result => {
-            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            *word_index = word_index.saturating_add(1);
-            if pointer == 0 {
-                return Err(VMError::DecodeError);
-            }
-            let mut ok_end = *node_index;
-            let ok_words = state_node_word_count(nodes, &mut ok_end)?;
-            let mut err_end = ok_end;
-            let err_words = state_node_word_count(nodes, &mut err_end)?;
-            let layout = SumLayoutV1::try_new(
-                u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
-                u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
-            )
-            .map_err(|_| VMError::DecodeError)?;
-            let (tag, payload) =
-                crate::sum::read_words(context.vm, context.resolve(pointer), layout)?;
-            atoms.push(StateValueAtomV1::Tag(tag));
-            let mut active_word = 0;
-            if tag {
-                encode_state_node(
-                    nodes,
-                    node_index,
-                    &payload,
-                    &mut active_word,
-                    context,
-                    atoms,
-                    pointer_bytes,
-                )?;
-                skip_state_node(nodes, node_index)?;
-            } else {
-                skip_state_node(nodes, node_index)?;
-                encode_state_node(
-                    nodes,
-                    node_index,
-                    &payload,
-                    &mut active_word,
-                    context,
-                    atoms,
-                    pointer_bytes,
-                )?;
-            }
-            if *node_index != err_end || active_word != payload.len() {
-                return Err(VMError::DecodeError);
-            }
-            *pointer_bytes = pointer_bytes.saturating_add(
-                usize::try_from(
-                    layout
-                        .allocation_bytes()
-                        .map_err(|_| VMError::DecodeError)?,
-                )
-                .unwrap_or(usize::MAX),
-            );
-        }
-        StateValueNodeV1::List { element, capacity } => {
-            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            *word_index = word_index.saturating_add(1);
-            if pointer == 0 {
-                return Err(VMError::DecodeError);
-            }
-            let element_words = element.word_count().ok_or(VMError::DecodeError)?;
-            let layout = ListLayoutV1::try_new(
-                u64::from(*capacity),
-                u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
-            )
-            .map_err(|_| VMError::DecodeError)?;
-            let raw_items = crate::list::read_words(context.vm, context.resolve(pointer), layout)?;
-            let mut items = Vec::with_capacity(raw_items.len());
-            for words in raw_items {
-                let mut item = Vec::new();
-                let mut item_node = 0;
-                let mut item_word = 0;
-                encode_state_node(
-                    &element.nodes,
-                    &mut item_node,
-                    &words,
-                    &mut item_word,
-                    context,
-                    &mut item,
-                    pointer_bytes,
-                )?;
-                if item_node != element.nodes.len() || item_word != words.len() {
-                    return Err(VMError::DecodeError);
-                }
-                validate_state_atom_stream(context.vm.syscall_policy(), element, &item)?;
-                items.push(item);
-            }
-            *pointer_bytes = pointer_bytes.saturating_add(
-                usize::try_from(
-                    layout
-                        .allocation_bytes()
-                        .map_err(|_| VMError::DecodeError)?,
-                )
-                .unwrap_or(usize::MAX),
-            );
-            atoms.push(StateValueAtomV1::List(items));
-        }
-        StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
-            let word = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            *word_index = word_index.saturating_add(1);
-            let value = match word {
-                0 => false,
-                1 => true,
-                _ => return Err(VMError::DecodeError),
-            };
-            atoms.push(StateValueAtomV1::Bool(value));
-        }
-        StateValueNodeV1::Leaf(StateValueKindV1::Bytes) => {
-            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            *word_index = word_index.saturating_add(1);
-            if pointer == 0 {
-                return Err(VMError::DecodeError);
-            }
-            let (envelope, tlv) = load_tlv(context.vm, pointer, context.resolver)?;
-            if !matches!(tlv.type_id, PointerType::Blob | PointerType::NoritoBytes) {
-                return Err(VMError::NoritoInvalid);
-            }
-            validate_pointer_payload(StateValueKindV1::Bytes, tlv.payload)?;
-            let canonical = encode_tlv(PointerType::Blob, tlv.payload)?;
-            *pointer_bytes = pointer_bytes.saturating_add(envelope.len());
-            atoms.push(StateValueAtomV1::Pointer(canonical));
-        }
-        StateValueNodeV1::Leaf(kind) => {
-            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            *word_index = word_index.saturating_add(1);
-            if pointer == 0 {
-                return Err(VMError::DecodeError);
-            }
-            let expected = kind.pointer_type().ok_or(VMError::DecodeError)?;
-            let (envelope, tlv) =
-                load_expected_tlv(context.vm, pointer, expected, context.resolver)?;
-            validate_pointer_payload(*kind, tlv.payload)?;
-            *pointer_bytes = pointer_bytes.saturating_add(envelope.len());
-            atoms.push(StateValueAtomV1::Pointer(envelope.to_vec()));
         }
     }
+
+    struct Cursor<'a> {
+        nodes: &'a [StateValueNodeV1],
+        node_index: usize,
+        words: WordStream<'a>,
+        word_index: usize,
+        output: usize,
+    }
+
+    enum Work<'a> {
+        Encode(usize),
+        FinishCursor {
+            cursor: usize,
+            expected_node: usize,
+            expected_word: usize,
+        },
+        FinishItem {
+            cursor: usize,
+            schema: &'a StateValueSchemaV1,
+        },
+        FinishList {
+            parent_output: usize,
+            item_outputs: Vec<usize>,
+        },
+    }
+
+    let mut cursors = vec![Cursor {
+        nodes,
+        node_index: *node_index,
+        words: WordStream::Borrowed(words),
+        word_index: *word_index,
+        output: 0,
+    }];
+    let mut outputs = StateAtomOutputArena::new();
+    let mut work = vec![Work::Encode(0)];
+    let mut encoded_pointer_bytes = 0_usize;
+
+    while let Some(task) = work.pop() {
+        match task {
+            Work::FinishCursor {
+                cursor,
+                expected_node,
+                expected_word,
+            } => {
+                let cursor = cursors.get(cursor).ok_or(VMError::DecodeError)?;
+                if cursor.node_index != expected_node || cursor.word_index != expected_word {
+                    return Err(VMError::DecodeError);
+                }
+            }
+            Work::FinishItem { cursor, schema } => {
+                let cursor = cursors.get(cursor).ok_or(VMError::DecodeError)?;
+                if cursor.node_index != cursor.nodes.len()
+                    || cursor.word_index != cursor.words.as_slice().len()
+                {
+                    return Err(VMError::DecodeError);
+                }
+                let item = outputs
+                    .streams
+                    .get(cursor.output)
+                    .ok_or(VMError::DecodeError)?;
+                validate_state_atom_stream(context.vm.syscall_policy(), schema, item)?;
+            }
+            Work::FinishList {
+                parent_output,
+                item_outputs,
+            } => {
+                let mut items = Vec::with_capacity(item_outputs.len());
+                for output in item_outputs {
+                    items.push(std::mem::take(
+                        outputs
+                            .streams
+                            .get_mut(output)
+                            .ok_or(VMError::DecodeError)?,
+                    ));
+                }
+                outputs
+                    .streams
+                    .get_mut(parent_output)
+                    .ok_or(VMError::DecodeError)?
+                    .push(StateValueAtomV1::List(items));
+            }
+            Work::Encode(cursor_id) => {
+                let cursor = cursors.get_mut(cursor_id).ok_or(VMError::DecodeError)?;
+                let cursor_nodes = cursor.nodes;
+                let cursor_output = cursor.output;
+                let node = cursor_nodes
+                    .get(cursor.node_index)
+                    .ok_or(VMError::DecodeError)?;
+                cursor.node_index = cursor
+                    .node_index
+                    .checked_add(1)
+                    .ok_or(VMError::DecodeError)?;
+                match node {
+                    StateValueNodeV1::Struct { fields, .. } => {
+                        work.extend(
+                            std::iter::repeat_with(|| Work::Encode(cursor_id)).take(fields.len()),
+                        );
+                    }
+                    StateValueNodeV1::Tuple { arity } => {
+                        work.extend(
+                            std::iter::repeat_with(|| Work::Encode(cursor_id))
+                                .take(usize::from(*arity)),
+                        );
+                    }
+                    StateValueNodeV1::Option => {
+                        let pointer = *cursor
+                            .words
+                            .as_slice()
+                            .get(cursor.word_index)
+                            .ok_or(VMError::DecodeError)?;
+                        cursor.word_index = cursor
+                            .word_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        if pointer == 0 {
+                            return Err(VMError::DecodeError);
+                        }
+                        let child_start = cursor.node_index;
+                        let mut child_end = child_start;
+                        let child_words = state_node_word_count(cursor_nodes, &mut child_end)?;
+                        let layout = SumLayoutV1::option(
+                            u64::try_from(child_words).map_err(|_| VMError::DecodeError)?,
+                        )
+                        .map_err(|_| VMError::DecodeError)?;
+                        let (tag, payload) =
+                            crate::sum::read_words(context.vm, context.resolve(pointer), layout)?;
+                        outputs
+                            .streams
+                            .get_mut(cursor_output)
+                            .ok_or(VMError::DecodeError)?
+                            .push(StateValueAtomV1::Tag(tag));
+                        cursor.node_index = child_end;
+                        if tag {
+                            let expected_word = payload.len();
+                            let child_cursor = cursors.len();
+                            cursors.push(Cursor {
+                                nodes: cursor_nodes,
+                                node_index: child_start,
+                                words: WordStream::Owned(payload),
+                                word_index: 0,
+                                output: cursor_output,
+                            });
+                            work.push(Work::FinishCursor {
+                                cursor: child_cursor,
+                                expected_node: child_end,
+                                expected_word,
+                            });
+                            work.push(Work::Encode(child_cursor));
+                        } else if !payload.is_empty() {
+                            return Err(VMError::DecodeError);
+                        }
+                        encoded_pointer_bytes = encoded_pointer_bytes.saturating_add(
+                            usize::try_from(
+                                layout
+                                    .allocation_bytes()
+                                    .map_err(|_| VMError::DecodeError)?,
+                            )
+                            .unwrap_or(usize::MAX),
+                        );
+                    }
+                    StateValueNodeV1::Result => {
+                        let pointer = *cursor
+                            .words
+                            .as_slice()
+                            .get(cursor.word_index)
+                            .ok_or(VMError::DecodeError)?;
+                        cursor.word_index = cursor
+                            .word_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        if pointer == 0 {
+                            return Err(VMError::DecodeError);
+                        }
+                        let ok_start = cursor.node_index;
+                        let mut ok_end = ok_start;
+                        let ok_words = state_node_word_count(cursor_nodes, &mut ok_end)?;
+                        let mut err_end = ok_end;
+                        let err_words = state_node_word_count(cursor_nodes, &mut err_end)?;
+                        let layout = SumLayoutV1::try_new(
+                            u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
+                        )
+                        .map_err(|_| VMError::DecodeError)?;
+                        let (tag, payload) =
+                            crate::sum::read_words(context.vm, context.resolve(pointer), layout)?;
+                        outputs
+                            .streams
+                            .get_mut(cursor_output)
+                            .ok_or(VMError::DecodeError)?
+                            .push(StateValueAtomV1::Tag(tag));
+                        cursor.node_index = err_end;
+                        let (active_start, active_end) = if tag {
+                            (ok_start, ok_end)
+                        } else {
+                            (ok_end, err_end)
+                        };
+                        let expected_word = payload.len();
+                        let child_cursor = cursors.len();
+                        cursors.push(Cursor {
+                            nodes: cursor_nodes,
+                            node_index: active_start,
+                            words: WordStream::Owned(payload),
+                            word_index: 0,
+                            output: cursor_output,
+                        });
+                        work.push(Work::FinishCursor {
+                            cursor: child_cursor,
+                            expected_node: active_end,
+                            expected_word,
+                        });
+                        work.push(Work::Encode(child_cursor));
+                        encoded_pointer_bytes = encoded_pointer_bytes.saturating_add(
+                            usize::try_from(
+                                layout
+                                    .allocation_bytes()
+                                    .map_err(|_| VMError::DecodeError)?,
+                            )
+                            .unwrap_or(usize::MAX),
+                        );
+                    }
+                    StateValueNodeV1::List { element, capacity } => {
+                        let pointer = *cursor
+                            .words
+                            .as_slice()
+                            .get(cursor.word_index)
+                            .ok_or(VMError::DecodeError)?;
+                        cursor.word_index = cursor
+                            .word_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        if pointer == 0 {
+                            return Err(VMError::DecodeError);
+                        }
+                        let element_words = element.word_count().ok_or(VMError::DecodeError)?;
+                        let layout = ListLayoutV1::try_new(
+                            u64::from(*capacity),
+                            u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+                        )
+                        .map_err(|_| VMError::DecodeError)?;
+                        let raw_items =
+                            crate::list::read_words(context.vm, context.resolve(pointer), layout)?;
+                        let parent_output = cursor_output;
+                        let first_cursor = cursors.len();
+                        let first_output = outputs.streams.len();
+                        outputs
+                            .streams
+                            .extend((0..raw_items.len()).map(|_| Vec::new()));
+                        cursors.extend(raw_items.into_iter().enumerate().map(
+                            |(item_index, words)| Cursor {
+                                nodes: &element.nodes,
+                                node_index: 0,
+                                words: WordStream::Owned(words),
+                                word_index: 0,
+                                output: first_output + item_index,
+                            },
+                        ));
+                        let item_outputs =
+                            (first_output..first_output + cursors.len() - first_cursor).collect();
+                        work.push(Work::FinishList {
+                            parent_output,
+                            item_outputs,
+                        });
+                        for item_cursor in (first_cursor..cursors.len()).rev() {
+                            work.push(Work::FinishItem {
+                                cursor: item_cursor,
+                                schema: element,
+                            });
+                            work.push(Work::Encode(item_cursor));
+                        }
+                        encoded_pointer_bytes = encoded_pointer_bytes.saturating_add(
+                            usize::try_from(
+                                layout
+                                    .allocation_bytes()
+                                    .map_err(|_| VMError::DecodeError)?,
+                            )
+                            .unwrap_or(usize::MAX),
+                        );
+                    }
+                    StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
+                        let word = *cursor
+                            .words
+                            .as_slice()
+                            .get(cursor.word_index)
+                            .ok_or(VMError::DecodeError)?;
+                        cursor.word_index = cursor
+                            .word_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        let value = match word {
+                            0 => false,
+                            1 => true,
+                            _ => return Err(VMError::DecodeError),
+                        };
+                        outputs
+                            .streams
+                            .get_mut(cursor_output)
+                            .ok_or(VMError::DecodeError)?
+                            .push(StateValueAtomV1::Bool(value));
+                    }
+                    StateValueNodeV1::Leaf(StateValueKindV1::Bytes) => {
+                        let pointer = *cursor
+                            .words
+                            .as_slice()
+                            .get(cursor.word_index)
+                            .ok_or(VMError::DecodeError)?;
+                        cursor.word_index = cursor
+                            .word_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        if pointer == 0 {
+                            return Err(VMError::DecodeError);
+                        }
+                        let (envelope, tlv) = load_tlv(context.vm, pointer, context.resolver)?;
+                        if !matches!(tlv.type_id, PointerType::Blob | PointerType::NoritoBytes) {
+                            return Err(VMError::NoritoInvalid);
+                        }
+                        validate_pointer_payload(StateValueKindV1::Bytes, tlv.payload)?;
+                        let canonical = encode_tlv(PointerType::Blob, tlv.payload)?;
+                        encoded_pointer_bytes =
+                            encoded_pointer_bytes.saturating_add(envelope.len());
+                        outputs
+                            .streams
+                            .get_mut(cursor_output)
+                            .ok_or(VMError::DecodeError)?
+                            .push(StateValueAtomV1::Pointer(canonical));
+                    }
+                    StateValueNodeV1::Leaf(kind) => {
+                        let pointer = *cursor
+                            .words
+                            .as_slice()
+                            .get(cursor.word_index)
+                            .ok_or(VMError::DecodeError)?;
+                        cursor.word_index = cursor
+                            .word_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        if pointer == 0 {
+                            return Err(VMError::DecodeError);
+                        }
+                        let expected = kind.pointer_type().ok_or(VMError::DecodeError)?;
+                        let (envelope, tlv) =
+                            load_expected_tlv(context.vm, pointer, expected, context.resolver)?;
+                        validate_pointer_payload(*kind, tlv.payload)?;
+                        encoded_pointer_bytes =
+                            encoded_pointer_bytes.saturating_add(envelope.len());
+                        outputs
+                            .streams
+                            .get_mut(cursor_output)
+                            .ok_or(VMError::DecodeError)?
+                            .push(StateValueAtomV1::Pointer(envelope.to_vec()));
+                    }
+                }
+            }
+        }
+    }
+
+    let root = cursors.first().ok_or(VMError::DecodeError)?;
+    *node_index = root.node_index;
+    *word_index = root.word_index;
+    atoms.extend(std::mem::take(
+        outputs.streams.first_mut().ok_or(VMError::DecodeError)?,
+    ));
+    *pointer_bytes = pointer_bytes.saturating_add(encoded_pointer_bytes);
     Ok(())
 }
 
@@ -773,7 +950,7 @@ pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
         schema_hash: state_value_schema_hash_v1(schema_payload),
         atoms,
     };
-    let payload = to_bytes(&record).map_err(|_| VMError::NoritoInvalid)?;
+    let payload = encode_canonical_norito(&record)?;
     if payload.len() > MAX_STATE_VALUE_RECORD_BYTES {
         return Err(VMError::NoritoInvalid);
     }
@@ -798,235 +975,467 @@ enum PlannedStateWord {
     Sum {
         layout: SumLayoutV1,
         tag: u64,
-        active: Vec<PlannedStateWord>,
+        active: Vec<usize>,
     },
     List {
         layout: ListLayoutV1,
-        elements: Vec<Vec<PlannedStateWord>>,
+        elements: Vec<Vec<usize>>,
     },
+}
+
+struct PlannedState {
+    values: Vec<PlannedStateWord>,
+    roots: Vec<usize>,
 }
 
 fn plan_state_atoms(
     nodes: &[StateValueNodeV1],
     atoms: &[StateValueAtomV1],
-    node_index: &mut usize,
-    atom_index: &mut usize,
-    planned: &mut Vec<PlannedStateWord>,
-) -> Result<(), VMError> {
-    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-    *node_index = node_index.saturating_add(1);
-    match node {
-        StateValueNodeV1::Struct { fields, .. } => {
-            for _ in fields {
-                plan_state_atoms(nodes, atoms, node_index, atom_index, planned)?;
-            }
-        }
-        StateValueNodeV1::Tuple { arity } => {
-            for _ in 0..*arity {
-                plan_state_atoms(nodes, atoms, node_index, atom_index, planned)?;
-            }
-        }
-        StateValueNodeV1::Option => {
-            let StateValueAtomV1::Tag(tag) = atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            let mut child_end = *node_index;
-            let child_words = state_node_word_count(nodes, &mut child_end)?;
-            let mut active = Vec::with_capacity(child_words);
-            if *tag {
-                plan_state_atoms(nodes, atoms, node_index, atom_index, &mut active)?;
-            } else {
-                skip_state_node(nodes, node_index)?;
-            }
-            if *node_index != child_end || active.len() != if *tag { child_words } else { 0 } {
-                return Err(VMError::DecodeError);
-            }
-            let layout =
-                SumLayoutV1::option(u64::try_from(child_words).map_err(|_| VMError::DecodeError)?)
-                    .map_err(|_| VMError::DecodeError)?;
-            planned.push(PlannedStateWord::Sum {
+) -> Result<PlannedState, VMError> {
+    struct Cursor<'a> {
+        nodes: &'a [StateValueNodeV1],
+        atoms: &'a [StateValueAtomV1],
+        node_index: usize,
+        atom_index: usize,
+        output: usize,
+    }
+
+    enum Work {
+        Plan(usize),
+        FinishActive {
+            parent_cursor: usize,
+            child_cursor: usize,
+            active_output: usize,
+            expected_node: usize,
+            expected_words: usize,
+            layout: SumLayoutV1,
+            tag: u64,
+        },
+        FinishItem {
+            cursor: usize,
+            output: usize,
+            expected_words: usize,
+        },
+        FinishList {
+            parent_output: usize,
+            item_outputs: Vec<usize>,
+            layout: ListLayoutV1,
+        },
+    }
+
+    fn push_planned(
+        values: &mut Vec<PlannedStateWord>,
+        outputs: &mut [Vec<usize>],
+        output: usize,
+        value: PlannedStateWord,
+    ) -> Result<(), VMError> {
+        let value_id = values.len();
+        values.push(value);
+        outputs
+            .get_mut(output)
+            .ok_or(VMError::DecodeError)?
+            .push(value_id);
+        Ok(())
+    }
+
+    let mut cursors = vec![Cursor {
+        nodes,
+        atoms,
+        node_index: 0,
+        atom_index: 0,
+        output: 0,
+    }];
+    let mut outputs = vec![Vec::new()];
+    let mut values = Vec::new();
+    let mut work = vec![Work::Plan(0)];
+
+    while let Some(task) = work.pop() {
+        match task {
+            Work::FinishActive {
+                parent_cursor,
+                child_cursor,
+                active_output,
+                expected_node,
+                expected_words,
                 layout,
-                tag: u64::from(*tag),
-                active,
-            });
-        }
-        StateValueNodeV1::Result => {
-            let StateValueAtomV1::Tag(tag) = atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            let mut ok_end = *node_index;
-            let ok_words = state_node_word_count(nodes, &mut ok_end)?;
-            let mut err_end = ok_end;
-            let err_words = state_node_word_count(nodes, &mut err_end)?;
-            let mut active = Vec::with_capacity(if *tag { ok_words } else { err_words });
-            if *tag {
-                plan_state_atoms(nodes, atoms, node_index, atom_index, &mut active)?;
-                skip_state_node(nodes, node_index)?;
-            } else {
-                skip_state_node(nodes, node_index)?;
-                plan_state_atoms(nodes, atoms, node_index, atom_index, &mut active)?;
-            }
-            let expected_words = if *tag { ok_words } else { err_words };
-            if *node_index != err_end || active.len() != expected_words {
-                return Err(VMError::DecodeError);
-            }
-            let layout = SumLayoutV1::try_new(
-                u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
-                u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
-            )
-            .map_err(|_| VMError::DecodeError)?;
-            planned.push(PlannedStateWord::Sum {
-                layout,
-                tag: u64::from(*tag),
-                active,
-            });
-        }
-        StateValueNodeV1::List { element, capacity } => {
-            let StateValueAtomV1::List(items) =
-                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            let element_words = element.word_count().ok_or(VMError::DecodeError)?;
-            let layout = ListLayoutV1::try_new(
-                u64::from(*capacity),
-                u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
-            )
-            .map_err(|_| VMError::DecodeError)?;
-            let mut elements = Vec::with_capacity(items.len());
-            for item in items {
-                let mut item_node = 0;
-                let mut item_atom = 0;
-                let mut values = Vec::new();
-                plan_state_atoms(
-                    &element.nodes,
-                    item,
-                    &mut item_node,
-                    &mut item_atom,
-                    &mut values,
-                )?;
-                if item_node != element.nodes.len()
-                    || item_atom != item.len()
-                    || values.len() != element_words
+                tag,
+            } => {
+                let child = cursors.get(child_cursor).ok_or(VMError::DecodeError)?;
+                if child.node_index != expected_node
+                    || outputs
+                        .get(active_output)
+                        .ok_or(VMError::DecodeError)?
+                        .len()
+                        != expected_words
                 {
                     return Err(VMError::DecodeError);
                 }
-                elements.push(values);
+                let child_atom_index = child.atom_index;
+                cursors
+                    .get_mut(parent_cursor)
+                    .ok_or(VMError::DecodeError)?
+                    .atom_index = child_atom_index;
+                let active =
+                    std::mem::take(outputs.get_mut(active_output).ok_or(VMError::DecodeError)?);
+                let parent_output = cursors
+                    .get(parent_cursor)
+                    .ok_or(VMError::DecodeError)?
+                    .output;
+                push_planned(
+                    &mut values,
+                    &mut outputs,
+                    parent_output,
+                    PlannedStateWord::Sum {
+                        layout,
+                        tag,
+                        active,
+                    },
+                )?;
             }
-            planned.push(PlannedStateWord::List { layout, elements });
-        }
-        StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
-            let StateValueAtomV1::Bool(value) =
-                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            planned.push(PlannedStateWord::Scalar(u64::from(*value)));
-        }
-        StateValueNodeV1::Leaf(_) => {
-            let StateValueAtomV1::Pointer(envelope) =
-                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
-            else {
-                return Err(VMError::DecodeError);
-            };
-            *atom_index = atom_index.saturating_add(1);
-            planned.push(PlannedStateWord::Pointer(envelope.clone()));
-        }
-    }
-    Ok(())
-}
-
-fn planned_state_bytes(value: &PlannedStateWord) -> usize {
-    match value {
-        PlannedStateWord::Scalar(_) => 0,
-        PlannedStateWord::Pointer(envelope) => envelope.len(),
-        PlannedStateWord::Sum { layout, active, .. } => {
-            active.iter().map(planned_state_bytes).fold(
-                layout
-                    .allocation_bytes()
-                    .ok()
-                    .and_then(|bytes| usize::try_from(bytes).ok())
-                    .unwrap_or(usize::MAX),
-                usize::saturating_add,
-            )
-        }
-        PlannedStateWord::List { layout, elements } => {
-            elements.iter().flatten().map(planned_state_bytes).fold(
-                layout
-                    .allocation_bytes()
-                    .ok()
-                    .and_then(|bytes| usize::try_from(bytes).ok())
-                    .unwrap_or(usize::MAX),
-                usize::saturating_add,
-            )
-        }
-    }
-}
-
-fn planned_state_allocation_shape(value: &PlannedStateWord, tlv_lengths: &mut Vec<usize>) -> usize {
-    match value {
-        PlannedStateWord::Scalar(_) => 0,
-        PlannedStateWord::Pointer(envelope) => {
-            tlv_lengths.push(envelope.len());
-            0
-        }
-        PlannedStateWord::Sum { layout, active, .. } => active.iter().fold(
-            layout
-                .allocation_bytes()
-                .ok()
-                .and_then(|bytes| usize::try_from(bytes).ok())
-                .unwrap_or(usize::MAX),
-            |bytes, value| bytes.saturating_add(planned_state_allocation_shape(value, tlv_lengths)),
-        ),
-        PlannedStateWord::List { layout, elements } => elements.iter().flatten().fold(
-            layout
-                .allocation_bytes()
-                .ok()
-                .and_then(|bytes| usize::try_from(bytes).ok())
-                .unwrap_or(usize::MAX),
-            |bytes, value| bytes.saturating_add(planned_state_allocation_shape(value, tlv_lengths)),
-        ),
-    }
-}
-
-fn materialize_state_word(vm: &mut IVM, value: PlannedStateWord) -> Result<u64, VMError> {
-    match value {
-        PlannedStateWord::Scalar(value) => Ok(value),
-        PlannedStateWord::Pointer(envelope) => vm.alloc_host_tlv(&envelope),
-        PlannedStateWord::Sum {
-            layout,
-            tag,
-            active,
-        } => {
-            let mut payload = Vec::with_capacity(active.len());
-            for value in active {
-                payload.push(materialize_state_word(vm, value)?);
-            }
-            crate::sum::allocate_words(vm, layout, tag, &payload)
-        }
-        PlannedStateWord::List { layout, elements } => {
-            let width =
-                usize::try_from(layout.element_words()).map_err(|_| VMError::DecodeError)?;
-            let mut words = Vec::with_capacity(elements.len());
-            for element in elements {
-                let mut item = Vec::with_capacity(width);
-                for value in element {
-                    item.push(materialize_state_word(vm, value)?);
-                }
-                if item.len() != width {
+            Work::FinishItem {
+                cursor,
+                output,
+                expected_words,
+            } => {
+                let cursor = cursors.get(cursor).ok_or(VMError::DecodeError)?;
+                if cursor.node_index != cursor.nodes.len()
+                    || cursor.atom_index != cursor.atoms.len()
+                    || outputs.get(output).ok_or(VMError::DecodeError)?.len() != expected_words
+                {
                     return Err(VMError::DecodeError);
                 }
-                words.push(item);
             }
-            crate::list::allocate_words(vm, layout, &words)
+            Work::FinishList {
+                parent_output,
+                item_outputs,
+                layout,
+                ..
+            } => {
+                let mut elements = Vec::with_capacity(item_outputs.len());
+                for output in item_outputs {
+                    elements.push(std::mem::take(
+                        outputs.get_mut(output).ok_or(VMError::DecodeError)?,
+                    ));
+                }
+                push_planned(
+                    &mut values,
+                    &mut outputs,
+                    parent_output,
+                    PlannedStateWord::List { layout, elements },
+                )?;
+            }
+            Work::Plan(cursor_id) => {
+                let cursor = cursors.get_mut(cursor_id).ok_or(VMError::DecodeError)?;
+                let cursor_nodes = cursor.nodes;
+                let cursor_atoms = cursor.atoms;
+                let cursor_output = cursor.output;
+                let node = cursor_nodes
+                    .get(cursor.node_index)
+                    .ok_or(VMError::DecodeError)?;
+                cursor.node_index = cursor
+                    .node_index
+                    .checked_add(1)
+                    .ok_or(VMError::DecodeError)?;
+                match node {
+                    StateValueNodeV1::Struct { fields, .. } => {
+                        work.extend(
+                            std::iter::repeat_with(|| Work::Plan(cursor_id)).take(fields.len()),
+                        );
+                    }
+                    StateValueNodeV1::Tuple { arity } => {
+                        work.extend(
+                            std::iter::repeat_with(|| Work::Plan(cursor_id))
+                                .take(usize::from(*arity)),
+                        );
+                    }
+                    StateValueNodeV1::Option => {
+                        let StateValueAtomV1::Tag(tag) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        let tag = *tag;
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        let child_start = cursor.node_index;
+                        let mut child_end = child_start;
+                        let child_words = state_node_word_count(cursor_nodes, &mut child_end)?;
+                        cursor.node_index = child_end;
+                        let layout = SumLayoutV1::option(
+                            u64::try_from(child_words).map_err(|_| VMError::DecodeError)?,
+                        )
+                        .map_err(|_| VMError::DecodeError)?;
+                        if tag {
+                            let active_output = outputs.len();
+                            outputs.push(Vec::with_capacity(child_words));
+                            let child_atom_index = cursor.atom_index;
+                            let child_cursor = cursors.len();
+                            cursors.push(Cursor {
+                                nodes: cursor_nodes,
+                                atoms: cursor_atoms,
+                                node_index: child_start,
+                                atom_index: child_atom_index,
+                                output: active_output,
+                            });
+                            work.push(Work::FinishActive {
+                                parent_cursor: cursor_id,
+                                child_cursor,
+                                active_output,
+                                expected_node: child_end,
+                                expected_words: child_words,
+                                layout,
+                                tag: 1,
+                            });
+                            work.push(Work::Plan(child_cursor));
+                        } else {
+                            push_planned(
+                                &mut values,
+                                &mut outputs,
+                                cursor_output,
+                                PlannedStateWord::Sum {
+                                    layout,
+                                    tag: 0,
+                                    active: Vec::new(),
+                                },
+                            )?;
+                        }
+                    }
+                    StateValueNodeV1::Result => {
+                        let StateValueAtomV1::Tag(tag) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        let tag = *tag;
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        let ok_start = cursor.node_index;
+                        let mut ok_end = ok_start;
+                        let ok_words = state_node_word_count(cursor_nodes, &mut ok_end)?;
+                        let mut err_end = ok_end;
+                        let err_words = state_node_word_count(cursor_nodes, &mut err_end)?;
+                        cursor.node_index = err_end;
+                        let layout = SumLayoutV1::try_new(
+                            u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
+                        )
+                        .map_err(|_| VMError::DecodeError)?;
+                        let (active_start, active_end, active_words) = if tag {
+                            (ok_start, ok_end, ok_words)
+                        } else {
+                            (ok_end, err_end, err_words)
+                        };
+                        let active_output = outputs.len();
+                        outputs.push(Vec::with_capacity(active_words));
+                        let child_atom_index = cursor.atom_index;
+                        let child_cursor = cursors.len();
+                        cursors.push(Cursor {
+                            nodes: cursor_nodes,
+                            atoms: cursor_atoms,
+                            node_index: active_start,
+                            atom_index: child_atom_index,
+                            output: active_output,
+                        });
+                        work.push(Work::FinishActive {
+                            parent_cursor: cursor_id,
+                            child_cursor,
+                            active_output,
+                            expected_node: active_end,
+                            expected_words: active_words,
+                            layout,
+                            tag: u64::from(tag),
+                        });
+                        work.push(Work::Plan(child_cursor));
+                    }
+                    StateValueNodeV1::List { element, capacity } => {
+                        let StateValueAtomV1::List(items) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        if items.len() > usize::from(*capacity) {
+                            return Err(VMError::DecodeError);
+                        }
+                        let element_words = element.word_count().ok_or(VMError::DecodeError)?;
+                        let layout = ListLayoutV1::try_new(
+                            u64::from(*capacity),
+                            u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+                        )
+                        .map_err(|_| VMError::DecodeError)?;
+                        let parent_output = cursor_output;
+                        let first_cursor = cursors.len();
+                        let first_output = outputs.len();
+                        outputs.extend((0..items.len()).map(|_| Vec::with_capacity(element_words)));
+                        cursors.extend(items.iter().enumerate().map(|(item_index, item)| Cursor {
+                            nodes: &element.nodes,
+                            atoms: item,
+                            node_index: 0,
+                            atom_index: 0,
+                            output: first_output + item_index,
+                        }));
+                        let item_outputs =
+                            (first_output..first_output + cursors.len() - first_cursor).collect();
+                        work.push(Work::FinishList {
+                            parent_output,
+                            item_outputs,
+                            layout,
+                        });
+                        for item_cursor in (first_cursor..cursors.len()).rev() {
+                            work.push(Work::FinishItem {
+                                cursor: item_cursor,
+                                output: cursors[item_cursor].output,
+                                expected_words: element_words,
+                            });
+                            work.push(Work::Plan(item_cursor));
+                        }
+                    }
+                    StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
+                        let StateValueAtomV1::Bool(value) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        let value = *value;
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        push_planned(
+                            &mut values,
+                            &mut outputs,
+                            cursor_output,
+                            PlannedStateWord::Scalar(u64::from(value)),
+                        )?;
+                    }
+                    StateValueNodeV1::Leaf(_) => {
+                        let StateValueAtomV1::Pointer(envelope) = cursor_atoms
+                            .get(cursor.atom_index)
+                            .ok_or(VMError::DecodeError)?
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        push_planned(
+                            &mut values,
+                            &mut outputs,
+                            cursor_output,
+                            PlannedStateWord::Pointer(envelope.clone()),
+                        )?;
+                    }
+                }
+            }
         }
     }
+
+    let root = cursors.first().ok_or(VMError::DecodeError)?;
+    if root.node_index != nodes.len() || root.atom_index != atoms.len() {
+        return Err(VMError::DecodeError);
+    }
+    Ok(PlannedState {
+        values,
+        roots: std::mem::take(outputs.first_mut().ok_or(VMError::DecodeError)?),
+    })
+}
+
+fn planned_state_bytes(planned: &PlannedState) -> usize {
+    planned.values.iter().fold(0_usize, |bytes, value| {
+        let value_bytes = match value {
+            PlannedStateWord::Scalar(_) => 0,
+            PlannedStateWord::Pointer(envelope) => envelope.len(),
+            PlannedStateWord::Sum { layout, .. } => layout
+                .allocation_bytes()
+                .ok()
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .unwrap_or(usize::MAX),
+            PlannedStateWord::List { layout, .. } => layout
+                .allocation_bytes()
+                .ok()
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .unwrap_or(usize::MAX),
+        };
+        bytes.saturating_add(value_bytes)
+    })
+}
+
+fn planned_state_allocation_shape(planned: &PlannedState, tlv_lengths: &mut Vec<usize>) -> usize {
+    planned.values.iter().fold(0_usize, |bytes, value| {
+        let value_bytes = match value {
+            PlannedStateWord::Scalar(_) => 0,
+            PlannedStateWord::Pointer(envelope) => {
+                tlv_lengths.push(envelope.len());
+                0
+            }
+            PlannedStateWord::Sum { layout, .. } => layout
+                .allocation_bytes()
+                .ok()
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .unwrap_or(usize::MAX),
+            PlannedStateWord::List { layout, .. } => layout
+                .allocation_bytes()
+                .ok()
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .unwrap_or(usize::MAX),
+        };
+        bytes.saturating_add(value_bytes)
+    })
+}
+
+fn materialize_state_words(vm: &mut IVM, planned: &PlannedState) -> Result<Vec<u64>, VMError> {
+    let mut materialized = Vec::with_capacity(planned.values.len());
+    for value in &planned.values {
+        let word = match value {
+            PlannedStateWord::Scalar(value) => *value,
+            PlannedStateWord::Pointer(envelope) => vm.alloc_host_tlv(envelope)?,
+            PlannedStateWord::Sum {
+                layout,
+                tag,
+                active,
+            } => {
+                let mut payload = Vec::with_capacity(active.len());
+                for value in active {
+                    payload.push(*materialized.get(*value).ok_or(VMError::DecodeError)?);
+                }
+                crate::sum::allocate_words(vm, *layout, *tag, &payload)?
+            }
+            PlannedStateWord::List { layout, elements } => {
+                let width =
+                    usize::try_from(layout.element_words()).map_err(|_| VMError::DecodeError)?;
+                let mut words = Vec::with_capacity(elements.len());
+                for element in elements {
+                    let mut item = Vec::with_capacity(width);
+                    for value in element {
+                        item.push(*materialized.get(*value).ok_or(VMError::DecodeError)?);
+                    }
+                    if item.len() != width {
+                        return Err(VMError::DecodeError);
+                    }
+                    words.push(item);
+                }
+                crate::list::allocate_words(vm, *layout, &words)?
+            }
+        };
+        materialized.push(word);
+    }
+    planned
+        .roots
+        .iter()
+        .map(|root| materialized.get(*root).copied().ok_or(VMError::DecodeError))
+        .collect()
 }
 
 /// Decode the record in `r11`, returning an aligned Blob word table in `r10`.
@@ -1049,45 +1458,28 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
         schema_payload,
         tlv.payload,
     )?;
-    let atoms = record.atoms;
+    let atoms = &record.atoms;
     let record_len = tlv.payload.len();
 
-    let mut planned = Vec::new();
-    let mut node_index = 0;
-    let mut atom_index = 0;
-    plan_state_atoms(
-        &schema.nodes,
-        &atoms,
-        &mut node_index,
-        &mut atom_index,
-        &mut planned,
-    )?;
-    if node_index != schema.nodes.len()
-        || atom_index != atoms.len()
-        || planned.len() != schema.word_count().ok_or(VMError::DecodeError)?
-    {
+    let planned = plan_state_atoms(&schema.nodes, atoms)?;
+    if planned.roots.len() != schema.word_count().ok_or(VMError::DecodeError)? {
         return Err(VMError::DecodeError);
     }
-    let pointer_bytes = planned
-        .iter()
-        .map(planned_state_bytes)
-        .fold(0, usize::saturating_add);
+    let pointer_bytes = planned_state_bytes(&planned);
 
-    let table_payload_len = 1usize.saturating_add(planned.len().saturating_mul(8));
+    let table_payload_len = 1usize.saturating_add(planned.roots.len().saturating_mul(8));
     let actual = gas(
         schema_payload
             .len()
             .saturating_add(record_len)
             .saturating_add(pointer_bytes)
             .saturating_add(table_payload_len),
-        planned.len(),
+        planned.roots.len(),
     );
     preflight_reserved_syscall_gas(vm, actual)?;
 
     let mut tlv_lengths = Vec::new();
-    let raw_heap_bytes = planned.iter().fold(0_usize, |bytes, value| {
-        bytes.saturating_add(planned_state_allocation_shape(value, &mut tlv_lengths))
-    });
+    let raw_heap_bytes = planned_state_allocation_shape(&planned, &mut tlv_lengths);
     tlv_lengths.push(
         7_usize
             .saturating_add(table_payload_len)
@@ -1105,10 +1497,7 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
         return Err(VMError::OutOfMemory);
     }
 
-    let mut words = Vec::with_capacity(planned.len());
-    for value in planned {
-        words.push(materialize_state_word(vm, value)?);
-    }
+    let words = materialize_state_words(vm, &planned)?;
     let mut table = Vec::with_capacity(table_payload_len);
     table.push(0);
     for word in words {
@@ -1122,6 +1511,7 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use iroha_primitives::{bigint::BigInt, numeric::Quantity};
     use ivm_abi::state_value::{
         StateValueAtomV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
@@ -1155,6 +1545,358 @@ mod tests {
             .expect("canonical quantity frame");
         let envelope = encode_tlv(PointerType::Quantity, &frame).expect("quantity TLV");
         vm.alloc_host_tlv(&envelope).expect("install quantity")
+    }
+
+    fn nested_singleton_list_schema(depth: usize) -> StateValueSchemaV1 {
+        (0..depth).fold(
+            StateValueSchemaV1 {
+                nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Bool)],
+            },
+            |element, _| StateValueSchemaV1 {
+                nodes: vec![StateValueNodeV1::List {
+                    element: Box::new(element),
+                    capacity: 1,
+                }],
+            },
+        )
+    }
+
+    fn nested_active_option_schema(depth: usize) -> StateValueSchemaV1 {
+        let mut nodes = Vec::with_capacity(depth + 1);
+        nodes.extend((0..depth).map(|_| StateValueNodeV1::Option));
+        nodes.push(StateValueNodeV1::Leaf(StateValueKindV1::Bool));
+        StateValueSchemaV1 { nodes }
+    }
+
+    fn nested_singleton_list_value(vm: &mut IVM, depth: usize, mut word: u64) -> u64 {
+        let layout = ListLayoutV1::try_new(1, 1).expect("singleton List layout");
+        for _ in 0..depth {
+            word = crate::list::allocate_words(vm, layout, &[vec![word]])
+                .expect("allocate nested singleton List");
+        }
+        word
+    }
+
+    fn read_singleton_lists(vm: &IVM, mut word: u64, depth: usize) -> u64 {
+        let layout = ListLayoutV1::try_new(1, 1).expect("singleton List layout");
+        for _ in 0..depth {
+            let items = crate::list::read_words(vm, word, layout).expect("read singleton List");
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].len(), 1);
+            word = items[0][0];
+        }
+        word
+    }
+
+    fn read_active_options(vm: &IVM, mut word: u64, depth: usize) -> u64 {
+        let layout = SumLayoutV1::option(1).expect("Option layout");
+        for _ in 0..depth {
+            let (tag, payload) =
+                crate::sum::read_words(vm, word, layout).expect("read active Option");
+            assert!(tag);
+            assert_eq!(payload.len(), 1);
+            word = payload[0];
+        }
+        word
+    }
+
+    #[test]
+    fn nested_list_runtime_walkers_are_stack_safe_at_the_v1_boundary() {
+        const DEPTH: usize = 255;
+
+        let worker = std::thread::Builder::new()
+            .name("state-value-runtime-list-boundary".into())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let schema = nested_singleton_list_schema(DEPTH);
+                assert!(schema.validate());
+                assert_eq!(schema.word_count(), Some(1));
+
+                let mut vm = IVM::new(u64::MAX);
+                let schema_pointer = install_schema(&mut vm, &schema);
+                let value = nested_singleton_list_value(&mut vm, DEPTH, 1);
+                let table = vm.alloc_heap(8).expect("root word table");
+                vm.store_u64(table, value).expect("store root List");
+                vm.set_register(10, schema_pointer);
+                vm.set_register(11, table);
+                vm.set_register(12, 1);
+                encode_state_value(&mut vm, identity_address).expect("encode nested Lists");
+                let record_pointer = vm.register(10);
+                let record_payload = vm
+                    .validate_tlv(record_pointer)
+                    .expect("nested List record")
+                    .payload
+                    .to_vec();
+                validate_state_value_record(&vm, &schema, &record_payload)
+                    .expect("validate nested List record");
+
+                let record: StateValueRecordV1 =
+                    decode_from_bytes(&record_payload).expect("decode nested List record");
+                validate_state_atom_stream(vm.syscall_policy(), &schema, &record.atoms)
+                    .expect("validate nested List atoms");
+                let planned =
+                    plan_state_atoms(&schema.nodes, &record.atoms).expect("plan nested Lists");
+                assert_eq!(planned.roots.len(), 1);
+                assert_eq!(planned.values.len(), DEPTH + 1);
+                let mut planned_vm = IVM::new(u64::MAX);
+                let planned_words = materialize_state_words(&mut planned_vm, &planned)
+                    .expect("materialize nested Lists");
+                assert_eq!(planned_words.len(), 1);
+                assert_eq!(
+                    read_singleton_lists(&planned_vm, planned_words[0], DEPTH),
+                    1
+                );
+
+                vm.set_register(10, schema_pointer);
+                vm.set_register(11, record_pointer);
+                decode_state_value(&mut vm, identity_address).expect("decode nested Lists");
+                let decoded_table = vm
+                    .validate_tlv(vm.register(10))
+                    .expect("decoded word table");
+                let decoded_root = u64::from_le_bytes(
+                    decoded_table.payload[1..9]
+                        .try_into()
+                        .expect("decoded root word"),
+                );
+                assert_eq!(read_singleton_lists(&vm, decoded_root, DEPTH), 1);
+
+                let rejected_schema = nested_singleton_list_schema(DEPTH + 1);
+                assert!(!rejected_schema.validate());
+                assert!(
+                    encode_canonical_norito(&rejected_schema).is_err(),
+                    "256 nested Lists plus their leaf must exceed the 256-node V1 boundary"
+                );
+            })
+            .expect("spawn small-stack nested List worker");
+        worker.join().expect("small-stack nested List worker");
+    }
+
+    #[test]
+    fn nested_list_encode_error_cleanup_is_stack_safe() {
+        const INNER_DEPTH: usize = 254;
+
+        let worker = std::thread::Builder::new()
+            .name("state-value-runtime-list-error-cleanup".into())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let schema = StateValueSchemaV1 {
+                    nodes: vec![StateValueNodeV1::List {
+                        element: Box::new(nested_singleton_list_schema(INNER_DEPTH)),
+                        capacity: 2,
+                    }],
+                };
+                assert!(schema.validate());
+
+                let mut vm = IVM::new(u64::MAX);
+                let schema_pointer = install_schema(&mut vm, &schema);
+                let valid = nested_singleton_list_value(&mut vm, INNER_DEPTH, 1);
+                let invalid = nested_singleton_list_value(&mut vm, INNER_DEPTH, 2);
+                let outer_layout = ListLayoutV1::try_new(2, 1).expect("outer List layout");
+                let outer = crate::list::allocate_words(
+                    &mut vm,
+                    outer_layout,
+                    &[vec![valid], vec![invalid]],
+                )
+                .expect("allocate mixed outer List");
+                let table = vm.alloc_heap(8).expect("root word table");
+                vm.store_u64(table, outer).expect("store outer List");
+                let heap_before = vm.memory.heap_allocated_len();
+                vm.set_register(10, schema_pointer);
+                vm.set_register(11, table);
+                vm.set_register(12, 1);
+
+                assert_eq!(
+                    encode_state_value(&mut vm, identity_address),
+                    Err(VMError::DecodeError)
+                );
+                assert_eq!(vm.register(10), schema_pointer);
+                assert_eq!(vm.memory.heap_allocated_len(), heap_before);
+            })
+            .expect("spawn small-stack List cleanup worker");
+        worker.join().expect("small-stack List cleanup worker");
+    }
+
+    #[test]
+    fn active_option_runtime_walkers_are_stack_safe_at_the_v1_boundary() {
+        const DEPTH: usize = 255;
+
+        let worker = std::thread::Builder::new()
+            .name("state-value-runtime-option-boundary".into())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let schema = nested_active_option_schema(DEPTH);
+                assert!(schema.validate());
+                let mut skipped = 0;
+                skip_state_node(&schema.nodes, &mut skipped).expect("skip nested Options");
+                assert_eq!(skipped, DEPTH + 1);
+                let mut counted = 0;
+                assert_eq!(state_node_word_count(&schema.nodes, &mut counted), Ok(1));
+                assert_eq!(counted, DEPTH + 1);
+
+                let mut vm = IVM::new(u64::MAX);
+                let schema_pointer = install_schema(&mut vm, &schema);
+                let layout = SumLayoutV1::option(1).expect("Option layout");
+                let mut value = 1_u64;
+                for _ in 0..DEPTH {
+                    value = crate::sum::allocate_words(&mut vm, layout, 1, &[value])
+                        .expect("allocate active Option");
+                }
+                let table = vm.alloc_heap(8).expect("root word table");
+                vm.store_u64(table, value).expect("store root Option");
+                vm.set_register(10, schema_pointer);
+                vm.set_register(11, table);
+                vm.set_register(12, 1);
+                encode_state_value(&mut vm, identity_address).expect("encode active Options");
+                let record_pointer = vm.register(10);
+                let record_payload = vm
+                    .validate_tlv(record_pointer)
+                    .expect("active Option record")
+                    .payload
+                    .to_vec();
+                validate_state_value_record(&vm, &schema, &record_payload)
+                    .expect("validate active Option record");
+
+                let record: StateValueRecordV1 =
+                    decode_from_bytes(&record_payload).expect("decode active Option record");
+                let planned =
+                    plan_state_atoms(&schema.nodes, &record.atoms).expect("plan active Options");
+                assert_eq!(planned.roots.len(), 1);
+                assert_eq!(planned.values.len(), DEPTH + 1);
+                let mut planned_vm = IVM::new(u64::MAX);
+                let planned_words = materialize_state_words(&mut planned_vm, &planned)
+                    .expect("materialize active Options");
+                assert_eq!(planned_words.len(), 1);
+                assert_eq!(read_active_options(&planned_vm, planned_words[0], DEPTH), 1);
+
+                validate_state_atom_stream(
+                    vm.syscall_policy(),
+                    &schema,
+                    &[StateValueAtomV1::Tag(false)],
+                )
+                .expect("skip the inactive nested Option payload");
+
+                vm.set_register(10, schema_pointer);
+                vm.set_register(11, record_pointer);
+                decode_state_value(&mut vm, identity_address).expect("decode active Options");
+                let decoded_table = vm
+                    .validate_tlv(vm.register(10))
+                    .expect("decoded word table");
+                let decoded_root = u64::from_le_bytes(
+                    decoded_table.payload[1..9]
+                        .try_into()
+                        .expect("decoded root word"),
+                );
+                assert_eq!(read_active_options(&vm, decoded_root, DEPTH), 1);
+
+                let rejected_schema = nested_active_option_schema(DEPTH + 1);
+                assert!(!rejected_schema.validate());
+                assert!(
+                    encode_canonical_norito(&rejected_schema).is_err(),
+                    "256 Options plus their leaf must exceed the 256-node V1 boundary"
+                );
+            })
+            .expect("spawn small-stack active Option worker");
+        worker.join().expect("small-stack active Option worker");
+    }
+
+    #[test]
+    fn capability_payload_validation_is_canonical_and_uses_decode_errors() {
+        use crate::axt::{
+            AssetHandle, AxtDescriptor, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
+            ProofBlob,
+        };
+
+        let dsid = DataSpaceId::new(7);
+        let descriptor = AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![AxtTouchSpec {
+                dsid,
+                read: vec!["orders".to_owned()],
+                write: vec!["ledger".to_owned()],
+            }],
+        };
+        let canonical = encode_canonical_norito(&descriptor).expect("canonical descriptor");
+        assert_eq!(
+            validate_pointer_payload(StateValueKindV1::AxtDescriptor, &canonical),
+            Ok(())
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            to_bytes(&descriptor).expect("alternate descriptor")
+        };
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            validate_pointer_payload(StateValueKindV1::AxtDescriptor, &alternate),
+            Err(VMError::DecodeError)
+        );
+
+        let invalid_descriptor = AxtDescriptor {
+            dsids: Vec::new(),
+            touches: Vec::new(),
+        };
+        assert_eq!(
+            validate_pointer_payload(
+                StateValueKindV1::AxtDescriptor,
+                &encode_canonical_norito(&invalid_descriptor).expect("encode invalid descriptor"),
+            ),
+            Err(VMError::DecodeError)
+        );
+
+        let invalid_handle = AssetHandle {
+            scope: vec!["transfer".to_owned()],
+            subject: HandleSubject {
+                account: "subject".to_owned(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: "1".parse().expect("quantity"),
+                per_use: Some(Quantity::zero()),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![1],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(0),
+            axt_binding: vec![1; 32],
+            manifest_view_root: vec![2; 32],
+            expiry_slot: 1,
+            max_clock_skew_ms: None,
+        };
+        assert_eq!(
+            validate_pointer_payload(
+                StateValueKindV1::AssetHandle,
+                &encode_canonical_norito(&invalid_handle).expect("encode invalid handle"),
+            ),
+            Err(VMError::DecodeError)
+        );
+
+        let invalid_proof = ProofBlob {
+            payload: Vec::new(),
+            expiry_slot: Some(0),
+        };
+        assert_eq!(
+            validate_pointer_payload(
+                StateValueKindV1::ProofBlob,
+                &encode_canonical_norito(&invalid_proof).expect("encode invalid proof"),
+            ),
+            Err(VMError::DecodeError)
+        );
+
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before = to_bytes(&descriptor).expect("ambient descriptor");
+        assert_eq!(
+            validate_pointer_payload(StateValueKindV1::AxtDescriptor, &canonical),
+            Ok(())
+        );
+        assert_eq!(
+            to_bytes(&descriptor).expect("ambient descriptor after validation"),
+            ambient_before
+        );
     }
 
     fn mixed_pointer_scalar_schema() -> StateValueSchemaV1 {

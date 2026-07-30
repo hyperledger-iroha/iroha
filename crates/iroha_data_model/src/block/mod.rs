@@ -138,6 +138,8 @@ pub enum SetTransactionResultsError {
         /// Merkle root already present in the block header.
         actual: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
     },
+    /// The supplied AXT policy snapshot was not canonical.
+    InvalidAxtPolicySnapshot(crate::nexus::AxtPolicySnapshotValidationError),
 }
 
 impl fmt::Display for SetTransactionResultsError {
@@ -163,11 +165,55 @@ impl fmt::Display for SetTransactionResultsError {
                 f,
                 "existing block header Merkle root mismatch: expected {expected:?}, got {actual:?}",
             ),
+            Self::InvalidAxtPolicySnapshot(error) => {
+                write!(f, "invalid AXT policy snapshot: {error}")
+            }
         }
     }
 }
 
 impl std::error::Error for SetTransactionResultsError {}
+
+/// Error returned when independent-batch receipts cannot be attached to result leaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetBatchTransferOutcomesError {
+    /// The block does not yet carry transaction results.
+    MissingTransactionResults,
+    /// Entrypoint and result counts differ.
+    ResultCountMismatch {
+        /// Number of canonical entrypoint hashes.
+        entrypoints: usize,
+        /// Number of canonical transaction results.
+        results: usize,
+    },
+    /// An outcome row references an entrypoint absent from this block.
+    UnknownEntrypoint {
+        /// Unknown canonical entrypoint hash.
+        hash: HashOf<TransactionEntrypoint>,
+    },
+}
+
+impl fmt::Display for SetBatchTransferOutcomesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingTransactionResults => {
+                f.write_str("cannot attach batch outcomes before transaction results")
+            }
+            Self::ResultCountMismatch {
+                entrypoints,
+                results,
+            } => write!(
+                f,
+                "cannot attach batch outcomes to misaligned block results: {entrypoints} entrypoints, {results} results",
+            ),
+            Self::UnknownEntrypoint { hash } => {
+                write!(f, "batch outcomes reference unknown entrypoint {hash}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SetBatchTransferOutcomesError {}
 
 impl SignedBlock {
     /// Create new block with a given signature
@@ -251,8 +297,8 @@ impl SignedBlock {
     /// # Errors
     ///
     /// Returns [`SetTransactionResultsError`] when the supplied entrypoint hashes do not cover
-    /// the block payload, do not match external entrypoints, or would make the existing header
-    /// consensus Merkle root inconsistent.
+    /// the block payload, do not match external entrypoints, would make the existing header
+    /// consensus Merkle root inconsistent, or the AXT policy snapshot is not canonical.
     #[cfg(feature = "transparent_api")]
     pub fn set_transaction_results(
         &mut self,
@@ -266,7 +312,7 @@ impl SignedBlock {
             results,
             BTreeMap::new(),
             Vec::new(),
-            None,
+            crate::nexus::AxtPolicySnapshot::default(),
         )
     }
 
@@ -285,8 +331,11 @@ impl SignedBlock {
         results: Vec<TransactionResultInner>,
         fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
         axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
-        axt_policy_snapshot: Option<crate::nexus::AxtPolicySnapshot>,
+        axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
     ) -> Result<(), SetTransactionResultsError> {
+        axt_policy_snapshot
+            .validate()
+            .map_err(SetTransactionResultsError::InvalidAxtPolicySnapshot)?;
         let result_hashes = results.iter().map(TransactionResult::hash_from_inner);
 
         let external_hashes = self
@@ -360,8 +409,6 @@ impl SignedBlock {
         )
         .unwrap_or(u64::MAX);
         self.payload.header.result_merkle_root = result_merkle.root();
-        let axt_policy_snapshot =
-            axt_policy_snapshot.map(crate::nexus::AxtPolicySnapshot::with_computed_version);
         self.result = Some(BlockResult {
             external_entrypoints: Vec::new(),
             time_triggers,
@@ -386,6 +433,67 @@ impl SignedBlock {
         if let Some(result) = self.result.as_mut() {
             result.trigger_completions = trigger_completions;
         }
+    }
+
+    /// Replace the embedded AXT policy snapshot for adversarial validation fixtures.
+    ///
+    /// Production block construction must use
+    /// [`Self::set_transaction_results_with_transcripts`], which rejects
+    /// non-canonical snapshots.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn replace_axt_policy_snapshot_for_testing(
+        &mut self,
+        snapshot: crate::nexus::AxtPolicySnapshot,
+    ) -> Option<crate::nexus::AxtPolicySnapshot> {
+        self.result
+            .as_mut()
+            .map(|result| core::mem::replace(&mut result.axt_policy_snapshot, snapshot))
+    }
+
+    /// Replace durable independent-batch outcomes captured while executing this block.
+    #[cfg(feature = "transparent_api")]
+    pub fn set_batch_transfer_outcomes(
+        &mut self,
+        outcomes: BTreeMap<
+            HashOf<crate::transaction::signed::TransactionEntrypoint>,
+            Vec<crate::events::data::prelude::AssetBatchTransferOutcome>,
+        >,
+    ) -> Result<(), SetBatchTransferOutcomesError> {
+        let result = self
+            .result
+            .as_mut()
+            .ok_or(SetBatchTransferOutcomesError::MissingTransactionResults)?;
+        let entrypoint_hashes = result.merkle.leaves().collect::<Vec<_>>();
+        if entrypoint_hashes.len() != result.transaction_results.len() {
+            return Err(SetBatchTransferOutcomesError::ResultCountMismatch {
+                entrypoints: entrypoint_hashes.len(),
+                results: result.transaction_results.len(),
+            });
+        }
+        let assignments = outcomes
+            .into_iter()
+            .map(|(hash, receipts)| {
+                entrypoint_hashes
+                    .iter()
+                    .position(|candidate| *candidate == hash)
+                    .map(|index| (index, receipts))
+                    .ok_or(SetBatchTransferOutcomesError::UnknownEntrypoint { hash })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for transaction_result in &mut result.transaction_results {
+            transaction_result.set_batch_transfer_outcomes(Vec::new());
+        }
+        for (index, receipts) in assignments {
+            result.transaction_results[index].set_batch_transfer_outcomes(receipts);
+        }
+        result.result_merkle = result
+            .transaction_results
+            .iter()
+            .map(TransactionResult::hash)
+            .collect();
+        self.payload.header.result_merkle_root = result.result_merkle.root();
+        Ok(())
     }
 
     /// Number of successful execution fragments recorded with this block result.
@@ -796,7 +904,7 @@ impl SignedBlock {
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             trigger_completions: Vec::new(),
-            axt_policy_snapshot: None,
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
         Ok(SignedBlock {
             signatures: [signature].into_iter().collect(),
@@ -1891,6 +1999,39 @@ mod tests {
     }
 
     #[test]
+    fn block_result_rejects_wire_omitting_required_axt_policy_snapshot() {
+        #[derive(norito::codec::Encode)]
+        struct BlockResultWithoutAxtPolicySnapshot {
+            time_triggers: Vec<crate::trigger::TimeTriggerEntrypoint>,
+            merkle: MerkleTree<TransactionEntrypoint>,
+            result_merkle: MerkleTree<crate::transaction::signed::TransactionResult>,
+            transaction_results: Vec<crate::transaction::signed::TransactionResult>,
+            committed_fragment_count: u64,
+            fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
+            axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+            trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
+        }
+
+        let omitted_snapshot = BlockResultWithoutAxtPolicySnapshot {
+            time_triggers: Vec::new(),
+            merkle: MerkleTree::default(),
+            result_merkle: MerkleTree::default(),
+            transaction_results: Vec::new(),
+            committed_fragment_count: 0,
+            fastpq_transcripts: BTreeMap::new(),
+            axt_envelopes: Vec::new(),
+            trigger_completions: Vec::new(),
+        };
+        let bytes = omitted_snapshot.encode();
+        let mut cursor = bytes.as_slice();
+
+        assert!(
+            BlockResult::decode_all(&mut cursor).is_err(),
+            "the AXT policy snapshot is a required V1 BlockResult wire field"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "transparent_api")]
     fn presigned_with_payload_preserves_payload_and_signature() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -2017,7 +2158,7 @@ mod tests {
             fastpq_transcripts: std::collections::BTreeMap::new(),
             axt_envelopes: Vec::new(),
             trigger_completions: Vec::new(),
-            axt_policy_snapshot: None,
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
 
         let block = SignedBlock {
@@ -3104,7 +3245,7 @@ mod tests {
                 Vec::new(),
                 transcripts.clone(),
                 Vec::new(),
-                None,
+                crate::nexus::AxtPolicySnapshot::default(),
             )
             .expect("empty block has no external hash prefix to validate");
 
@@ -3137,13 +3278,60 @@ mod tests {
                 ],
                 BTreeMap::new(),
                 Vec::new(),
-                None,
+                crate::nexus::AxtPolicySnapshot::default(),
             )
             .expect("empty block has no external hash prefix to validate");
 
         assert_eq!(block.committed_fragment_count(), Some(1));
         block.set_committed_fragment_count(3);
         assert_eq!(block.committed_fragment_count(), Some(3));
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn set_transaction_results_rejects_noncanonical_snapshot_without_mutation() {
+        use std::num::NonZeroU64;
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let keypair = checked_random_keypair();
+        let signature = checked_block_signature(0, &keypair, &header);
+        let mut block = SignedBlock::presigned(signature, header, Vec::new());
+        let binding = crate::nexus::AxtPolicyBinding {
+            dsid: crate::nexus::DataSpaceId::new(1),
+            policy: crate::nexus::AxtPolicyEntry {
+                manifest_root: [0x42; 32],
+                target_lane: crate::nexus::LaneId::new(0),
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 1,
+            },
+        };
+        let entries = vec![binding, binding];
+        let snapshot = crate::nexus::AxtPolicySnapshot {
+            version: crate::nexus::AxtPolicySnapshot::compute_version(&entries),
+            entries,
+        };
+        let original_result_root = block.header().result_merkle_root();
+
+        let error = block
+            .set_transaction_results_with_transcripts(
+                Vec::new(),
+                &[],
+                Vec::new(),
+                BTreeMap::new(),
+                Vec::new(),
+                snapshot,
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SetTransactionResultsError::InvalidAxtPolicySnapshot(
+                crate::nexus::AxtPolicySnapshotValidationError::DuplicateDataspaceId(_)
+            )
+        ));
+        assert!(!block.has_results());
+        assert_eq!(block.header().result_merkle_root(), original_result_root);
     }
 
     #[cfg(feature = "transparent_api")]
@@ -3216,7 +3404,7 @@ mod tests {
             touches: Vec::new(),
             proofs: Vec::new(),
             handles: Vec::new(),
-            commit_height: Some(1),
+            commit_height: 1,
         };
         let dsid = crate::DataSpaceId::new(9);
         let policy_snapshot = crate::nexus::AxtPolicySnapshot {
@@ -3232,7 +3420,8 @@ mod tests {
                 },
             }],
         }
-        .with_computed_version();
+        .with_computed_version()
+        .expect("test policy snapshot is canonical");
         let expected_policy_snapshot = policy_snapshot.clone();
 
         block
@@ -3244,7 +3433,7 @@ mod tests {
                 )],
                 transcripts.clone(),
                 vec![axt_envelope.clone()],
-                Some(policy_snapshot),
+                policy_snapshot,
             )
             .expect("entrypoint hash should match payload");
 

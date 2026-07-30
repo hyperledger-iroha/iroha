@@ -7,9 +7,48 @@
 //! have identical overflow behavior.
 
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
-use super::params::{APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1, PROOF_MODULUS_V1};
+use super::params::{
+    APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1,
+    INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1, INTERNAL_CRT_GARNER_INVERSES_V1,
+    INTERNAL_CRT_NEGACYCLIC_ROOT_INVERSES_V1, INTERNAL_CRT_NEGACYCLIC_ROOTS_V1,
+    INTERNAL_CRT_PRIMES_V1, INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1,
+    INTERNAL_CRT_RING_DEGREE_INVERSES_V1, PROOF_MODULUS_V1,
+};
+
+#[derive(Clone, Copy)]
+struct FixedModulusV1 {
+    modulus: u64,
+    /// `-modulus^-1 mod 2^64`.
+    montgomery_negative_inverse: u64,
+    /// `2^128 mod modulus`, used to enter the Montgomery domain.
+    montgomery_r_squared: u64,
+}
+
+const PROOF_FIXED_MODULUS_V1: FixedModulusV1 = FixedModulusV1 {
+    modulus: PROOF_MODULUS_V1,
+    montgomery_negative_inverse: 4_655_614_974_089_172_227,
+    montgomery_r_squared: 95_672_812_437_504,
+};
+
+const INTERNAL_CRT_FIXED_MODULI_V1: [FixedModulusV1; 3] = [
+    FixedModulusV1 {
+        modulus: INTERNAL_CRT_PRIMES_V1[0],
+        montgomery_negative_inverse: 8_444_618_314_856_986_879,
+        montgomery_r_squared: 861_055_311_937_536,
+    },
+    FixedModulusV1 {
+        modulus: INTERNAL_CRT_PRIMES_V1[1],
+        montgomery_negative_inverse: 2_456_608_423_348_909_439,
+        montgomery_r_squared: 812_195_763_980_927,
+    },
+    FixedModulusV1 {
+        modulus: INTERNAL_CRT_PRIMES_V1[2],
+        montgomery_negative_inverse: 5_276_763_958_930_549_887,
+        montgomery_r_squared: 1_057_249_418_043_771,
+    },
+];
 
 /// One canonical polynomial in `Z_12289[X] / (X^64 + 1)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -305,7 +344,7 @@ impl ProofPolynomialV1 {
     #[must_use]
     pub fn constant_centered(constant: i64) -> Self {
         let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
-        coefficients[0] = canonicalize_i128(i128::from(constant), PROOF_MODULUS_V1);
+        coefficients[0] = canonicalize_i64_v1(constant, PROOF_FIXED_MODULUS_V1);
         Self { coefficients }
     }
 
@@ -314,7 +353,7 @@ impl ProofPolynomialV1 {
     pub fn from_centered_coefficients(coefficients: [i64; APPLICATION_RING_DEGREE_V1]) -> Self {
         let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
         for (output, coefficient) in output.iter_mut().zip(coefficients) {
-            *output = canonicalize_i128(i128::from(coefficient), PROOF_MODULUS_V1);
+            *output = canonicalize_i64_v1(coefficient, PROOF_FIXED_MODULUS_V1);
         }
         Self {
             coefficients: output,
@@ -354,7 +393,7 @@ impl ProofPolynomialV1 {
             .zip(self.coefficients)
             .zip(rhs.coefficients)
         {
-            *output = add_mod_u64(lhs, rhs, PROOF_MODULUS_V1);
+            *output = add_mod_canonical_u64(lhs, rhs, PROOF_FIXED_MODULUS_V1);
         }
         Self {
             coefficients: output,
@@ -370,7 +409,7 @@ impl ProofPolynomialV1 {
             .zip(self.coefficients)
             .zip(rhs.coefficients)
         {
-            *output = sub_mod_u64(lhs, rhs, PROOF_MODULUS_V1);
+            *output = sub_mod_canonical_u64(lhs, rhs, PROOF_FIXED_MODULUS_V1);
         }
         Self {
             coefficients: output,
@@ -386,20 +425,29 @@ impl ProofPolynomialV1 {
     /// Multiply modulo `X^64 + 1`.
     #[must_use]
     pub fn multiply(self, rhs: Self) -> Self {
+        let lhs = Zeroizing::new(self);
+        let rhs = Zeroizing::new(rhs);
+        Self {
+            coefficients: multiply_negacyclic_crt_ntt_v1(&lhs.coefficients, &rhs.coefficients),
+        }
+    }
+
+    /// Quadratic-time reference multiplication retained only as a test oracle.
+    #[cfg(test)]
+    fn multiply_schoolbook(self, rhs: Self) -> Self {
         let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
         for (lhs_index, lhs) in self.coefficients.iter().copied().enumerate() {
             for (rhs_index, rhs) in rhs.coefficients.iter().copied().enumerate() {
-                let product =
-                    u64::try_from(u128::from(lhs) * u128::from(rhs) % u128::from(PROOF_MODULUS_V1))
-                        .expect("reduced proof residue fits u64");
+                let product = multiply_mod_fixed_u64(lhs, rhs, PROOF_FIXED_MODULUS_V1);
                 let degree = lhs_index + rhs_index;
                 if degree < APPLICATION_RING_DEGREE_V1 {
-                    output[degree] = add_mod_u64(output[degree], product, PROOF_MODULUS_V1);
+                    output[degree] =
+                        add_mod_canonical_u64(output[degree], product, PROOF_FIXED_MODULUS_V1);
                 } else {
-                    output[degree - APPLICATION_RING_DEGREE_V1] = sub_mod_u64(
+                    output[degree - APPLICATION_RING_DEGREE_V1] = sub_mod_canonical_u64(
                         output[degree - APPLICATION_RING_DEGREE_V1],
                         product,
-                        PROOF_MODULUS_V1,
+                        PROOF_FIXED_MODULUS_V1,
                     );
                 }
             }
@@ -412,7 +460,7 @@ impl ProofPolynomialV1 {
     /// Multiply by a signed integer in the proof ring.
     #[must_use]
     pub fn scale_centered(self, scalar: i64) -> Self {
-        let scalar = canonicalize_i128(i128::from(scalar), PROOF_MODULUS_V1);
+        let scalar = canonicalize_i64_v1(scalar, PROOF_FIXED_MODULUS_V1);
         self.scale_canonical_unchecked(scalar)
     }
 
@@ -431,10 +479,7 @@ impl ProofPolynomialV1 {
     fn scale_canonical_unchecked(self, scalar: u64) -> Self {
         let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
         for (output, coefficient) in output.iter_mut().zip(self.coefficients) {
-            *output = u64::try_from(
-                u128::from(coefficient) * u128::from(scalar) % u128::from(PROOF_MODULUS_V1),
-            )
-            .expect("reduced proof residue fits u64");
+            *output = multiply_mod_fixed_u64(coefficient, scalar, PROOF_FIXED_MODULUS_V1);
         }
         Self {
             coefficients: output,
@@ -448,11 +493,7 @@ impl ProofPolynomialV1 {
         output[0] = self.coefficients[0];
         for index in 1..APPLICATION_RING_DEGREE_V1 {
             let coefficient = self.coefficients[APPLICATION_RING_DEGREE_V1 - index];
-            output[index] = if coefficient == 0 {
-                0
-            } else {
-                PROOF_MODULUS_V1 - coefficient
-            };
+            output[index] = sub_mod_canonical_u64(0, coefficient, PROOF_FIXED_MODULUS_V1);
         }
         Self {
             coefficients: output,
@@ -471,10 +512,10 @@ impl ProofPolynomialV1 {
             let degree = index + reduced_power;
             let wraps = degree / APPLICATION_RING_DEGREE_V1;
             let destination = degree % APPLICATION_RING_DEGREE_V1;
-            output[destination] = if wraps % 2 == 0 || coefficient == 0 {
+            output[destination] = if wraps % 2 == 0 {
                 coefficient
             } else {
-                PROOF_MODULUS_V1 - coefficient
+                sub_mod_canonical_u64(0, coefficient, PROOF_FIXED_MODULUS_V1)
             };
         }
         Self {
@@ -486,12 +527,13 @@ impl ProofPolynomialV1 {
     #[must_use]
     pub fn centered_coefficient(&self, index: usize) -> i64 {
         let residue = self.coefficients[index];
-        if residue <= PROOF_MODULUS_V1 / 2 {
-            i64::try_from(residue).expect("proof residue fits i64")
-        } else {
-            i64::try_from(residue).expect("proof residue fits i64")
-                - i64::try_from(PROOF_MODULUS_V1).expect("proof modulus fits i64")
-        }
+        let non_negative = residue as i64;
+        let negative = non_negative - PROOF_MODULUS_V1 as i64;
+        select_i64_v1(
+            non_negative,
+            negative,
+            greater_than_bit_u64_v1(residue, PROOF_MODULUS_V1 / 2),
+        )
     }
 
     /// Exact squared Euclidean norm of the centered lift.
@@ -502,7 +544,7 @@ impl ProofPolynomialV1 {
             .enumerate()
             .map(|(index, _)| {
                 let coefficient = i128::from(self.centered_coefficient(index));
-                u128::try_from(coefficient * coefficient).expect("square is non-negative")
+                (coefficient * coefficient) as u128
             })
             .sum()
     }
@@ -514,13 +556,235 @@ impl Zeroize for ProofPolynomialV1 {
     }
 }
 
-fn canonicalize_i128(value: i128, modulus: u64) -> u64 {
-    let modulus = i128::from(modulus);
-    let mut residue = value % modulus;
-    if residue < 0 {
-        residue += modulus;
+fn multiply_negacyclic_crt_ntt_v1(
+    lhs: &[u64; APPLICATION_RING_DEGREE_V1],
+    rhs: &[u64; APPLICATION_RING_DEGREE_V1],
+) -> [u64; APPLICATION_RING_DEGREE_V1] {
+    let mut crt_coefficients = Zeroizing::new([[0_u64; APPLICATION_RING_DEGREE_V1]; 3]);
+
+    for prime_index in 0..INTERNAL_CRT_PRIMES_V1.len() {
+        let fixed_modulus = INTERNAL_CRT_FIXED_MODULI_V1[prime_index];
+        let mut lhs_ntt = Zeroizing::new(*lhs);
+        let mut rhs_ntt = Zeroizing::new(*rhs);
+
+        // Every canonical q-residue is less than twice every CRT prime, so
+        // one fixed-time conditional subtraction is an exact reduction.
+        for coefficient in lhs_ntt.iter_mut().chain(rhs_ntt.iter_mut()) {
+            *coefficient = reduce_once_u64(*coefficient, fixed_modulus);
+        }
+
+        forward_negacyclic_ntt_v1(
+            &mut lhs_ntt,
+            fixed_modulus,
+            INTERNAL_CRT_NEGACYCLIC_ROOTS_V1[prime_index],
+        );
+        forward_negacyclic_ntt_v1(
+            &mut rhs_ntt,
+            fixed_modulus,
+            INTERNAL_CRT_NEGACYCLIC_ROOTS_V1[prime_index],
+        );
+        for (lhs, rhs) in lhs_ntt.iter_mut().zip(rhs_ntt.iter().copied()) {
+            *lhs = multiply_mod_fixed_u64(*lhs, rhs, fixed_modulus);
+        }
+        inverse_negacyclic_ntt_v1(
+            &mut lhs_ntt,
+            fixed_modulus,
+            INTERNAL_CRT_NEGACYCLIC_ROOT_INVERSES_V1[prime_index],
+            INTERNAL_CRT_RING_DEGREE_INVERSES_V1[prime_index],
+        );
+        crt_coefficients[prime_index].copy_from_slice(&*lhs_ntt);
     }
-    u64::try_from(residue).expect("canonical residue fits u64")
+
+    core::array::from_fn(|coefficient_index| {
+        centered_crt_reconstruct_mod_q_v1([
+            crt_coefficients[0][coefficient_index],
+            crt_coefficients[1][coefficient_index],
+            crt_coefficients[2][coefficient_index],
+        ])
+    })
+}
+
+fn forward_negacyclic_ntt_v1(
+    values: &mut [u64; APPLICATION_RING_DEGREE_V1],
+    fixed_modulus: FixedModulusV1,
+    negacyclic_root: u64,
+) {
+    let mut twist = 1_u64;
+    for value in values.iter_mut() {
+        *value = multiply_mod_fixed_u64(*value, twist, fixed_modulus);
+        twist = multiply_mod_fixed_u64(twist, negacyclic_root, fixed_modulus);
+    }
+    let cyclic_root = multiply_mod_fixed_u64(negacyclic_root, negacyclic_root, fixed_modulus);
+    cyclic_ntt_v1(values, fixed_modulus, cyclic_root);
+}
+
+fn inverse_negacyclic_ntt_v1(
+    values: &mut [u64; APPLICATION_RING_DEGREE_V1],
+    fixed_modulus: FixedModulusV1,
+    inverse_negacyclic_root: u64,
+    inverse_degree: u64,
+) {
+    let inverse_cyclic_root = multiply_mod_fixed_u64(
+        inverse_negacyclic_root,
+        inverse_negacyclic_root,
+        fixed_modulus,
+    );
+    cyclic_ntt_v1(values, fixed_modulus, inverse_cyclic_root);
+
+    let mut inverse_twist = 1_u64;
+    for value in values.iter_mut() {
+        *value = multiply_mod_fixed_u64(
+            multiply_mod_fixed_u64(*value, inverse_degree, fixed_modulus),
+            inverse_twist,
+            fixed_modulus,
+        );
+        inverse_twist =
+            multiply_mod_fixed_u64(inverse_twist, inverse_negacyclic_root, fixed_modulus);
+    }
+}
+
+fn cyclic_ntt_v1(
+    values: &mut [u64; APPLICATION_RING_DEGREE_V1],
+    fixed_modulus: FixedModulusV1,
+    root: u64,
+) {
+    let mut reversed = 0_usize;
+    for index in 1..APPLICATION_RING_DEGREE_V1 {
+        let mut bit = APPLICATION_RING_DEGREE_V1 >> 1;
+        while reversed & bit != 0 {
+            reversed ^= bit;
+            bit >>= 1;
+        }
+        reversed ^= bit;
+        if index < reversed {
+            values.swap(index, reversed);
+        }
+    }
+
+    let mut length = 2;
+    while length <= APPLICATION_RING_DEGREE_V1 {
+        let stage_root = modular_power_fixed_u64(
+            root,
+            u64::try_from(APPLICATION_RING_DEGREE_V1 / length).expect("NTT exponent fits u64"),
+            fixed_modulus,
+        );
+        for block in values.chunks_exact_mut(length) {
+            let mut twiddle = 1_u64;
+            let (lower, upper) = block.split_at_mut(length / 2);
+            for (lower, upper) in lower.iter_mut().zip(upper.iter_mut()) {
+                let even = *lower;
+                let odd = multiply_mod_fixed_u64(*upper, twiddle, fixed_modulus);
+                *lower = add_mod_canonical_u64(even, odd, fixed_modulus);
+                *upper = sub_mod_canonical_u64(even, odd, fixed_modulus);
+                twiddle = multiply_mod_fixed_u64(twiddle, stage_root, fixed_modulus);
+            }
+        }
+        length *= 2;
+    }
+}
+
+fn centered_crt_reconstruct_mod_q_v1(residues: [u64; 3]) -> u64 {
+    const DIGIT_ZERO_INDEX: usize = 0;
+    const DIGIT_ONE_INDEX: usize = 1;
+    const DIGIT_TWO_INDEX: usize = 2;
+    const LOWER_TWO_DIGITS_INDEX: usize = 3;
+    const RECONSTRUCTED_INDEX: usize = 4;
+    const NEGATIVE_INDEX: usize = 5;
+
+    let residues = Zeroizing::new(residues);
+    let mut scratch = Zeroizing::new([0_u64; 6]);
+    let [prime_zero, prime_one, prime_two] = INTERNAL_CRT_PRIMES_V1;
+    let prime_one_modulus = INTERNAL_CRT_FIXED_MODULI_V1[1];
+    let prime_two_modulus = INTERNAL_CRT_FIXED_MODULI_V1[2];
+
+    // Garner mixed-radix digits:
+    // x = digit0 + p0 * digit1 + p0 * p1 * digit2, 0 <= x < P.
+    scratch[DIGIT_ZERO_INDEX] = residues[0];
+    scratch[DIGIT_ONE_INDEX] = multiply_mod_fixed_u64(
+        sub_mod_canonical_u64(
+            residues[1],
+            reduce_once_u64(scratch[DIGIT_ZERO_INDEX], prime_one_modulus),
+            prime_one_modulus,
+        ),
+        INTERNAL_CRT_GARNER_INVERSES_V1[0],
+        prime_one_modulus,
+    );
+    scratch[LOWER_TWO_DIGITS_INDEX] = add_mod_canonical_u64(
+        reduce_once_u64(scratch[DIGIT_ZERO_INDEX], prime_two_modulus),
+        multiply_mod_fixed_u64(
+            reduce_once_u64(prime_zero, prime_two_modulus),
+            reduce_once_u64(scratch[DIGIT_ONE_INDEX], prime_two_modulus),
+            prime_two_modulus,
+        ),
+        prime_two_modulus,
+    );
+    scratch[DIGIT_TWO_INDEX] = multiply_mod_fixed_u64(
+        sub_mod_canonical_u64(
+            residues[2],
+            scratch[LOWER_TWO_DIGITS_INDEX],
+            prime_two_modulus,
+        ),
+        INTERNAL_CRT_GARNER_INVERSES_V1[1],
+        prime_two_modulus,
+    );
+
+    scratch[RECONSTRUCTED_INDEX] = add_mod_canonical_u64(
+        add_mod_canonical_u64(
+            scratch[DIGIT_ZERO_INDEX],
+            multiply_mod_fixed_u64(prime_zero, scratch[DIGIT_ONE_INDEX], PROOF_FIXED_MODULUS_V1),
+            PROOF_FIXED_MODULUS_V1,
+        ),
+        multiply_mod_fixed_u64(
+            INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1,
+            scratch[DIGIT_TWO_INDEX],
+            PROOF_FIXED_MODULUS_V1,
+        ),
+        PROOF_FIXED_MODULUS_V1,
+    );
+
+    // P is odd. Its floor-half has the mixed-radix digits
+    // ((p0-1)/2, (p1-1)/2, (p2-1)/2), so a lexicographic comparison from
+    // the most significant digit chooses the unique centered representative
+    // without constructing the 150-bit product P.
+    let half_digits = [
+        (prime_zero - 1) / 2,
+        (prime_one - 1) / 2,
+        (prime_two - 1) / 2,
+    ];
+    let is_negative = greater_than_bit_u64_v1(scratch[DIGIT_TWO_INDEX], half_digits[2])
+        | (equal_bit_u64_v1(scratch[DIGIT_TWO_INDEX], half_digits[2])
+            & (greater_than_bit_u64_v1(scratch[DIGIT_ONE_INDEX], half_digits[1])
+                | (equal_bit_u64_v1(scratch[DIGIT_ONE_INDEX], half_digits[1])
+                    & greater_than_bit_u64_v1(scratch[DIGIT_ZERO_INDEX], half_digits[0]))));
+    scratch[NEGATIVE_INDEX] = sub_mod_canonical_u64(
+        scratch[RECONSTRUCTED_INDEX],
+        INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1,
+        PROOF_FIXED_MODULUS_V1,
+    );
+    select_u64_v1(
+        scratch[RECONSTRUCTED_INDEX],
+        scratch[NEGATIVE_INDEX],
+        is_negative,
+    )
+}
+
+fn canonicalize_i64_v1(value: i64, fixed_modulus: FixedModulusV1) -> u64 {
+    let bits = value as u64;
+    let sign_bit = bits >> 63;
+    let sign_mask = 0_u64.wrapping_sub(sign_bit);
+    let magnitude = (bits ^ sign_mask).wrapping_add(sign_bit);
+    let non_negative = reduce_u64_v1(magnitude, fixed_modulus);
+    let negative = sub_mod_canonical_u64(0, non_negative, fixed_modulus);
+    select_u64_v1(non_negative, negative, sign_bit)
+}
+
+fn reduce_u64_v1(value: u64, fixed_modulus: FixedModulusV1) -> u64 {
+    let mut remainder = 0_u64;
+    for bit_index in (0..u64::BITS).rev() {
+        remainder = (remainder << 1) | ((value >> bit_index) & 1);
+        remainder = reduce_once_u64(remainder, fixed_modulus);
+    }
+    remainder
 }
 
 fn add_mod_u16(lhs: u16, rhs: u16, modulus: u16) -> u16 {
@@ -536,17 +800,117 @@ fn sub_mod_u16(lhs: u16, rhs: u16, modulus: u16) -> u16 {
     }
 }
 
-fn add_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    let sum = u128::from(lhs) + u128::from(rhs);
-    u64::try_from(sum % u128::from(modulus)).expect("reduced sum fits u64")
+fn select_u64_v1(lhs: u64, rhs: u64, select_rhs_bit: u64) -> u64 {
+    let mask = 0_u64.wrapping_sub(select_rhs_bit);
+    (lhs & !mask) | (rhs & mask)
 }
 
-fn sub_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
+fn select_i64_v1(lhs: i64, rhs: i64, select_rhs_bit: u64) -> i64 {
+    select_u64_v1(lhs as u64, rhs as u64, select_rhs_bit) as i64
+}
+
+fn equal_bit_u64_v1(lhs: u64, rhs: u64) -> u64 {
+    let difference = lhs ^ rhs;
+    1 ^ ((difference | difference.wrapping_neg()) >> 63)
+}
+
+/// Return one exactly when `lhs > rhs`.
+///
+/// Every caller supplies values below `2^63` whose absolute difference is
+/// below `2^63`, so the high bit of the wrapped reverse subtraction is the
+/// borrow bit.
+fn greater_than_bit_u64_v1(lhs: u64, rhs: u64) -> u64 {
+    rhs.wrapping_sub(lhs) >> 63
+}
+
+fn reduce_once_u64(value: u64, fixed_modulus: FixedModulusV1) -> u64 {
+    let reduced = value.wrapping_sub(fixed_modulus.modulus);
+    let underflow_bit = reduced >> 63;
+    select_u64_v1(reduced, value, underflow_bit)
+}
+
+fn add_mod_canonical_u64(lhs: u64, rhs: u64, fixed_modulus: FixedModulusV1) -> u64 {
+    let sum = lhs + rhs;
+    reduce_once_u64(sum, fixed_modulus)
+}
+
+fn sub_mod_canonical_u64(lhs: u64, rhs: u64, fixed_modulus: FixedModulusV1) -> u64 {
+    let difference = lhs.wrapping_sub(rhs);
+    let underflow_bit = difference >> 63;
+    let corrected = difference.wrapping_add(fixed_modulus.modulus);
+    select_u64_v1(difference, corrected, underflow_bit)
+}
+
+fn montgomery_reduce_u128_v1(product: u128, fixed_modulus: FixedModulusV1) -> u64 {
+    let correction = (product as u64).wrapping_mul(fixed_modulus.montgomery_negative_inverse);
+    let corrected_product = product + u128::from(correction) * u128::from(fixed_modulus.modulus);
+    let quotient = (corrected_product >> 64) as u64;
+    reduce_once_u64(quotient, fixed_modulus)
+}
+
+fn multiply_mod_fixed_u64(lhs: u64, rhs: u64, fixed_modulus: FixedModulusV1) -> u64 {
+    let lhs_montgomery = montgomery_reduce_u128_v1(
+        u128::from(lhs) * u128::from(fixed_modulus.montgomery_r_squared),
+        fixed_modulus,
+    );
+    montgomery_reduce_u128_v1(u128::from(lhs_montgomery) * u128::from(rhs), fixed_modulus)
+}
+
+fn modular_power_fixed_u64(mut base: u64, mut exponent: u64, fixed_modulus: FixedModulusV1) -> u64 {
+    let mut output = 1_u64;
+    // The exponent is derived solely from the public, fixed NTT degree.
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            output = multiply_mod_fixed_u64(output, base, fixed_modulus);
+        }
+        base = multiply_mod_fixed_u64(base, base, fixed_modulus);
+        exponent >>= 1;
+    }
+    output
+}
+
+#[cfg(test)]
+fn multiply_mod_reference_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
+    u64::try_from(u128::from(lhs) * u128::from(rhs) % u128::from(modulus))
+        .expect("reduced product fits u64")
+}
+
+#[cfg(test)]
+fn add_mod_reference_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
+    u64::try_from((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
+        .expect("reduced sum fits u64")
+}
+
+#[cfg(test)]
+fn sub_mod_reference_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     if lhs >= rhs {
         lhs - rhs
     } else {
         modulus - (rhs - lhs)
     }
+}
+
+#[cfg(test)]
+fn modular_power_reference_u64(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
+    let mut output = 1_u64;
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            output = multiply_mod_reference_u64(output, base, modulus);
+        }
+        base = multiply_mod_reference_u64(base, base, modulus);
+        exponent >>= 1;
+    }
+    output
+}
+
+#[cfg(test)]
+fn canonicalize_i128_reference(value: i128, modulus: u64) -> u64 {
+    let modulus = i128::from(modulus);
+    let mut residue = value % modulus;
+    if residue < 0 {
+        residue += modulus;
+    }
+    u64::try_from(residue).expect("canonical residue fits u64")
 }
 
 /// Canonical ring failure.
@@ -598,6 +962,372 @@ mod tests {
         let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
         coefficients[index] = coefficient;
         ProofPolynomialV1::new(coefficients).expect("canonical monomial")
+    }
+
+    fn splitmix64(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut value = *state;
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^ (value >> 31)
+    }
+
+    fn random_proof_polynomial(state: &mut u64) -> ProofPolynomialV1 {
+        ProofPolynomialV1::new(core::array::from_fn(|_| {
+            splitmix64(state) % PROOF_MODULUS_V1
+        }))
+        .expect("random residues are canonical")
+    }
+
+    fn crt_residues_from_centered(value: i128) -> [u64; 3] {
+        INTERNAL_CRT_PRIMES_V1.map(|prime| canonicalize_i128_reference(value, prime))
+    }
+
+    fn mixed_radix_residues(digits: [u64; 3]) -> [u64; 3] {
+        INTERNAL_CRT_PRIMES_V1.map(|modulus| {
+            add_mod_reference_u64(
+                add_mod_reference_u64(
+                    digits[0] % modulus,
+                    multiply_mod_reference_u64(
+                        INTERNAL_CRT_PRIMES_V1[0] % modulus,
+                        digits[1] % modulus,
+                        modulus,
+                    ),
+                    modulus,
+                ),
+                multiply_mod_reference_u64(
+                    multiply_mod_reference_u64(
+                        INTERNAL_CRT_PRIMES_V1[0] % modulus,
+                        INTERNAL_CRT_PRIMES_V1[1] % modulus,
+                        modulus,
+                    ),
+                    digits[2] % modulus,
+                    modulus,
+                ),
+                modulus,
+            )
+        })
+    }
+
+    fn mixed_radix_mod_q(digits: [u64; 3]) -> u64 {
+        add_mod_reference_u64(
+            add_mod_reference_u64(
+                digits[0],
+                multiply_mod_reference_u64(INTERNAL_CRT_PRIMES_V1[0], digits[1], PROOF_MODULUS_V1),
+                PROOF_MODULUS_V1,
+            ),
+            multiply_mod_reference_u64(
+                INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1,
+                digits[2],
+                PROOF_MODULUS_V1,
+            ),
+            PROOF_MODULUS_V1,
+        )
+    }
+
+    fn is_prime_u64(candidate: u64) -> bool {
+        const BASES: [u64; 7] = [2, 325, 9_375, 28_178, 450_775, 9_780_504, 1_795_265_022];
+        if candidate < 2 {
+            return false;
+        }
+        for divisor in [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
+            if candidate == divisor {
+                return true;
+            }
+            if candidate.is_multiple_of(divisor) {
+                return false;
+            }
+        }
+
+        let shift = (candidate - 1).trailing_zeros();
+        let odd_part = (candidate - 1) >> shift;
+        'base: for base in BASES {
+            let base = base % candidate;
+            if base == 0 {
+                continue;
+            }
+            let mut witness = modular_power_reference_u64(base, odd_part, candidate);
+            if witness == 1 || witness == candidate - 1 {
+                continue;
+            }
+            for _ in 1..shift {
+                witness = multiply_mod_reference_u64(witness, witness, candidate);
+                if witness == candidate - 1 {
+                    continue 'base;
+                }
+            }
+            return false;
+        }
+        true
+    }
+
+    #[test]
+    fn fixed_modulus_arithmetic_matches_independent_reference_at_boundaries_and_randomly() {
+        let fixed_moduli = [
+            PROOF_FIXED_MODULUS_V1,
+            INTERNAL_CRT_FIXED_MODULI_V1[0],
+            INTERNAL_CRT_FIXED_MODULI_V1[1],
+            INTERNAL_CRT_FIXED_MODULI_V1[2],
+        ];
+        let mut random_state = 0x4D4F_4E54_474F_4D45;
+
+        for fixed_modulus in fixed_moduli {
+            let modulus = fixed_modulus.modulus;
+            assert_eq!(
+                modulus.wrapping_mul(fixed_modulus.montgomery_negative_inverse),
+                u64::MAX
+            );
+            let montgomery_radix_modulus = (1_u128 << 64) % u128::from(modulus);
+            assert_eq!(
+                fixed_modulus.montgomery_r_squared,
+                u64::try_from(
+                    montgomery_radix_modulus * montgomery_radix_modulus % u128::from(modulus)
+                )
+                .expect("reference residue fits u64")
+            );
+
+            for value in [0, 1, modulus - 1, modulus, modulus + 1, 2 * modulus - 1] {
+                assert_eq!(
+                    reduce_once_u64(value, fixed_modulus),
+                    value % modulus,
+                    "single reduction failed for modulus {modulus} and value {value}"
+                );
+            }
+            for value in [
+                0,
+                1,
+                modulus - 1,
+                modulus,
+                modulus + 1,
+                u64::MAX / 2,
+                u64::MAX - 1,
+                u64::MAX,
+            ] {
+                assert_eq!(
+                    reduce_u64_v1(value, fixed_modulus),
+                    value % modulus,
+                    "full reduction failed for modulus {modulus} and value {value}"
+                );
+            }
+
+            let boundaries = [0, 1, modulus / 2, modulus / 2 + 1, modulus - 2, modulus - 1];
+            for lhs in boundaries {
+                for rhs in boundaries {
+                    assert_eq!(
+                        add_mod_canonical_u64(lhs, rhs, fixed_modulus),
+                        add_mod_reference_u64(lhs, rhs, modulus)
+                    );
+                    assert_eq!(
+                        sub_mod_canonical_u64(lhs, rhs, fixed_modulus),
+                        sub_mod_reference_u64(lhs, rhs, modulus)
+                    );
+                    assert_eq!(
+                        multiply_mod_fixed_u64(lhs, rhs, fixed_modulus),
+                        multiply_mod_reference_u64(lhs, rhs, modulus)
+                    );
+                }
+            }
+
+            for _ in 0..512 {
+                let lhs = splitmix64(&mut random_state) % modulus;
+                let rhs = splitmix64(&mut random_state) % modulus;
+                assert_eq!(
+                    add_mod_canonical_u64(lhs, rhs, fixed_modulus),
+                    add_mod_reference_u64(lhs, rhs, modulus)
+                );
+                assert_eq!(
+                    sub_mod_canonical_u64(lhs, rhs, fixed_modulus),
+                    sub_mod_reference_u64(lhs, rhs, modulus)
+                );
+                assert_eq!(
+                    multiply_mod_fixed_u64(lhs, rhs, fixed_modulus),
+                    multiply_mod_reference_u64(lhs, rhs, modulus)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_time_centering_matches_reference_for_all_signed_boundaries() {
+        for value in [
+            i64::MIN,
+            i64::MIN + 1,
+            -(PROOF_MODULUS_V1 as i64) - 1,
+            -(PROOF_MODULUS_V1 as i64),
+            -(PROOF_MODULUS_V1 as i64) + 1,
+            -1,
+            0,
+            1,
+            PROOF_MODULUS_V1 as i64 - 1,
+            PROOF_MODULUS_V1 as i64,
+            PROOF_MODULUS_V1 as i64 + 1,
+            i64::MAX - 1,
+            i64::MAX,
+        ] {
+            assert_eq!(
+                canonicalize_i64_v1(value, PROOF_FIXED_MODULUS_V1),
+                canonicalize_i128_reference(i128::from(value), PROOF_MODULUS_V1),
+                "centering failed for {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn crt_ntt_profile_constants_are_exact_and_support_unique_reconstruction() {
+        for prime_index in 0..INTERNAL_CRT_PRIMES_V1.len() {
+            let prime = INTERNAL_CRT_PRIMES_V1[prime_index];
+            let fixed_modulus = INTERNAL_CRT_FIXED_MODULI_V1[prime_index];
+            let root = INTERNAL_CRT_NEGACYCLIC_ROOTS_V1[prime_index];
+            assert!(is_prime_u64(prime));
+            assert_eq!(modular_power_fixed_u64(root, 64, fixed_modulus), prime - 1);
+            assert_eq!(modular_power_fixed_u64(root, 128, fixed_modulus), 1);
+            assert_eq!(
+                multiply_mod_fixed_u64(
+                    root,
+                    INTERNAL_CRT_NEGACYCLIC_ROOT_INVERSES_V1[prime_index],
+                    fixed_modulus,
+                ),
+                1
+            );
+            assert_eq!(
+                multiply_mod_fixed_u64(
+                    u64::try_from(APPLICATION_RING_DEGREE_V1).expect("degree fits u64"),
+                    INTERNAL_CRT_RING_DEGREE_INVERSES_V1[prime_index],
+                    fixed_modulus,
+                ),
+                1
+            );
+            assert!(PROOF_MODULUS_V1 < 2 * prime);
+        }
+
+        let [prime_zero, prime_one, prime_two] = INTERNAL_CRT_PRIMES_V1;
+        assert_eq!(
+            multiply_mod_reference_u64(
+                prime_zero % prime_one,
+                INTERNAL_CRT_GARNER_INVERSES_V1[0],
+                prime_one
+            ),
+            1
+        );
+        assert_eq!(
+            multiply_mod_reference_u64(
+                multiply_mod_reference_u64(prime_zero, prime_one, prime_two),
+                INTERNAL_CRT_GARNER_INVERSES_V1[1],
+                prime_two
+            ),
+            1
+        );
+        assert_eq!(
+            multiply_mod_reference_u64(prime_zero, prime_one, PROOF_MODULUS_V1),
+            INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1
+        );
+        assert_eq!(
+            multiply_mod_reference_u64(
+                INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1,
+                prime_two,
+                PROOF_MODULUS_V1
+            ),
+            INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1
+        );
+
+        // Twice the largest possible absolute schoolbook coefficient is
+        // strictly below P=p0*p1*p2. Division keeps this check inside u128.
+        let maximum_residue = u128::from(PROOF_MODULUS_V1 - 1);
+        let twice_coefficient_bound = 2
+            * u128::try_from(APPLICATION_RING_DEGREE_V1).expect("degree fits u128")
+            * maximum_residue
+            * maximum_residue;
+        let first_two_product = u128::from(prime_zero) * u128::from(prime_one);
+        assert!(twice_coefficient_bound / first_two_product < u128::from(prime_two));
+    }
+
+    #[test]
+    fn negacyclic_ntt_round_trips_boundary_and_random_inputs_under_every_prime() {
+        let mut random_state = 0x4E54_542D_524F_554E;
+        for prime_index in 0..INTERNAL_CRT_PRIMES_V1.len() {
+            let prime = INTERNAL_CRT_PRIMES_V1[prime_index];
+            let fixed_modulus = INTERNAL_CRT_FIXED_MODULI_V1[prime_index];
+            let inputs = [
+                [0_u64; APPLICATION_RING_DEGREE_V1],
+                core::array::from_fn(|index| if index % 2 == 0 { prime - 1 } else { 1 }),
+                core::array::from_fn(|_| splitmix64(&mut random_state) % prime),
+            ];
+            for input in inputs {
+                let mut transformed = input;
+                forward_negacyclic_ntt_v1(
+                    &mut transformed,
+                    fixed_modulus,
+                    INTERNAL_CRT_NEGACYCLIC_ROOTS_V1[prime_index],
+                );
+                assert!(transformed.iter().all(|coefficient| *coefficient < prime));
+                inverse_negacyclic_ntt_v1(
+                    &mut transformed,
+                    fixed_modulus,
+                    INTERNAL_CRT_NEGACYCLIC_ROOT_INVERSES_V1[prime_index],
+                    INTERNAL_CRT_RING_DEGREE_INVERSES_V1[prime_index],
+                );
+                assert_eq!(transformed, input);
+            }
+        }
+    }
+
+    #[test]
+    fn centered_crt_reconstruction_handles_sign_and_exact_boundaries() {
+        let maximum_coefficient = i128::try_from(APPLICATION_RING_DEGREE_V1)
+            .expect("degree fits i128")
+            * i128::from(PROOF_MODULUS_V1 - 1)
+            * i128::from(PROOF_MODULUS_V1 - 1);
+        for value in [
+            -maximum_coefficient,
+            -maximum_coefficient + 1,
+            -i128::from(PROOF_MODULUS_V1) - 1,
+            -i128::from(PROOF_MODULUS_V1),
+            -i128::from(PROOF_MODULUS_V1) + 1,
+            -1,
+            0,
+            1,
+            i128::from(PROOF_MODULUS_V1) - 1,
+            i128::from(PROOF_MODULUS_V1),
+            i128::from(PROOF_MODULUS_V1) + 1,
+            maximum_coefficient - 1,
+            maximum_coefficient,
+        ] {
+            assert_eq!(
+                centered_crt_reconstruct_mod_q_v1(crt_residues_from_centered(value)),
+                canonicalize_i128_reference(value, PROOF_MODULUS_V1),
+                "failed to reconstruct centered value {value}"
+            );
+        }
+
+        let [prime_zero, prime_one, prime_two] = INTERNAL_CRT_PRIMES_V1;
+        let half_digits = [
+            (prime_zero - 1) / 2,
+            (prime_one - 1) / 2,
+            (prime_two - 1) / 2,
+        ];
+        let half_mod_q = mixed_radix_mod_q(half_digits);
+        assert_eq!(
+            centered_crt_reconstruct_mod_q_v1(mixed_radix_residues(half_digits)),
+            half_mod_q
+        );
+
+        let just_above_half = [half_digits[0] + 1, half_digits[1], half_digits[2]];
+        assert_eq!(
+            centered_crt_reconstruct_mod_q_v1(mixed_radix_residues(just_above_half)),
+            sub_mod_reference_u64(
+                mixed_radix_mod_q(just_above_half),
+                INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1,
+                PROOF_MODULUS_V1
+            )
+        );
+        assert_eq!(
+            centered_crt_reconstruct_mod_q_v1(mixed_radix_residues([
+                prime_zero - 1,
+                prime_one - 1,
+                prime_two - 1,
+            ])),
+            PROOF_MODULUS_V1 - 1
+        );
     }
 
     #[test]
@@ -674,6 +1404,123 @@ mod tests {
         );
         assert_eq!(product.centered_coefficient(0), -1);
         assert_eq!(product.centered_squared_norm(), 1);
+    }
+
+    #[test]
+    fn proof_ntt_multiplication_is_exact_for_every_monomial_pair() {
+        for lhs_index in 0..APPLICATION_RING_DEGREE_V1 {
+            for rhs_index in 0..APPLICATION_RING_DEGREE_V1 {
+                let product = proof_monomial(lhs_index, 1).multiply(proof_monomial(rhs_index, 1));
+                let degree = lhs_index + rhs_index;
+                let mut expected = [0_u64; APPLICATION_RING_DEGREE_V1];
+                expected[degree % APPLICATION_RING_DEGREE_V1] =
+                    if degree < APPLICATION_RING_DEGREE_V1 {
+                        1
+                    } else {
+                        PROOF_MODULUS_V1 - 1
+                    };
+                assert_eq!(
+                    product.coefficients(),
+                    &expected,
+                    "incorrect X^{lhs_index} * X^{rhs_index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn proof_ntt_matches_schoolbook_for_sign_and_residue_boundaries() {
+        let positive_half = PROOF_MODULUS_V1 / 2;
+        let negative_half = positive_half + 1;
+        let boundary_polynomials = [
+            ProofPolynomialV1::ZERO,
+            ProofPolynomialV1::new([PROOF_MODULUS_V1 - 1; APPLICATION_RING_DEGREE_V1])
+                .expect("minus-one residues are canonical"),
+            ProofPolynomialV1::new(core::array::from_fn(|index| {
+                if index % 2 == 0 {
+                    positive_half
+                } else {
+                    negative_half
+                }
+            }))
+            .expect("centered boundary residues are canonical"),
+            ProofPolynomialV1::new(core::array::from_fn(|index| {
+                [0, 1, PROOF_MODULUS_V1 - 1, positive_half, negative_half][index % 5]
+            }))
+            .expect("boundary residues are canonical"),
+            proof_monomial(63, PROOF_MODULUS_V1 - 1),
+        ];
+
+        for lhs in boundary_polynomials {
+            for rhs in boundary_polynomials {
+                let product = lhs.multiply(rhs);
+                assert_eq!(product, lhs.multiply_schoolbook(rhs));
+                assert!(
+                    product
+                        .coefficients()
+                        .iter()
+                        .all(|coefficient| *coefficient < PROOF_MODULUS_V1)
+                );
+            }
+        }
+
+        let boundary_coefficients = [1, positive_half, negative_half, PROOF_MODULUS_V1 - 1];
+        let boundary_indices = [0, 1, 31, 32, 63];
+        for lhs_index in boundary_indices {
+            for rhs_index in boundary_indices {
+                for lhs_coefficient in boundary_coefficients {
+                    for rhs_coefficient in boundary_coefficients {
+                        let lhs = proof_monomial(lhs_index, lhs_coefficient);
+                        let rhs = proof_monomial(rhs_index, rhs_coefficient);
+                        assert_eq!(
+                            lhs.multiply(rhs),
+                            lhs.multiply_schoolbook(rhs),
+                            "boundary monomials failed at ({lhs_index}, {rhs_index}) \
+                             with ({lhs_coefficient}, {rhs_coefficient})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn proof_ntt_matches_schoolbook_for_deterministic_random_polynomials() {
+        let mut random_state = 0x4352_542D_4449_4646;
+        for sample in 0..128 {
+            let lhs = random_proof_polynomial(&mut random_state);
+            let rhs = random_proof_polynomial(&mut random_state);
+            let product = lhs.multiply(rhs);
+            assert_eq!(
+                product,
+                lhs.multiply_schoolbook(rhs),
+                "random differential sample {sample} failed"
+            );
+            assert!(
+                product
+                    .coefficients()
+                    .iter()
+                    .all(|coefficient| *coefficient < PROOF_MODULUS_V1)
+            );
+            if sample % 8 == 0 {
+                assert_eq!(product, rhs.multiply(lhs));
+            }
+        }
+    }
+
+    #[test]
+    fn proof_ntt_distributivity_holds_for_deterministic_random_polynomials() {
+        let mut random_state = 0x4352_542D_4449_5354;
+        for sample in 0..48 {
+            let lhs = random_proof_polynomial(&mut random_state);
+            let rhs = random_proof_polynomial(&mut random_state);
+            let addend = random_proof_polynomial(&mut random_state);
+            assert_eq!(
+                lhs.multiply(rhs.add(addend)),
+                lhs.multiply(rhs).add(lhs.multiply(addend)),
+                "random distributivity sample {sample} failed"
+            );
+        }
     }
 
     #[test]

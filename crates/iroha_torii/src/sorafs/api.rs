@@ -2550,6 +2550,7 @@ struct SiteFileListReadbackQuery {
 #[derive(Debug, Default)]
 struct StorageMetadataReadbackQuery {
     limit: Option<u32>,
+    offset: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -2807,6 +2808,7 @@ impl StorageMetadataReadbackQuery {
         let mut query = Self::default();
         walk_query_params(raw, |key, value| match key {
             "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            "offset" => parse_u32_field(&mut query.offset, "offset", value),
             _ => Ok(()),
         })?;
         Ok(query)
@@ -19495,6 +19497,7 @@ fn asset_escrow_kind_label(kind: AssetEscrowKind) -> &'static str {
     match kind {
         AssetEscrowKind::Marketplace => "marketplace",
         AssetEscrowKind::Lock => "lock",
+        AssetEscrowKind::Conditional => "conditional",
     }
 }
 
@@ -22335,17 +22338,24 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
 
     let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(manifest_bytes.as_slice());
     let file_count = stored.files().len();
+    let offset = query
+        .offset
+        .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX))
+        .unwrap_or(0)
+        .min(file_count);
     let limit = query
         .limit
         .map(|limit| normalize_limit(Some(limit)))
-        .unwrap_or(file_count);
+        .unwrap_or_else(|| file_count.saturating_sub(offset));
     let files = stored
         .files()
         .iter()
+        .skip(offset)
         .take(limit)
         .map(storage_stored_file_dto)
         .collect::<Vec<_>>();
     let returned_file_count = files.len();
+    let returned_end = offset.saturating_add(returned_file_count);
 
     let response = StorageManifestResponseDto {
         manifest_id_hex,
@@ -22376,7 +22386,11 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
             Value::from(returned_file_count as u64),
         );
         obj.insert("limit".into(), Value::from(limit as u64));
-        obj.insert("truncated_files".into(), Value::from(file_count > limit));
+        obj.insert("offset".into(), Value::from(offset as u64));
+        obj.insert(
+            "truncated_files".into(),
+            Value::from(returned_end < file_count),
+        );
     }
 
     JsonBody(value).into_response()
@@ -22456,34 +22470,47 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         }
     };
     let file_count = stored.files().len();
+    let offset = query
+        .offset
+        .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX))
+        .unwrap_or(0);
+    let file_offset = offset.min(file_count);
     let files = stored
         .files()
         .iter()
+        .skip(file_offset)
         .take(limit)
         .map(file_listing_entry_json)
         .collect::<Vec<_>>();
     let returned_file_count = files.len();
     let chunk_count = specs.len();
+    let chunk_offset = offset.min(chunk_count);
 
     let chunk_digests = specs
         .iter()
+        .skip(chunk_offset)
         .take(limit)
         .map(|spec| Value::String(hex::encode(spec.digest)))
         .collect::<Vec<_>>();
     let chunks = specs
         .iter()
+        .skip(chunk_offset)
         .take(limit)
         .map(chunk_fetch_spec_json)
         .collect::<Vec<_>>();
 
     let mut plan_map = Map::new();
     plan_map.insert("chunk_count".into(), Value::from(chunk_count as u64));
+    plan_map.insert("offset".into(), Value::from(offset as u64));
     plan_map.insert(
         "returned_chunk_count".into(),
         Value::from(chunks.len() as u64),
     );
     plan_map.insert("limit".into(), Value::from(limit as u64));
-    plan_map.insert("truncated_chunks".into(), Value::from(chunk_count > limit));
+    plan_map.insert(
+        "truncated_chunks".into(),
+        Value::from(chunk_offset.saturating_add(chunks.len()) < chunk_count),
+    );
     plan_map.insert("content_length".into(), Value::from(plan.content_length));
     plan_map.insert(
         "payload_digest_blake3".into(),
@@ -22498,7 +22525,10 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         "returned_file_count".into(),
         Value::from(returned_file_count as u64),
     );
-    plan_map.insert("truncated_files".into(), Value::from(file_count > limit));
+    plan_map.insert(
+        "truncated_files".into(),
+        Value::from(file_offset.saturating_add(returned_file_count) < file_count),
+    );
     plan_map.insert("files".into(), Value::Array(files));
     plan_map.insert("chunk_digest_count".into(), Value::from(chunk_count as u64));
     plan_map.insert(
@@ -22507,7 +22537,7 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
     );
     plan_map.insert(
         "truncated_chunk_digests".into(),
-        Value::from(chunk_count > limit),
+        Value::from(chunk_offset.saturating_add(chunk_digests.len()) < chunk_count),
     );
     plan_map.insert("chunk_digests_blake3".into(), Value::Array(chunk_digests));
     plan_map.insert("chunks".into(), Value::Array(chunks));
@@ -29907,11 +29937,10 @@ mod app_api_tests {
     };
 
     use axum::{body, http::Uri};
-    use blake3::hash;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_config::parameters::actual::SorafsTokenConfig;
     use sorafs_car::{
-        CarBuildPlan,
+        CarBuildPlan, CarWriter,
         multi_fetch::{
             FetchOptions, FetchProvider, ProviderMetadata, RangeCapability, StreamBudget,
             fetch_plan_parallel,
@@ -29938,6 +29967,16 @@ mod app_api_tests {
         sorafs::{AdmissionRegistry, StreamTokenIssuer},
         utils::extractors::JsonOnly,
     };
+
+    fn canonical_fixture_car_stats(
+        plan: &CarBuildPlan,
+        payload: &[u8],
+    ) -> sorafs_car::CarWriteStats {
+        CarWriter::new(plan, payload)
+            .expect("canonical fixture CAR writer")
+            .write_to(std::io::sink())
+            .expect("derive canonical fixture CAR archive stats")
+    }
 
     #[test]
     fn walk_query_params_decodes_percent_encoding() {
@@ -30110,17 +30149,23 @@ mod app_api_tests {
     }
 
     #[test]
-    fn storage_metadata_readback_query_parses_limits() {
-        let query = StorageMetadataReadbackQuery::parse(Some("limit=2&ignored=true"))
+    fn storage_metadata_readback_query_parses_pagination() {
+        let query = StorageMetadataReadbackQuery::parse(Some("limit=2&offset=7&ignored=true"))
             .expect("parse storage metadata readback query");
         assert_eq!(normalize_limit(query.limit), 2);
+        assert_eq!(query.offset, Some(7));
 
         let query = StorageMetadataReadbackQuery::parse(Some("limit=9999"))
             .expect("parse oversized storage metadata query");
         assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+        assert_eq!(query.offset, None);
 
         let err = StorageMetadataReadbackQuery::parse(Some("limit=bad"))
             .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+
+        let err = StorageMetadataReadbackQuery::parse(Some("offset=bad"))
+            .expect_err("invalid offset should fail");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -30260,9 +30305,10 @@ mod app_api_tests {
 
         let payload = b"deterministic payload for alignment";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x02, 0x03, 0x04])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 BLAKE3_256_MULTIHASH_CODE,
@@ -30273,8 +30319,8 @@ mod app_api_tests {
                     .expect("derive canonical alignment fixture PoR root"),
             )
             .content_length(plan.content_length)
-            .car_digest(hash(payload).into())
-            .car_size(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -30305,9 +30351,10 @@ mod app_api_tests {
 
         let payload = b"payload for misalignment check";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0x0A, 0x0B, 0x0C])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 BLAKE3_256_MULTIHASH_CODE,
@@ -30318,8 +30365,8 @@ mod app_api_tests {
                     .expect("derive canonical misalignment fixture PoR root"),
             )
             .content_length(plan.content_length)
-            .car_digest(hash(payload).into())
-            .car_size(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -30781,6 +30828,11 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
         | StorageBackendError::PorCommitmentGeometryOverflow { .. }
         | StorageBackendError::AllocationGeometryOverflow { .. }
         | StorageBackendError::PorRootMismatch
+        | StorageBackendError::ManifestChunkPlanDigestMismatch
+        | StorageBackendError::CarArchiveReconstruction { .. }
+        | StorageBackendError::ManifestCarArchiveDigestMismatch
+        | StorageBackendError::ManifestCarSizeMismatch { .. }
+        | StorageBackendError::ManifestDagCodecMismatch { .. }
         | StorageBackendError::PorSampleCountTooLarge { .. }
         | StorageBackendError::PdpTree(_)
         | StorageBackendError::PdpCommitment(_)
@@ -30895,6 +30947,30 @@ mod storage_backend_error_tests {
         });
         let response = storage_backend_error(err);
         assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn manifest_archive_binding_errors_map_to_bad_request() {
+        for error in [
+            StorageBackendError::ManifestChunkPlanDigestMismatch,
+            StorageBackendError::CarArchiveReconstruction {
+                reason: "fixture".to_owned(),
+            },
+            StorageBackendError::ManifestCarArchiveDigestMismatch,
+            StorageBackendError::ManifestCarSizeMismatch {
+                expected: 1,
+                actual: 2,
+            },
+            StorageBackendError::ManifestDagCodecMismatch {
+                expected: 0x55,
+                actual: 0x71,
+            },
+        ] {
+            assert_eq!(
+                storage_backend_error(error).status(),
+                super::StatusCode::BAD_REQUEST
+            );
+        }
     }
 
     #[test]
@@ -31147,8 +31223,17 @@ pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<Chu
 mod chunk_profile_tests {
     use super::*;
 
-    use blake3;
     use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
+
+    fn canonical_fixture_car_stats(
+        plan: &CarBuildPlan,
+        payload: &[u8],
+    ) -> sorafs_car::CarWriteStats {
+        sorafs_car::CarWriter::new(plan, payload)
+            .expect("canonical fixture CAR writer")
+            .write_to(std::io::sink())
+            .expect("derive canonical fixture CAR archive stats")
+    }
 
     #[test]
     fn chunk_profile_for_manifest_accepts_inline_profile() {
@@ -31162,9 +31247,10 @@ mod chunk_profile_tests {
         };
         let plan =
             CarBuildPlan::single_file_with_profile(payload, profile).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(profile, BLAKE3_256_MULTIHASH_CODE)
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .por_root(
@@ -31172,8 +31258,8 @@ mod chunk_profile_tests {
                     .expect("derive canonical inline-profile PoR root"),
             )
             .content_length(content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -31188,9 +31274,10 @@ mod chunk_profile_tests {
         let payload = b"chunk-profile-fixture";
         let content_length = payload.len() as u64;
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let mut manifest = ManifestBuilder::new()
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 BLAKE3_256_MULTIHASH_CODE,
@@ -31201,8 +31288,8 @@ mod chunk_profile_tests {
                     .expect("derive canonical unknown-profile fixture PoR root"),
             )
             .content_length(content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -36708,6 +36795,7 @@ mod advert_tests {
             release_authority,
             expires_at_ms: Some(1_800_086_400_000),
             evidence_hashes: vec![Hash::new("appeal deposit status evidence")],
+            conditions: Vec::new(),
             created_at_ms: 1_800_000_001_000,
             accepted_at_ms: None,
             payment_sent_at_ms: None,
@@ -37903,6 +37991,19 @@ mod advert_tests {
             mismatches
                 .iter()
                 .any(|item| item.contains("remaining_amount"))
+        );
+    }
+
+    #[test]
+    fn asset_escrow_kind_labels_cover_the_closed_enum() {
+        assert_eq!(
+            asset_escrow_kind_label(AssetEscrowKind::Marketplace),
+            "marketplace"
+        );
+        assert_eq!(asset_escrow_kind_label(AssetEscrowKind::Lock), "lock");
+        assert_eq!(
+            asset_escrow_kind_label(AssetEscrowKind::Conditional),
+            "conditional"
         );
     }
 
@@ -45097,13 +45198,22 @@ mod advert_tests {
         }
     }
 
+    fn canonical_fixture_car_stats(
+        plan: &CarBuildPlan,
+        payload: &[u8],
+    ) -> sorafs_car::CarWriteStats {
+        sorafs_car::CarWriter::new(plan, payload)
+            .expect("canonical fixture CAR writer")
+            .write_to(std::io::sink())
+            .expect("derive canonical fixture CAR archive stats")
+    }
+
     fn manifest_for_payload(seed: u8, payload: &[u8]) -> ManifestV1 {
         let plan = CarBuildPlan::single_file(payload).expect("canonical fixture chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(sorafs_manifest::canonical_manifest_root_cid(
-                [seed.max(1); 32],
-            ))
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -45113,9 +45223,9 @@ mod advert_tests {
                 sorafs_car::compute_por_root(payload, &plan)
                     .expect("derive canonical fixture PoR root"),
             )
-            .content_length(payload.len() as u64)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(payload.len() as u64)
+            .content_length(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .push_alias(AliasClaim {
@@ -45123,9 +45233,28 @@ mod advert_tests {
                 namespace: "alias".into(),
                 proof: vec![0xAA; 16],
             })
+            .add_metadata("test.fixture_seed", format!("{seed:02x}"))
             .build()
             .expect("manifest");
         manifest
+    }
+
+    #[test]
+    fn canonical_manifest_fixture_separates_digest_domains() {
+        let payload = b"raw payload, CARv1 section, and CAR archive domains";
+        let plan = CarBuildPlan::single_file(payload).expect("canonical fixture chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
+
+        assert_ne!(plan.payload_digest, car_stats.car_payload_digest);
+        assert_ne!(plan.payload_digest, car_stats.car_archive_digest);
+        assert_ne!(car_stats.car_payload_digest, car_stats.car_archive_digest);
+
+        let manifest = manifest_for_payload(0xA5, payload);
+        assert_eq!(
+            manifest.car_digest,
+            *car_stats.car_archive_digest.as_bytes()
+        );
+        assert_eq!(manifest.car_size, car_stats.car_size);
     }
 
     fn seed_capacity_declaration(
@@ -45979,23 +46108,40 @@ mod advert_tests {
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
 
-        let payload = b"sorafs manifest export payload";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "first.bin".to_owned()],
+                    data: b"first manifest export payload".to_vec(),
+                },
+                FileEntry {
+                    path: vec!["assets".to_owned(), "second.bin".to_owned()],
+                    data: b"second manifest export payload".to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: b"manifest export index".to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let car_stats = canonical_fixture_car_stats(&plan, &payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xAB; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
             )
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
+                sorafs_car::compute_por_root(&payload, &plan)
                     .expect("derive canonical manifest-export fixture PoR root"),
             )
             .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
@@ -46039,15 +46185,20 @@ mod advert_tests {
             value.get("content_length").and_then(Value::as_u64),
             Some(plan.content_length)
         );
-        assert_eq!(value.get("file_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("file_count").and_then(Value::as_u64), Some(3));
         assert_eq!(
             value.get("returned_file_count").and_then(Value::as_u64),
-            Some(1)
+            Some(3)
         );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(3));
+        assert_eq!(value.get("offset").and_then(Value::as_u64), Some(0));
         assert_eq!(
             value.get("truncated_files").and_then(Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            value.get("files").and_then(Value::as_array).map(Vec::len),
+            Some(3)
         );
         let manifest_b64 = value
             .get("manifest_b64")
@@ -46057,6 +46208,66 @@ mod advert_tests {
             .decode(manifest_b64.as_bytes())
             .expect("decode manifest");
         assert_eq!(decoded, manifest_bytes);
+
+        let paged_response = handle_get_sorafs_storage_manifest(
+            State(state.clone()),
+            Path(manifest_id.clone()),
+            axum::extract::RawQuery(Some("offset=1&limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(paged_response.status(), StatusCode::OK);
+        let paged_body = body::to_bytes(paged_response.into_body(), usize::MAX)
+            .await
+            .expect("collect paged manifest body");
+        let paged: Value =
+            norito::json::from_slice(&paged_body).expect("decode paged manifest response");
+        assert_eq!(paged.get("file_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            paged.get("returned_file_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(paged.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(paged.get("offset").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            paged.get("truncated_files").and_then(Value::as_bool),
+            Some(true)
+        );
+        let paged_files = paged
+            .get("files")
+            .and_then(Value::as_array)
+            .expect("paged files");
+        assert_eq!(paged_files.len(), 1);
+        assert_eq!(
+            paged_files[0]
+                .get("path")
+                .and_then(Value::as_array)
+                .and_then(|path| path.last())
+                .and_then(Value::as_str),
+            Some("second.bin")
+        );
+
+        let remaining_response = handle_get_sorafs_storage_manifest(
+            State(state),
+            Path(manifest_id),
+            axum::extract::RawQuery(Some("offset=1".to_owned())),
+        )
+        .await;
+        assert_eq!(remaining_response.status(), StatusCode::OK);
+        let remaining_body = body::to_bytes(remaining_response.into_body(), usize::MAX)
+            .await
+            .expect("collect remaining manifest body");
+        let remaining: Value =
+            norito::json::from_slice(&remaining_body).expect("decode remaining manifest response");
+        assert_eq!(
+            remaining.get("returned_file_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(remaining.get("limit").and_then(Value::as_u64), Some(2));
+        assert_eq!(remaining.get("offset").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            remaining.get("truncated_files").and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     #[tokio::test]
@@ -47405,7 +47616,7 @@ mod advert_tests {
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
 
-        let first_file = vec![0xA5; sorafs_chunker::ChunkProfile::DEFAULT.max_size + 17];
+        let first_file = vec![0xA5; sorafs_chunker::ChunkProfile::DEFAULT.max_size * 2 + 17];
         let second_file = b"sorafs chunk plan export tail".to_vec();
         let (plan, payload) = CarBuildPlan::from_files_with_profile(
             vec![
@@ -47421,9 +47632,10 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("plan");
+        let car_stats = canonical_fixture_car_stats(&plan, &payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xCD; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -47434,15 +47646,15 @@ mod advert_tests {
                     .expect("derive canonical multi-file fixture PoR root"),
             )
             .content_length(plan.content_length)
-            .car_digest(blake3::hash(&payload).into())
-            .car_size(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
             .expect("manifest");
         assert!(
-            plan.chunks.len() > 1,
-            "fixture should cover chunk truncation"
+            plan.chunks.len() > 2,
+            "fixture should cover nonzero-offset chunk truncation"
         );
 
         let chunker_handle = format!(
@@ -47494,6 +47706,12 @@ mod advert_tests {
             Some(plan.chunks.len() as u64)
         );
         assert_eq!(
+            plan_value
+                .get("returned_chunk_digest_count")
+                .and_then(Value::as_u64),
+            Some(plan.chunks.len() as u64)
+        );
+        assert_eq!(
             plan_value.get("file_count").and_then(Value::as_u64),
             Some(2)
         );
@@ -47507,8 +47725,15 @@ mod advert_tests {
             plan_value.get("limit").and_then(Value::as_u64),
             Some(DEFAULT_LIST_LIMIT as u64)
         );
+        assert_eq!(plan_value.get("offset").and_then(Value::as_u64), Some(0));
         assert_eq!(
             plan_value.get("truncated_chunks").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            plan_value
+                .get("truncated_chunk_digests")
+                .and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
@@ -47524,6 +47749,20 @@ mod advert_tests {
             .and_then(Value::as_array)
             .expect("chunks array");
         assert_eq!(chunks.len(), plan.chunks.len());
+        assert_eq!(
+            plan_value
+                .get("chunk_digests_blake3")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(plan.chunks.len())
+        );
+        assert_eq!(
+            plan_value
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
 
         let capped_response = handle_get_sorafs_storage_plan(
             State(state.clone()),
@@ -47545,6 +47784,8 @@ mod advert_tests {
             capped_plan.get("chunk_count").and_then(Value::as_u64),
             Some(plan.chunks.len() as u64)
         );
+        assert_eq!(capped_plan.get("offset").and_then(Value::as_u64), Some(0));
+        assert_eq!(capped_plan.get("limit").and_then(Value::as_u64), Some(1));
         assert_eq!(
             capped_plan
                 .get("returned_chunk_count")
@@ -47595,6 +47836,89 @@ mod advert_tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+
+        let paged_response = handle_get_sorafs_storage_plan(
+            State(state),
+            Path(manifest_id),
+            axum::extract::RawQuery(Some("offset=1&limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(paged_response.status(), StatusCode::OK);
+        let paged_body = body::to_bytes(paged_response.into_body(), usize::MAX)
+            .await
+            .expect("collect paged plan body");
+        let paged_value: Value =
+            norito::json::from_slice(&paged_body).expect("decode paged plan response");
+        let paged_plan = paged_value
+            .get("plan")
+            .and_then(Value::as_object)
+            .expect("paged plan object");
+        assert_eq!(paged_plan.get("offset").and_then(Value::as_u64), Some(1));
+        assert_eq!(paged_plan.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            paged_plan
+                .get("returned_chunk_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            paged_plan
+                .get("returned_chunk_digest_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            paged_plan
+                .get("returned_file_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            paged_plan.get("truncated_chunks").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            paged_plan
+                .get("truncated_chunk_digests")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            paged_plan.get("truncated_files").and_then(Value::as_bool),
+            Some(false)
+        );
+        let paged_chunks = paged_plan
+            .get("chunks")
+            .and_then(Value::as_array)
+            .expect("paged chunks");
+        assert_eq!(paged_chunks.len(), 1);
+        assert_eq!(
+            paged_chunks[0].get("chunk_index").and_then(Value::as_u64),
+            Some(1)
+        );
+        let paged_digests = paged_plan
+            .get("chunk_digests_blake3")
+            .and_then(Value::as_array)
+            .expect("paged chunk digests");
+        assert_eq!(paged_digests.len(), 1);
+        let expected_paged_digest = hex::encode(plan.chunks[1].digest);
+        assert_eq!(
+            paged_digests[0].as_str(),
+            Some(expected_paged_digest.as_str())
+        );
+        let paged_files = paged_plan
+            .get("files")
+            .and_then(Value::as_array)
+            .expect("paged files");
+        assert_eq!(paged_files.len(), 1);
+        assert_eq!(
+            paged_files[0]
+                .get("path")
+                .and_then(Value::as_array)
+                .and_then(|path| path.last())
+                .and_then(Value::as_str),
+            Some("index.html")
         );
     }
 
@@ -49222,9 +49546,10 @@ mod advert_tests {
 
         let payload = b"sorafs fetch manifest envelope enforcement payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xCC; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -49234,9 +49559,9 @@ mod advert_tests {
                 sorafs_car::compute_por_root(payload, &plan)
                     .expect("derive canonical envelope fixture PoR root"),
             )
-            .content_length(payload.len() as u64)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(payload.len() as u64)
+            .content_length(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
@@ -49431,9 +49756,10 @@ mod advert_tests {
 
         let payload = b"sorafs fetch manifest envelope optional payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xCC; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -49443,9 +49769,9 @@ mod advert_tests {
                 sorafs_car::compute_por_root(payload, &plan)
                     .expect("derive canonical optional-envelope fixture PoR root"),
             )
-            .content_length(payload.len() as u64)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(payload.len() as u64)
+            .content_length(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
@@ -49571,9 +49897,10 @@ mod advert_tests {
 
         let payload = b"sorafs capability enforcement payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xDC; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -49583,9 +49910,9 @@ mod advert_tests {
                 sorafs_car::compute_por_root(payload, &plan)
                     .expect("derive canonical capability fixture PoR root"),
             )
-            .content_length(payload.len() as u64)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(payload.len() as u64)
+            .content_length(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()

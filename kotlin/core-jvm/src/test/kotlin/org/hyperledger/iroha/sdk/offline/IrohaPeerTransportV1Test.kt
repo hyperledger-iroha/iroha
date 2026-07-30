@@ -26,15 +26,12 @@ import kotlin.test.assertTrue
 class IrohaPeerTransportV1Test {
     @Test
     fun `wire and QR custom limits cannot exceed V1 hard ceilings`() {
-        IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 24_576)
+        IrohaPeerWireLimitsV1(32 * 1_024, 24_576)
         assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576, 24_576)
+            IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576)
         }
         assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireLimitsV1(32 * 1_024, 24_577, 24_576)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 24_577)
+            IrohaPeerWireLimitsV1(32 * 1_024, 24_577)
         }
 
         IrohaPeerQRScanLimitsV1(3, 12, 3_072, 30_000, 180_000)
@@ -83,101 +80,6 @@ class IrohaPeerTransportV1Test {
         pool.shutdownNow()
         assertEquals(0, failures.get())
         assertEquals(1, maximum.get())
-    }
-
-    @Test
-    fun `canonical text codec preserves Offline Note exact UTF8`() {
-        val signedWalletText = "pk2off2:eyJsaW5lYWdlIjoiY2Fub25pY2FsIn0.署名"
-        val encoded = IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes(
-            signedWalletText,
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-        )
-        assertContentEquals(signedWalletText.toByteArray(Charsets.UTF_8), encoded)
-        assertEquals(
-            signedWalletText,
-            IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(
-                encoded,
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            ),
-        )
-        assertEquals(
-            24_576,
-            IrohaPeerCanonicalTextPayloadCodecV1.maximumCanonicalTextBytes(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            ),
-        )
-        assertFailsWith<IllegalArgumentException> {
-            IrohaPeerCanonicalTextPayloadCodecV1.maximumCanonicalTextBytes(
-                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
-            )
-        }
-
-        val canonicalLimited = IrohaPeerWireLimitsV1(
-            maximumCanonicalBytes = 7,
-            maximumOfflineNoteEncodedBytes = 9,
-            maximumKagemushaEncodedBytes = 8,
-        )
-        assertEquals(
-            7,
-            IrohaPeerCanonicalTextPayloadCodecV1.maximumCanonicalTextBytes(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                canonicalLimited,
-            ),
-        )
-    }
-
-    @Test
-    fun `canonical text codec rejects empty invalid UTF8 and profile oversize input`() {
-        val profile = IrohaPeerPayloadProfile.OFFLINE_NOTE
-        run {
-            assertFailsWith<IllegalArgumentException> {
-                IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes("", profile)
-            }
-            assertFailsWith<IllegalArgumentException> {
-                IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(byteArrayOf(), profile)
-            }
-            assertFailsWith<IllegalArgumentException> {
-                IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(
-                    byteArrayOf(0xc3.toByte(), 0x28),
-                    profile,
-                )
-            }
-            val maximum = IrohaPeerCanonicalTextPayloadCodecV1
-                .maximumCanonicalTextBytes(profile)
-            assertFailsWith<IllegalArgumentException> {
-                IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes(
-                    "a".repeat(maximum + 1),
-                    profile,
-                )
-            }
-            assertFailsWith<IllegalArgumentException> {
-                IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(
-                    ByteArray(maximum + 1) { 'a'.code.toByte() },
-                    profile,
-                )
-            }
-        }
-
-        assertFailsWith<IllegalArgumentException> {
-            IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes(
-                "not-a-native-archive",
-                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(
-                "not-a-native-archive".toByteArray(),
-                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
-            )
-        }
-
-        // JVM String can contain an unpaired surrogate, but it is not exact UTF-8.
-        assertFailsWith<IllegalArgumentException> {
-            IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes(
-                "\uD800",
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            )
-        }
     }
 
     @Test
@@ -240,7 +142,6 @@ class IrohaPeerTransportV1Test {
 
         val tooSmall = IrohaPeerWireLimitsV1(
             maximumCanonicalBytes = 32 * 1024,
-            maximumOfflineNoteEncodedBytes = archive.size - 1,
             maximumKagemushaEncodedBytes = archive.size - 1,
         )
         assertFailsWith<IllegalArgumentException> {
@@ -249,15 +150,6 @@ class IrohaPeerTransportV1Test {
                 IrohaPeerWireCompressionPolicyV1.DISABLED,
                 tooSmall,
             )
-        }
-        val offline = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                IrohaPeerPayloadKind.PAYMENT,
-                1,
-                byteArrayOf(1),
-            ))
-        assertFailsWith<IllegalArgumentException> {
-            IrohaPeerKagemushaAdapterV1.decode(offline)
         }
     }
 
@@ -442,89 +334,12 @@ class IrohaPeerTransportV1Test {
     fun `rejects empty canonical IPM1 payloads`() {
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerPayloadKind.PAYMENT,
-                1,
+                0x0102,
                 byteArrayOf(),
             )
         }
-    }
-
-    @Test
-    fun `matches shared IPM1 and IQR1 golden vector`() {
-        val fixture = Json.parseToJsonElement(
-            String(Files.readAllBytes(sharedFixture()), Charsets.UTF_8),
-        ).jsonObject
-        val payload = IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerPayloadKind.PAYMENT,
-            1,
-            fixture.getValue("canonical_utf8").jsonPrimitive.content.toByteArray(),
-        )
-        val message = IrohaPeerWireMessageV1(payload)
-        assertEquals(fixture.getValue("ipm1_hex").jsonPrimitive.content, message.encode().hex())
-        assertEquals(fixture.getValue("canonical_hash_hex").jsonPrimitive.content, message.canonicalHash.hex())
-        assertEquals(fixture.getValue("wire_hash_hex").jsonPrimitive.content, message.wireHash.hex())
-        assertEquals(listOf(fixture.getValue("iqr1").jsonPrimitive.content), IrohaPeerQRCodecV1.encode(message))
-        assertEquals(message, IrohaPeerWireMessageV1.decode(
-            message.encode(),
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerPayloadKind.PAYMENT,
-        ))
-        val canonicalQR = IrohaPeerQRCodecV1.encode(message).single()
-        assertEquals(message, IrohaPeerQRScanSessionV1().ingest(canonicalQR).message)
-        for (nonCanonical in listOf(" $canonicalQR", "$canonicalQR\t", "\n$canonicalQR")) {
-            assertFailsWith<IllegalArgumentException> {
-                IrohaPeerQRScanSessionV1().ingest(nonCanonical)
-            }
-        }
-
-        val zlib = fixture.getValue("zlib").jsonObject
-        val compressedBytes = zlib.getValue("ipm1_hex").jsonPrimitive.content.hexBytes()
-        val compressed = IrohaPeerWireMessageV1.decode(compressedBytes)
-        assertEquals(IrohaPeerContentEncodingV1.ZLIB, compressed.encoding)
-        assertContentEquals(ByteArray(1024) { 65 }, compressed.canonicalPayload.bytes)
-        assertEquals(
-            zlib.getValue("iqr1").jsonPrimitive.content,
-            IrohaPeerQRCodecV1.encodeFrame(IrohaPeerQRFrameV1(
-                IrohaPeerQRFrameKindV1.COMPLETE,
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                IrohaPeerPayloadKind.PAYMENT,
-                compressed.streamId,
-                0,
-                1,
-                compressedBytes,
-            )),
-        )
-    }
-
-    @Test
-    fun `matches shared animated IRQR frame bytes and order`() {
-        val fixture = Json.parseToJsonElement(
-            String(Files.readAllBytes(sharedFixture()), Charsets.UTF_8),
-        ).jsonObject.getValue("animated").jsonObject
-        var state = fixture.getValue("canonical_seed").jsonPrimitive.content.toInt()
-        val canonical = ByteArray(fixture.getValue("canonical_count").jsonPrimitive.content.toInt()) {
-            state = state * 1_664_525 + 1_013_904_223
-            (state ushr 24).toByte()
-        }
-        val message = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerPayloadKind.PAYMENT,
-            1,
-            canonical,
-        ))
-        assertEquals(fixture.getValue("wire_hash_hex").jsonPrimitive.content, message.wireHash.hex())
-        val frames = IrohaPeerQRCodecV1.animatedFrameTexts(message)
-            .map(IrohaPeerQRCodecV1::decodeFrame)
-        assertEquals(
-            fixture.getValue("frame_kind_index_total").jsonArray.map { it.jsonPrimitive.content },
-            frames.map { "${it.frameKind.code}:${it.index}:${it.total}" },
-        )
-        assertEquals(
-            fixture.getValue("frame_blake2b_256_hex").jsonArray.map { it.jsonPrimitive.content },
-            frames.map { Blake2b.digest256(it.encode()).hex() },
-        )
     }
 
     @Test
@@ -582,12 +397,6 @@ class IrohaPeerTransportV1Test {
         val tampered = first.encode()
         tampered[tampered.lastIndex] = (tampered.last().toInt() xor 1).toByte()
         assertFailsWith<IllegalArgumentException> { IrohaPeerWireMessageV1.decode(tampered) }
-        assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireMessageV1.decode(
-                first.encode(),
-                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
-            )
-        }
         val corruptFrame = IrohaPeerQRCodecV1.decodeFrame(
             IrohaPeerQRCodecV1.encode(first).single(),
         ).encode()
@@ -645,32 +454,11 @@ class IrohaPeerTransportV1Test {
     }
 
     @Test
-    fun `expected profile and kind mismatches quarantine their stream IDs`() {
-        val kagemusha = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
-            IrohaPeerPayloadKind.RECEIVE_REQUEST,
-            0x0102,
-            kagemushaArchive(IrohaPeerPayloadKind.RECEIVE_REQUEST, byteArrayOf(0x51)),
-        ))
-        val profileText = IrohaPeerQRCodecV1.encode(kagemusha).single()
-        val profileSession = IrohaPeerQRScanSessionV1(
-            expectedProfile = IrohaPeerPayloadProfile.OFFLINE_NOTE,
-        )
-        val mismatch = assertFailsWith<IllegalArgumentException> {
-            profileSession.ingestAt(profileText, 100)
-        }
-        assertTrue(mismatch.message.orEmpty().contains("profile mismatch"))
-        val repeated = assertFailsWith<IllegalArgumentException> {
-            profileSession.ingestAt(profileText, 101)
-        }
-        assertTrue(repeated.message.orEmpty().contains("quarantined"))
-
-        val acknowledgement = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+    fun `expected kind mismatch quarantines its stream ID`() {
+        val acknowledgement = IrohaPeerKagemushaStructuralTestV1.message(
             IrohaPeerPayloadKind.ACKNOWLEDGEMENT,
-            1,
             "ack".toByteArray(),
-        ))
+        )
         val kindText = IrohaPeerQRCodecV1.encode(acknowledgement).single()
         val kindSession = IrohaPeerQRScanSessionV1(
             expectedKind = IrohaPeerPayloadKind.PAYMENT,
@@ -686,54 +474,58 @@ class IrohaPeerTransportV1Test {
     }
 
     @Test
-    fun `first release profile schemas and retail twenty four KiB body bound are enforced`() {
-        assertEquals(24_576, IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES)
-        assertEquals(24_576, IrohaPeerWireLimitsV1.PEER_V1.maximumOfflineNoteEncodedBytes)
+    fun `first release profile schema and Kagemusha twenty four KiB body bound are enforced`() {
         assertEquals(24_576, IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES)
+        assertEquals(null, IrohaPeerPayloadProfile.fromCode(1))
+        assertEquals(null, IrohaPeerPayloadProfile.fromCode(0xffff))
 
-        val boundary = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+        val boundary = IrohaPeerKagemushaStructuralTestV1.message(
             IrohaPeerPayloadKind.PAYMENT,
-            1,
-            ByteArray(24_576) { 0x5a },
-        ))
+            ByteArray(24_528) { 0x5a },
+        )
         assertEquals(24_576, boundary.encodedBody.size)
         assertEquals(boundary, IrohaPeerWireMessageV1.decode(boundary.encode()))
         assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerKagemushaStructuralTestV1.message(
                 IrohaPeerPayloadKind.PAYMENT,
-                1,
-                ByteArray(24_577) { 0x5a },
-            ))
-        }
-
-        val retailMismatch = assertFailsWith<IllegalArgumentException> {
-            IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                IrohaPeerPayloadKind.PAYMENT,
-                0x0102,
-                byteArrayOf(1),
+                ByteArray(24_529) { 0x5a },
             )
         }
-        assertTrue(retailMismatch.message.orEmpty().contains("requires schema 1, received 258"))
-        val kagemushaMismatch = assertFailsWith<IllegalArgumentException> {
+
+        val schemaMismatch = assertFailsWith<IllegalArgumentException> {
             IrohaPeerCanonicalPayload(
                 IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerPayloadKind.PAYMENT,
                 1,
-                byteArrayOf(1),
+                kagemushaArchive(IrohaPeerPayloadKind.PAYMENT, byteArrayOf(1)),
             )
         }
-        assertTrue(kagemushaMismatch.message.orEmpty().contains("requires schema 258, received 1"))
+        assertTrue(schemaMismatch.message.orEmpty().contains("requires schema 258, received 1"))
 
-        val hostileHeader = boundary.encode().copyOfRange(0, IrohaPeerWireMessageV1.HEADER_LENGTH)
-        hostileHeader[10] = 0x01
-        hostileHeader[11] = 0x02
-        val headerFailure = assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireMessageV1.decodeHeader(hostileHeader)
+        val retiredHeader = boundary.encode().copyOfRange(0, IrohaPeerWireMessageV1.HEADER_LENGTH)
+        retiredHeader[6] = 0
+        retiredHeader[7] = 1
+        retiredHeader[10] = 0
+        retiredHeader[11] = 1
+        assertFailsWith<IllegalArgumentException> {
+            IrohaPeerWireMessageV1.decodeHeader(retiredHeader)
         }
-        assertTrue(headerFailure.message.orEmpty().contains("requires schema 1, received 258"))
+
+        val unknownHeader = boundary.encode().copyOfRange(0, IrohaPeerWireMessageV1.HEADER_LENGTH)
+        unknownHeader[6] = 0xff.toByte()
+        unknownHeader[7] = 0xff.toByte()
+        assertFailsWith<IllegalArgumentException> {
+            IrohaPeerWireMessageV1.decodeHeader(unknownHeader)
+        }
+
+        val wrongSchemaHeader =
+            boundary.encode().copyOfRange(0, IrohaPeerWireMessageV1.HEADER_LENGTH)
+        wrongSchemaHeader[10] = 0
+        wrongSchemaHeader[11] = 1
+        val hostile = assertFailsWith<IllegalArgumentException> {
+            IrohaPeerWireMessageV1.decodeHeader(wrongSchemaHeader)
+        }
+        assertTrue(hostile.message.orEmpty().contains("requires schema 258, received 1"))
     }
 
     @Test
@@ -744,15 +536,15 @@ class IrohaPeerTransportV1Test {
         )
         val staticText = IrohaPeerQRCodecV1.encode(message("schema quarantine")).single()
         val staticSession = IrohaPeerQRScanSessionV1(
-            expectedProfile = IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            expectedProfile = IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             expectedKind = IrohaPeerPayloadKind.PAYMENT,
-            expectedSchemaVersion = 0x0102,
+            expectedSchemaVersion = 1,
             scanLimits = limits,
         )
         val staticMismatch = assertFailsWith<IllegalArgumentException> {
             staticSession.ingestAt(staticText, 1_000)
         }
-        assertTrue(staticMismatch.message.orEmpty().contains("expected 258, received 1"))
+        assertTrue(staticMismatch.message.orEmpty().contains("expected 1, received 258"))
         val staticQuarantine = assertFailsWith<IllegalArgumentException> {
             staticSession.ingestAt(staticText, 1_029)
         }
@@ -760,7 +552,7 @@ class IrohaPeerTransportV1Test {
         val expiredStatic = assertFailsWith<IllegalArgumentException> {
             staticSession.ingestAt(staticText, 1_030)
         }
-        assertTrue(expiredStatic.message.orEmpty().contains("expected 258, received 1"))
+        assertTrue(expiredStatic.message.orEmpty().contains("expected 1, received 258"))
 
         val animated = IrohaPeerQRCodecV1.animatedFrameTexts(animatedMessage(72))
         val headers = animated.filter {
@@ -771,9 +563,9 @@ class IrohaPeerTransportV1Test {
         }
         assertTrue(headers.size >= 2)
         val animatedSession = IrohaPeerQRScanSessionV1(
-            expectedProfile = IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            expectedProfile = IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             expectedKind = IrohaPeerPayloadKind.PAYMENT,
-            expectedSchemaVersion = 0x0102,
+            expectedSchemaVersion = 1,
             scanLimits = limits,
         )
         assertFailsWith<IllegalArgumentException> {
@@ -790,7 +582,7 @@ class IrohaPeerTransportV1Test {
         val expiredHeader = assertFailsWith<IllegalArgumentException> {
             animatedSession.ingestAt(headers.last(), 2_030)
         }
-        assertTrue(expiredHeader.message.orEmpty().contains("expected 258, received 1"))
+        assertTrue(expiredHeader.message.orEmpty().contains("expected 1, received 258"))
 
         val kagemusha = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
             IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
@@ -928,12 +720,10 @@ class IrohaPeerTransportV1Test {
         }
         assertEquals(0, completeSession.activeStreamCount)
 
-        val animated = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+        val animated = IrohaPeerKagemushaStructuralTestV1.message(
             IrohaPeerPayloadKind.PAYMENT,
-            1,
             ByteArray(300) { (it * 73 + 63).toByte() },
-        ))
+        )
         val frames = IrohaPeerQRCodecV1.animatedFrameTexts(animated)
             .map(IrohaPeerQRCodecV1::decodeFrame)
         val header = frames.first { it.frameKind == IrohaPeerQRFrameKindV1.HEADER }
@@ -967,7 +757,10 @@ class IrohaPeerTransportV1Test {
 
     @Test
     fun `decodes only canonically useful zlib`() {
-        val canonical = ByteArray(1024) { 0x41 }
+        val canonical = kagemushaArchive(
+            IrohaPeerPayloadKind.PAYMENT,
+            ByteArray(1_024) { 0x41 },
+        )
         val decoded = IrohaPeerWireMessageV1.decode(zlibMessage(canonical))
         assertEquals(IrohaPeerContentEncodingV1.ZLIB, decoded.encoding)
         assertContentEquals(canonical, decoded.canonicalPayload.bytes)
@@ -975,16 +768,16 @@ class IrohaPeerTransportV1Test {
             IrohaPeerWireMessageV1.decode(zlibMessage(canonical, byteArrayOf(0)))
         }
         assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireMessageV1.decode(zlibMessage(ByteArray(100) { 0x41 }))
+            IrohaPeerWireMessageV1.decode(zlibMessage(
+                kagemushaArchive(IrohaPeerPayloadKind.PAYMENT, ByteArray(100) { 0x41 }),
+            ))
         }
     }
 
-    private fun message(text: String) = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-        IrohaPeerPayloadProfile.OFFLINE_NOTE,
+    private fun message(text: String) = IrohaPeerKagemushaStructuralTestV1.message(
         IrohaPeerPayloadKind.PAYMENT,
-        1,
         text.toByteArray(),
-    ))
+    )
 
     private fun animatedMessage(seed: Int): IrohaPeerWireMessageV1 {
         var state = seed
@@ -992,12 +785,10 @@ class IrohaPeerTransportV1Test {
             state = state * 1_664_525 + 1_013_904_223
             (state ushr 24).toByte()
         }
-        return IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+        return IrohaPeerKagemushaStructuralTestV1.message(
             IrohaPeerPayloadKind.PAYMENT,
-            1,
             bytes,
-        ))
+        )
     }
 
     private fun kagemushaArchive(
@@ -1061,7 +852,7 @@ class IrohaPeerTransportV1Test {
             deflater.end()
         }
         val body = compressed.toByteArray() + trailing
-        val metadata = byteArrayOf(0, 1, 2, 0, 1)
+        val metadata = byteArrayOf(0, 2, 2, 1, 2)
         val canonicalHash = Blake2b.digest256(
             "IROHA-PEER-PAYLOAD-V1\u0000".toByteArray() + metadata + canonical,
         )
@@ -1070,11 +861,11 @@ class IrohaPeerTransportV1Test {
         prefix[4] = 1
         prefix[5] = 1
         prefix[6] = 0
-        prefix[7] = 1
+        prefix[7] = 2
         prefix[8] = 2
         prefix[9] = 0
-        prefix[10] = 0
-        prefix[11] = 1
+        prefix[10] = 1
+        prefix[11] = 2
         prefix.writeU32(12, canonical.size)
         prefix.writeU32(16, body.size)
         canonicalHash.copyInto(prefix, 20)
@@ -1082,15 +873,6 @@ class IrohaPeerTransportV1Test {
             "IROHA-PEER-MESSAGE-V1\u0000".toByteArray() + prefix + body,
         )
         return prefix + wireHash + body
-    }
-
-    private fun sharedFixture(): Path {
-        var current = Paths.get("").toAbsolutePath()
-        while (true) {
-            val candidate = current.resolve("fixtures/offline/peer_transport_v1.json")
-            if (Files.isRegularFile(candidate)) return candidate
-            current = current.parent ?: error("peer_transport_v1.json was not found")
-        }
     }
 
     private fun sharedKagemushaFixture(): Path {

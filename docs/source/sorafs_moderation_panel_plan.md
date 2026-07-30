@@ -46,6 +46,17 @@ credentials. Standard `irohad` forwards the deployment-owned boundary into
 Torii, and startup or an in-flight call fails closed when the provider is
 missing, substituted, stale, unavailable, or test-marked.
 
+The strict transaction ingress is the one deliberate local boundary: it admits
+an already signed transaction through Torii's canonical durable queue and owns
+no signing authority. It no longer self-attests from operator-supplied values.
+The implementation reports the fixed handle
+`torii.sorafs.moderation-strict-ingress.v1`, revision `1`, and the BLAKE3 policy
+digest
+`cc0ceac18b93fa9705c0ef86f657a9ed94c5dd6531578496a2d64e8ec5216d2e`.
+The three configured `strict_ingress_*` values are an independent expected
+binding; Torii startup fails if any of them differs from that implementation
+identity.
+
 Remaining production blockers under
 `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are deployment construction of the real
 messaging, settlement/publication, HSM/KMS/WebAuthn, linearizable sealed-CAS

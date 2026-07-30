@@ -289,6 +289,15 @@ wait on a hung provider call. The worker retains the checkpoint writer lease
 until that call exits, so repeated reopen attempts fail busy instead of
 accumulating detached workers.
 
+The outbox checkpoint defaults to 160 MiB and the canonical signed-completion
+limit must remain within 64 KiB..=64 MiB. Capacity admission counts both copies
+that an active row may retain—the unsigned `expected_payload` and the complete
+`signed_transaction`—plus conservative canonical active/terminal structural
+budgets and checkpoint framing. The checked aggregate for
+`max_active_entries` and `max_terminal_entries` must fit
+`checkpoint_max_bytes`; a 128 MiB signed-transaction limit therefore cannot be
+made valid by the 192 MiB checkpoint ceiling and fails configuration loading.
+
 Set
 `[sorafs.storage.provider_ingest_runtime.finalized_archive]` explicitly for
 each deployment. `relative_root` is a normalized relative namespace below the

@@ -1,9 +1,21 @@
 # Roadmap
 
-Last updated: 2026-07-27
+Last updated: 2026-07-30
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## ZK-ACE JavaScript signed-transaction parity
+
+- Design and implement a new typed JavaScript API for the canonical governed
+  ZK-ACE action. It must accept a validated `PrivacyZkAcePolicyRecordV1`,
+  canonical genesis hash, exact transaction context and fee intent, private
+  non-serializable witness material, and signing key, then return the signed
+  `SubmitPrivacyProofV1` transaction and typed effect metadata.
+- Mirror the Rust/Python two-pass intent binding and witness-erasure guarantees.
+  Do not restore or alias the retired proof-attachment builders, caller-selected
+  verifier keys/backends, serializable witness/public-input types, or direct
+  ZK-ACE instruction wires.
 
 ## Sumeragi V2 production multilane release closure
 
@@ -62,7 +74,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 733-test,
+  mutations before promotion, then finish the remaining 738-test,
   38-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -2203,9 +2215,13 @@ excluded from the first release.
   EpAffine/Pallas recursive state wrapper, fixed-key terminal IPA verification,
   authenticated artifacts, adversarial lifecycle tests, independent review, and
   physical-device performance evidence.
-- Snapshot-backed node restarts now target hash-journal validation for
-  historical blocks, keeping full Kura block-body loads only for suffix replay
-  and the existing latest-tip rollback repair path.
+- After the next signed Taira rollout, capture a four-validator restart
+  benchmark proving that the single bounded-parallel Kura finality audit is
+  reused by retained-record validation, replay planning, and active-height
+  recovery. The benchmark must record audit/init time, time to Torii readiness,
+  and time to consensus alignment; it must also confirm that the startup-only
+  identity inventory is cleared before runtime while the fixed-size runtime
+  finality cache remains bounded.
 - Offline Note V2 device attestation now supports both the centralized
   middleware certificate flow and a receiptless on-chain registration flow. The
   middleware path preserves signed receipt admission while rejecting
@@ -16008,9 +16024,11 @@ digest-bound pending-XSD source probe summaries for reviewed
   workflow test command. The focused Kagemusha and SoraFS JS runner patterns
   must include their runtime-gate meta tests so those lane checks prove the
 	  runtime preflights directly. The JavaScript privacy helper lane must keep
-	  Jindo, SIS-with-hints, and the research adapter source/package-dist exports
-	  covered against class-instance option objects while retaining raw envelope
-	  bytes verifier shortcuts for canonical proof bytes. It must also keep
+	  Jindo and the research adapter source/package-dist exports covered against
+	  class-instance option objects while retaining raw envelope bytes verifier
+	  shortcuts for canonical proof bytes. It must keep both retired SIS
+	  identifiers (`sis-hints-anoncred-pq-v0` and `sis-with-hints`) rejection-only
+	  across source and package-dist surfaces. It must also keep
 	  research catalog labels for Orchard, FCMP++, Miden, Aztec, and PQ MASP
 	  pinned to their dedicated OpenVerify backend tags.
 - Keep privacy and Kagemusha Python workflow lanes on the Python 3.11
@@ -16042,11 +16060,12 @@ digest-bound pending-XSD source probe summaries for reviewed
   if they are tracked. The Python native loader must keep stale macOS extension
 	  artifacts fail-closed instead of aborting package imports. The Python privacy
 	  lane must also keep VeRange, Anonymous PGC, zkAt, ZK-AMS, Vega, Silent
-	  Threshold, ZK-X.509, Jindo, SIS-with-hints, and the Orchard/Penumbra/FCMP++/
-	  Miden/Aztec/PQ MASP research adapters on the plain-dict contract, including
-	  nested commitment descriptors and adapter metadata, while retaining the raw
+	  Threshold, ZK-X.509, Jindo, and the Orchard/Penumbra/FCMP++/Miden/Aztec/PQ
+	  MASP research adapters on the plain-dict contract, including nested
+	  commitment descriptors and adapter metadata, while retaining the raw
 	  envelope bytes verifier shortcut for callers that already hold canonical
-	  proof bytes.
+	  proof bytes. Both retired SIS identifiers (`sis-hints-anoncred-pq-v0` and
+	  `sis-with-hints`) must remain rejection-only.
 - Keep public SCCP release evidence tied to every UI-side full-light-client
   role helper, not only aggregate request builders; Solana and TON readiness
   rows now require the per-role audit proof request symbols across web, Python,
@@ -23647,15 +23666,15 @@ signed ancestor-linked solid-block header proof,
 
 **Status:** external release evidence remains.
 
-- Archive immutable source, `Cargo.lock`, benchmark workload, and toolchain
-  provenance for the documented predecessor, then run the candidate and
-  predecessor on the same controlled runner. The documented predecessor lacks
-  `Cargo.lock`, and the available older lock is incompatible, so no
+- Recover the independently archived original `Cargo.lock` and toolchain
+  provenance for the source-evidenced predecessor
+  `a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`, then run its 33 comparable native
+  workloads and the candidate on the same controlled runner. The predecessor
+  contains no `Cargo.lock`; its workload hashes bind benchmark source only and
+  cannot replace the missing provenance. Until it is recovered, no
   reproducible locked 5% comparison is claimed.
-- Run the Java and Kotlin SDK gates on a host with a usable Java runtime,
-  `kotlinc`, and Gradle; those toolchains are unavailable on the current host.
-- Run the C# SDK gate on a supported .NET 8 environment; `dotnet` is unavailable
-  on the current host.
+- Run the current C# Numeric V1 and contract-manifest SDK gate on a supported
+  .NET 8 environment; `dotnet` is unavailable on this host.
 
 ## Privacy, ZK, and FHE
 
@@ -25952,7 +25971,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-733-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+738-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -26288,7 +26307,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  733-test target above supersedes that checkpoint. The 38-module pre-network
+  738-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

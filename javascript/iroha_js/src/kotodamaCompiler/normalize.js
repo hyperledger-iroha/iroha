@@ -1,7 +1,13 @@
 import { blake2b256 } from "../blake2b.js";
 import {
+  KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
+  isCanonicalKotodamaDynamicAccessBaseKey,
   isCanonicalKotodamaEntrypoint as isCanonicalEntrypointName,
   isCanonicalKotodamaIdentifier as isCanonicalIdentifier,
+  isCanonicalKotodamaStateTypeName as isCanonicalStateTypeName,
+  isKotodamaV1DynamicAccessBoundKind,
+  isKotodamaV1StateMapKeyTypeName,
+  kotodamaV1StateMapKeyTypeName,
 } from "../kotodamaIdentifiers.js";
 import { analyzeEntrypointValueTypeV1 } from "../entrypointSchema.js";
 
@@ -83,6 +89,14 @@ const NORITO_CRC64_TABLE = Object.freeze(
   }),
 );
 
+// Keep the fail-closed boundary's exact diagnostics while avoiding 145
+// repeated `throw new TypeError(...)` constructor sequences in the minified
+// browser compiler. A single throwing helper preserves the public error class
+// and message byte-for-byte.
+function rejectType(message) {
+  throw new TypeError(message);
+}
+
 function isRecord(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -96,24 +110,24 @@ function requireRecord(value, label) {
   try {
     record = isRecord(value);
   } catch {
-    throw new TypeError(`${label} must be a plain data-only object`);
+    rejectType(`${label} must be a plain data-only object`);
   }
   if (!record) {
-    throw new TypeError(`${label} must be an object`);
+    rejectType(`${label} must be an object`);
   }
   let keys;
   try {
     keys = Reflect.ownKeys(value);
   } catch {
-    throw new TypeError(`${label} must be a plain data-only object`);
+    rejectType(`${label} must be a plain data-only object`);
   }
   for (const key of keys) {
     if (typeof key !== "string") {
-      throw new TypeError(`${label} must not contain symbol fields`);
+      rejectType(`${label} must not contain symbol fields`);
     }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new TypeError(`${label}.${key} must be an enumerable data property`);
+      rejectType(`${label}.${key} must be an enumerable data property`);
     }
   }
   return value;
@@ -125,13 +139,13 @@ function snapshotRecord(value, label) {
   try {
     descriptors = Object.getOwnPropertyDescriptors(value);
   } catch {
-    throw new TypeError(`${label} must be a stable plain data-only object`);
+    rejectType(`${label} must be a stable plain data-only object`);
   }
   const snapshot = Object.create(null);
   for (const key of Reflect.ownKeys(descriptors)) {
     const descriptor = descriptors[key];
     if (typeof key !== "string" || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new TypeError(`${label} must be a stable plain data-only object`);
+      rejectType(`${label} must be a stable plain data-only object`);
     }
     snapshot[key] = descriptor.value;
   }
@@ -146,13 +160,13 @@ function requireExactKeys(value, keys, label) {
     actual.length !== expected.length ||
     actual.some((key, index) => key !== expected[index])
   ) {
-    throw new TypeError(`${label} has an invalid field set`);
+    rejectType(`${label} has an invalid field set`);
   }
 }
 
 function requireDenseArray(value, label, maximum = MAX_MANIFEST_ITEMS) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${label} must be an array`);
+    rejectType(`${label} must be an array`);
   }
   let length;
   let keys;
@@ -161,22 +175,22 @@ function requireDenseArray(value, label, maximum = MAX_MANIFEST_ITEMS) {
     length = lengthDescriptor?.value;
     keys = Reflect.ownKeys(value);
   } catch {
-    throw new TypeError(`${label} must be a dense data-only array`);
+    rejectType(`${label} must be a dense data-only array`);
   }
   if (!Number.isSafeInteger(length) || length < 0 || length > maximum) {
     throw new RangeError(`${label} must contain at most ${maximum} items`);
   }
   if (keys.some((key) => typeof key !== "string")) {
-    throw new TypeError(`${label} must not contain symbol fields`);
+    rejectType(`${label} must not contain symbol fields`);
   }
   const elementKeys = keys.filter((key) => key !== "length");
   if (elementKeys.length !== length) {
-    throw new TypeError(`${label} must be a dense array without extra fields`);
+    rejectType(`${label} must be a dense array without extra fields`);
   }
   for (let index = 0; index < length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new TypeError(`${label} must be a dense data-only array`);
+      rejectType(`${label} must be a dense data-only array`);
     }
   }
   return value;
@@ -184,26 +198,26 @@ function requireDenseArray(value, label, maximum = MAX_MANIFEST_ITEMS) {
 
 function snapshotDenseArray(value, label, maximum = MAX_MANIFEST_ITEMS) {
   if (!Array.isArray(value)) {
-    throw new TypeError(`${label} must be an array`);
+    rejectType(`${label} must be an array`);
   }
   let descriptors;
   try {
     descriptors = Object.getOwnPropertyDescriptors(value);
   } catch {
-    throw new TypeError(`${label} must be a stable dense data-only array`);
+    rejectType(`${label} must be a stable dense data-only array`);
   }
   const length = descriptors.length?.value;
   if (!Number.isSafeInteger(length) || length < 0 || length > maximum) {
     throw new RangeError(`${label} must contain at most ${maximum} items`);
   }
   if (Reflect.ownKeys(descriptors).length !== length + 1) {
-    throw new TypeError(`${label} must be a dense array without extra fields`);
+    rejectType(`${label} must be a dense array without extra fields`);
   }
   const snapshot = [];
   for (let index = 0; index < length; index += 1) {
     const descriptor = descriptors[index];
     if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new TypeError(`${label} must be a stable dense data-only array`);
+      rejectType(`${label} must be a stable dense data-only array`);
     }
     snapshot.push(descriptor.value);
   }
@@ -226,10 +240,10 @@ function validateUnicodeScalarString(value) {
 
 function requireString(value, label, { allowEmpty = false, maximum = MAX_STRING_BYTES } = {}) {
   if (typeof value !== "string" || (!allowEmpty && value.length === 0)) {
-    throw new TypeError(`${label} must be ${allowEmpty ? "a" : "a non-empty"} string`);
+    rejectType(`${label} must be ${allowEmpty ? "a" : "a non-empty"} string`);
   }
   if (!validateUnicodeScalarString(value)) {
-    throw new TypeError(`${label} must contain valid Unicode scalar values`);
+    rejectType(`${label} must contain valid Unicode scalar values`);
   }
   if (UTF8_ENCODER.encode(value).length > maximum) {
     throw new RangeError(`${label} exceeds the ${maximum}-byte limit`);
@@ -239,7 +253,7 @@ function requireString(value, label, { allowEmpty = false, maximum = MAX_STRING_
 
 function requireUnsignedInteger(value, maximum, label) {
   if (!Number.isSafeInteger(value) || value < 0 || value > maximum) {
-    throw new TypeError(`${label} must be an unsigned safe integer in 0..${maximum}`);
+    rejectType(`${label} must be an unsigned safe integer in 0..${maximum}`);
   }
   return value;
 }
@@ -273,7 +287,7 @@ function validateBoundedJson(value, label) {
     }
     if (typeof item === "number") {
       if (!Number.isFinite(item)) {
-        throw new TypeError(`${current.label} must contain only finite JSON numbers`);
+        rejectType(`${current.label} must contain only finite JSON numbers`);
       }
       continue;
     }
@@ -306,27 +320,27 @@ function parseJson(raw, label) {
   try {
     return JSON.parse(raw);
   } catch {
-    throw new TypeError(`${label} is not valid JSON`);
+    rejectType(`${label} is not valid JSON`);
   }
 }
 
 function normalizeHashHex(value, label) {
   if (typeof value !== "string") {
-    throw new TypeError(`Kotodama compiler response is missing ${label}`);
+    rejectType(`Kotodama compiler response is missing ${label}`);
   }
   if (/^[0-9a-fA-F]{64}$/u.test(value)) {
     return requireIrohaHashMarker(value.toLowerCase(), label);
   }
   const literal = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u.exec(value);
   if (literal === null) {
-    throw new TypeError(
+    rejectType(
       `Kotodama compiler response contains an invalid or noncanonical ${label}`,
     );
   }
   const [, body, checksum] = literal;
   const expected = crc16Literal("hash", body);
   if (checksum !== expected) {
-    throw new TypeError(
+    rejectType(
       `Kotodama compiler response contains an invalid ${label} checksum; expected ${expected}`,
     );
   }
@@ -335,7 +349,7 @@ function normalizeHashHex(value, label) {
 
 function requireIrohaHashMarker(hex, label) {
   if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
-    throw new TypeError(
+    rejectType(
       `Kotodama compiler response contains an invalid ${label} marker bit`,
     );
   }
@@ -382,7 +396,7 @@ function snapshotUint8Array(value) {
     return new Uint8Array(buffer, byteOffset, byteLength).slice();
   } catch (error) {
     if (error instanceof RangeError) throw error;
-    throw new TypeError("Kotodama compiler artifactBytes must be a readable Uint8Array");
+    rejectType("Kotodama compiler artifactBytes must be a readable Uint8Array");
   }
 }
 
@@ -398,14 +412,14 @@ function normalizeArtifactBytes(value) {
       MAX_ARTIFACT_BYTES,
     );
     if (snapshot.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)) {
-      throw new TypeError("Kotodama compiler artifactBytes must contain only bytes");
+      rejectType("Kotodama compiler artifactBytes must contain only bytes");
     }
     bytes = Uint8Array.from(snapshot);
   } else {
-    throw new TypeError("Kotodama compiler response is missing artifactBytes");
+    rejectType("Kotodama compiler response is missing artifactBytes");
   }
   if (bytes.length === 0 || bytes.length > MAX_ARTIFACT_BYTES) {
-    throw new TypeError(
+    rejectType(
       `Kotodama compiler artifactBytes must contain 1..${MAX_ARTIFACT_BYTES} bytes`,
     );
   }
@@ -414,7 +428,7 @@ function normalizeArtifactBytes(value) {
 
 function readU32Le(bytes, offset, label) {
   if (offset < 0 || offset + 4 > bytes.length) {
-    throw new TypeError(`${label} is truncated`);
+    rejectType(`${label} is truncated`);
   }
   return (
     bytes[offset] |
@@ -426,7 +440,7 @@ function readU32Le(bytes, offset, label) {
 
 function readU32Be(bytes, offset, label) {
   if (offset < 0 || offset + 4 > bytes.length) {
-    throw new TypeError(`${label} is truncated`);
+    rejectType(`${label} is truncated`);
   }
   return (
     bytes[offset] * 0x1000000 +
@@ -438,7 +452,7 @@ function readU32Be(bytes, offset, label) {
 
 function readU64Le(bytes, offset, label) {
   if (offset < 0 || offset + 8 > bytes.length) {
-    throw new TypeError(`${label} is truncated`);
+    rejectType(`${label} is truncated`);
   }
   let value = 0n;
   for (let index = 7; index >= 0; index -= 1) {
@@ -465,14 +479,14 @@ function readCompactLength(bytes, state, label) {
   const start = state.offset;
   for (;;) {
     if (state.offset >= bytes.length || state.offset - start >= 8) {
-      throw new TypeError(`${label} contains a truncated or oversized compact length`);
+      rejectType(`${label} contains a truncated or oversized compact length`);
     }
     const byte = bytes[state.offset];
     state.offset += 1;
     value |= BigInt(byte & 0x7f) << shift;
     if ((byte & 0x80) === 0) {
       if (state.offset - start > 1 && byte === 0) {
-        throw new TypeError(`${label} contains a noncanonical compact length`);
+        rejectType(`${label} contains a noncanonical compact length`);
       }
       if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new RangeError(`${label} compact length exceeds the safe integer range`);
@@ -487,7 +501,7 @@ function readCompactField(bytes, state, label) {
   const length = readCompactLength(bytes, state, `${label}.length`);
   const end = state.offset + length;
   if (end > bytes.length) {
-    throw new TypeError(`${label} payload is truncated`);
+    rejectType(`${label} payload is truncated`);
   }
   const field = bytes.subarray(state.offset, end);
   state.offset = end;
@@ -498,58 +512,58 @@ function decodeEmbeddedString(field, label) {
   const state = { offset: 0 };
   const encoded = readCompactField(field, state, label);
   if (state.offset !== field.length) {
-    throw new TypeError(`${label} contains trailing bytes`);
+    rejectType(`${label} contains trailing bytes`);
   }
   try {
     return UTF8_DECODER.decode(encoded);
   } catch {
-    throw new TypeError(`${label} is not valid UTF-8`);
+    rejectType(`${label} is not valid UTF-8`);
   }
 }
 
 function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex) {
   const label = "Kotodama embedded contract interface";
   if (frame.length < NORITO_FRAME_HEADER_BYTES) {
-    throw new TypeError(`${label} is shorter than its Norito frame header`);
+    rejectType(`${label} is shorter than its Norito frame header`);
   }
   if (!equalBytes(frame.subarray(0, 4), Uint8Array.from([0x4e, 0x52, 0x54, 0x30]))) {
-    throw new TypeError(`${label} is not an NRT0 frame`);
+    rejectType(`${label} is not an NRT0 frame`);
   }
   if (frame[4] !== 0 || frame[5] !== 0) {
-    throw new TypeError(`${label} uses an unsupported Norito version`);
+    rejectType(`${label} uses an unsupported Norito version`);
   }
   if (!equalBytes(frame.subarray(6, 22), EMBEDDED_INTERFACE_SCHEMA_HASH)) {
-    throw new TypeError(`${label} has the wrong Norito schema hash`);
+    rejectType(`${label} has the wrong Norito schema hash`);
   }
   if (frame[22] !== 0 || frame[39] !== NORITO_COMPACT_LENGTHS_FLAG) {
-    throw new TypeError(`${label} must use canonical uncompressed compact-length framing`);
+    rejectType(`${label} must use canonical uncompressed compact-length framing`);
   }
   const payloadLength = readU64Le(frame, 23, `${label} payload length`);
   if (payloadLength === 0n || payloadLength > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new TypeError(`${label} has an invalid payload length`);
+    rejectType(`${label} has an invalid payload length`);
   }
   const safePayloadLength = Number(payloadLength);
   const paddingLength = frame.length - NORITO_FRAME_HEADER_BYTES - safePayloadLength;
   if (paddingLength !== NORITO_EMBEDDED_INTERFACE_PADDING_BYTES) {
-    throw new TypeError(`${label} has a noncanonical alignment padding length`);
+    rejectType(`${label} has a noncanonical alignment padding length`);
   }
   const payloadOffset = NORITO_FRAME_HEADER_BYTES + paddingLength;
   if (frame.subarray(NORITO_FRAME_HEADER_BYTES, payloadOffset).some((byte) => byte !== 0)) {
-    throw new TypeError(`${label} contains non-zero alignment padding`);
+    rejectType(`${label} contains non-zero alignment padding`);
   }
   const payload = frame.subarray(payloadOffset);
   if (payload.length !== safePayloadLength) {
-    throw new TypeError(`${label} payload is truncated`);
+    rejectType(`${label} payload is truncated`);
   }
   if (noritoCrc64(payload) !== readU64Le(frame, 31, `${label} CRC64`)) {
-    throw new TypeError(`${label} has an invalid CRC64`);
+    rejectType(`${label} has an invalid CRC64`);
   }
 
   const state = { offset: 0 };
   const fields = Array.from({ length: 9 }, (_, index) =>
     readCompactField(payload, state, `${label}.field${index}`));
   if (state.offset !== payload.length) {
-    throw new TypeError(`${label} contains trailing or unknown fields`);
+    rejectType(`${label} contains trailing or unknown fields`);
   }
   const embeddedName = decodeEmbeddedString(fields[0], `${label}.seiyaku_name`);
   const embeddedFingerprint = decodeEmbeddedString(
@@ -557,25 +571,25 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
     `${label}.compiler_fingerprint`,
   );
   if (fields[2].length !== IVM_ABI_HASH_BYTES || toHex(fields[2]) !== abiHashHex) {
-    throw new TypeError(
+    rejectType(
       "Kotodama embedded contract interface ABI hash does not match the compiler response",
     );
   }
   const embeddedFeatures = readU64Le(fields[3], 0, `${label}.features_bitmap`);
   if (fields[3].length !== 8 || embeddedFeatures > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new TypeError(`${label}.features_bitmap is not a canonical safe u64`);
+    rejectType(`${label}.features_bitmap is not a canonical safe u64`);
   }
   if (
     embeddedName !== manifest.seiyaku_name ||
     embeddedFingerprint !== manifest.compiler_fingerprint ||
     Number(embeddedFeatures) !== manifest.features_bitmap
   ) {
-    throw new TypeError(
+    rejectType(
       "Kotodama manifest identity/capabilities do not match the embedded contract interface",
     );
   }
   if (Number(embeddedFeatures) !== (headerMode & 0x03)) {
-    throw new TypeError(
+    rejectType(
       "Kotodama embedded contract capabilities do not match the IVM execution header",
     );
   }
@@ -587,7 +601,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
       readCompactField(field, optionState, `${optionLabel}.value`);
       if (optionState.offset === field.length) return true;
     }
-    throw new TypeError(`${optionLabel} has a noncanonical option envelope`);
+    rejectType(`${optionLabel} has a noncanonical option envelope`);
   };
   const vectorCount = (field, vectorLabel) => {
     const count = readU64Le(field, 0, `${vectorLabel}.count`);
@@ -599,13 +613,13 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
       readCompactField(field, vectorState, `${vectorLabel}[${index}]`);
     }
     if (vectorState.offset !== field.length) {
-      throw new TypeError(`${vectorLabel} has trailing or missing vector bytes`);
+      rejectType(`${vectorLabel} has trailing or missing vector bytes`);
     }
     return Number(count);
   };
   const expectedAccessHints = manifest.access_set_hints !== null;
   if (optionPresent(fields[4], `${label}.access_set_hints`) !== expectedAccessHints) {
-    throw new TypeError("Kotodama manifest access hints do not match the embedded interface");
+    rejectType("Kotodama manifest access hints do not match the embedded interface");
   }
   for (const [fieldIndex, manifestValue, fieldLabel] of [
     [5, manifest.kotoba ?? [], "kotoba"],
@@ -614,7 +628,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
     [8, manifest.error_codes ?? [], "error_codes"],
   ]) {
     if (vectorCount(fields[fieldIndex], `${label}.${fieldLabel}`) !== manifestValue.length) {
-      throw new TypeError(
+      rejectType(
         `Kotodama manifest ${fieldLabel} count does not match the embedded interface`,
       );
     }
@@ -623,26 +637,26 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
 
 function validateLiteralSection(bytes, start) {
   const label = "Kotodama IVM literal section";
-  if (start + 16 > bytes.length) throw new TypeError(`${label} is truncated`);
+  if (start + 16 > bytes.length) rejectType(`${label} is truncated`);
   const count = readU32Le(bytes, start + 4, `${label} count`);
   const padding = readU32Le(bytes, start + 8, `${label} padding`);
   const dataLength = readU32Le(bytes, start + 12, `${label} data length`);
   if (count > 0x1_0000 || padding > 3) {
-    throw new TypeError(`${label} has invalid bounds`);
+    rejectType(`${label} has invalid bounds`);
   }
   const entriesLength = count * 8;
   const dataStart = start + 16 + entriesLength;
   const dataEnd = dataStart + dataLength;
   const codeOffset = dataEnd + padding;
   if (dataEnd < dataStart || codeOffset > bytes.length) {
-    throw new TypeError(`${label} exceeds the artifact bounds`);
+    rejectType(`${label} exceeds the artifact bounds`);
   }
   const expectedPadding = (4 - ((start - IVM_HEADER_BYTES + 16 + entriesLength + dataLength) % 4)) % 4;
   if (
     padding !== expectedPadding ||
     bytes.subarray(dataEnd, codeOffset).some((byte) => byte !== 0)
   ) {
-    throw new TypeError(`${label} uses noncanonical alignment padding`);
+    rejectType(`${label} uses noncanonical alignment padding`);
   }
   const descriptors = [];
   for (let index = 0; index < count; index += 1) {
@@ -654,7 +668,7 @@ function validateLiteralSection(bytes, start) {
     const kind = Number(descriptor >> 56n);
     const relativeOffsetBigInt = descriptor & 0x00ff_ffff_ffff_ffffn;
     if (relativeOffsetBigInt > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new TypeError(`${label} descriptor ${index} offset is invalid`);
+      rejectType(`${label} descriptor ${index} offset is invalid`);
     }
     const relativeOffset = Number(relativeOffsetBigInt);
     const absoluteOffset = start + relativeOffset;
@@ -664,22 +678,22 @@ function validateLiteralSection(bytes, start) {
       absoluteOffset < dataStart ||
       absoluteOffset >= dataEnd
     ) {
-      throw new TypeError(`${label} descriptor ${index} is invalid`);
+      rejectType(`${label} descriptor ${index} is invalid`);
     }
     if (
       descriptors.length !== 0 &&
       absoluteOffset <= descriptors[descriptors.length - 1].absoluteOffset
     ) {
-      throw new TypeError(`${label} descriptor targets must be strictly increasing`);
+      rejectType(`${label} descriptor targets must be strictly increasing`);
     }
     descriptors.push({ kind, absoluteOffset });
   }
   if (descriptors.length === 0) {
     if (dataLength !== 0) {
-      throw new TypeError(`${label} cannot contain unindexed literal data`);
+      rejectType(`${label} cannot contain unindexed literal data`);
     }
   } else if (descriptors[0].absoluteOffset !== dataStart) {
-    throw new TypeError(`${label} first descriptor must target the first data byte`);
+    rejectType(`${label} first descriptor must target the first data byte`);
   }
   for (let index = 0; index < descriptors.length; index += 1) {
     const { kind, absoluteOffset } = descriptors[index];
@@ -688,7 +702,7 @@ function validateLiteralSection(bytes, start) {
     if (kind === 0) {
       validatePointerLiteralV1(literal, `${label} descriptor ${index}`);
     } else if (literal.length !== 8) {
-      throw new TypeError(`${label} i64 descriptor ${index} must contain exactly 8 bytes`);
+      rejectType(`${label} i64 descriptor ${index} must contain exactly 8 bytes`);
     }
   }
   return codeOffset;
@@ -696,33 +710,33 @@ function validateLiteralSection(bytes, start) {
 
 function validatePointerLiteralV1(bytes, label) {
   if (bytes.length < 39) {
-    throw new TypeError(`${label} pointer TLV is truncated`);
+    rejectType(`${label} pointer TLV is truncated`);
   }
   const typeId = (bytes[0] << 8) | bytes[1];
   const allowedType = typeId >= 0x0001 && typeId <= 0x0012;
   if (!allowedType) {
-    throw new TypeError(`${label} pointer TLV type is not allowed by ABI v1`);
+    rejectType(`${label} pointer TLV type is not allowed by ABI v1`);
   }
   if (bytes[2] !== 1) {
-    throw new TypeError(`${label} pointer TLV must use version 1`);
+    rejectType(`${label} pointer TLV must use version 1`);
   }
   const payloadLength = readU32Be(bytes, 3, `${label} pointer TLV length`);
   const expectedLength = 7 + payloadLength + 32;
   if (bytes.length !== expectedLength) {
-    throw new TypeError(`${label} pointer TLV length does not match its envelope`);
+    rejectType(`${label} pointer TLV length does not match its envelope`);
   }
   const payload = bytes.subarray(7, 7 + payloadLength);
   const expectedHash = blake2b256(payload);
   expectedHash[expectedHash.length - 1] |= 1;
   if (!equalBytes(bytes.subarray(7 + payloadLength), expectedHash)) {
-    throw new TypeError(`${label} pointer TLV payload hash is invalid`);
+    rejectType(`${label} pointer TLV payload hash is invalid`);
   }
 }
 
 function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   const label = "Kotodama compiler artifact";
   if (bytes.length < IVM_HEADER_BYTES + 8 + NORITO_FRAME_HEADER_BYTES + 4) {
-    throw new TypeError(`${label} is too short to be a deployable IVM contract`);
+    rejectType(`${label} is too short to be a deployable IVM contract`);
   }
   if (bytes.length - IVM_HEADER_BYTES > MAX_IVM_CODE_REGION_BYTES) {
     throw new RangeError(
@@ -730,22 +744,22 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
     );
   }
   if (!equalBytes(bytes.subarray(0, 4), Uint8Array.from([0x49, 0x56, 0x4d, 0x00]))) {
-    throw new TypeError(`${label} has invalid IVM header magic`);
+    rejectType(`${label} has invalid IVM header magic`);
   }
   if (bytes[4] !== 1 || bytes[5] !== 1 || (bytes[6] & ~0x03) !== 0 || bytes[7] > 64) {
-    throw new TypeError(`${label} has unsupported IVM execution metadata`);
+    rejectType(`${label} has unsupported IVM execution metadata`);
   }
   if (bytes[16] !== 1) {
-    throw new TypeError(`${label} must use IVM ABI version 1`);
+    rejectType(`${label} must use IVM ABI version 1`);
   }
   if (toHex(bytes.subarray(IVM_EXECUTION_HEADER_BYTES, IVM_HEADER_BYTES)) !== abiHashHex) {
-    throw new TypeError(`${label} authenticated ABI hash does not match abiHash`);
+    rejectType(`${label} authenticated ABI hash does not match abiHash`);
   }
   if (!equalBytes(
     bytes.subarray(IVM_HEADER_BYTES, IVM_HEADER_BYTES + 4),
     Uint8Array.from([0x43, 0x4e, 0x54, 0x52]),
   )) {
-    throw new TypeError(`${label} is missing its required CNTR interface section`);
+    rejectType(`${label} is missing its required CNTR interface section`);
   }
   const interfaceLength = readU32Le(
     bytes,
@@ -755,7 +769,7 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   const interfaceStart = IVM_HEADER_BYTES + 8;
   const interfaceEnd = interfaceStart + interfaceLength;
   if (interfaceLength === 0 || interfaceEnd < interfaceStart || interfaceEnd > bytes.length) {
-    throw new TypeError(`${label} has an invalid CNTR interface length`);
+    rejectType(`${label} has an invalid CNTR interface length`);
   }
   validateEmbeddedInterfaceFrame(
     bytes.subarray(interfaceStart, interfaceEnd),
@@ -765,14 +779,14 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   );
   let codeOffset = interfaceEnd;
   if (equalBytes(bytes.subarray(codeOffset, codeOffset + 4), Uint8Array.from([0x44, 0x42, 0x47, 0x31]))) {
-    throw new TypeError(`${label} must keep DBG1 metadata in authenticated sidecars`);
+    rejectType(`${label} must keep DBG1 metadata in authenticated sidecars`);
   }
   if (equalBytes(bytes.subarray(codeOffset, codeOffset + 4), Uint8Array.from([0x4c, 0x54, 0x4c, 0x42]))) {
     codeOffset = validateLiteralSection(bytes, codeOffset);
   }
   const codeLength = bytes.length - codeOffset;
   if (codeLength <= 0 || codeLength % 4 !== 0) {
-    throw new TypeError(`${label} must contain a non-empty word-aligned instruction stream`);
+    rejectType(`${label} must contain a non-empty word-aligned instruction stream`);
   }
 }
 
@@ -843,14 +857,14 @@ function requireCanonicalBase64(value, label) {
     value.length % 4 !== 0 ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)
   ) {
-    throw new TypeError(`${label} must be exact standard-base64`);
+    rejectType(`${label} must be exact standard-base64`);
   }
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   if (value.endsWith("==") && (alphabet.indexOf(value.at(-3)) & 0x0f) !== 0) {
-    throw new TypeError(`${label} must use canonical base64 padding bits`);
+    rejectType(`${label} must use canonical base64 padding bits`);
   }
   if (value.endsWith("=") && !value.endsWith("==") && (alphabet.indexOf(value.at(-2)) & 0x03) !== 0) {
-    throw new TypeError(`${label} must use canonical base64 padding bits`);
+    rejectType(`${label} must use canonical base64 padding bits`);
   }
   return value;
 }
@@ -859,11 +873,11 @@ function validateSourceLocation(value, label, { nullable = false } = {}) {
   if (nullable && value.source_id === null) {
     for (const key of ["byte_start", "byte_end", "line", "column"]) {
       if (value[key] !== null) {
-        throw new TypeError(`${label} must use one consistent nullable source location`);
+        rejectType(`${label} must use one consistent nullable source location`);
       }
     }
     if (value.source_path !== null) {
-      throw new TypeError(`${label}.source_path must be null without a source location`);
+      rejectType(`${label}.source_path must be null without a source location`);
     }
     return;
   }
@@ -876,7 +890,7 @@ function validateSourceLocation(value, label, { nullable = false } = {}) {
   requireUnsignedInteger(value.line, U32_MAX, `${label}.line`);
   requireUnsignedInteger(value.column, U32_MAX, `${label}.column`);
   if (value.byte_start > value.byte_end) {
-    throw new TypeError(`${label} must use a forward UTF-8 byte range`);
+    rejectType(`${label} must use a forward UTF-8 byte range`);
   }
 }
 
@@ -901,7 +915,7 @@ function validateSourceMapEntry(value, index) {
   requireUnsignedInteger(value.pc_start, Number.MAX_SAFE_INTEGER, `${label}.pc_start`);
   requireUnsignedInteger(value.pc_end, Number.MAX_SAFE_INTEGER, `${label}.pc_end`);
   if (value.pc_start > value.pc_end) {
-    throw new TypeError(`${label} must use a forward PC range`);
+    rejectType(`${label} must use a forward PC range`);
   }
   validateSourceLocation(value, label);
 }
@@ -935,10 +949,10 @@ function validateBudgetEntry(value, index) {
     requireUnsignedInteger(value[key], U32_MAX, `${label}.${key}`);
   }
   if (typeof value.jump_range_risk !== "boolean") {
-    throw new TypeError(`${label}.jump_range_risk must be a boolean`);
+    rejectType(`${label}.jump_range_risk must be a boolean`);
   }
   if (value.pc_start > value.pc_end) {
-    throw new TypeError(`${label} must use a forward PC range`);
+    rejectType(`${label} must use a forward PC range`);
   }
   validateSourceLocation(value, label, { nullable: true });
 }
@@ -984,7 +998,7 @@ function validateEntrypointType(value, label, maximumWords = MAX_ENTRYPOINT_WORD
   validateBoundedJson(value, label);
   const analysis = analyzeEntrypointValueTypeV1(value, label);
   if (analysis.wordCount > maximumWords) {
-    throw new TypeError(`${label} exceeds the ${maximumWords}-word V1 ABI limit`);
+    rejectType(`${label} exceeds the ${maximumWords}-word V1 ABI limit`);
   }
   return analysis;
 }
@@ -993,7 +1007,7 @@ function validateArgumentSchema(value, params, label) {
   requireExactKeys(value, ["fields"], label);
   requireDenseArray(value.fields, `${label}.fields`, MAX_ENTRYPOINT_PARAMETERS);
   if (value.fields.length === 0 || value.fields.length !== params.length) {
-    throw new TypeError(`${label}.fields must exactly match the declared parameters`);
+    rejectType(`${label}.fields must exactly match the declared parameters`);
   }
   const names = new Set();
   let words = 0;
@@ -1001,17 +1015,17 @@ function validateArgumentSchema(value, params, label) {
     const fieldLabel = `${label}.fields[${index}]`;
     requireExactKeys(field, ["name", "ty"], fieldLabel);
     if (!isCanonicalIdentifier(field.name) || names.has(field.name)) {
-      throw new TypeError(`${fieldLabel}.name must be unique and canonical`);
+      rejectType(`${fieldLabel}.name must be unique and canonical`);
     }
     names.add(field.name);
     const analysis = validateEntrypointType(field.ty, `${fieldLabel}.ty`);
     words += analysis.wordCount;
     if (field.name !== params[index].name || analysis.canonicalName !== params[index].type_name) {
-      throw new TypeError(`${fieldLabel} does not match its declared parameter`);
+      rejectType(`${fieldLabel} does not match its declared parameter`);
     }
   });
   if (words > MAX_ENTRYPOINT_WORDS) {
-    throw new TypeError(`${label} exceeds the ${MAX_ENTRYPOINT_WORDS}-word V1 ABI limit`);
+    rejectType(`${label} exceeds the ${MAX_ENTRYPOINT_WORDS}-word V1 ABI limit`);
   }
 }
 
@@ -1021,9 +1035,29 @@ function validateDynamicAccessHints(value, label) {
     const hintLabel = `${label}[${index}]`;
     requireExactKeys(hint, ["base_key", "key_type", "bound_kind", "max_keys"], hintLabel);
     requireString(hint.base_key, `${hintLabel}.base_key`);
+    if (!isCanonicalKotodamaDynamicAccessBaseKey(hint.base_key)) {
+      rejectType(
+        `${hintLabel}.base_key must be state: plus one canonical state declaration identifier`,
+      );
+    }
     requireString(hint.key_type, `${hintLabel}.key_type`);
+    if (!isKotodamaV1StateMapKeyTypeName(hint.key_type)) {
+      rejectType(
+        `${hintLabel}.key_type must be an exact Kotodama V1 StateMap key scalar`,
+      );
+    }
     requireString(hint.bound_kind, `${hintLabel}.bound_kind`);
-    requireUnsignedInteger(hint.max_keys, U32_MAX, `${hintLabel}.max_keys`);
+    if (!isKotodamaV1DynamicAccessBoundKind(hint.bound_kind)) {
+      rejectType(`${hintLabel}.bound_kind must be exactly take or range`);
+    }
+    requireUnsignedInteger(
+      hint.max_keys,
+      KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
+      `${hintLabel}.max_keys`,
+    );
+    if (hint.max_keys === 0) {
+      rejectType(`${hintLabel}.max_keys must be in the V1 range 1..64`);
+    }
   });
 }
 
@@ -1040,15 +1074,54 @@ function validateAccessSetHints(value, label) {
   validateDynamicAccessHints(value.dynamic_writes, `${label}.dynamic_writes`);
 }
 
+function validateDynamicAccessHintStateMaps(accessSetHints, states, label) {
+  if (accessSetHints === null) return;
+  const stateMaps = new Map();
+  for (const state of states) {
+    const keyType = kotodamaV1StateMapKeyTypeName(state.type_name);
+    if (keyType !== null) {
+      stateMaps.set(state.name, keyType);
+    }
+  }
+  for (const field of ["dynamic_reads", "dynamic_writes"]) {
+    const seen = new Set();
+    accessSetHints[field].forEach((hint, index) => {
+      const hintLabel = `${label}.${field}[${index}]`;
+      const identity = JSON.stringify([
+        hint.base_key,
+        hint.key_type,
+        hint.bound_kind,
+        hint.max_keys,
+      ]);
+      if (seen.has(identity)) {
+        rejectType(`${label}.${field} contains a duplicate dynamic access hint`);
+      }
+      seen.add(identity);
+      const stateName = hint.base_key.slice("state:".length);
+      const expectedKeyType = stateMaps.get(stateName);
+      if (expectedKeyType === undefined) {
+        rejectType(
+          `${hintLabel}.base_key must reference a declared top-level StateMap`,
+        );
+      }
+      if (hint.key_type !== expectedKeyType) {
+        rejectType(
+          `${hintLabel}.key_type ${hint.key_type} does not match declared StateMap key type ${expectedKeyType}`,
+        );
+      }
+    });
+  }
+}
+
 function validateTriggerRepeats(value, label) {
   requireRecord(value, label);
   const keys = Reflect.ownKeys(value);
   if (keys.length !== 1 || !["Indefinitely", "Exactly"].includes(keys[0])) {
-    throw new TypeError(`${label} must contain exactly one canonical repeat policy`);
+    rejectType(`${label} must contain exactly one canonical repeat policy`);
   }
   if (keys[0] === "Indefinitely") {
     if (value.Indefinitely !== null) {
-      throw new TypeError(`${label}.Indefinitely must be null`);
+      rejectType(`${label}.Indefinitely must be null`);
     }
   } else {
     requireUnsignedInteger(value.Exactly, U32_MAX, `${label}.Exactly`);
@@ -1066,7 +1139,7 @@ function validateTriggers(value, entrypointName, label) {
       triggerLabel,
     );
     if (!isCanonicalIdentifier(trigger.id) || ids.has(trigger.id)) {
-      throw new TypeError(`${triggerLabel}.id must be unique and canonical`);
+      rejectType(`${triggerLabel}.id must be unique and canonical`);
     }
     ids.add(trigger.id);
     validateTriggerRepeats(trigger.repeats, `${triggerLabel}.repeats`);
@@ -1077,10 +1150,10 @@ function validateTriggers(value, entrypointName, label) {
     requireExactKeys(trigger.callback, ["namespace", "entrypoint"], `${triggerLabel}.callback`);
     requireNullableString(trigger.callback.namespace, `${triggerLabel}.callback.namespace`);
     if (!isCanonicalEntrypointName(trigger.callback.entrypoint)) {
-      throw new TypeError(`${triggerLabel}.callback.entrypoint must be canonical`);
+      rejectType(`${triggerLabel}.callback.entrypoint must be canonical`);
     }
     if (trigger.callback.namespace === null && trigger.callback.entrypoint !== entrypointName) {
-      throw new TypeError(`${triggerLabel}.callback must target its declaring entrypoint`);
+      rejectType(`${triggerLabel}.callback must target its declaring entrypoint`);
     }
   });
 }
@@ -1107,19 +1180,19 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
   );
   requireExactKeys(entry.kind, ["kind", "value"], `${label}.kind`);
   if (!isCanonicalEntrypointName(entry.name)) {
-    throw new TypeError(
+    rejectType(
       `${label}.name is not a canonical V1 identifier or branded lifecycle selector`,
     );
   }
   if (names.has(entry.name)) {
-    throw new TypeError(`Kotodama manifest contains duplicate entrypoint ${entry.name}`);
+    rejectType(`Kotodama manifest contains duplicate entrypoint ${entry.name}`);
   }
   names.add(entry.name);
   if (!MANIFEST_ENTRYPOINT_KINDS.has(entry.kind.kind)) {
-    throw new TypeError(`${label}.kind must be Kotoage, View, Hajimari, or Kaizen`);
+    rejectType(`${label}.kind must be Kotoage, View, Hajimari, or Kaizen`);
   }
   if (entry.kind.value !== null) {
-    throw new TypeError(`${label}.kind.value must be null`);
+    rejectType(`${label}.kind.value must be null`);
   }
   const lifecycleKind =
     entry.name === "hajimari" || entry.name === "始まり"
@@ -1131,18 +1204,18 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
     (lifecycleKind === null && ["Hajimari", "Kaizen"].includes(entry.kind.kind)) ||
     (lifecycleKind !== null && entry.kind.kind !== lifecycleKind)
   ) {
-    throw new TypeError(`${label}.kind does not match its branded lifecycle selector`);
+    rejectType(`${label}.kind does not match its branded lifecycle selector`);
   }
   if (entry.kind.kind === "Kotoage" && (typeof entry.permission !== "string" || entry.permission.trim() === "")) {
-    throw new TypeError(`${label} kotoage/言挙げ is missing caller authorization`);
+    rejectType(`${label} kotoage/言挙げ is missing caller authorization`);
   }
   if (["Hajimari", "Kaizen"].includes(entry.kind.kind) && entry.permission !== null) {
-    throw new TypeError(`${label} hajimari/始まり and kaizen/改善 must use runtime authorization`);
+    rejectType(`${label} hajimari/始まり and kaizen/改善 must use runtime authorization`);
   }
   if (entry.permission !== null) requireString(entry.permission, `${label}.permission`);
   if (lifecycleKind !== null) {
     if (lifecycleKinds.has(lifecycleKind)) {
-      throw new TypeError(`Kotodama manifest contains duplicate ${lifecycleKind} entrypoints`);
+      rejectType(`Kotodama manifest contains duplicate ${lifecycleKind} entrypoints`);
     }
     lifecycleKinds.add(lifecycleKind);
   }
@@ -1153,35 +1226,35 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
     const paramLabel = `${label}.params[${paramIndex}]`;
     requireExactKeys(param, ["name", "type_name"], paramLabel);
     if (!isCanonicalIdentifier(param.name) || paramNames.has(param.name)) {
-      throw new TypeError(`${paramLabel}.name must be unique and canonical`);
+      rejectType(`${paramLabel}.name must be unique and canonical`);
     }
     paramNames.add(param.name);
     requireString(param.type_name, `${paramLabel}.type_name`);
   });
   if (entry.params.length === 0) {
     if (entry.argument_schema !== null) {
-      throw new TypeError(`${label}.argument_schema must be null without parameters`);
+      rejectType(`${label}.argument_schema must be null without parameters`);
     }
   } else {
     if (entry.argument_schema === null) {
-      throw new TypeError(`${label}.argument_schema is required for declared parameters`);
+      rejectType(`${label}.argument_schema is required for declared parameters`);
     }
     validateArgumentSchema(entry.argument_schema, entry.params, `${label}.argument_schema`);
   }
   if ((entry.return_type === null) !== (entry.return_schema === null)) {
-    throw new TypeError(`${label} return_type and return_schema must be present together`);
+    rejectType(`${label} return_type and return_schema must be present together`);
   }
   if (entry.return_schema !== null) {
     requireString(entry.return_type, `${label}.return_type`);
     const analysis = validateEntrypointType(entry.return_schema, `${label}.return_schema`);
     if (analysis.canonicalName !== entry.return_type) {
-      throw new TypeError(`${label}.return_type does not match return_schema`);
+      rejectType(`${label}.return_type does not match return_schema`);
     }
   }
   requireStringArray(entry.read_keys, `${label}.read_keys`);
   requireStringArray(entry.write_keys, `${label}.write_keys`);
   if (entry.access_hints_complete !== null && typeof entry.access_hints_complete !== "boolean") {
-    throw new TypeError(`${label}.access_hints_complete must be a boolean or null`);
+    rejectType(`${label}.access_hints_complete must be a boolean or null`);
   }
   requireStringArray(entry.access_hints_skipped, `${label}.access_hints_skipped`);
   validateTriggers(entry.triggers, entry.name, `${label}.triggers`);
@@ -1194,13 +1267,15 @@ function validateCompilerManifestStates(states) {
     const label = `Kotodama manifest state ${index}`;
     requireExactKeys(state, ["name", "type_name"], label);
     if (!isCanonicalIdentifier(state.name, { declaration: true })) {
-      throw new TypeError(`${label}.name is not canonical`);
+      rejectType(`${label}.name is not canonical`);
     }
     if (names.has(state.name)) {
-      throw new TypeError(`Kotodama manifest contains duplicate state ${state.name}`);
+      rejectType(`Kotodama manifest contains duplicate state ${state.name}`);
     }
     names.add(state.name);
-    requireString(state.type_name, `${label}.type_name`);
+    if (!isCanonicalStateTypeName(state.type_name)) {
+      rejectType(`${label}.type_name is not a canonical V1 state type`);
+    }
   });
 }
 
@@ -1213,17 +1288,17 @@ function validateCompilerManifestErrorCodes(errorCodes) {
     const label = `Kotodama manifest error code ${index}`;
     requireExactKeys(errorCode, ["namespace", "name", "code"], label);
     if (
-      !isCanonicalIdentifier(errorCode.namespace, { declaration: true }) ||
+      !isCanonicalIdentifier(errorCode.namespace, { typeDeclaration: true }) ||
       !isCanonicalIdentifier(errorCode.name)
     ) {
-      throw new TypeError(`${label} must use canonical namespace and variant identifiers`);
+      rejectType(`${label} must use canonical namespace and variant identifiers`);
     }
     if (!Number.isSafeInteger(errorCode.code) || errorCode.code <= 0 || errorCode.code > U32_MAX) {
-      throw new TypeError(`${label}.code must be a non-zero u32`);
+      rejectType(`${label}.code must be a non-zero u32`);
     }
     const path = `${errorCode.namespace}::${errorCode.name}`;
     if (paths.has(path) || codes.has(errorCode.code)) {
-      throw new TypeError(`Kotodama manifest contains a duplicate error path or code at ${path}`);
+      rejectType(`Kotodama manifest contains a duplicate error path or code at ${path}`);
     }
     paths.add(path);
     codes.add(errorCode.code);
@@ -1239,7 +1314,7 @@ function validateKotoba(value) {
     requireExactKeys(entry, ["msg_id", "translations"], label);
     requireString(entry.msg_id, `${label}.msg_id`);
     if (messageIds.has(entry.msg_id)) {
-      throw new TypeError(`Kotodama manifest kotoba contains duplicate msg_id ${entry.msg_id}`);
+      rejectType(`Kotodama manifest kotoba contains duplicate msg_id ${entry.msg_id}`);
     }
     messageIds.add(entry.msg_id);
     requireDenseArray(entry.translations, `${label}.translations`);
@@ -1250,7 +1325,7 @@ function validateKotoba(value) {
       requireString(translation.lang, `${translationLabel}.lang`);
       requireString(translation.text, `${translationLabel}.text`, { allowEmpty: true });
       if (languages.has(translation.lang)) {
-        throw new TypeError(`${label} contains duplicate language ${translation.lang}`);
+        rejectType(`${label} contains duplicate language ${translation.lang}`);
       }
       languages.add(translation.lang);
     });
@@ -1264,7 +1339,7 @@ function validateProvenance(value) {
   // signed message and public-key algorithm would turn untrusted metadata into
   // a false authenticity claim. A later signed-manifest version must add full
   // cryptographic verification before this boundary accepts it.
-  throw new TypeError(
+  rejectType(
     "Kotodama manifest provenance must be null until signed provenance is verifiable",
   );
 }
@@ -1272,7 +1347,7 @@ function validateProvenance(value) {
 function validateCompilerManifest(manifest) {
   requireRecord(manifest, "Kotodama manifest");
   if (Object.hasOwn(manifest, "contract_name")) {
-    throw new TypeError(
+    rejectType(
       "Kotodama manifest must use seiyaku_name; contract_name is not a V1 field",
     );
   }
@@ -1293,15 +1368,15 @@ function validateCompilerManifest(manifest) {
     ],
     "Kotodama manifest",
   );
-  if (!isCanonicalIdentifier(manifest.seiyaku_name, { declaration: true })) {
-    throw new TypeError(
-      "Kotodama manifest seiyaku_name must be a canonical V1 declaration identifier",
+  if (!isCanonicalIdentifier(manifest.seiyaku_name, { typeDeclaration: true })) {
+    rejectType(
+      "Kotodama manifest seiyaku_name must be a canonical V1 type declaration identifier",
     );
   }
   requireString(manifest.compiler_fingerprint, "Kotodama manifest compiler_fingerprint");
   requireUnsignedInteger(
     manifest.features_bitmap,
-    Number.MAX_SAFE_INTEGER,
+    3,
     "Kotodama manifest features_bitmap",
   );
   validateAccessSetHints(manifest.access_set_hints, "Kotodama manifest access_set_hints");
@@ -1311,6 +1386,11 @@ function validateCompilerManifest(manifest) {
   manifest.entrypoints.forEach((entry, index) =>
     validateCompilerEntrypoint(entry, index, names, lifecycleKinds));
   validateCompilerManifestStates(manifest.states);
+  validateDynamicAccessHintStateMaps(
+    manifest.access_set_hints,
+    manifest.states,
+    "Kotodama manifest access_set_hints",
+  );
   validateCompilerManifestErrorCodes(manifest.error_codes);
   validateKotoba(manifest.kotoba);
   validateProvenance(manifest.provenance);
@@ -1324,7 +1404,7 @@ function validatePosition(value, label) {
     !Number.isSafeInteger(value.column) ||
     value.column < 1
   ) {
-    throw new TypeError(`${label} must contain one-based safe-integer line and column values`);
+    rejectType(`${label} must contain one-based safe-integer line and column values`);
   }
 }
 
@@ -1344,7 +1424,7 @@ function validateSpan(value, label) {
     value.start.line > value.end.line ||
     (value.start.line === value.end.line && value.start.column > value.end.column);
   if (startsAfterEnd) {
-    throw new TypeError(`${label} must be a forward half-open range`);
+    rejectType(`${label} must be a forward half-open range`);
   }
   if (value.byte_range !== null) {
     requireExactKeys(value.byte_range, ["start", "end"], `${label}.byte_range`);
@@ -1354,7 +1434,7 @@ function validateSpan(value, label) {
       !Number.isSafeInteger(value.byte_range.end) ||
       value.byte_range.end < value.byte_range.start
     ) {
-      throw new TypeError(`${label}.byte_range must be a forward safe-integer byte range`);
+      rejectType(`${label}.byte_range must be a forward safe-integer byte range`);
     }
   }
 }
@@ -1367,13 +1447,13 @@ function validateDiagnostic(value, index) {
     label,
   );
   if (typeof value.code !== "string" || !/^[EK][A-Z0-9_]+$/.test(value.code)) {
-    throw new TypeError(`${label}.code is not a stable Kotodama diagnostic code`);
+    rejectType(`${label}.code is not a stable Kotodama diagnostic code`);
   }
   if (!DIAGNOSTIC_SEVERITIES.has(value.severity)) {
-    throw new TypeError(`${label}.severity is invalid`);
+    rejectType(`${label}.severity is invalid`);
   }
   if (!DIAGNOSTIC_PHASES.has(value.phase)) {
-    throw new TypeError(`${label}.phase is invalid`);
+    rejectType(`${label}.phase is invalid`);
   }
   requireString(value.message, `${label}.message`);
   if (value.primary_span !== null) {
@@ -1399,11 +1479,11 @@ function parseDiagnostics(raw) {
   const diagnostics = parseJson(raw, "Kotodama diagnosticsJson");
   requireDenseArray(diagnostics, "Kotodama diagnostics", MAX_DIAGNOSTICS);
   if (diagnostics.length === 0) {
-    throw new TypeError("failed Kotodama compilation must return a non-empty diagnostic array");
+    rejectType("failed Kotodama compilation must return a non-empty diagnostic array");
   }
   diagnostics.forEach(validateDiagnostic);
   if (!diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-    throw new TypeError("failed Kotodama compilation must contain at least one error diagnostic");
+    rejectType("failed Kotodama compilation must contain at least one error diagnostic");
   }
   return diagnostics;
 }
@@ -1447,7 +1527,7 @@ export function normalizeCompilerOutput(output) {
   const sourceMap = parseSidecar(output.sourceMapJson, "source-map", codeHashHex);
   const budgetReport = parseSidecar(output.budgetReportJson, "budget", codeHashHex);
   if (sourceMap.length !== budgetReport.length) {
-    throw new TypeError("Kotodama compiler sidecars must describe the same functions");
+    rejectType("Kotodama compiler sidecars must describe the same functions");
   }
   sourceMap.forEach((sourceEntry, index) => {
     const budgetEntry = budgetReport[index];
@@ -1456,7 +1536,7 @@ export function normalizeCompilerOutput(output) {
       sourceEntry.pc_start !== budgetEntry.pc_start ||
       sourceEntry.pc_end !== budgetEntry.pc_end
     ) {
-      throw new TypeError(
+      rejectType(
         `Kotodama compiler sidecar entry ${index} function identity does not match`,
       );
     }
@@ -1485,7 +1565,7 @@ export function normalizeCompilerResult(result) {
   );
   if (result.ok === true) {
     if (result.diagnosticsJson !== null) {
-      throw new TypeError(
+      rejectType(
         "successful Kotodama compilation must contain an exact null diagnosticsJson sentinel",
       );
     }
@@ -1493,11 +1573,11 @@ export function normalizeCompilerResult(result) {
   }
   if (result.ok === false) {
     if (result.output !== null) {
-      throw new TypeError(
+      rejectType(
         "failed Kotodama compilation must contain an exact null output sentinel",
       );
     }
     return { ok: false, diagnostics: parseDiagnostics(result.diagnosticsJson) };
   }
-  throw new TypeError("Kotodama compiler result.ok must be a boolean");
+  rejectType("Kotodama compiler result.ok must be a boolean");
 }

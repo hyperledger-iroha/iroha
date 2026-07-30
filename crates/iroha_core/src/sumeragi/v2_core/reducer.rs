@@ -29,8 +29,7 @@ use super::{
         VolatileSummary, WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT,
         WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT,
         WAL_RECORD_PROPOSAL_INTENT, WAL_RECORD_TIMEOUT_INTENT,
-        locked_commit_progress_witness_is_valid,
-        production_durable_intent_trace_refines_progress_witness_kernel,
+        check_production_durable_intent_transition, locked_commit_progress_witness_is_valid,
     },
 };
 
@@ -185,7 +184,8 @@ pub enum Effect {
         /// Complete frame to append.
         entry: WalEntry,
     },
-    /// Fetch an exact body, optionally using QC signers as certified sources.
+    /// Fetch an exact body, optionally using the frozen roster as authenticated
+    /// archive sources under a verified QC.
     FetchBody {
         /// Tag for all fetch completions.
         tag: EventTag,
@@ -657,6 +657,18 @@ pub struct Reducer {
 }
 
 impl Reducer {
+    /// Return the immutable canonical archive fanout for this height.
+    ///
+    /// Every member is authenticated by the frozen context. The carried QC,
+    /// not membership in its signer subset, authorizes the exact subject.
+    fn frozen_archive_sources(&self) -> Vec<ValidatorId> {
+        self.context
+            .roster()
+            .iter()
+            .map(|validator| validator.id())
+            .collect()
+    }
+
     /// Constructs a fresh reducer at view zero.
     ///
     /// # Errors
@@ -1042,11 +1054,12 @@ impl Reducer {
                     durable_sequence_before: self.durable.last_id().get(),
                     durable_sequence_after: next.durable.last_id().get(),
                 };
-                if !production_durable_intent_trace_refines_progress_witness_kernel(
-                    durable_intent_trace,
-                ) {
+                let Some(checked_transition) =
+                    check_production_durable_intent_transition(durable_intent_trace)
+                else {
                     return Err(ReducerError::RefinementViolation);
-                }
+                };
+                let _authorized_transition = checked_transition.into_projection();
                 if let Some(violation) = next.progress_witness_violation() {
                     return Err(ReducerError::ProgressWitnessViolation(violation));
                 }
@@ -2510,11 +2523,7 @@ impl Reducer {
                 .body_work
                 .get(&(round, subject))
                 .and_then(|work| work.manifest),
-            certified_sources: certificate
-                .signatures()
-                .iter()
-                .map(SignatureShare::signer)
-                .collect(),
+            certified_sources: self.frozen_archive_sources(),
             certificate: Some(certificate),
         })
     }
@@ -3022,12 +3031,7 @@ impl Reducer {
                             certificate.proposal_round() == *round
                                 && certificate.subject() == *subject
                                 && certificate.validate(&after.context).is_ok()
-                                && certified_sources
-                                    == &certificate
-                                        .signatures()
-                                        .iter()
-                                        .map(SignatureShare::signer)
-                                        .collect::<Vec<_>>()
+                                && certified_sources == &after.frozen_archive_sources()
                         });
                 if round.height() != after.context.height() || !certificate_valid {
                     None
@@ -3955,11 +3959,7 @@ impl Reducer {
                 .body_work
                 .get(&(round, subject))
                 .and_then(|work| work.manifest),
-            certified_sources: certificate
-                .signatures()
-                .iter()
-                .map(SignatureShare::signer)
-                .collect(),
+            certified_sources: self.frozen_archive_sources(),
             certificate: Some(certificate.clone()),
         }
     }
@@ -5463,11 +5463,12 @@ mod source_link_tests {
         let event = Event::RetransmitElapsed {
             tag: before.current_tag(),
         };
-        let certified_sources = decision
-            .signatures()
-            .iter()
-            .map(SignatureShare::signer)
-            .collect::<Vec<_>>();
+        let certified_sources = before.frozen_archive_sources();
+        assert_eq!(certified_sources.len(), before.context.roster().len());
+        assert!(
+            certified_sources.contains(&ValidatorId::repeat(4)),
+            "a frozen-roster archive that did not sign the QC remains a deterministic source"
+        );
 
         let mut wrong_after = before.clone();
         wrong_after.body_work.insert(

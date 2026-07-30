@@ -30,13 +30,13 @@ pub mod isi {
         },
         asset::{AssetBalancePolicy, AssetBalanceScope},
         events::data::prelude::AssetChanged,
-        isi::error::{
-            InstructionExecutionError, InvalidParameterError, MathError, RepetitionError,
-        },
+        governance::types::ProposalKind,
+        isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
         nexus::{DataSpaceCatalog, DataSpaceId, LaneVisibility},
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
+        validation_fee::ValidationFeePlainElectorateRulesV1,
     };
     use iroha_logger::prelude::*;
     use norito::codec::Decode as _;
@@ -52,6 +52,27 @@ pub mod isi {
 
     /// Alias grace window after lease expiry (369 hours).
     const ASSET_ALIAS_GRACE_MS: u64 = 369u64 * 60 * 60 * 1_000;
+
+    fn retained_validation_fee_plain_electorate_rules(
+        proposal: &crate::state::GovernanceProposalRecord,
+    ) -> Option<&ValidationFeePlainElectorateRulesV1> {
+        if !matches!(
+            proposal.status,
+            crate::state::GovernanceProposalStatus::Proposed
+                | crate::state::GovernanceProposalStatus::Approved
+        ) {
+            return None;
+        }
+        match &proposal.kind {
+            ProposalKind::ValidationFeePolicy(payload) => Some(&payload.plain_electorate_rules),
+            ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+                Some(&payload.plain_electorate_rules)
+            }
+            ProposalKind::DeployContract(_)
+            | ProposalKind::RuntimeUpgrade(_)
+            | ProposalKind::SccpRouteGovernance(_) => None,
+        }
+    }
 
     fn alias_grace_until_ms(lease_expiry_ms: Option<u64>) -> Option<u64> {
         lease_expiry_ms.map(|expiry| expiry.saturating_add(ASSET_ALIAS_GRACE_MS))
@@ -1370,6 +1391,32 @@ pub mod isi {
                 .into());
             }
 
+            let orchard_pool_references =
+                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+                    &state_transaction.world.privacy_commitments,
+                )
+                .map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister account {account_id}: persisted Orchard pool state is invalid: {message}"
+                        )
+                        .into(),
+                    )
+                })?;
+            if let Some(reference) = orchard_pool_references
+                .iter()
+                .find(|reference| reference.reserve_account() == &account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is the reserve account for governed Orchard pool {:?}",
+                        reference.namespace()
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
             if let Some(primary_label) = state_transaction.world.account(&account_id)?.label() {
                 ensure_alias_can_change_recovery_binding(state_transaction, primary_label)?;
             }
@@ -1424,6 +1471,47 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it is configured as governance slash receiver account (`gov.slash_receiver_account`); update governance config first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if let Some((referendum_id, _)) =
+                state_transaction
+                    .world
+                    .governance_locks
+                    .iter()
+                    .find(|(_, locks)| {
+                        locks.locks.values().any(|record| {
+                            record.custody.as_ref().is_some_and(|custody| {
+                                custody.bond_escrow_account == account_id
+                                    || custody.slash_receiver_account == account_id
+                            })
+                        })
+                    })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if let Some((proposal_id, _)) = state_transaction
+                .world
+                .governance_proposals
+                .iter()
+                .find(|(_, proposal)| {
+                    retained_validation_fee_plain_electorate_rules(proposal).is_some_and(|rules| {
+                        rules.bond_escrow_account == account_id
+                            || rules.slash_receiver_account == account_id
+                    })
+                })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is retained by immutable validation-fee proposal custody (proposal {proposal_id:?}); reject or supersede the proposal first"
                     )
                     .into(),
                 )
@@ -2338,10 +2426,74 @@ pub mod isi {
                 .into());
             }
 
+            let orchard_pool_references =
+                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+                    &state_transaction.world.privacy_commitments,
+                )
+                .map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: persisted Orchard pool state is invalid: {message}"
+                        )
+                        .into(),
+                    )
+                })?;
+            if let Some(reference) = orchard_pool_references
+                .iter()
+                .find(|reference| reference.asset_definition_id() == &asset_definition_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it backs governed Orchard pool {:?}",
+                        reference.namespace()
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
             if asset_definition_id == state_transaction.gov.voting_asset_id {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister asset definition {asset_definition_id}: it is configured as governance voting asset definition (`gov.voting_asset_id`); update governance config first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if let Some((referendum_id, _)) =
+                state_transaction
+                    .world
+                    .governance_locks
+                    .iter()
+                    .find(|(_, locks)| {
+                        locks.locks.values().any(|record| {
+                            record.custody.as_ref().is_some_and(|custody| {
+                                custody.asset_definition_id == asset_definition_id
+                            })
+                        })
+                    })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if let Some((proposal_id, _)) = state_transaction
+                .world
+                .governance_proposals
+                .iter()
+                .find(|(_, proposal)| {
+                    retained_validation_fee_plain_electorate_rules(proposal)
+                        .is_some_and(|rules| rules.voting_asset_id == asset_definition_id)
+                })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is retained by immutable validation-fee proposal custody (proposal {proposal_id:?}); reject or supersede the proposal first"
                     )
                     .into(),
                 )
@@ -2678,6 +2830,10 @@ pub mod isi {
             })
             .collect::<Vec<_>>();
 
+        // Preflight the complete migration before removing any global bucket. In particular, a
+        // pre-existing scoped bucket must be checked against its full post-merge balance rather
+        // than only the amount moving out of the global bucket.
+        let mut migrations = Vec::with_capacity(global_asset_ids.len());
         for global_asset_id in global_asset_ids {
             let Some(source_value) = state_transaction
                 .world
@@ -2700,16 +2856,7 @@ pub mod isi {
                 .is_some();
             let merged_amount = state_transaction
                 .world
-                .assets
-                .get(&scoped_asset_id)
-                .map(|destination_value| {
-                    destination_value
-                        .clone()
-                        .into_inner()
-                        .checked_add(&source_amount)
-                        .map_err(|_| MathError::Overflow)
-                })
-                .transpose()?;
+                .precheck_numeric_asset_credit_exact(&scoped_asset_id, &source_amount)?;
 
             if state_transaction
                 .world
@@ -2728,22 +2875,40 @@ pub mod isi {
                     )
                     .into(),
                 )
-                .into());
+                    .into());
             }
 
-            state_transaction
-                .world
-                .assets
-                .remove(global_asset_id.clone());
+            migrations.push((
+                global_asset_id,
+                source_value,
+                source_amount,
+                scoped_asset_id,
+                destination_existed,
+                merged_amount,
+            ));
+        }
+
+        for (
+            global_asset_id,
+            source_value,
+            source_amount,
+            scoped_asset_id,
+            destination_existed,
+            merged_amount,
+        ) in migrations
+        {
             let source_metadata = state_transaction
                 .world
                 .asset_metadata
-                .remove(global_asset_id.clone());
-            state_transaction
+                .get(&global_asset_id)
+                .cloned();
+            let removed = state_transaction
                 .world
-                .untrack_asset_holder_if_empty(&global_asset_id);
+                .remove_asset_and_metadata(&global_asset_id)
+                .expect("preflighted global migration source must remain present");
+            debug_assert_eq!(removed, source_value);
 
-            if let Some(merged_amount) = merged_amount {
+            if destination_existed {
                 let destination_value = state_transaction
                     .world
                     .assets
@@ -2755,10 +2920,11 @@ pub mod isi {
                     .world
                     .assets
                     .insert(scoped_asset_id.clone(), source_value);
-            }
-            if !destination_existed {
                 state_transaction.world.track_asset_holder(&scoped_asset_id);
             }
+            state_transaction
+                .world
+                .refresh_nonzero_asset_holder(&scoped_asset_id);
             if let Some(source_metadata) = source_metadata {
                 state_transaction
                     .world
@@ -3675,7 +3841,10 @@ pub mod query {
 mod tests {
     use std::sync::Arc;
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{
+        Algorithm, Hash, KeyPair,
+        blake2::{Blake2b512, digest::Digest as _},
+    };
     use iroha_data_model::{
         ChainId, IntoKeyValue,
         account::{
@@ -3689,16 +3858,24 @@ mod tests {
         },
         asset::definition::AssetConfidentialPolicy,
         asset::{
-            Asset, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId, Mintable,
-            NewAssetDefinition,
+            Asset, AssetBalanceScope, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId,
+            AssetId, Mintable, NewAssetDefinition,
         },
         block::BlockHeader,
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
         },
+        governance::types::{
+            GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ParliamentRoster,
+            ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+        },
         isi::{
+            SetAssetHoldingLimit,
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
-            error::{InstructionExecutionError, InvalidParameterError},
+            error::{
+                AssetTransferAdmissionError, InstructionExecutionError, InvalidParameterError,
+            },
+            governance::{CouncilDerivationKind, VotingMode},
         },
         metadata::Metadata,
         name::Name,
@@ -3710,8 +3887,21 @@ mod tests {
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
         permission::Permission,
         prelude::Domain,
+        privacy::{
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+        },
         role::{Role, RoleId},
+        smart_contract::ContractAddress,
         sns::{NameControllerV1, NameRecordV1},
+        validation_fee::{
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
+            VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            ValidationFeeChargingMode, ValidationFeePlainElectorateEligibilityRuleV1,
+            ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateRulesV1,
+            ValidationFeePlainElectorateSnapshotV1, ValidationFeePolicyV1,
+            ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
+        },
     };
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
@@ -3731,7 +3921,12 @@ mod tests {
         prelude::World,
         query::store::LiveQueryStore,
         smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::{State, WorldReadOnly},
+        state::{
+            GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
+            GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
+            GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
+            GovernanceReferendumStatus, GovernanceStageApprovals, State, WorldReadOnly,
+        },
     };
 
     fn test_state() -> State {
@@ -3752,6 +3947,393 @@ mod tests {
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("domain ISI fixture key generation for requested algorithm should succeed")
+    }
+
+    fn install_orchard_pool_dependency_guard(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+        asset_definition_id: AssetDefinitionId,
+        reserve_account: AccountId,
+    ) -> crate::privacy_state::PrivacyCommitmentKeyV1 {
+        let namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
+            }),
+        );
+        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
+            PrivacyOrchardPoolBootstrapDigestV1::new([0xD2; 32]),
+            asset_definition_id,
+            reserve_account,
+        )
+        .expect("canonical Orchard dependency-guard state");
+        let key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
+            .expect("canonical Orchard dependency-guard key");
+        let record = crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
+            .expect("canonical Orchard dependency-guard record");
+        assert!(
+            state_transaction
+                .world
+                .privacy_commitments
+                .insert(key, record)
+                .is_none()
+        );
+        key
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum ValidationFeeProposalFixtureKind {
+        Policy,
+        PayoutLifecycle,
+    }
+
+    #[derive(Clone, Debug)]
+    struct ValidationFeeUnregisterTargets {
+        domain_id: DomainId,
+        voting_asset_id: AssetDefinitionId,
+        bond_escrow_account: AccountId,
+        slash_receiver_account: AccountId,
+    }
+
+    fn fixture_account(seed: u8) -> AccountId {
+        AccountId::new(
+            fixture_keypair(seed, Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn register_validation_fee_unregister_targets(
+        authority: &AccountId,
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+    ) -> ValidationFeeUnregisterTargets {
+        let domain_id =
+            DomainId::try_new("validation", "guard").expect("validation-fee guard domain");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(authority, state_transaction)
+            .expect("register validation-fee guard domain");
+        if state_transaction.world.accounts.get(authority).is_none() {
+            Register::account(NewAccount::new(authority.clone()))
+                .execute(authority, state_transaction)
+                .expect("register validation-fee proposal operator");
+        }
+        let active_domain_id =
+            DomainId::try_new("active", "guard").expect("active governance guard domain");
+        Register::domain(Domain::new(active_domain_id.clone()))
+            .execute(authority, state_transaction)
+            .expect("register active governance guard domain");
+        let active_voting_asset_id = AssetDefinitionId::new(
+            active_domain_id,
+            "replacement".parse().expect("replacement asset name"),
+        );
+        Register::asset_definition(
+            AssetDefinition::numeric(active_voting_asset_id.clone())
+                .with_name(active_voting_asset_id.name().to_string()),
+        )
+        .execute(authority, state_transaction)
+        .expect("register replacement governance voting asset");
+        let voting_asset_id =
+            AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
+        Register::asset_definition(
+            AssetDefinition::numeric(voting_asset_id.clone())
+                .with_name(voting_asset_id.name().to_string()),
+        )
+        .execute(authority, state_transaction)
+        .expect("register retained validation-fee voting asset");
+        let bond_escrow_account = fixture_account(0x91);
+        let slash_receiver_account = fixture_account(0x92);
+        let active_bond_escrow_account = fixture_account(0xB1);
+        let active_slash_receiver_account = fixture_account(0xB2);
+        for account_id in [
+            &bond_escrow_account,
+            &slash_receiver_account,
+            &active_bond_escrow_account,
+            &active_slash_receiver_account,
+        ] {
+            Register::account(NewAccount::new(account_id.clone()))
+                .execute(authority, state_transaction)
+                .expect("register validation-fee custody account");
+        }
+        ValidationFeeUnregisterTargets {
+            domain_id,
+            voting_asset_id,
+            bond_escrow_account,
+            slash_receiver_account,
+        }
+    }
+
+    fn validation_fee_unregister_rules(
+        targets: &ValidationFeeUnregisterTargets,
+    ) -> ValidationFeePlainElectorateRulesV1 {
+        let rules = ValidationFeePlainElectorateRulesV1 {
+            voting_asset_id: targets.voting_asset_id.clone(),
+            bond_escrow_account: targets.bond_escrow_account.clone(),
+            slash_receiver_account: targets.slash_receiver_account.clone(),
+            ballot_amount: Quantity::from(150_u32),
+            ballot_duration_blocks: 3_600,
+            citizenship_amount: Quantity::from(10_000_u32),
+            max_members: VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
+            conviction_step_blocks: 100,
+            max_conviction: 6,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            eligibility_rule: ValidationFeePlainElectorateEligibilityRuleV1::
+                ProposalOperatorAtOrBeforeGateOthersAfterGate,
+        };
+        assert_eq!(
+            rules.invariant_error(),
+            None,
+            "unregister guard rules must be structurally valid"
+        );
+        rules
+    }
+
+    fn validation_fee_guard_sbd_asset_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("sbd", "guard").expect("SBD guard domain"),
+            "sbd".parse().expect("SBD asset name"),
+        )
+    }
+
+    fn validation_fee_guard_payout_binding(
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> ValidationFeeTreasuryPayoutBindingV1 {
+        let controller = fixture_account(0xA0);
+        let contract_address = ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &controller,
+            91,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive validation-fee payout contract address");
+        let binding = ValidationFeeTreasuryPayoutBindingV1 {
+            treasury_account_id: contract_address.subject_id(),
+            contract_address,
+            code_hash: [0xA5; 32],
+            entrypoint: "autonomous_validation_fee_tick"
+                .parse()
+                .expect("payout entrypoint"),
+            sbd_asset_id: validation_fee_guard_sbd_asset_id(),
+            xor_asset_id: rules.voting_asset_id.clone(),
+            pool_vault_account_id: fixture_account(0xA2),
+            batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
+            min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
+            max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
+            recipients: (0xA3..=0xA6)
+                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
+                    account_id: fixture_account(seed),
+                    share: iroha_data_model::validation_fee::validation_fee_payout_recipient_share(
+                    ),
+                })
+                .collect(),
+        };
+        assert_eq!(
+            binding.invariant_error(),
+            None,
+            "unregister guard payout binding must be structurally valid"
+        );
+        binding
+    }
+
+    fn validation_fee_unregister_proposal_kind(
+        fixture_kind: ValidationFeeProposalFixtureKind,
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> ProposalKind {
+        match fixture_kind {
+            ValidationFeeProposalFixtureKind::Policy => {
+                let policy = ValidationFeePolicyV1 {
+                    schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+                    chain_id: ChainId::from("validation-fee-unregister-guard"),
+                    genesis_hash: [0x77; 32],
+                    policy_version: 1,
+                    previous_policy_hash: None,
+                    ds_asset_id: validation_fee_guard_sbd_asset_id(),
+                    ds_scale: VALIDATION_FEE_DS_SCALE,
+                    fee: Quantity::zero(),
+                    treasury_account_id: fixture_account(0xA7),
+                    charging_mode: ValidationFeeChargingMode::Disabled,
+                    effective_from_height: VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS + 3_601,
+                    expires_after_height: None,
+                    exemption_classes: Vec::new(),
+                    treasury_payout_binding: None,
+                };
+                assert_eq!(
+                    policy.policy_invariant_error(),
+                    None,
+                    "unregister guard policy must be structurally valid"
+                );
+                ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+                    policy,
+                    payout_lifecycle_proposal_id: None,
+                    plain_electorate_rules: rules.clone(),
+                })
+            }
+            ValidationFeeProposalFixtureKind::PayoutLifecycle => {
+                ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                    payout_binding: validation_fee_guard_payout_binding(rules),
+                    plain_electorate_rules: rules.clone(),
+                })
+            }
+        }
+    }
+
+    const VALIDATION_FEE_PARLIAMENT_BODIES: [ParliamentBody; 7] = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+        ParliamentBody::FmaCommittee,
+    ];
+
+    fn validation_fee_unregister_parliament_snapshot() -> GovernanceParliamentSnapshot {
+        let rosters = VALIDATION_FEE_PARLIAMENT_BODIES
+            .into_iter()
+            .map(|body| {
+                (
+                    body,
+                    ParliamentRoster {
+                        body,
+                        epoch: 1,
+                        members: vec![(*ALICE_ID).clone()],
+                        alternates: Vec::new(),
+                        verified: 1,
+                        candidate_count: 1,
+                        derived_by: CouncilDerivationKind::Fallback,
+                    },
+                )
+            })
+            .collect();
+        let bodies = ParliamentBodies {
+            selection_epoch: 1,
+            rosters,
+        };
+        let encoded = norito::to_bytes(&bodies).expect("encode unregister guard Parliament bodies");
+        let digest = Blake2b512::digest(encoded);
+        let mut roster_root = [0_u8; 32];
+        roster_root.copy_from_slice(&digest[..32]);
+        GovernanceParliamentSnapshot {
+            selection_epoch: 1,
+            beacon: [0x55; 32],
+            roster_root,
+            bodies,
+        }
+    }
+
+    fn insert_validation_fee_unregister_proposal(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+        fixture_kind: ValidationFeeProposalFixtureKind,
+        status: GovernanceProposalStatus,
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> [u8; 32] {
+        let kind = validation_fee_unregister_proposal_kind(fixture_kind, rules);
+        let proposal_id = kind.fingerprint();
+        let referendum_status = match status {
+            GovernanceProposalStatus::Proposed => GovernanceReferendumStatus::Proposed,
+            GovernanceProposalStatus::Approved => GovernanceReferendumStatus::Closed,
+            GovernanceProposalStatus::Rejected
+            | GovernanceProposalStatus::Enacted
+            | GovernanceProposalStatus::Superseded => {
+                panic!("unregister guard fixture only supports retained proposal statuses")
+            }
+        };
+        let finalization_evidence = (status == GovernanceProposalStatus::Approved).then_some(
+            GovernanceFinalizationEvidence {
+                proposal_id,
+                referendum_id: proposal_id,
+                finalized_at_height: 3_601,
+                mode: VotingMode::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: rules.min_turnout,
+                approval_threshold_numerator: rules.approval_threshold_numerator,
+                approval_threshold_denominator: rules.approval_threshold_denominator,
+                approved: true,
+            },
+        );
+        state_transaction.world.governance_proposals.insert(
+            proposal_id,
+            GovernanceProposalRecord {
+                proposer: (*ALICE_ID).clone(),
+                kind,
+                created_height: 1,
+                status,
+                pipeline: GovernancePipeline::default(),
+                parliament_snapshot: Some(validation_fee_unregister_parliament_snapshot()),
+                finalization_evidence,
+                enacted_at_height: None,
+            },
+        );
+        let referendum_id = hex::encode(proposal_id);
+        state_transaction.world.governance_referenda.insert(
+            referendum_id.clone(),
+            GovernanceReferendumRecord {
+                h_start: 2,
+                h_end: 3_601,
+                status: referendum_status,
+                mode: GovernanceReferendumMode::Plain,
+            },
+        );
+        if status == GovernanceProposalStatus::Approved {
+            let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+                proposal_id,
+                (*ALICE_ID).clone(),
+                2,
+                1,
+                vec![ValidationFeePlainElectorateMemberV1 {
+                    account_id: (*ALICE_ID).clone(),
+                    bonded_height: 1,
+                    bonded_amount: rules.citizenship_amount.clone(),
+                }],
+            )
+            .expect("build unregister guard frozen electorate");
+            assert_eq!(
+                electorate.context_error(proposal_id, &ALICE_ID, rules),
+                None,
+                "unregister guard electorate must be valid for its proposal"
+            );
+            let mut approvals = GovernanceStageApprovals::default();
+            for body in VALIDATION_FEE_PARLIAMENT_BODIES {
+                approvals
+                    .ensure_stage(body, 1, 1, 10_000)
+                    .record((*ALICE_ID).clone());
+            }
+            approvals.approval_gate_height = Some(1);
+            approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
+            state_transaction
+                .world
+                .governance_stage_approvals
+                .insert(referendum_id, approvals);
+        }
+        proposal_id
+    }
+
+    fn drift_validation_fee_governance_config(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+    ) {
+        state_transaction.gov.voting_asset_id = AssetDefinitionId::new(
+            DomainId::try_new("active", "guard").expect("active guard domain"),
+            "replacement".parse().expect("replacement asset name"),
+        );
+        state_transaction.gov.bond_escrow_account = fixture_account(0xB1);
+        state_transaction.gov.slash_receiver_account = fixture_account(0xB2);
+    }
+
+    fn assert_validation_fee_governance_config_drift(
+        state_transaction: &crate::state::StateTransaction<'_, '_>,
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) {
+        assert_ne!(state_transaction.gov.voting_asset_id, rules.voting_asset_id);
+        assert_ne!(
+            state_transaction.gov.bond_escrow_account,
+            rules.bond_escrow_account
+        );
+        assert_ne!(
+            state_transaction.gov.slash_receiver_account,
+            rules.slash_receiver_account
+        );
     }
 
     fn instruction_error_contains(error: &InstructionExecutionError, expected: &str) -> bool {
@@ -3813,6 +4395,155 @@ mod tests {
         seed_domain(&mut state, &domain_id, authority);
         seed_account(&mut state, authority, &domain_id);
         state
+    }
+
+    #[test]
+    fn unregister_account_rejects_governed_orchard_reserve_dependency_atomically() {
+        let authority = (*ALICE_ID).clone();
+        let mut state = test_state_with_authority(&authority);
+        let domain_id =
+            DomainId::try_new("orchard_account", "guard").expect("Orchard guard domain");
+        seed_domain(&mut state, &domain_id, &authority);
+        let reserve_account = AccountId::new(checked_keypair().public_key().clone());
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::account(NewAccount::new(reserve_account.clone()))
+            .execute(&authority, &mut transaction)
+            .expect("register Orchard reserve account");
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("register Orchard backing definition");
+        let state_key = install_orchard_pool_dependency_guard(
+            &mut transaction,
+            asset_definition_id,
+            reserve_account.clone(),
+        );
+
+        let error = Unregister::account(reserve_account.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("governed Orchard reserve account must remain registered");
+        assert!(
+            error
+                .to_string()
+                .contains("reserve account for governed Orchard pool"),
+            "{error}"
+        );
+        assert!(transaction.world.accounts.get(&reserve_account).is_some());
+        assert!(
+            transaction
+                .world
+                .privacy_commitments
+                .get(&state_key)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn unregister_asset_definition_rejects_governed_orchard_dependency_atomically() {
+        let authority = (*ALICE_ID).clone();
+        let mut state = test_state_with_authority(&authority);
+        let domain_id = DomainId::try_new("orchard_asset", "guard").expect("Orchard guard domain");
+        seed_domain(&mut state, &domain_id, &authority);
+        let reserve_account = AccountId::new(checked_keypair().public_key().clone());
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::account(NewAccount::new(reserve_account.clone()))
+            .execute(&authority, &mut transaction)
+            .expect("register Orchard reserve account");
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("register Orchard backing definition");
+        let state_key = install_orchard_pool_dependency_guard(
+            &mut transaction,
+            asset_definition_id.clone(),
+            reserve_account,
+        );
+
+        let error = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("governed Orchard backing definition must remain registered");
+        assert!(
+            error.to_string().contains("backs governed Orchard pool"),
+            "{error}"
+        );
+        assert!(
+            transaction
+                .world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_some()
+        );
+        assert!(
+            transaction
+                .world
+                .privacy_commitments
+                .get(&state_key)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn unregister_domain_rejects_governed_orchard_asset_cascade_before_mutation() {
+        let authority = (*ALICE_ID).clone();
+        let mut state = test_state_with_authority(&authority);
+        let domain_id = DomainId::try_new("orchard_domain", "guard").expect("Orchard guard domain");
+        seed_domain(&mut state, &domain_id, &authority);
+        let reserve_account = AccountId::new(checked_keypair().public_key().clone());
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "coin".parse().expect("asset name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::account(NewAccount::new(reserve_account.clone()))
+            .execute(&authority, &mut transaction)
+            .expect("register Orchard reserve account");
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("register Orchard backing definition");
+        let state_key = install_orchard_pool_dependency_guard(
+            &mut transaction,
+            asset_definition_id.clone(),
+            reserve_account.clone(),
+        );
+
+        let error = Unregister::domain(domain_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("domain cascade must retain governed Orchard backing definition");
+        assert!(
+            error.to_string().contains("backs governed Orchard pool"),
+            "{error}"
+        );
+        assert!(transaction.world.domains.get(&domain_id).is_some());
+        assert!(
+            transaction
+                .world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_some()
+        );
+        assert!(transaction.world.accounts.get(&reserve_account).is_some());
+        assert!(
+            transaction
+                .world
+                .privacy_commitments
+                .get(&state_key)
+                .is_some()
+        );
     }
 
     #[test]
@@ -7246,6 +7977,221 @@ mod tests {
     }
 
     #[test]
+    fn unregister_account_rejects_immutable_governance_lock_custody_after_config_change() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let custody_account = AccountId::new(checked_keypair().public_key().clone());
+        let owner = (*BOB_ID).clone();
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(NewAccount::new(custody_account.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register retained custody account");
+
+        let mut locks = GovernanceLocksForReferendum::default();
+        locks.locks.insert(
+            owner.clone(),
+            GovernanceLockRecord {
+                owner,
+                amount: Quantity::from(150_u32),
+                slashed: Quantity::zero(),
+                expiry_height: 10,
+                direction: 0,
+                duration_blocks: 3_600,
+                custody: Some(GovernanceLockCustody {
+                    escrowed: true,
+                    asset_definition_id: tx.gov.voting_asset_id.clone(),
+                    bond_escrow_account: custody_account.clone(),
+                    slash_receiver_account: custody_account.clone(),
+                }),
+            },
+        );
+        tx.world
+            .governance_locks
+            .insert("retained-account-custody".to_owned(), locks);
+        tx.gov.bond_escrow_account = authority.clone();
+        tx.gov.slash_receiver_account = authority.clone();
+
+        let err = Unregister::account(custody_account.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("immutable lock custody account must remain registered");
+        assert!(
+            err.to_string()
+                .contains("retained by immutable governance lock custody"),
+            "error should identify retained lock custody: {err}"
+        );
+        assert!(
+            tx.world.accounts.get(&custody_account).is_some(),
+            "custody account must remain after rejected unregister"
+        );
+    }
+
+    #[test]
+    fn unregister_account_rejects_zero_lock_validation_fee_proposal_custody_after_config_change() {
+        for fixture_kind in [
+            ValidationFeeProposalFixtureKind::Policy,
+            ValidationFeeProposalFixtureKind::PayoutLifecycle,
+        ] {
+            for status in [
+                GovernanceProposalStatus::Proposed,
+                GovernanceProposalStatus::Approved,
+            ] {
+                let state = test_state();
+                let authority = (*ALICE_ID).clone();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut tx = block.transaction();
+                let targets = register_validation_fee_unregister_targets(&authority, &mut tx);
+                let rules = validation_fee_unregister_rules(&targets);
+                let proposal_id = insert_validation_fee_unregister_proposal(
+                    &mut tx,
+                    fixture_kind,
+                    status,
+                    &rules,
+                );
+                assert!(
+                    tx.world.governance_locks.iter().next().is_none(),
+                    "zero-lock regression fixture must not rely on ballot custody"
+                );
+                drift_validation_fee_governance_config(&mut tx);
+                assert_validation_fee_governance_config_drift(&tx, &rules);
+
+                for (reference, account_id) in [
+                    ("bond escrow", &targets.bond_escrow_account),
+                    ("slash receiver", &targets.slash_receiver_account),
+                ] {
+                    let err = Unregister::account(account_id.clone())
+                        .execute(&authority, &mut tx)
+                        .expect_err(
+                            "retained validation-fee proposal custody must block account removal",
+                        );
+                    assert!(
+                        err.to_string()
+                            .contains("retained by immutable validation-fee proposal custody"),
+                        "{fixture_kind:?} {status:?} proposal {proposal_id:?} must retain its \
+                         {reference} account without locks: {err}"
+                    );
+                    assert!(
+                        tx.world.accounts.get(account_id).is_some(),
+                        "{reference} account must remain after rejected unregister"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unregister_asset_definition_rejects_zero_lock_validation_fee_proposal_rules_after_config_change()
+     {
+        for fixture_kind in [
+            ValidationFeeProposalFixtureKind::Policy,
+            ValidationFeeProposalFixtureKind::PayoutLifecycle,
+        ] {
+            for status in [
+                GovernanceProposalStatus::Proposed,
+                GovernanceProposalStatus::Approved,
+            ] {
+                let state = test_state();
+                let authority = (*ALICE_ID).clone();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut tx = block.transaction();
+                let targets = register_validation_fee_unregister_targets(&authority, &mut tx);
+                let rules = validation_fee_unregister_rules(&targets);
+                let proposal_id = insert_validation_fee_unregister_proposal(
+                    &mut tx,
+                    fixture_kind,
+                    status,
+                    &rules,
+                );
+                assert!(
+                    tx.world.governance_locks.iter().next().is_none(),
+                    "zero-lock regression fixture must not rely on ballot custody"
+                );
+                drift_validation_fee_governance_config(&mut tx);
+                assert_validation_fee_governance_config_drift(&tx, &rules);
+
+                let err = Unregister::asset_definition(targets.voting_asset_id.clone())
+                    .execute(&authority, &mut tx)
+                    .expect_err(
+                        "retained validation-fee proposal rules must block asset-definition removal",
+                    );
+                assert!(
+                    err.to_string()
+                        .contains("retained by immutable validation-fee proposal custody"),
+                    "{fixture_kind:?} {status:?} proposal {proposal_id:?} must retain its voting \
+                     asset without locks: {err}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&targets.voting_asset_id)
+                        .is_some(),
+                    "voting asset definition must remain after rejected unregister"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unregister_domain_rejects_zero_lock_validation_fee_proposal_rules_after_config_change() {
+        for fixture_kind in [
+            ValidationFeeProposalFixtureKind::Policy,
+            ValidationFeeProposalFixtureKind::PayoutLifecycle,
+        ] {
+            for status in [
+                GovernanceProposalStatus::Proposed,
+                GovernanceProposalStatus::Approved,
+            ] {
+                let state = test_state();
+                let authority = (*ALICE_ID).clone();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut tx = block.transaction();
+                let targets = register_validation_fee_unregister_targets(&authority, &mut tx);
+                let rules = validation_fee_unregister_rules(&targets);
+                let proposal_id = insert_validation_fee_unregister_proposal(
+                    &mut tx,
+                    fixture_kind,
+                    status,
+                    &rules,
+                );
+                assert!(
+                    tx.world.governance_locks.iter().next().is_none(),
+                    "zero-lock regression fixture must not rely on ballot custody"
+                );
+                drift_validation_fee_governance_config(&mut tx);
+                assert_validation_fee_governance_config_drift(&tx, &rules);
+
+                let err = Unregister::domain(targets.domain_id.clone())
+                    .execute(&authority, &mut tx)
+                    .expect_err(
+                        "domain removal must retain validation-fee proposal rule references",
+                    );
+                assert!(
+                    err.to_string()
+                        .contains("retained by immutable validation-fee proposal custody"),
+                    "{fixture_kind:?} {status:?} proposal {proposal_id:?} must retain its voting \
+                     asset domain without locks: {err}"
+                );
+                assert!(
+                    tx.world.domains.get(&targets.domain_id).is_some(),
+                    "referenced domain must remain after rejected unregister"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&targets.voting_asset_id)
+                        .is_some(),
+                    "referenced asset definition must remain after rejected domain unregister"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn unregister_account_removes_associated_permissions_from_accounts_and_roles() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
@@ -10211,6 +11157,130 @@ mod tests {
     }
 
     #[test]
+    fn balance_policy_migration_rejects_merged_bucket_above_holding_limit_atomically() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id =
+            DomainId::try_new("policy-limit-migration", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &ALICE_ID, &domain_id);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "Limited Private Unit".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register global definition");
+
+        let global_asset = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+        Mint::asset_quantity(10_u32, global_asset.clone())
+            .execute(&authority, &mut tx)
+            .expect("mint global balance");
+        let scoped_asset = AssetId::with_scope(
+            definition_id.clone(),
+            ALICE_ID.clone(),
+            AssetBalanceScope::Dataspace(paynet),
+        );
+        let (scoped_asset_id, scoped_value) =
+            Asset::new(scoped_asset.clone(), Quantity::from(2_u32)).into_key_value();
+        tx.world
+            .assets
+            .insert(scoped_asset_id.clone(), scoped_value);
+        tx.world.track_asset_holder(&scoped_asset_id);
+        tx.world.track_nonzero_asset_holder(&scoped_asset_id);
+        tx.world
+            .increase_asset_total_amount(&definition_id, &Quantity::from(2_u32))
+            .expect("fixture total includes the pre-existing scoped bucket");
+
+        let metadata_key: Name = "migration_note".parse().expect("metadata key");
+        let mut global_metadata = Metadata::default();
+        global_metadata.insert(
+            metadata_key,
+            Json::new("stay global on rejection".to_owned()),
+        );
+        tx.world
+            .asset_metadata
+            .insert(global_asset.clone(), global_metadata.clone());
+
+        SetAssetHoldingLimit::new(
+            ALICE_ID.clone(),
+            definition_id.clone(),
+            Some(Quantity::from(11_u32)),
+        )
+        .execute(&authority, &mut tx)
+        .expect("set a limit below the merged destination balance");
+        let total_before = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition exists")
+            .total_quantity()
+            .clone();
+        let external_events_before = tx.world.external_event_buf.len();
+        let internal_events_before = tx.world.internal_event_buf.len();
+
+        let error = SetAssetDefinitionBalancePolicy::new(
+            definition_id.clone(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(paynet),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("the merged scoped balance must respect the holding limit");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::HoldingLimitExceeded(_)
+            )
+        ));
+
+        assert_eq!(
+            tx.world
+                .assets
+                .get(&global_asset)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(10_u32))
+        );
+        assert_eq!(
+            tx.world
+                .assets
+                .get(&scoped_asset)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(2_u32))
+        );
+        assert_eq!(
+            tx.world.asset_metadata.get(&global_asset),
+            Some(&global_metadata)
+        );
+        assert!(tx.world.asset_metadata.get(&scoped_asset).is_none());
+        let definition = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition remains");
+        assert_eq!(
+            definition.balance_scope_policy(),
+            iroha_data_model::asset::AssetBalancePolicy::Global
+        );
+        assert_eq!(definition.total_quantity(), &total_before);
+        assert_eq!(tx.world.external_event_buf.len(), external_events_before);
+        assert_eq!(tx.world.internal_event_buf.len(), internal_events_before);
+    }
+
+    #[test]
     fn set_asset_definition_balance_policy_rejects_missing_migration_dataspace() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -11199,6 +12269,68 @@ mod tests {
                 .get(&asset_definition_id)
                 .is_some(),
             "asset definition should remain after rejected unregister"
+        );
+    }
+
+    #[test]
+    fn unregister_asset_definition_rejects_immutable_governance_lock_custody_after_config_change() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
+        seed_domain(&mut state, &asset_domain, &authority);
+        let asset_definition_id =
+            AssetDefinitionId::new(asset_domain.clone(), "locked".parse().unwrap());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register retained custody asset definition");
+
+        let owner = (*BOB_ID).clone();
+        let mut locks = GovernanceLocksForReferendum::default();
+        locks.locks.insert(
+            owner.clone(),
+            GovernanceLockRecord {
+                owner,
+                amount: Quantity::from(150_u32),
+                slashed: Quantity::zero(),
+                expiry_height: 10,
+                direction: 0,
+                duration_blocks: 3_600,
+                custody: Some(GovernanceLockCustody {
+                    escrowed: true,
+                    asset_definition_id: asset_definition_id.clone(),
+                    bond_escrow_account: authority.clone(),
+                    slash_receiver_account: authority.clone(),
+                }),
+            },
+        );
+        tx.world
+            .governance_locks
+            .insert("retained-asset-custody".to_owned(), locks);
+        tx.gov.voting_asset_id =
+            AssetDefinitionId::new(asset_domain, "replacement".parse().unwrap());
+
+        let err = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("immutable lock custody asset definition must remain registered");
+        assert!(
+            err.to_string()
+                .contains("retained by immutable governance lock custody"),
+            "error should identify retained lock custody: {err}"
+        );
+        assert!(
+            tx.world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_some(),
+            "custody asset definition must remain after rejected unregister"
         );
     }
 

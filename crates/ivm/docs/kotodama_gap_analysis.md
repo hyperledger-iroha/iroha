@@ -279,6 +279,17 @@ checkouts. Each checkout must run its own revision-native benchmark source; do
 not copy the candidate harness into the base checkout to invent old samples for
 candidate-only identities:
 
+The source-evidenced comparison revision is
+`a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`. Merge
+`2ca45d754d0a993009dc45fc33d4e1976b39d087`, which introduced this reset
+performance policy, names its selected comparison parent and has that revision
+as its second parent. Its native sources contain exactly the 33 comparable
+identities and none of the 13 candidate-only identities. The revision does not
+contain `Cargo.lock`, however, so the commands below are a release procedure,
+not completed evidence, until its independently archived original lock and
+toolchain provenance are recovered. Never synthesize that provenance from the
+candidate lock or harness.
+
 ```console
 # In the base checkout:
 cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline base
@@ -299,16 +310,21 @@ python3 scripts/check_kotodama_perf.py \
 ```
 
 The checker fails closed on missing/malformed samples or benchmark coverage
-changes. Its threshold cannot be loosened above 5%; a stable release runner may
-set a tighter threshold with `--threshold`. The
-`.github/workflows/kotodama_perf.yml` gate checks out the pull request base and
-candidate, measures both on the same runner with Criterion's named baseline,
-validates every representative candidate median, and applies the 5% comparison
-only to identities with real pre-reset evidence. Timing baselines are
-deliberately runner-local; they are not portable across CPU models or loaded
-hosts. CI requires every pre-reset comparable workload on the checked-out base
-and the complete V1 workload inventory on the candidate; it never manufactures
-a candidate self-baseline.
+changes. It extracts and whitespace-normalizes the actual Criterion timed
+closure for every one of the 33 comparable identities, binds each closure to
+the audited predecessor SHA-256 inventory, and requires exact base/candidate
+body equality. Shared rounded-Quantity and typed-query loops also bind each
+name to its mode or family declaration. Its threshold cannot be loosened above
+5%; a stable release runner may set a tighter threshold with `--threshold`.
+
+The `.github/workflows/kotodama_perf.yml` definition checks out the pull request
+base and candidate and is configured to measure both on one runner with
+Criterion's named baseline. It is not the required release evidence unless the
+base resolves to the pinned predecessor and both original lock files are
+present and authenticated. Timing baselines are deliberately runner-local;
+they are not portable across CPU models or loaded hosts. The policy requires
+every pre-reset comparable workload on the base and the complete V1 workload
+inventory on the candidate; it never manufactures a candidate self-baseline.
 
 The seven direct exact-decimal identities (`add`, `sub`, `mul`, exact division,
 and floor, ceil, and nearest-even rounded division) and the five isolated

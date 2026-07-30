@@ -26,15 +26,12 @@ timeout-quorum convergence, and target/context/leader/view/subject-indexed
 semantic phase composition.  Its occurrence rank counts every distinct
 target/leader owner at the frozen semantic rank; equal-count replacement and
 count-increasing producer replenishment remain explicit non-progress debt.
-the recipient-local certified-response capacity arm is already proved from
-the dedicated runtime slot and fair claim runner.  The Decision declaration
-contains exactly the request clock-owner, Runtime-prefix, request
-head/gate-owner, request admission/coalescing, and nonphysical nonclaim
-response head/gate-owner residuals.  The Decision-local Stage-2
-Busy owner and protected Serve FIFO starvation are proved in their dedicated
-closure leaf.  Keeping the open declarations above their eventual
-proof-bearing leaves prevents a strict leaf run from accepting either broad
-derived claim as an imported fact.
+The exact Decision residual below is now composed only from the five direct
+proof leaves: request clock owner, Runtime prefix, request head/gate owner,
+request admission/coalescing, and nonphysical nonclaim response head/gate
+owner.  The Decision-local Stage-2 Busy owner and protected Serve FIFO
+starvation remain proved in their dedicated closure leaf.  No aggregate
+Decision claim is fed back into those leaves.
 ***************************************************************************)
 
 THEOREM ProgressWitnessObligation ==
@@ -144,6 +141,12 @@ THEOREM ExactDecisionOffSchedulerResidualConvergenceObligation ==
   \A initialContext:
     ExactDecisionOffSchedulerResidualConvergenceProperty(
       AsyncSpecAt(initialContext))
+BY ExactDecisionRequestClockOwnerConvergence,
+   ExactDecisionRequestRuntimePrefixConvergence,
+   ExactDecisionRequestHeadGateOwnerConvergence,
+   ExactDecisionRequestAdmissionCoalescingOutcomeIsDischarged,
+   ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergence
+   DEF ExactDecisionOffSchedulerResidualConvergenceProperty
 
 THEOREM ExactDecisionStageServiceObligation ==
   \A initialContext:

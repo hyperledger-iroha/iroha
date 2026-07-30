@@ -34,61 +34,22 @@ const RECOVERY_ENTROPY_LENGTH_TO_WORD_COUNT = new Map([
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
-export const PRIVACY_FFI_VERSION_V1 = 1;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 7;
-export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
-export const PRIVACY_FFI_STATUS_ERROR = 1;
-export const PRIVACY_FFI_ERROR_NULL_POINTER = 1;
-export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
-export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
-export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
-export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21;
+export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024;
+export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1 = Object.freeze({
+  VALID: 0,
+  NULL_POINTER: 1,
+  EMPTY: 2,
+  ARCHIVE_TOO_LARGE: 3,
+  DECODE_RESOURCE_LIMIT: 4,
+  SCHEMA_MISMATCH: 5,
+  NON_CANONICAL: 6,
+  MALFORMED_ARCHIVE: 7,
+  INVALID_SNAPSHOT: 8,
+});
 const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
-const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0";
-const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1";
-const ZK_ACE_PRODUCTION_VK_REF = "stark-fri:zk_ace_pq_authorization_v0";
-const ZK_ACE_PRODUCTION_DISABLED_MESSAGE =
-  "native ZK-ACE prover returned PRIVACY_FFI_ERROR_PRODUCTION_DISABLED for " +
-  `${ZK_ACE_ALGORITHM_ID} ${ZK_ACE_PRODUCTION_ENTRYPOINT} ` +
-  `${ZK_ACE_PRODUCTION_VK_REF}: ` +
-  "Iroha production allowlist is not enabled for this audited row";
 const U64_MAX = (1n << 64n) - 1n;
 const U64_MAX_DECIMAL_DIGITS = U64_MAX.toString(10).length;
-const U128_MAX = (1n << 128n) - 1n;
-const U128_MAX_DECIMAL_DIGITS = U128_MAX.toString(10).length;
-const PRIVACY_NORITO_HEADER_BYTES = 40;
-const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
-const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
-const PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20;
-const PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
-const PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE = 0x50;
-const PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE = 0x42;
-const PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE = 0x56;
-const PRIVACY_REQUEST_SCHEMA_BYTE = 0x52;
-const PRIVACY_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
-const PRIVACY_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
-const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE = (() => {
-  const archive = Buffer.alloc(PRIVACY_NORITO_HEADER_BYTES);
-  archive.write("NRT0", 0, "ascii");
-  archive.fill(PRIVACY_REQUEST_SCHEMA_BYTE, 6, 22);
-  return archive;
-})();
-const PRIVACY_NORITO_MAGIC = Buffer.from("NRT0", "ascii");
-const PRIVACY_CRC64_TABLE = (() => {
-  const table = new Array(256);
-  for (let index = 0; index < 256; index += 1) {
-    let crc = BigInt(index);
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        (crc & 1n) !== 0n
-          ? (crc >> 1n) ^ PRIVACY_CRC64_REFLECTED_POLY
-          : crc >> 1n;
-    }
-    table[index] = crc;
-  }
-  return table;
-})();
-
 export const CRYPTO_ALGORITHMS = Object.freeze({
   ED25519: "ed25519",
   SECP256K1: "secp256k1",
@@ -641,76 +602,6 @@ export function buildKaigiRosterJoinProof(options) {
 }
 
 /**
- * Build a native STARK/FRI-backed ZK-ACE transparent-transfer authorization.
- * @param {{fromAccountId?: string, from?: string, toAccountId?: string, to?: string, assetDefinitionId?: string, asset?: string, amount: string | number | bigint, chainId?: string, chain_id?: string, identityRoot?: ArrayBufferView | ArrayBuffer | Buffer | string, identity_root?: ArrayBufferView | ArrayBuffer | Buffer | string, identityBlinding?: ArrayBufferView | ArrayBuffer | Buffer | string, identity_blinding?: ArrayBufferView | ArrayBuffer | Buffer | string, replaySecret?: ArrayBufferView | ArrayBuffer | Buffer | string, replay_secret?: ArrayBufferView | ArrayBuffer | Buffer | string, policyHash?: ArrayBufferView | ArrayBuffer | Buffer | string, policy_hash?: ArrayBufferView | ArrayBuffer | Buffer | string, verifierKeyId?: string, verifier_key_id?: string, verifyingKeyCommitment?: ArrayBufferView | ArrayBuffer | Buffer | string, vkCommitment?: ArrayBufferView | ArrayBuffer | Buffer | string}} options
- * @returns {object}
- */
-export function buildZkAceTransferAuthorizationV1(options) {
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError("buildZkAceTransferAuthorizationV1 options must be an object");
-  }
-  const native = ensureGenericCryptoNative(
-    resolveNativeBinding(),
-    "zkAceBuildTransferAuthorizationV1",
-  );
-  const nativeArgs = zkAceTransferAuthorizationNativeArgs(options);
-  let resultJson;
-  let nativeError;
-  try {
-    resultJson = native.zkAceBuildTransferAuthorizationV1(...nativeArgs);
-  } catch (error) {
-    nativeError = error;
-  }
-  if (nativeError !== undefined) {
-    throw sanitizeZkAceNativeProverError(nativeError);
-  }
-  let result;
-  try {
-    result = JSON.parse(resultJson);
-  } catch (error) {
-    throw new Error(`native ZK-ACE prover returned invalid JSON: ${error.message}`);
-  }
-  return normalizeZkAceAuthorizationResult(result);
-}
-
-function sanitizeZkAceNativeProverError(error) {
-  const message = error?.message ?? String(error ?? "");
-  if (
-    /PRIVACY_FFI_ERROR_PRODUCTION_DISABLED|production[- ]disabled|Iroha production allowlist/i.test(
-      message,
-    )
-  ) {
-    return new Error(ZK_ACE_PRODUCTION_DISABLED_MESSAGE);
-  }
-  return new Error("native ZK-ACE prover failed");
-}
-
-function zkAceTransferAuthorizationNativeArgs(options) {
-  return [
-    requiredString(options.fromAccountId ?? options.from, "fromAccountId"),
-    requiredString(options.toAccountId ?? options.to, "toAccountId"),
-    requiredString(
-      options.assetDefinitionId ?? options.asset_definition_id ?? options.asset,
-      "assetDefinitionId",
-    ),
-    normalizePositiveU128Literal(options.amount, "amount"),
-    requiredString(options.chainId ?? options.chain_id, "chainId"),
-    fixed32Buffer(options.identityRoot ?? options.identity_root, "identityRoot"),
-    fixed32Buffer(options.identityBlinding ?? options.identity_blinding, "identityBlinding"),
-    fixed32Buffer(options.replaySecret ?? options.replay_secret, "replaySecret"),
-    fixed32Buffer(options.policyHash ?? options.policy_hash, "policyHash"),
-    options.verifierKeyId ?? options.verifier_key_id ?? null,
-    optionalFixed32Buffer(
-      options.verifyingKeyCommitment ??
-        options.verifying_key_commitment ??
-        options.vkCommitment ??
-        options.vk_commitment,
-      "verifyingKeyCommitment",
-    ),
-  ];
-}
-
-/**
  * Derive the confidential key hierarchy from a 32-byte spend key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
  * @returns {{skSpend: Buffer, nk: Buffer, ivk: Buffer, ovk: Buffer, fvk: Buffer, skSpendHex: string, nkHex: string, ivkHex: string, ovkHex: string, fvkHex: string, asHex(): Record<string, string>}}
@@ -908,73 +799,28 @@ function hasPrivacyNativeSurface(native) {
   return (
     native &&
     Number.isInteger(abiVersion) &&
-    abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION &&
+    abiVersion === PRIVACY_REQUIRED_BRIDGE_ABI_VERSION &&
     typeof native.privacyCapabilitiesV1 === "function" &&
-    typeof native.privacyProofRequestV1 === "function" &&
-    typeof native.privacyBuildProofV1 === "function" &&
-    typeof native.privacyVerifyProofV1 === "function"
+    typeof native.privacyValidateCapabilitiesV1 === "function"
   );
-}
-
-function privacyNativeProbeReturnsBytes(native, operation, requestArchive = undefined) {
-  let request;
-  try {
-    const result =
-      requestArchive === undefined
-        ? native[operation]()
-        : native[operation]((request = Buffer.from(requestArchive)));
-    privacyNativeOutputToBuffer(result, operation, { clearSource: true });
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (request) {
-      request.fill(0);
-    }
-  }
-}
-
-function privacyNativeProofRequestProbeReturnsBytes(native) {
-  let publicInputs;
-  try {
-    publicInputs = Buffer.from("privacy-native-availability-public-input-v1", "utf8");
-    const result = native.privacyProofRequestV1(
-      ZK_ACE_ALGORITHM_ID,
-      ZK_ACE_PRODUCTION_ENTRYPOINT,
-      ZK_ACE_PRODUCTION_VK_REF,
-      publicInputs,
-      Buffer.alloc(0),
-      Buffer.alloc(0),
-    );
-    privacyRequestNativeOutputToBuffer(result, "privacyProofRequestV1", {
-      clearSource: true,
-    });
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (publicInputs) {
-      publicInputs.fill(0);
-    }
-  }
 }
 
 function hasPrivacyNative(native) {
   return (
     hasPrivacyNativeSurface(native) &&
-    privacyNativeProbeReturnsBytes(native, "privacyCapabilitiesV1") &&
-    privacyNativeProofRequestProbeReturnsBytes(native) &&
-    privacyNativeProbeReturnsBytes(
-      native,
-      "privacyBuildProofV1",
-      PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
-    ) &&
-    privacyNativeProbeReturnsBytes(
-      native,
-      "privacyVerifyProofV1",
-      PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
-    )
+    privacyNativeProbeReturnsBytes(native, "privacyCapabilitiesV1")
   );
+}
+
+function privacyNativeProbeReturnsBytes(native, operation) {
+  let result;
+  try {
+    result = native[operation]();
+    privacyNativeOutputToBuffer(native, result, operation, { clearSource: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function privacyBridgeAbiVersion(native) {
@@ -1024,54 +870,7 @@ function toPrivacyArchiveBuffer(value, name) {
   );
 }
 
-function toPrivacyRequestArchiveBuffer(value, name) {
-  const request = toPrivacyArchiveBuffer(value, name);
-  if (request.length === 0) {
-    throw new Error(`${name} must not be empty`);
-  }
-  if (request.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-    throw new Error(`${name} must not exceed ${PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes`);
-  }
-  assertPrivacyNoritoArchive(request, name, "request", PRIVACY_REQUEST_SCHEMA_BYTE);
-  return Buffer.from(request);
-}
-
-function toPrivacyRequestComponentBuffer(value, name, { allowEmpty = true } = {}) {
-  if (typeof value === "string") {
-    throw new TypeError(`${name} must be bytes-like, not a string`);
-  }
-  let bytes;
-  if (Buffer.isBuffer(value)) {
-    bytes = value;
-  } else if (value instanceof Uint8Array || value instanceof DataView) {
-    if (!(value.buffer instanceof ArrayBuffer)) {
-      throw new TypeError(`${name} must not use shared memory`);
-    }
-    bytes = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-  } else if (value instanceof ArrayBuffer) {
-    bytes = Buffer.from(value);
-  } else {
-    throw new TypeError(
-      `${name} must be bytes-like as a Buffer, Uint8Array, DataView, or ArrayBuffer`,
-    );
-  }
-  if (!allowEmpty && bytes.length === 0) {
-    throw new Error(`${name} must not be empty`);
-  }
-  if (bytes.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-    throw new Error(`${name} must not exceed ${PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes`);
-  }
-  return Buffer.from(bytes);
-}
-
-function requirePrivacyRequestText(value, name) {
-  if (typeof value !== "string") {
-    throw new TypeError(`${name} must be a string`);
-  }
-  return value;
-}
-
-function privacyNativeOutputToBuffer(result, operation, options = {}) {
+function privacyNativeOutputToBuffer(native, result, operation, options = {}) {
   let output;
   if (result === undefined || result === null) {
     throw new Error(`native ${operation} returned no output`);
@@ -1087,150 +886,24 @@ function privacyNativeOutputToBuffer(result, operation, options = {}) {
     if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
       throw new Error(`native ${operation} returned oversized output`);
     }
-    assertPrivacyNoritoArchive(
+    const validationStatus = invokePrivacyNative(
+      native,
+      "privacyValidateCapabilitiesV1",
       output,
-      operation,
-      "native",
-      privacyExpectedResultSchemaByte(operation),
     );
+    if (
+      validationStatus !==
+      PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID
+    ) {
+      throw new Error(
+        `native ${operation} returned an invalid typed privacy capability archive`,
+      );
+    }
     return Buffer.from(output);
   } finally {
     if (options.clearSource === true && output) {
       output.fill(0);
     }
-  }
-}
-
-function privacyRequestNativeOutputToBuffer(result, operation, options = {}) {
-  let output;
-  if (result === undefined || result === null) {
-    throw new Error(`native ${operation} returned no output`);
-  }
-  if (typeof result === "string") {
-    throw new Error(`native ${operation} returned text instead of Norito V1 bytes`);
-  }
-  try {
-    output = toPrivacyArchiveBuffer(result, `native ${operation} output`);
-    if (output.length === 0) {
-      throw new Error(`native ${operation} returned empty output`);
-    }
-    if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-      throw new Error(`native ${operation} returned oversized output`);
-    }
-    assertPrivacyNoritoArchive(
-      output,
-      operation,
-      "request",
-      PRIVACY_REQUEST_SCHEMA_BYTE,
-    );
-    return Buffer.from(output);
-  } finally {
-    if (options.clearSource === true && output) {
-      output.fill(0);
-    }
-  }
-}
-
-function privacyCrc64(payload) {
-  let crc = PRIVACY_CRC64_MASK;
-  for (const byte of payload) {
-    const index = Number((crc ^ BigInt(byte)) & 0xffn);
-    crc = PRIVACY_CRC64_TABLE[index] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ PRIVACY_CRC64_MASK);
-}
-
-function assertPrivacyNoritoArchive(
-  output,
-  operation,
-  context = "native",
-  expectedSchemaByte,
-) {
-  const fail = () => {
-    if (context === "request") {
-      throw new Error(`${operation} must be a valid Norito V1 archive`);
-    }
-    throw new Error(`native ${operation} returned invalid Norito V1 archive`);
-  };
-  if (
-    !Number.isInteger(expectedSchemaByte) ||
-    expectedSchemaByte < 0 ||
-    expectedSchemaByte > 0xff
-  ) {
-    if (context === "request") {
-      throw new Error(`${operation} must use the privacy request schema`);
-    }
-    throw new Error(`native ${operation} returned unexpected privacy result schema`);
-  }
-  if (output.length < PRIVACY_NORITO_HEADER_BYTES) {
-    fail();
-  }
-  if (!output.subarray(0, 4).equals(PRIVACY_NORITO_MAGIC)) {
-    fail();
-  }
-  if (output[4] !== 0 || output[5] !== 0) {
-    fail();
-  }
-  if (output[22] !== 0) {
-    fail();
-  }
-  const flags = output[39];
-  if (
-    (flags & ~PRIVACY_NORITO_SUPPORTED_FLAGS_MASK) !== 0 ||
-    ((flags & PRIVACY_NORITO_FIELD_BITSET_FLAG) !== 0 &&
-      (flags & PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS) !==
-        PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS)
-  ) {
-    fail();
-  }
-  const payloadLengthBig = output.readBigUInt64LE(23);
-  if (payloadLengthBig > BigInt(Number.MAX_SAFE_INTEGER)) {
-    fail();
-  }
-  const payloadLength = Number(payloadLengthBig);
-  if (payloadLength === 0) {
-    if (context === "request") {
-      throw new Error(`${operation} must contain a non-empty privacy request payload`);
-    }
-    throw new Error(`native ${operation} returned empty privacy result payload`);
-  }
-  const minimumLength = PRIVACY_NORITO_HEADER_BYTES + payloadLength;
-  if (output.length < minimumLength) {
-    fail();
-  }
-  const paddingLength = output.length - minimumLength;
-  if (paddingLength > PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES) {
-    fail();
-  }
-  const padding = output.subarray(
-    PRIVACY_NORITO_HEADER_BYTES,
-    PRIVACY_NORITO_HEADER_BYTES + paddingLength,
-  );
-  if (padding.some((byte) => byte !== 0)) {
-    fail();
-  }
-  const payload = output.subarray(PRIVACY_NORITO_HEADER_BYTES + paddingLength);
-  if (privacyCrc64(payload) !== output.readBigUInt64LE(31)) {
-    fail();
-  }
-  if (output.subarray(6, 22).some((byte) => byte !== expectedSchemaByte)) {
-    if (context === "request") {
-      throw new Error(`${operation} must use the privacy request schema`);
-    }
-    throw new Error(`native ${operation} returned unexpected privacy result schema`);
-  }
-}
-
-function privacyExpectedResultSchemaByte(operation) {
-  switch (operation) {
-    case "privacyCapabilitiesV1":
-      return PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE;
-    case "privacyBuildProofV1":
-      return PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE;
-    case "privacyVerifyProofV1":
-      return PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE;
-    default:
-      throw new Error(`native ${operation} is not a supported privacy native operation`);
   }
 }
 
@@ -1239,17 +912,6 @@ function invokePrivacyNative(native, operation, ...args) {
     return native[operation](...args);
   } catch {
     throw new Error(`native ${operation} failed`);
-  }
-}
-
-function callPrivacyNative(operation, requestArchive) {
-  const request = toPrivacyRequestArchiveBuffer(requestArchive, "requestArchive");
-  try {
-    const native = ensurePrivacyNative(resolveNativeBinding(), operation);
-    const result = invokePrivacyNative(native, operation, request);
-    return privacyNativeOutputToBuffer(result, operation);
-  } finally {
-    request.fill(0);
   }
 }
 
@@ -1264,58 +926,11 @@ export function isPrivacyNativeAvailable() {
 export function privacyCapabilitiesV1() {
   const native = ensurePrivacyNative(resolveNativeBinding(), "privacyCapabilitiesV1");
   const result = invokePrivacyNative(native, "privacyCapabilitiesV1");
-  return privacyNativeOutputToBuffer(result, "privacyCapabilitiesV1");
-}
-
-export function privacyProofRequestV1(input) {
-  if (!input || typeof input !== "object") {
-    throw new TypeError("privacyProofRequestV1 input must be an object");
-  }
-  const {
-    algorithmId,
-    entrypoint,
-    vkRef,
-    publicInputs,
-    witness = Buffer.alloc(0),
-    proof = Buffer.alloc(0),
-  } = input;
-  const algorithmIdText = requirePrivacyRequestText(algorithmId, "algorithmId");
-  const entrypointText = requirePrivacyRequestText(entrypoint, "entrypoint");
-  const vkRefText = requirePrivacyRequestText(vkRef, "vkRef");
-  const publicInputsBuffer = toPrivacyRequestComponentBuffer(publicInputs, "publicInputs", {
-    allowEmpty: false,
-  });
-  const witnessBuffer = toPrivacyRequestComponentBuffer(witness, "witness");
-  const proofBuffer = toPrivacyRequestComponentBuffer(proof, "proof");
-  try {
-    const native = ensurePrivacyNative(resolveNativeBinding(), "privacyProofRequestV1");
-    const result = invokePrivacyNative(
-      native,
-      "privacyProofRequestV1",
-      algorithmIdText,
-      entrypointText,
-      vkRefText,
-      publicInputsBuffer,
-      witnessBuffer,
-      proofBuffer,
-    );
-    return privacyRequestNativeOutputToBuffer(result, "privacyProofRequestV1");
-  } finally {
-    publicInputsBuffer.fill(0);
-    witnessBuffer.fill(0);
-    proofBuffer.fill(0);
-  }
-}
-
-export function privacyBuildProofV1(requestArchive) {
-  return callPrivacyNative("privacyBuildProofV1", requestArchive);
-}
-
-export function privacyVerifyProofV1(requestArchive) {
-  return callPrivacyNative("privacyVerifyProofV1", requestArchive);
+  return privacyNativeOutputToBuffer(native, result, "privacyCapabilitiesV1");
 }
 
 /**
+ * Return the canonical SM2 signing fixture values/**
  * Return the canonical SM2 signing fixture values for the given seed and message.
  * @param {string} distid
  * @param {ArrayBufferView | ArrayBuffer | Buffer | string} seed
@@ -1419,14 +1034,6 @@ function toOwnedBuffer(value, name) {
   return Buffer.from(toBuffer(value, name));
 }
 
-function requiredString(value, name) {
-  const text = typeof value === "string" ? value.trim() : String(value ?? "").trim();
-  if (!text) {
-    throw new Error(`${name} must be a non-empty string`);
-  }
-  return text;
-}
-
 function normalizeConfidentialV2ExactString(value, name) {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`${name} is required`);
@@ -1435,77 +1042,6 @@ function normalizeConfidentialV2ExactString(value, name) {
     throw new Error(`${name} must not contain surrounding whitespace`);
   }
   return value;
-}
-
-function fixed32Buffer(value, name) {
-  const hexValue = normalizeFixed32HexInput(value, name);
-  return Buffer.from(hexValue, "hex");
-}
-
-function optionalFixed32Buffer(value, name) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return fixed32Buffer(value, name);
-}
-
-function normalizeProofAttachmentFromNative(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("native ZK-ACE prover returned invalid proof attachment");
-  }
-  const proof = { ...value };
-  if (typeof proof.proof_b64 !== "string" || proof.proof_b64.length === 0) {
-    throw new Error("native ZK-ACE prover returned missing proof_b64");
-  }
-  if (typeof proof.backend !== "string" || proof.backend.length === 0) {
-    throw new Error("native ZK-ACE prover returned missing proof backend");
-  }
-  const verifyingKeyRef = proof.vk_ref ?? proof.verifying_key_ref ?? proof.verifyingKeyRef;
-  if (!verifyingKeyRef || typeof verifyingKeyRef !== "object" || Array.isArray(verifyingKeyRef)) {
-    throw new Error("native ZK-ACE prover returned missing verifying key reference");
-  }
-  const normalized = {
-    backend: proof.backend,
-    proof_b64: proof.proof_b64,
-    vk_ref: verifyingKeyRef,
-  };
-  const commitment =
-    proof.vk_commitment ?? proof.verifying_key_commitment ?? proof.verifyingKeyCommitment;
-  if (commitment !== undefined && commitment !== null) {
-    normalized.vk_commitment = commitment;
-  }
-  const envelopeHash = proof.envelope_hash ?? proof.envelopeHash;
-  if (envelopeHash !== undefined && envelopeHash !== null) {
-    normalized.envelope_hash = envelopeHash;
-  }
-  return normalized;
-}
-
-function normalizeZkAceAuthorizationResult(result) {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    throw new Error("native ZK-ACE prover returned invalid authorization payload");
-  }
-  return {
-    publicInputs: result.public_inputs ?? result.publicInputs,
-    public_inputs: result.public_inputs ?? result.publicInputs,
-    proof: normalizeProofAttachmentFromNative(result.proof),
-    identityCommitment: result.identity_commitment,
-    identity_commitment: result.identity_commitment,
-    txDigest: result.tx_digest,
-    tx_digest: result.tx_digest,
-    replayNullifier: result.replay_nullifier,
-    replay_nullifier: result.replay_nullifier,
-    policyHash: result.policy_hash,
-    policy_hash: result.policy_hash,
-    verifierKeyId: result.verifier_key_id,
-    verifier_key_id: result.verifier_key_id,
-    authorizationProofBytes: Number(result.authorization_proof_bytes ?? 0),
-    authorization_proof_bytes: Number(result.authorization_proof_bytes ?? 0),
-    authorizationPublicInputBytes: Number(result.authorization_public_input_bytes ?? 0),
-    authorization_public_input_bytes: Number(result.authorization_public_input_bytes ?? 0),
-    replayNullifierBytes: Number(result.replay_nullifier_bytes ?? 32),
-    replay_nullifier_bytes: Number(result.replay_nullifier_bytes ?? 32),
-  };
 }
 
 function normalizeFixed32HexInput(value, name) {
@@ -1532,30 +1068,6 @@ function normalizeWholeNumberLiteral(value, name) {
     throw new Error(`${name} must be a whole-number string`);
   }
   return normalized;
-}
-
-function normalizePositiveU128Literal(value, name) {
-  let amount;
-  if (typeof value === "bigint") {
-    amount = value;
-  } else if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) {
-      throw new Error(`${name} must be a positive decimal u128 string`);
-    }
-    amount = BigInt(value);
-  } else if (typeof value === "string") {
-    const normalized = value.trim();
-    if (!/^\d+$/.test(normalized)) {
-      throw new Error(`${name} must be a positive decimal u128 string`);
-    }
-    amount = BigInt(normalized);
-  } else {
-    throw new Error(`${name} must be a positive decimal u128 string`);
-  }
-  if (amount <= 0n || amount > U128_MAX) {
-    throw new Error(`${name} must be a positive decimal u128 string`);
-  }
-  return amount.toString(10);
 }
 
 function toBufferField(payload, ...fieldNames) {

@@ -929,6 +929,8 @@ pub(crate) fn validation_fee_plain_electorate_rules(
 ) -> ValidationFeePlainElectorateRulesV1 {
     ValidationFeePlainElectorateRulesV1 {
         voting_asset_id: gov.voting_asset_id.clone(),
+        bond_escrow_account: gov.bond_escrow_account.clone(),
+        slash_receiver_account: gov.slash_receiver_account.clone(),
         ballot_amount: gov.min_bond_amount.clone(),
         ballot_duration_blocks: gov.window_span,
         citizenship_amount: gov.citizenship_bond_amount.clone(),
@@ -1917,13 +1919,36 @@ pub async fn handle_gov_get_referendum(
 ///
 /// # Errors
 /// Returns a conversion error if an exact quadratic weight or tally exceeds
-/// the fixed consensus tally domain. Missing records result in zeroed tallies.
+/// the fixed consensus tally domain, a PLAIN lock carries an invalid direction,
+/// or the referendum belongs to the validation-fee governance flow. Validation-fee
+/// callers must use the typed proposal-detail endpoint, which validates the frozen
+/// electorate and retained ballot rules. Missing records result in zeroed tallies.
 pub async fn handle_gov_get_tally(
     state: Arc<iroha_core::state::State>,
     id: axum::extract::Path<String>,
 ) -> Result<JsonBody<TallyGetResponse>, crate::Error> {
     let rid = id.0;
     let world = state.world_view();
+    let mut proposal_id = [0_u8; 32];
+    let is_validation_fee_referendum = rid.len() == 64
+        && hex::decode_to_slice(&rid, &mut proposal_id).is_ok()
+        && world
+            .governance_proposals()
+            .get(&proposal_id)
+            .is_some_and(|proposal| {
+                matches!(
+                    &proposal.kind,
+                    iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+                )
+            });
+    if is_validation_fee_referendum {
+        let typed_proposal_id = hex::encode(proposal_id);
+        return Err(crate::routing::conversion_error(format!(
+            "validation-fee referendum tally requires the typed \
+             /v1/validation-fee/proposals/{typed_proposal_id} endpoint"
+        )));
+    }
     let gov_cfg = state.gov.clone();
     // Mirror FinalizeReferendum tally logic without mutating state.
     let now_h = state.committed_height() as u64;
@@ -1962,8 +1987,14 @@ pub async fn handle_gov_get_tally(
                         1 => {
                             reject = reject.checked_add(w).ok_or_else(tally_overflow_error)?;
                         }
-                        _ => {
+                        2 => {
                             abstain = abstain.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        }
+                        direction => {
+                            return Err(crate::routing::conversion_error(format!(
+                                "plain ballot lock has invalid direction {direction}; \
+                                 expected 0, 1, or 2"
+                            )));
                         }
                     }
                 }
@@ -2007,10 +2038,10 @@ fn integer_sqrt_u128(n: u128) -> u128 {
         return 0;
     }
     let mut x0 = n;
-    let mut x1 = (x0 + n / x0) / 2;
+    let mut x1 = u128::midpoint(x0, n / x0);
     while x1 < x0 {
         x0 = x1;
-        x1 = (x0 + n / x0) / 2;
+        x1 = u128::midpoint(x0, n / x0);
     }
     x0
 }
@@ -3532,9 +3563,10 @@ mod tests {
         queue::{Queue, TransactionGuard},
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
-            GovernanceLockRecord, GovernanceLocksForReferendum, GovernanceProposalStatus,
-            GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
-            GovernanceStageApprovals, State, World,
+            GovernanceLockRecord, GovernanceLocksForReferendum, GovernancePipeline,
+            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
+            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceStageApprovals,
+            State, World,
         },
     };
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
@@ -3572,7 +3604,6 @@ mod tests {
         assert!(hint_present(&map, "owner"));
     }
 
-    #[cfg(feature = "gov_vrf")]
     fn conversion_message(err: crate::Error) -> String {
         match err {
             crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -5121,6 +5152,7 @@ seiyaku GovernedReadFixture {
                     expiry_height: 100,
                     direction: 0,
                     duration_blocks: 4,
+                    custody: None,
                 },
             );
             stx.world.governance_locks_mut().insert(rid.clone(), locks);
@@ -5135,6 +5167,127 @@ seiyaku GovernedReadFixture {
         let body = res.0;
         assert_eq!(body.approve, 9);
         assert_eq!(body.reject, 0);
+    }
+
+    #[tokio::test]
+    async fn gov_get_tally_rejects_invalid_plain_direction() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let rid = "rid-tally-invalid-direction".to_string();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 10,
+                    status: GovernanceReferendumStatus::Open,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                ALICE_ID.clone(),
+                GovernanceLockRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: 9_u64.into(),
+                    slashed: Quantity::zero(),
+                    expiry_height: 100,
+                    direction: 3,
+                    duration_blocks: 4,
+                    custody: None,
+                },
+            );
+            tx.world.governance_locks_mut().insert(rid.clone(), locks);
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+
+        let err = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect_err("an invalid direction must fail closed");
+        let message = conversion_message(err);
+        assert!(
+            message.contains("invalid direction 3"),
+            "unexpected tally error: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn gov_get_tally_directs_validation_fee_referenda_to_typed_endpoint() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let plain_electorate_rules = validation_fee_plain_electorate_rules(&state.gov);
+        let kind = iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(
+            iroha_data_model::governance::types::ValidationFeePolicyProposal {
+                policy: iroha_data_model::validation_fee::ValidationFeePolicyV1 {
+                    schema_version:
+                        iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+                    chain_id: ChainId::from("chain"),
+                    genesis_hash: [7; 32],
+                    policy_version: 1,
+                    previous_policy_hash: None,
+                    ds_asset_id: plain_electorate_rules.voting_asset_id.clone(),
+                    ds_scale: iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE,
+                    fee: Quantity::zero(),
+                    treasury_account_id: ALICE_ID.clone(),
+                    charging_mode:
+                        iroha_data_model::validation_fee::ValidationFeeChargingMode::Disabled,
+                    effective_from_height: 1,
+                    expires_after_height: None,
+                    exemption_classes: Vec::new(),
+                    treasury_payout_binding: None,
+                },
+                payout_lifecycle_proposal_id: None,
+                plain_electorate_rules,
+            },
+        );
+        let proposal_id = kind.fingerprint();
+        let rid = hex::encode(proposal_id);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_proposals_mut().insert(
+                proposal_id,
+                GovernanceProposalRecord {
+                    proposer: ALICE_ID.clone(),
+                    kind,
+                    created_height: 1,
+                    status: GovernanceProposalStatus::Proposed,
+                    pipeline: GovernancePipeline::default(),
+                    parliament_snapshot: None,
+                    finalization_evidence: None,
+                    enacted_at_height: None,
+                },
+            );
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 10,
+                    status: GovernanceReferendumStatus::Open,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+
+        let err = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid.clone()))
+            .await
+            .expect_err("generic tally must reject a validation-fee referendum");
+        let message = conversion_message(err);
+        assert!(
+            message.contains(&format!("/v1/validation-fee/proposals/{rid}")),
+            "unexpected tally error: {message}"
+        );
     }
 
     #[tokio::test]
@@ -5175,6 +5328,7 @@ seiyaku GovernedReadFixture {
                         expiry_height: u64::MAX,
                         direction: 0,
                         duration_blocks: u64::MAX - 1,
+                        custody: None,
                     },
                 );
             }
@@ -5187,9 +5341,10 @@ seiyaku GovernedReadFixture {
         let err = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
             .await
             .expect_err("overflowing tally must fail");
+        let message = conversion_message(err);
         assert!(
-            err.to_string()
-                .contains("governance tally arithmetic overflow")
+            message.contains("governance tally arithmetic overflow"),
+            "unexpected tally error: {message}"
         );
     }
 

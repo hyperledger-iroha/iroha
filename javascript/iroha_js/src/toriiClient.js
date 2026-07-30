@@ -38,8 +38,14 @@ import { normaliseGatewayProvider, sorafsGatewayFetch } from "./sorafs.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
 import {
+  KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
+  isCanonicalKotodamaDynamicAccessBaseKey,
   isCanonicalKotodamaEntrypoint,
   isCanonicalKotodamaIdentifier,
+  isCanonicalKotodamaStateTypeName,
+  isKotodamaV1DynamicAccessBoundKind,
+  isKotodamaV1StateMapKeyTypeName,
+  kotodamaV1StateMapKeyTypeName,
 } from "./kotodamaIdentifiers.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 import {
@@ -47,6 +53,7 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
+import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 import {
   buildCanonicalRequestHeaders,
   requireCanonicalAuthAccount,
@@ -134,6 +141,7 @@ const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
 const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
 const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
 const NODE_CAPABILITIES_JSON_MAX_BYTES = 1024 * 1024;
+const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
 const SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES = 1024 * 1024;
@@ -6644,6 +6652,23 @@ export class ToriiClient {
       { signal },
     );
     return normalizeNodeCapabilitiesResponse(payload);
+  }
+
+  /** @internal Raw bounded transport for the optional privacy-capabilities API. */
+  async [privacyCapabilityTransportV1](options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getPrivacyCapabilitiesV1");
+    const response = await this._request("GET", "/v1/privacy/capabilities", {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+    });
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      PRIVACY_CAPABILITIES_JSON_MAX_BYTES,
+      "privacy capabilities response",
+      { signal },
+    );
+    return payload;
   }
 
   /**
@@ -19328,6 +19353,7 @@ function parseGovernanceLockRecord(payload, context) {
     throw new RangeError(`${context}.direction must be within 0-255`);
   }
   const durationBlocks = coerceInteger(payload.duration_blocks ?? 0, `${context}.duration_blocks`);
+  const custody = parseGovernanceLockCustody(payload.custody, `${context}.custody`);
   return {
     owner,
     amount,
@@ -19335,6 +19361,41 @@ function parseGovernanceLockRecord(payload, context) {
     expiry_height: expiryHeight,
     direction,
     duration_blocks: durationBlocks,
+    custody,
+  };
+}
+
+const GOVERNANCE_LOCK_CUSTODY_KEYS = Object.freeze([
+  "escrowed",
+  "asset_definition_id",
+  "bond_escrow_account",
+  "slash_receiver_account",
+]);
+
+function parseGovernanceLockCustody(payload, context) {
+  if (payload === null) return null;
+  const custody = exactEnumerableDataRecord(
+    payload,
+    GOVERNANCE_LOCK_CUSTODY_KEYS,
+    context,
+  );
+  if (typeof custody.escrowed !== "boolean") {
+    throw new TypeError(`${context}.escrowed must be a boolean`);
+  }
+  return {
+    escrowed: custody.escrowed,
+    asset_definition_id: requireExactNonEmptyString(
+      custody.asset_definition_id,
+      `${context}.asset_definition_id`,
+    ),
+    bond_escrow_account: requireExactNonEmptyString(
+      custody.bond_escrow_account,
+      `${context}.bond_escrow_account`,
+    ),
+    slash_receiver_account: requireExactNonEmptyString(
+      custody.slash_receiver_account,
+      `${context}.slash_receiver_account`,
+    ),
   };
 }
 
@@ -23135,6 +23196,225 @@ function requireCanonicalKotodamaEntrypoint(value, context) {
   return name;
 }
 
+function exactManifestResponseRecord(value, allowedFields, context) {
+  const record = ensureRecord(value, context);
+  const allowed = new Set(allowedFields);
+  const unknownFields = Reflect.ownKeys(record).filter(
+    (field) => typeof field !== "string" || !allowed.has(field),
+  );
+  if (unknownFields.length !== 0) {
+    throw new TypeError(
+      `${context} contains unsupported fields: ${unknownFields
+        .map((field) => String(field))
+        .sort()
+        .join(", ")}`,
+    );
+  }
+  return record;
+}
+
+function assertExactManifestResponseValueType(value, context) {
+  if (value === undefined || value === null) {
+    return;
+  }
+  const record = exactManifestResponseRecord(value, ["nodes"], context);
+  if (!Array.isArray(record.nodes)) {
+    return;
+  }
+  record.nodes.forEach((node, index) => {
+    const nodeContext = `${context}.nodes[${index}]`;
+    const nodeRecord = exactManifestResponseRecord(node, ["kind", "value"], nodeContext);
+    if (nodeRecord.kind === "Struct") {
+      exactManifestResponseRecord(
+        nodeRecord.value,
+        ["name", "fields"],
+        `${nodeContext}.value`,
+      );
+    } else if (nodeRecord.kind === "List") {
+      exactManifestResponseRecord(nodeRecord.value, ["capacity"], `${nodeContext}.value`);
+    } else if (nodeRecord.kind === "Leaf") {
+      exactManifestResponseRecord(
+        nodeRecord.value,
+        ["kind", "value"],
+        `${nodeContext}.value`,
+      );
+    }
+  });
+}
+
+function assertExactManifestResponseShape(value, context) {
+  const manifest = exactManifestResponseRecord(
+    value,
+    [
+      "seiyaku_name",
+      "code_hash",
+      "abi_hash",
+      "compiler_fingerprint",
+      "features_bitmap",
+      "access_set_hints",
+      "entrypoints",
+      "states",
+      "error_codes",
+      "kotoba",
+      "provenance",
+    ],
+    context,
+  );
+
+  if (manifest.access_set_hints !== undefined && manifest.access_set_hints !== null) {
+    const access = exactManifestResponseRecord(
+      manifest.access_set_hints,
+      ["read_keys", "write_keys", "dynamic_reads", "dynamic_writes"],
+      `${context}.access_set_hints`,
+    );
+    for (const [field, hints] of [
+      ["dynamic_reads", access.dynamic_reads],
+      ["dynamic_writes", access.dynamic_writes],
+    ]) {
+      if (!Array.isArray(hints)) {
+        continue;
+      }
+      hints.forEach((hint, index) => {
+        exactManifestResponseRecord(
+          hint,
+          ["base_key", "key_type", "bound_kind", "max_keys"],
+          `${context}.access_set_hints.${field}[${index}]`,
+        );
+      });
+    }
+  }
+
+  if (Array.isArray(manifest.entrypoints)) {
+    manifest.entrypoints.forEach((entrypoint, index) => {
+      const entrypointContext = `${context}.entrypoints[${index}]`;
+      const entrypointRecord = exactManifestResponseRecord(
+        entrypoint,
+        [
+          "name",
+          "kind",
+          "params",
+          "argument_schema",
+          "return_type",
+          "return_schema",
+          "permission",
+          "read_keys",
+          "write_keys",
+          "access_hints_complete",
+          "access_hints_skipped",
+          "triggers",
+        ],
+        entrypointContext,
+      );
+      exactManifestResponseRecord(
+        entrypointRecord.kind,
+        ["kind", "value"],
+        `${entrypointContext}.kind`,
+      );
+      if (Array.isArray(entrypointRecord.params)) {
+        entrypointRecord.params.forEach((param, paramIndex) => {
+          exactManifestResponseRecord(
+            param,
+            ["name", "type_name"],
+            `${entrypointContext}.params[${paramIndex}]`,
+          );
+        });
+      }
+      if (
+        entrypointRecord.argument_schema !== undefined &&
+        entrypointRecord.argument_schema !== null
+      ) {
+        const argumentSchema = exactManifestResponseRecord(
+          entrypointRecord.argument_schema,
+          ["fields"],
+          `${entrypointContext}.argument_schema`,
+        );
+        if (Array.isArray(argumentSchema.fields)) {
+          argumentSchema.fields.forEach((field, fieldIndex) => {
+            const fieldContext =
+              `${entrypointContext}.argument_schema.fields[${fieldIndex}]`;
+            const fieldRecord = exactManifestResponseRecord(
+              field,
+              ["name", "ty"],
+              fieldContext,
+            );
+            assertExactManifestResponseValueType(fieldRecord.ty, `${fieldContext}.ty`);
+          });
+        }
+      }
+      assertExactManifestResponseValueType(
+        entrypointRecord.return_schema,
+        `${entrypointContext}.return_schema`,
+      );
+      if (Array.isArray(entrypointRecord.triggers)) {
+        entrypointRecord.triggers.forEach((trigger, triggerIndex) => {
+          const triggerContext = `${entrypointContext}.triggers[${triggerIndex}]`;
+          const triggerRecord = exactManifestResponseRecord(
+            trigger,
+            ["id", "repeats", "filter", "authority", "metadata", "callback"],
+            triggerContext,
+          );
+          exactManifestResponseRecord(
+            triggerRecord.repeats,
+            ["Indefinitely", "Exactly"],
+            `${triggerContext}.repeats`,
+          );
+          exactManifestResponseRecord(
+            triggerRecord.callback,
+            ["namespace", "entrypoint"],
+            `${triggerContext}.callback`,
+          );
+        });
+      }
+    });
+  }
+
+  if (Array.isArray(manifest.states)) {
+    manifest.states.forEach((state, index) => {
+      exactManifestResponseRecord(
+        state,
+        ["name", "type_name"],
+        `${context}.states[${index}]`,
+      );
+    });
+  }
+  if (Array.isArray(manifest.error_codes)) {
+    manifest.error_codes.forEach((errorCode, index) => {
+      exactManifestResponseRecord(
+        errorCode,
+        ["namespace", "name", "code"],
+        `${context}.error_codes[${index}]`,
+      );
+    });
+  }
+  if (Array.isArray(manifest.kotoba)) {
+    manifest.kotoba.forEach((entry, index) => {
+      const entryContext = `${context}.kotoba[${index}]`;
+      const entryRecord = exactManifestResponseRecord(
+        entry,
+        ["msg_id", "translations"],
+        entryContext,
+      );
+      if (Array.isArray(entryRecord.translations)) {
+        entryRecord.translations.forEach((translation, translationIndex) => {
+          exactManifestResponseRecord(
+            translation,
+            ["lang", "text"],
+            `${entryContext}.translations[${translationIndex}]`,
+          );
+        });
+      }
+    });
+  }
+  if (manifest.provenance !== undefined && manifest.provenance !== null) {
+    exactManifestResponseRecord(
+      manifest.provenance,
+      ["signer", "signature"],
+      `${context}.provenance`,
+    );
+  }
+  return manifest;
+}
+
 function normalizeManifestPayload(manifest, context) {
   if (!isPlainObject(manifest)) {
     throw new TypeError(`${context} must be an object`);
@@ -23222,14 +23502,21 @@ function normalizeManifestPayload(manifest, context) {
   }
   if (hasField("features_bitmap", "featuresBitmap")) {
     const features = getField("features_bitmap", "featuresBitmap") ?? null;
-    normalized.features_bitmap =
-      features === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(
-            features,
-            `${context}.features_bitmap`,
-            { allowZero: true },
-          );
+    if (features === null) {
+      normalized.features_bitmap = null;
+    } else {
+      const bitmap = ToriiClient._normalizeUnsignedInteger(
+        features,
+        `${context}.features_bitmap`,
+        { allowZero: true },
+      );
+      if (bitmap > 3) {
+        throw new TypeError(
+          `${context}.features_bitmap contains unsupported Kotodama V1 feature bits`,
+        );
+      }
+      normalized.features_bitmap = bitmap;
+    }
   }
   if (hasField("access_set_hints", "accessSetHints")) {
     const hints = getField("access_set_hints", "accessSetHints");
@@ -23348,6 +23635,11 @@ function validateNormalizedManifestPayload(manifest, context) {
     }
     stateNames.add(state.name);
   }
+  validateManifestDynamicAccessHintStateMaps(
+    manifest.access_set_hints,
+    manifest.states,
+    `${context}.access_set_hints`,
+  );
 
   const errorPaths = new Set();
   const errorNumbers = new Set();
@@ -23375,6 +23667,47 @@ function validateNormalizedManifestPayload(manifest, context) {
       }
       languages.add(translation.lang);
     }
+  }
+}
+
+function validateManifestDynamicAccessHintStateMaps(accessSetHints, states, context) {
+  if (accessSetHints === null) {
+    return;
+  }
+  const stateMaps = new Map();
+  for (const state of states ?? []) {
+    const keyType = kotodamaV1StateMapKeyTypeName(state.type_name);
+    if (keyType !== null) {
+      stateMaps.set(state.name, keyType);
+    }
+  }
+  for (const field of ["dynamic_reads", "dynamic_writes"]) {
+    const seen = new Set();
+    accessSetHints[field].forEach((hint, index) => {
+      const hintContext = `${context}.${field}[${index}]`;
+      const identity = JSON.stringify([
+        hint.base_key,
+        hint.key_type,
+        hint.bound_kind,
+        hint.max_keys,
+      ]);
+      if (seen.has(identity)) {
+        throw new TypeError(`${context}.${field} contains a duplicate dynamic access hint`);
+      }
+      seen.add(identity);
+      const stateName = hint.base_key.slice("state:".length);
+      const expectedKeyType = stateMaps.get(stateName);
+      if (expectedKeyType === undefined) {
+        throw new TypeError(
+          `${hintContext}.base_key must reference a declared top-level StateMap`,
+        );
+      }
+      if (hint.key_type !== expectedKeyType) {
+        throw new TypeError(
+          `${hintContext}.key_type ${hint.key_type} does not match declared StateMap key type ${expectedKeyType}`,
+        );
+      }
+    });
   }
 }
 
@@ -23504,27 +23837,63 @@ function normalizeAccessSetHintsPayload(payload, context) {
     }
     return value.map((entry, index) => {
       const hint = ensureRecord(entry, `${name}[${index}]`);
+      const hintContext = `${name}[${index}]`;
       const maxKeys = ToriiClient._normalizeUnsignedInteger(
-        hint.max_keys ?? hint.maxKeys,
-        `${name}[${index}].max_keys`,
-        { allowZero: true },
+        selectEqualManifestAlias(
+          hint,
+          "max_keys",
+          "maxKeys",
+          `${hintContext}.max_keys`,
+        ),
+        `${hintContext}.max_keys`,
+        { max: KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS },
       );
-      if (maxKeys > 0xffffffff) {
-        throw new TypeError(`${name}[${index}].max_keys must fit in u32`);
+      const keyType = requireExactNonEmptyString(
+        selectEqualManifestAlias(
+          hint,
+          "key_type",
+          "keyType",
+          `${hintContext}.key_type`,
+        ),
+        `${hintContext}.key_type`,
+      );
+      if (!isKotodamaV1StateMapKeyTypeName(keyType)) {
+        throw new TypeError(
+          `${hintContext}.key_type must be an exact Kotodama V1 StateMap key scalar`,
+        );
+      }
+      const baseKey = requireExactNonEmptyString(
+        selectEqualManifestAlias(
+          hint,
+          "base_key",
+          "baseKey",
+          `${hintContext}.base_key`,
+        ),
+        `${hintContext}.base_key`,
+      );
+      if (!isCanonicalKotodamaDynamicAccessBaseKey(baseKey)) {
+        throw new TypeError(
+          `${hintContext}.base_key must be state: plus one canonical state declaration identifier`,
+        );
+      }
+      const boundKind = requireExactNonEmptyString(
+        selectEqualManifestAlias(
+          hint,
+          "bound_kind",
+          "boundKind",
+          `${hintContext}.bound_kind`,
+        ),
+        `${hintContext}.bound_kind`,
+      );
+      if (!isKotodamaV1DynamicAccessBoundKind(boundKind)) {
+        throw new TypeError(
+          `${hintContext}.bound_kind must be exactly take or range`,
+        );
       }
       return {
-        base_key: requireNonEmptyString(
-          hint.base_key ?? hint.baseKey,
-          `${name}[${index}].base_key`,
-        ),
-        key_type: requireNonEmptyString(
-          hint.key_type ?? hint.keyType,
-          `${name}[${index}].key_type`,
-        ),
-        bound_kind: requireNonEmptyString(
-          hint.bound_kind ?? hint.boundKind,
-          `${name}[${index}].bound_kind`,
-        ),
+        base_key: baseKey,
+        key_type: keyType,
+        bound_kind: boundKind,
         max_keys: maxKeys,
       };
     });
@@ -23547,6 +23916,24 @@ function normalizeAccessSetHintsPayload(payload, context) {
       `${context}.dynamic_writes`,
     ),
   };
+}
+
+function selectEqualManifestAlias(record, snakeCase, camelCase, context) {
+  const hasSnakeCase = Object.prototype.hasOwnProperty.call(record, snakeCase);
+  const hasCamelCase = Object.prototype.hasOwnProperty.call(record, camelCase);
+  if (
+    hasSnakeCase &&
+    hasCamelCase &&
+    !Object.is(record[snakeCase], record[camelCase])
+  ) {
+    throw new TypeError(
+      `${context} contains conflicting ${snakeCase}/${camelCase} aliases`,
+    );
+  }
+  if (hasSnakeCase) {
+    return record[snakeCase];
+  }
+  return hasCamelCase ? record[camelCase] : undefined;
 }
 
 function normalizeManifestEntrypointPayload(value, context) {
@@ -23674,7 +24061,12 @@ function normalizeManifestEntrypointParams(value, context) {
     return {
       name,
       type_name: requireExactNonEmptyString(
-        record.type_name ?? record.typeName,
+        selectEqualManifestAlias(
+          record,
+          "type_name",
+          "typeName",
+          `${context}[${index}].type_name`,
+        ),
         `${context}[${index}].type_name`,
       ),
     };
@@ -23870,16 +24262,27 @@ function normalizeManifestStatesPayload(value, context) {
   }
   return value.map((state, index) => {
     const record = ensureRecord(state, `${context}[${index}]`);
+    const typeName = requireExactNonEmptyString(
+      selectEqualManifestAlias(
+        record,
+        "type_name",
+        "typeName",
+        `${context}[${index}].type_name`,
+      ),
+      `${context}[${index}].type_name`,
+    );
+    if (!isCanonicalKotodamaStateTypeName(typeName)) {
+      throw new TypeError(
+        `${context}[${index}].type_name must be a canonical Kotodama V1 state type`,
+      );
+    }
     return {
       name: requireCanonicalKotodamaIdentifier(
         record.name,
         `${context}[${index}].name`,
         { declaration: true },
       ),
-      type_name: requireExactNonEmptyString(
-        record.type_name ?? record.typeName,
-        `${context}[${index}].type_name`,
-      ),
+      type_name: typeName,
     };
   });
 }
@@ -26876,9 +27279,13 @@ function normalizeMultisigProposalResolveResponse(
 }
 
 function normalizeContractManifestResponse(payload) {
-  const record = ensureRecord(payload, "contract manifest response");
-  const manifestRecord = ensureRecord(
-    record.manifest ?? {},
+  const record = exactEnumerableDataRecord(
+    payload,
+    ["manifest", "code_hash", "abi_hash"],
+    "contract manifest response",
+  );
+  const manifestRecord = assertExactManifestResponseShape(
+    record.manifest,
     "contract manifest response.manifest",
   );
   const manifest = normalizeManifestPayload(
@@ -26906,9 +27313,6 @@ function normalizeContractManifestResponse(payload) {
     throw new TypeError(
       "contractManifest.abi_hash does not match manifest.abi_hash",
     );
-  }
-  if (Object.prototype.hasOwnProperty.call(record, "code_bytes")) {
-    throw new TypeError("contract manifest response must not include code_bytes");
   }
   return {
     manifest,
@@ -34802,307 +35206,26 @@ function normalizeVerifyingKeyStatusValue(value, context, { optional = false } =
   return canonical;
 }
 
-const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
+const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
+  "halo2/ipa",
   "halo2/pasta/kaigi-roster-v1",
   "halo2/pasta/kaigi-usage-v1",
   "halo2/pasta/ivm-overlay-bind",
   "halo2/pasta/ivm-execution-v1",
-  "halo2/ipa-pasta-cycle-v1",
+  "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+  "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+  "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
   "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-]);
-
-const TRUSTED_SETUP_BACKEND_SEGMENTS = new Set([
-  "groth16",
-  "kzg",
-  "bn254",
-  "bn256",
-  "bls12",
-  "srs",
-  "crs",
-  "ptau",
-  "ceremony",
-  "powersoftau",
-]);
-
-const TRUSTED_SETUP_COMPACT_TOKENS = [
-  "groth16",
-  "kzg",
-  "bn254",
-  "bn256",
-  "bls12381",
-  "bls12",
-  "srs",
-  "crs",
-  "ptau",
-  "ceremony",
-  "trustedsetup",
-  "structuredreferencestring",
-  "universalsrs",
-  "powersoftau",
-];
-
-const PRODUCTION_CLAIM_BACKEND_FRAGMENTS = [
-  "productionready",
-  "productionhardened",
-  "productionenabled",
-  "productionapproved",
-  "productioncertified",
-  "productionclaim",
-  "claimedproduction",
-  "mainnetready",
-  "mainnetcomplete",
-  "mainnetclaim",
-  "claimedmainnet",
-  "mainnetcertified",
-  "mainnetapproved",
-  "mainnetrelease",
-  "auditedproduction",
-  "externallyaudited",
-  "thirdpartyaudited",
-  "boiaudited",
-  "auditedmainnet",
-  "externalaudit",
-  "auditpassed",
-  "auditapproved",
-  "auditsignoff",
-  "auditclaim",
-  "claimedaudit",
-  "securityreviewpassed",
-  "securityauditpassed",
-  "securityaudited",
-  "externalsecurityreview",
-  "certifiedproduction",
-  "certifiedmainnet",
-  "releaseready",
-  "releaseapproved",
-  "releasecertified",
-];
-
-function compactPrivacyBackendLabel(value) {
-  return String(value).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function isPendingProductionVerifierBackendLabel(value) {
-  const compact = compactPrivacyBackendLabel(value);
-  return PENDING_PRODUCTION_VERIFIER_BACKEND_ALIASES.has(compact);
-}
-
-const PENDING_PRODUCTION_VERIFIER_BACKEND_ALIASES = new Set([
-  "halo2ipaorchard",
-  "orchard",
-  "zcashorchard",
-  "groth16bls12377",
-  "groth16bls12377decaf377",
-  "bls12377",
-  "decaf377",
-  "masp",
-  "penumbra",
-  "penumbramasp",
-  "halo2ipapenumbra",
-  "halo2ipamasp",
-  "fcmppluspluscurvetree",
-  "fcmp",
-  "monero",
-  "monerofcmp",
-  "monerofcmpplusplus",
-  "curvetree",
-  "halo2ipamonero",
-  "halo2ipacurvetree",
-  "latticepcssis",
-  "latticepcszk",
-  "jindo",
-  "jindolatticepcszk",
-  "jindolatticepcszkv0",
-  "jindolatticepcssis",
-  "starkfrimiden",
-  "midenstark",
-  "aztecplonkishprivatekernel",
-  "aztecprivatekernel",
-  "pqmaspstarkfri",
-  "pqmaspstark",
-  "starkfripqmaspstarkfri",
-  "postquantummasp",
-  "anonymouspgc",
-  "anonymouspgckoutofn",
-  "anonymouspgckoutofnv1",
-  "verange",
-  "verangetransparentrange",
-  "verangetransparentrangev1",
-  "zkat",
-  "zkatpolicyprivateauthenticator",
-  "zkatpolicyprivateauthv1",
-  "recursiveanonymousadmission",
-  "recursiveanonymousadmissionv0",
-  "zkamsrecursiveadmission",
-  "zkamsrecursiveadmissionv0",
-  "vegaexistingcredentialzk",
-  "vegaexistingcredentialzkv0",
-  "silentthresholdanoncred",
-  "silentthresholdanoncredv0",
-  "silentthresholdanonymouscredential",
-  "thresholdanonymouscredentials",
-  "zkx509",
-  "zkvmx509identity",
-  "zkx509onchainidentity",
-  "zkx509onchainidentityv0",
-  "siswithhints",
-  "sishints",
-  "sishintsanoncredpqv0",
-  "latticeanonymouscredentials",
-]);
-
-function hasTrustedSetupBackendSegment(value) {
-  return String(value)
-    .trim()
-    .toLowerCase()
-    .split(/[^a-z0-9]+/u)
-    .some((segment) => TRUSTED_SETUP_BACKEND_SEGMENTS.has(segment));
-}
-
-function isTrustedSetupVerifierBackendLabel(value) {
-  const backend = String(value).trim().toLowerCase();
-  const compact = compactPrivacyBackendLabel(value);
-  return (
-    hasTrustedSetupBackendSegment(value) ||
-    TRUSTED_SETUP_COMPACT_TOKENS.some((token) => compact.includes(token)) ||
-    backend === "groth16" ||
-    backend.startsWith("groth16/") ||
-    backend === "kzg" ||
-    backend.startsWith("kzg/") ||
-    backend === "bn254" ||
-    backend === "bn256" ||
-    backend === "bls12_381" ||
-    backend === "bls12-381" ||
-    backend === "halo2/bn254" ||
-    backend.startsWith("halo2/bn254/") ||
-    backend.includes("/bn254") ||
-    backend.includes(":bn254") ||
-    backend.includes("/bn256") ||
-    backend.includes(":bn256") ||
-    backend.includes("/bls12") ||
-    backend.includes(":bls12") ||
-    backend === "halo2/kzg" ||
-    backend.startsWith("halo2/kzg/") ||
-    backend.includes("/kzg") ||
-    backend.includes(":kzg")
-  );
-}
-
-function isDeveloperOnlyVerifierBackendLabel(value) {
-  const backend = String(value).trim().toLowerCase();
-  const compact = compactPrivacyBackendLabel(backend);
-  const compactFragments = [
-    "notforproduction",
-    "notproduction",
-    "notproductionready",
-    "notready",
-    "replacebeforeproduction",
-    "replacebeforemainnet",
-    "draftonly",
-  ];
-  if (compactFragments.some((fragment) => compact.includes(fragment))) {
-    return true;
-  }
-
-  const embedded = ["debug", "mock", "fixture", "dev", "todo", "draft", "pending", "replace"];
-  const exact = new Set(["test", "dummy", "fake", "stub", "sample", "placeholder", "todo", "draft"]);
-  const isDeveloperOnlyRun = (run) => embedded.some((token) => run.includes(token)) || exact.has(run);
-  let letterRun = "";
-  for (const token of backend.split(/[^a-z0-9]+/u).filter(Boolean)) {
-    if (isDeveloperOnlyRun(token)) {
-      return true;
-    }
-    if (token.length === 1) {
-      letterRun += token;
-      continue;
-    }
-    if (isDeveloperOnlyRun(letterRun)) {
-      return true;
-    }
-    letterRun = "";
-  }
-  return isDeveloperOnlyRun(letterRun);
-}
-
-function isProductionClaimVerifierBackendLabel(value) {
-  const compact = compactPrivacyBackendLabel(value);
-  return PRODUCTION_CLAIM_BACKEND_FRAGMENTS.some((fragment) => compact.includes(fragment));
-}
-
-const STARK_FRI_PRODUCTION_BACKEND_LABELS = new Set([
   "stark/fri",
   "stark/fri/sha256-goldilocks",
   "stark/fri/poseidon2-goldilocks",
   "stark/fri/sha256_goldilocks.v1",
 ]);
 
-function isStarkFriProductionBackendLabel(backend) {
-  return STARK_FRI_PRODUCTION_BACKEND_LABELS.has(backend);
-}
-
-function isPortableVerifierBackendLabel(backend) {
-  if (!/^[A-Za-z0-9/_.:+-]+$/u.test(backend)) {
-    return false;
-  }
-  if (!/^[A-Za-z0-9]/u.test(backend) || !/[A-Za-z0-9]$/u.test(backend)) {
-    return false;
-  }
-  return !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"].some((separator) =>
-    backend.includes(separator),
-  );
-}
-
-function normalizeNativeHalo2PastaBackendLabel(value) {
-  const backend = String(value);
-  if (backend.length === 0 || backend.trim() !== backend) {
-    return null;
-  }
-  if (PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.has(backend)) {
-    return backend;
-  }
-  for (const [prefix, targetPrefix] of [
-    ["halo2/pasta/ipa/", "halo2/pasta/"],
-    ["halo2/pasta/", "halo2/pasta/"],
-    ["halo2/ipa::", "halo2/pasta/"],
-    ["halo2/ipa:", "halo2/pasta/"],
-    ["halo2/ipa/", "halo2/pasta/"],
-  ]) {
-    if (backend.startsWith(prefix)) {
-      const rest = backend.slice(prefix.length);
-      return rest.length === 0 ? null : `${targetPrefix}${rest}`;
-    }
-  }
-  return null;
-}
-
-function isNativeHalo2PastaProductionBackendLabel(backend) {
-  const normalized = normalizeNativeHalo2PastaBackendLabel(backend);
-  return normalized !== null && PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.has(normalized);
-}
-
 function isProductionVerifyBackendLabel(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const backend = value;
-  if (
-    backend.length === 0 ||
-    backend.trim() !== backend ||
-    !isPortableVerifierBackendLabel(backend) ||
-    isPendingProductionVerifierBackendLabel(backend) ||
-    isProductionClaimVerifierBackendLabel(backend) ||
-    isTrustedSetupVerifierBackendLabel(backend) ||
-    isDeveloperOnlyVerifierBackendLabel(backend)
-  ) {
-    return false;
-  }
-  return (
-    backend === "halo2/ipa" ||
-    isStarkFriProductionBackendLabel(backend) ||
-    isNativeHalo2PastaProductionBackendLabel(backend)
-  );
+  return typeof value === "string" && PRODUCTION_VERIFY_BACKEND_LABELS_V1.has(value);
 }
 
 function assertProductionVerifyBackendLabel(value, context) {

@@ -3,6 +3,38 @@ set -euo pipefail
 
 ROOT_DIR="${PRIVACY_JS_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
+PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The JavaScript checks do not invoke Cargo, but they share the privacy SDK
+# guard boundary. Preserve a developer's workspace lock when one exists and,
+# on a clean checkout, fail if any test creates the ignored root Cargo.lock.
+# shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
+source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
+WORKSPACE_CARGO_LOCKFILE="${ROOT_DIR}/Cargo.lock"
+WORKSPACE_CARGO_LOCK_STATE="$(
+  privacy_sdk_capture_optional_file_state \
+    "${WORKSPACE_CARGO_LOCKFILE}" \
+    "workspace Cargo.lock" \
+    "${PYTHON_BIN}"
+)"
+
+cleanup_privacy_js_sdk_lock_state() {
+  local status=$?
+  trap - EXIT HUP INT TERM
+  if ! privacy_sdk_assert_optional_file_state \
+    "${WORKSPACE_CARGO_LOCKFILE}" \
+    "${WORKSPACE_CARGO_LOCK_STATE}" \
+    "workspace Cargo.lock" \
+    "${PYTHON_BIN}"; then
+    status=1
+  fi
+  exit "${status}"
+}
+trap cleanup_privacy_js_sdk_lock_state EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 node_candidate_path() {
   local candidate="$1"
@@ -69,9 +101,7 @@ export PYTHONDONTWRITEBYTECODE=1
   test/privacyFfiContractParity.test.js \
   test/privacyCatalogParity.test.js \
   test/privacyNative.test.js
-"${NODE_BIN}" --test --test-name-pattern "privacy native wrappers reject wrong-operation result schemas" \
-  test/instructionBuilders.test.js
-"${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports privacy native archive helpers|package dist privacy native wrappers reject wrong-operation result schemas|package declarations mark privacy capability metadata readonly" \
+"${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports only the canonical privacy capability bridge" \
   test/package_dist.test.js
-"${NODE_BIN}" --test --test-name-pattern "browser crypto exposes native-only helpers as safe stubs" \
+"${NODE_BIN}" --test --test-name-pattern "browser crypto exposes only the privacy capability bridge as a safe stub" \
   test/crypto.browser.test.js

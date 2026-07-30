@@ -181,7 +181,7 @@ impl RamLfeExecutionReceiptPayload {
     /// # Errors
     /// Returns the underlying Norito encoding error when serialization fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 
     /// Hash the canonical payload bytes for proof-binding circuits.
@@ -430,6 +430,37 @@ mod tests {
         receipt
             .verify_signature(signer.public_key())
             .expect("signed attestation should verify");
+    }
+
+    #[test]
+    fn receipt_payload_identity_ignores_ambient_norito_layout() {
+        let payload = receipt_payload();
+        let canonical = payload
+            .to_bytes()
+            .expect("encode canonical receipt payload");
+        let canonical_hash = payload
+            .payload_hash()
+            .expect("hash canonical receipt payload");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&payload).expect("encode alternate-layout receipt payload"),
+            canonical,
+            "fixture must exercise a distinct ambient Norito layout"
+        );
+        assert_eq!(
+            payload
+                .to_bytes()
+                .expect("encode receipt payload canonically under alternate layout"),
+            canonical
+        );
+        assert_eq!(
+            payload
+                .payload_hash()
+                .expect("hash receipt payload under alternate layout"),
+            canonical_hash
+        );
     }
 
     #[test]

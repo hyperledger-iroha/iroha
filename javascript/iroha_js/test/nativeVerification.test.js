@@ -15,9 +15,24 @@ const NATIVE_IMPLEMENTATIONS = [
   ["source", await import("../src/native.js")],
   ["package dist", await import("../dist/native.js")],
 ];
+const SOURCE_PROVENANCE = Object.freeze({
+  build_execution_policy: "trusted-local-cargo-v1",
+  build_provenance_version: 3,
+  source_git_revision: "a".repeat(40),
+  source_tree_clean: true,
+  source_tree_sha256: "b".repeat(64),
+});
 
 function sha256(data) {
   return createHash("sha256").update(data).digest("hex");
+}
+
+function checksumEntry(digest, extra = {}) {
+  return {
+    sha256: digest,
+    ...SOURCE_PROVENANCE,
+    ...extra,
+  };
 }
 
 function syntheticSignedMachO({ signatureByte, signatureSize, codeByte = 0x42 }) {
@@ -113,7 +128,7 @@ variantTest("verifyNativeBinding succeeds when checksum matches manifest entry",
     const platformKey = `${process.platform}-${process.arch}`;
     await fs.writeFile(
       manifestPath,
-      `${JSON.stringify({ entries: { [platformKey]: { sha256: digest } } }, null, 2)}\n`,
+      `${JSON.stringify({ entries: { [platformKey]: checksumEntry(digest) } }, null, 2)}\n`,
     );
 
     const result = verifyNativeBinding(bindingPath, { manifestPath });
@@ -137,11 +152,9 @@ variantTest("getNativeBinding rejects a checksum-valid dirty-source artifact", a
         manifestPath,
         `${JSON.stringify({
           entries: {
-            [`${process.platform}-${process.arch}`]: {
-              sha256: sha256(contents),
-              source_git_revision: "a".repeat(40),
+            [`${process.platform}-${process.arch}`]: checksumEntry(sha256(contents), {
               source_tree_clean: false,
-            },
+            }),
           },
         })}\n`,
       );
@@ -166,6 +179,29 @@ variantTest("getNativeBinding rejects a checksum-valid dirty-source artifact", a
   }
 });
 
+variantTest("checksum-only entries are rejected without V3 source provenance", async () => {
+  __resetNativeStateForTests();
+  await withTempDir(async (dir) => {
+    const bindingPath = path.join(dir, "iroha_js_host.node");
+    const manifestPath = path.join(dir, "iroha_js_host.checksums.json");
+    const contents = Buffer.from("native-stub");
+    const platformKey = `${process.platform}-${process.arch}`;
+    await fs.writeFile(bindingPath, contents);
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        entries: {
+          [platformKey]: { sha256: sha256(contents) },
+        },
+      })}\n`,
+    );
+
+    const result = verifyNativeBinding(bindingPath, { manifestPath });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "manifest_error");
+  });
+});
+
 variantTest("Darwin verification accepts only signing-container changes", async () => {
   __resetNativeStateForTests();
   await withTempDir(async (dir) => {
@@ -180,10 +216,9 @@ variantTest("Darwin verification accepts only signing-container changes", async 
       manifestPath,
       `${JSON.stringify({
         entries: {
-          "darwin-arm64": {
-            sha256: sha256(original),
+          "darwin-arm64": checksumEntry(sha256(original), {
             mach_o_signing_independent_sha256: stableDigest,
-          },
+          }),
         },
       })}\n`,
     );
@@ -220,11 +255,10 @@ variantTest("Darwin signing-independent fallback rejects malformed Mach-O bounds
       manifestPath,
       `${JSON.stringify({
         entries: {
-          "darwin-arm64": {
-            sha256: sha256(original),
+          "darwin-arm64": checksumEntry(sha256(original), {
             mach_o_signing_independent_sha256:
               machOSigningIndependentSHA256(original),
-          },
+          }),
         },
       })}\n`,
     );
@@ -254,13 +288,10 @@ variantTest("Windows verification accepts only a final bounded Authenticode regi
       manifestPath,
       `${JSON.stringify({
         entries: {
-          "win32-x64": {
-            sha256: sha256(original),
+          "win32-x64": checksumEntry(sha256(original), {
             pe_signing_independent_sha256: stableDigest,
             pe_unsigned_size: original.length,
-            source_git_revision: "a".repeat(40),
-            source_tree_clean: true,
-          },
+          }),
         },
       })}\n`,
     );
@@ -274,6 +305,7 @@ variantTest("Windows verification accepts only a final bounded Authenticode regi
     assert.equal(verified.expectedPeUnsignedSize, original.length);
     assert.equal(verified.sourceGitRevision, "a".repeat(40));
     assert.equal(verified.sourceTreeClean, true);
+    assert.equal(verified.sourceTreeSha256, "b".repeat(64));
 
     signed[original.length - 1] ^= 1;
     await fs.writeFile(bindingPath, signed);
@@ -299,11 +331,10 @@ variantTest("Windows signing fallback rejects missing or malformed certificate b
       manifestPath,
       `${JSON.stringify({
         entries: {
-          "win32-x64": {
-            sha256: sha256(original),
+          "win32-x64": checksumEntry(sha256(original), {
             pe_signing_independent_sha256: peSigningIndependentSHA256(original),
             pe_unsigned_size: original.length,
-          },
+          }),
         },
       })}\n`,
     );
@@ -339,7 +370,11 @@ variantTest("getNativeBinding rejects checksum mismatches", async () => {
       await fs.writeFile(
         manifestPath,
         `${JSON.stringify(
-          { entries: { [platformKey]: { sha256: sha256(Buffer.from("expected")) } } },
+          {
+            entries: {
+              [platformKey]: checksumEntry(sha256(Buffer.from("expected"))),
+            },
+          },
           null,
           2,
         )}\n`,
@@ -390,7 +425,7 @@ variantTest("verification rehashes files and reloads manifests on every call", a
     await fs.writeFile(
       manifestPath,
       `${JSON.stringify(
-        { entries: { [platformKey]: { sha256: sha256(original) } } },
+        { entries: { [platformKey]: checksumEntry(sha256(original)) } },
         null,
         2,
       )}\n`,
@@ -407,7 +442,7 @@ variantTest("verification rehashes files and reloads manifests on every call", a
     await fs.writeFile(
       manifestPath,
       `${JSON.stringify(
-        { entries: { [platformKey]: { sha256: sha256(replacement) } } },
+        { entries: { [platformKey]: checksumEntry(sha256(replacement)) } },
         null,
         2,
       )}\n`,
@@ -430,7 +465,7 @@ variantTest("verified snapshots retain the authenticated bytes across path subst
     await fs.writeFile(
       manifestPath,
       `${JSON.stringify(
-        { entries: { [platformKey]: { sha256: sha256(authenticated) } } },
+        { entries: { [platformKey]: checksumEntry(sha256(authenticated)) } },
         null,
         2,
       )}\n`,
@@ -475,7 +510,69 @@ variantTest("verification rejects malformed checksum manifests and entries", asy
         entries: {
           [platformKey]: {
             sha256: validHash,
+            build_execution_policy: "trusted-local-cargo-v1",
             source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+            source_tree_sha256: "b".repeat(64),
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            build_execution_policy: "hermetic-build-v1",
+            build_provenance_version: 3,
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+            source_tree_sha256: "b".repeat(64),
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            build_execution_policy: "trusted-local-cargo-v1",
+            build_provenance_version: 2,
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+            source_tree_sha256: "b".repeat(64),
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            source_git_revision: "a".repeat(40),
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            source_tree_sha256: "b".repeat(64),
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+            source_tree_sha256: "B".repeat(64),
           },
         },
       },
@@ -485,6 +582,7 @@ variantTest("verification rejects malformed checksum manifests and entries", asy
             sha256: validHash,
             source_git_revision: "A".repeat(40),
             source_tree_clean: true,
+            source_tree_sha256: "b".repeat(64),
           },
         },
       },
@@ -530,7 +628,7 @@ variantTest("explicit expected checksums are validated independently per call", 
     const verified = verifyNativeBinding(bindingPath, {
       platformKey,
       expectedChecksums: {
-        [platformKey]: { sha256: sha256(contents) },
+        [platformKey]: checksumEntry(sha256(contents)),
       },
     });
     assert.equal(verified.ok, true);
@@ -538,7 +636,7 @@ variantTest("explicit expected checksums are validated independently per call", 
     const rejected = verifyNativeBinding(bindingPath, {
       platformKey,
       expectedChecksums: {
-        [platformKey]: { sha256: "0".repeat(64) },
+        [platformKey]: checksumEntry("0".repeat(64)),
       },
     });
     assert.equal(rejected.ok, false);

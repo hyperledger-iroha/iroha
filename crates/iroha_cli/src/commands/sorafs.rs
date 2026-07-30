@@ -13110,8 +13110,7 @@ impl Run for ToolkitPackArgs {
             .first()
             .cloned()
             .ok_or_else(|| eyre!("CAR emission produced no root CID"))?;
-        let mut car_payload_digest = [0u8; 32];
-        car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+        let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
 
         let produce_hybrid_envelope = hybrid_envelope_out.is_some()
             || hybrid_envelope_json_out.is_some()
@@ -13150,7 +13149,7 @@ impl Run for ToolkitPackArgs {
             .chunk_digest_sha3_256(chunk_digest_sha3)
             .por_root(*chunk_store.por_tree().root())
             .content_length(plan.content_length)
-            .car_digest(car_payload_digest)
+            .car_digest(car_archive_digest)
             .car_size(car_stats.car_size)
             .pin_policy(PinPolicy {
                 min_replicas: 3,
@@ -25797,11 +25796,33 @@ mod tests {
         let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
         let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
         assert_eq!(manifest.content_length, 13);
-        let car_size = fs::metadata(&car_path).expect("car metadata").len();
-        assert_eq!(manifest.car_size, car_size);
+        let car_bytes = fs::read(&car_path).expect("read CAR archive");
+        assert_eq!(manifest.car_size, car_bytes.len() as u64);
+        let archive_digest = *blake3::hash(&car_bytes).as_bytes();
+        let archive_digest_hex = hex::encode(archive_digest);
+        assert_eq!(
+            manifest.car_digest, archive_digest,
+            "manifest must bind every byte of the canonical CARv2 archive"
+        );
 
         let report_bytes = fs::read(&json_path).expect("read report");
         let report: Value = norito::json::from_slice(&report_bytes).expect("decode report");
+        assert_eq!(
+            report.get("car_archive_digest_hex").and_then(Value::as_str),
+            Some(archive_digest_hex.as_str())
+        );
+        assert_eq!(
+            report
+                .get("manifest")
+                .and_then(|manifest| manifest.get("car_digest_hex"))
+                .and_then(Value::as_str),
+            Some(archive_digest_hex.as_str())
+        );
+        assert_ne!(
+            report.get("car_payload_digest_hex").and_then(Value::as_str),
+            Some(archive_digest_hex.as_str()),
+            "CARv1 payload-section digest must remain diagnostic-only"
+        );
         let digest_hex = hex::encode(manifest.digest().expect("manifest digest").as_bytes());
         assert_eq!(
             report.get("manifest_digest_hex").and_then(Value::as_str),

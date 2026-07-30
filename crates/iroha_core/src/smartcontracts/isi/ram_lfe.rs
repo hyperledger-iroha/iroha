@@ -392,11 +392,11 @@ pub fn validate_execution_receipt_at(
 }
 
 fn expected_associated_data_hash(program_policy: &RamLfeProgramPolicy) -> Result<Hash, String> {
-    norito::to_bytes(&program_policy.program_id)
+    norito::encode_canonical(&program_policy.program_id)
         .map(Hash::new)
         .map_err(|err| {
             format!(
-                "Failed to encode RAM-LFE program id {}: {err}",
+                "Failed to canonically encode RAM-LFE program id {}: {err}",
                 program_policy.program_id
             )
         })
@@ -407,8 +407,9 @@ fn verify_execution_proof(
     execution: &RamLfeExecutionReceiptPayload,
     verifier: &iroha_crypto::RamLfeProofVerifierMetadata,
 ) -> Result<(), String> {
-    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(&proof.bytes)
-        .map_err(|_| "RAM-LFE proof receipt must use an OpenVerifyEnvelope payload".to_owned())?;
+    let envelope: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).map_err(|err| {
+        format!("RAM-LFE proof receipt must use a canonical OpenVerifyEnvelope payload: {err}")
+    })?;
     if proof.backend.as_str() != verifier.proof_backend {
         return Err(format!(
             "RAM-LFE proof backend {} does not match verifier backend {}",
@@ -617,7 +618,7 @@ mod tests {
         mutate(&mut envelope);
         ProofBox::new(
             verifier.proof_backend.clone().into(),
-            norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope).expect("encode canonical OpenVerifyEnvelope"),
         )
     }
 
@@ -665,6 +666,45 @@ mod tests {
         assert!(
             err.contains("mismatched verifying key"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_execution_proof_rejects_alternate_norito_layout_before_proof_decode() {
+        let verifier = sample_proof_verifier();
+        let execution = sample_proof_payload();
+        let canonical = sample_proof_box(&verifier, |_| {});
+        let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(&canonical.bytes)
+            .expect("decode canonical RAM-LFE proof envelope");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_bytes = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope).expect("encode alternate-layout RAM-LFE proof envelope")
+        };
+        assert_ne!(alternate_bytes, canonical.bytes);
+        let alternate = ProofBox::new(canonical.backend, alternate_bytes);
+
+        let err = verify_execution_proof(&alternate, &execution, &verifier)
+            .expect_err("alternate-layout RAM-LFE proof envelope must reject");
+        assert!(
+            err.contains("canonical OpenVerifyEnvelope"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn associated_data_hash_is_independent_of_ambient_norito_layout() {
+        let policy = sample_policy();
+        let expected = expected_associated_data_hash(&policy)
+            .expect("derive canonical RAM-LFE associated-data hash");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            expected_associated_data_hash(&policy)
+                .expect("derive RAM-LFE associated-data hash under alternate ambient layout"),
+            expected
         );
     }
 }

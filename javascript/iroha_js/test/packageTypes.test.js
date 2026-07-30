@@ -196,12 +196,14 @@ test("package smoke rejects every non-portable or missing required recipe", () =
     "package.json",
     "ivm-artifact.d.ts",
     "kotodama-compiler.d.ts",
+    "privacy-capabilities.d.ts",
     "src/index.js",
     "dist/index.js",
     "dist/ivmArtifact.js",
     "dist/kotodamaCompiler/browser.js",
     "dist/kotodamaCompiler/index.js",
     "dist/nexusApp.js",
+    "dist/privacyCapabilities.js",
     "nexus-app.d.ts",
     ...PORTABLE_RECIPES,
     "scripts/build-dist.mjs",
@@ -368,6 +370,11 @@ test("SoraFS gateway denial declarations expose only governed catalog evidence",
 
 test("strict NodeNext resolves the root and every public subpath from a packed layout", () => {
   const packageJson = readPackageJson();
+  const indexOfSubpath = (subpath) => Object.keys(packageJson.exports).indexOf(subpath);
+  const noritoIndex = indexOfSubpath("./norito");
+  const cryptoIndex = indexOfSubpath("./crypto");
+  assert.notEqual(noritoIndex, -1);
+  assert.notEqual(cryptoIndex, -1);
   const { tempRoot } = createPackedLayout({ includeNodeTypes: true });
   try {
     const imports = Object.keys(packageJson.exports).map((subpath, index) => {
@@ -379,7 +386,9 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       path.join(tempRoot, "consumer.mts"),
       [
         ...imports,
-        `import { Crypto, Norito, NumericV1, Torii, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type CancelAssetLockInstruction, type CancelAssetLockV1, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SorafsValidationOutcome } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import * as RootSdk from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type CancelAssetLockInstruction, type CancelAssetLockV1, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SorafsValidationOutcome, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { getPrivacyCapabilitiesV1, parsePrivacyCapabilitySnapshotV1, type PrivacyCapabilitySnapshotV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
         'const cancelAssetLock: CancelAssetLockInstruction = buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: "15" });',
@@ -392,9 +401,27 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "// @ts-expect-error quantity-bearing APIs reject lossy JavaScript numbers.",
         'buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: 15 });',
         "const toriiConstructor: typeof ToriiClient = Torii.ToriiClient;",
-        "const encodeInstruction: typeof export10.noritoEncodeInstruction = Norito.noritoEncodeInstruction;",
-        "const validateFrame: typeof export10.validateNoritoFrame = Norito.validateNoritoFrame;",
-        "const generateKeyPair: typeof export14.generateKeyPair = Crypto.generateKeyPair;",
+        `const encodeInstruction: typeof export${noritoIndex}.noritoEncodeInstruction = Norito.noritoEncodeInstruction;`,
+        `const validateFrame: typeof export${noritoIndex}.validateNoritoFrame = Norito.validateNoritoFrame;`,
+        `const generateKeyPair: typeof export${cryptoIndex}.generateKeyPair = Crypto.generateKeyPair;`,
+        "const privacySnapshot: PrivacyCapabilitySnapshotV1 = parsePrivacyCapabilitySnapshotV1({});",
+        "const privacyNodeResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'));",
+        "const privacyBrowserResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiBrowserClient('https://torii.example'));",
+        'const verifierBackend: ToriiVerifierBackendLabelV1 = "halo2/ipa";',
+        "// @ts-expect-error retired privacy backend aliases fail closed.",
+        'const retiredVerifierBackend: ToriiVerifierBackendLabelV1 = "halo2/ipa-pasta-cycle-v1";',
+        "// @ts-expect-error backend labels are case-sensitive.",
+        'const caseShiftedVerifierBackend: ToriiVerifierBackendLabelV1 = "HALO2/IPA";',
+        "// @ts-expect-error backend labels reject surrounding whitespace.",
+        'const paddedVerifierBackend: ToriiVerifierBackendLabelV1 = " halo2/ipa";',
+        "// @ts-expect-error backend labels reject Unicode confusables.",
+        'const confusableVerifierBackend: ToriiVerifierBackendLabelV1 = "halо2/ipa";',
+        "// @ts-expect-error privacy capability fetch is not a base-client method.",
+        "void ToriiClient.prototype.getPrivacyCapabilitiesV1;",
+        "// @ts-expect-error privacy capability parser is not a root runtime export.",
+        "void RootSdk.parsePrivacyCapabilitySnapshotV1;",
+        "// @ts-expect-error the optional fetch API rejects unknown request options.",
+        "getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'), { unknown: true });",
         "const quantityFrame: Uint8Array = NumericV1.encodeQuantityFrame(42n);",
         "const quantityEnvelope: Uint8Array = NumericV1.encodeQuantityEnvelope(42n);",
         "const quantityJson: string = NumericV1.encodeQuantityJson(42n);",
@@ -423,7 +450,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,
-        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void generateKeyPair; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
+        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void generateKeyPair; void privacySnapshot; void privacyNodeResult; void privacyBrowserResult; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
       ].join("\n"),
       "utf8",
     );
@@ -463,6 +490,7 @@ test("dedicated browser declarations compile without ambient Node types", () => 
         'import { browserTransactionCodec } from "@iroha/iroha-js/transaction-codec";',
         'import { computeIvmArtifactHashes } from "@iroha/iroha-js/ivm-artifact";',
         'import { canonicalQueryString } from "@iroha/iroha-js/canonical-request";',
+        'import { getPrivacyCapabilitiesV1, type PrivacyCapabilitiesBrowserClientV1, type PrivacyCapabilitySnapshotV1 } from "@iroha/iroha-js/privacy-capabilities";',
         'import { compileKotodamaProgram, KotodamaCompilerClient, type KotodamaCompiledEntrypointValueKindName, type KotodamaCompiledManifestMetadata, type KotodamaCompilerCallOptions, type KotodamaCompilerTransportOptions } from "@iroha/iroha-js/kotodama-compiler";',
         "declare const approval: BrowserConnectApproval;",
         "declare const connectSession: ReturnType<typeof createConnectAppSession>;",
@@ -473,6 +501,8 @@ test("dedicated browser declarations compile without ambient Node types", () => 
         "void connectSession.signRaw(TORII_CANONICAL_REQUEST_DOMAIN_TAG, bytes);",
         "void new NexusAppClient({ transactionCodec: browserTransactionCodec });",
         "void computeIvmArtifactHashes(bytes);",
+        "declare const privacyClient: PrivacyCapabilitiesBrowserClientV1;",
+        "const privacyResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(privacyClient, { headers: { Accept: 'application/json' } });",
         'void canonicalQueryString(new URLSearchParams({ browser: "true" }));',
         'void compileKotodamaProgram("CREATE DOMAIN browser");',
         "const compilerTransport: KotodamaCompilerTransportOptions = { signal: new AbortController().signal, timeoutMs: 30_000 };",
@@ -489,7 +519,7 @@ test("dedicated browser declarations compile without ambient Node types", () => 
         'const retiredCompilerAmount: KotodamaCompiledEntrypointValueKindName = "Amount";',
         '// @ts-expect-error U128 is not a canonical V1 boundary kind.',
         'const retiredCompilerU128: KotodamaCompiledEntrypointValueKindName = "U128";',
-        'void compilerTransport; void compilerCall; void compilerNumericKinds; void compilerManifestName; void compilerFingerprint; void compilerFeatureBitmap; void compilerEntrypoints; void compilerStates; void retiredCompilerAmount; void retiredCompilerU128;',
+        'void privacyResult; void compilerTransport; void compilerCall; void compilerNumericKinds; void compilerManifestName; void compilerFingerprint; void compilerFeatureBitmap; void compilerEntrypoints; void compilerStates; void retiredCompilerAmount; void retiredCompilerU128;',
       ].join("\n"),
       "utf8",
     );

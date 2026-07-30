@@ -2441,11 +2441,16 @@ test("registerVerifyingKey accepts current production backend labels", async () 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const backends = [
     "halo2/ipa",
-    "halo2/ipa-pasta-cycle-v1",
-    "halo2/ipa:ivm-execution-v1",
-    "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kaigi-usage-v1",
+    "halo2/pasta/ivm-overlay-bind",
+    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     "stark/fri",
     "stark/fri/sha256-goldilocks",
     "stark/fri/poseidon2-goldilocks",
@@ -2471,8 +2476,9 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const backends = [
-    "halo2/ipa-pasta-cycle-v1",
+    "halo2/ipa",
     "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
     "stark/fri/sha256-goldilocks",
   ];
   for (const [index, backend] of backends.entries()) {
@@ -2637,6 +2643,8 @@ test("verifying key registration rejects unsupported production backends before 
   const cases = [
     ["register unknown native", () => client.registerVerifyingKey({ ...base, backend: "halo2/unknown-native-v1" })],
     ["register unknown IPA suffix", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:unknown-native-v1" })],
+    ["register retired IPA cycle alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa-pasta-cycle-v1" })],
+    ["register retired IPA profile alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:ivm-execution-v1" })],
     ["register leading-space backend", () => client.registerVerifyingKey({ ...base, backend: " halo2/ipa" })],
     ["register trailing-space backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa " })],
     ["register leading-tab backend", () => client.registerVerifyingKey({ ...base, backend: "\thalo2/ipa" })],
@@ -14439,6 +14447,12 @@ test("getGovernanceLocksTyped parses lock records and synthesizes not-found resu
   assert.equal(firstLock.amount, "18446744073709551616.25");
   assert.equal(firstLock.slashed, "0.25");
   assert.equal(firstLock.duration_blocks, 5);
+  assert.deepEqual(firstLock.custody, {
+    escrowed: true,
+    asset_definition_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
+    bond_escrow_account: "bond-escrow-account",
+    slash_receiver_account: "slash-receiver-account",
+  });
 
   const missingClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
@@ -14451,6 +14465,65 @@ test("getGovernanceLocksTyped parses lock records and synthesizes not-found resu
     locks: {},
     referendum_id: "ref-2",
   });
+});
+
+test("getGovernanceLocksTyped accepts null legacy custody and rejects malformed custody", async () => {
+  const parseCustody = async (mutate) => {
+    const fixture = cloneFixture(toriiFixtures.governance.locks);
+    const [lock] = Object.values(fixture.locks);
+    mutate(lock);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: fixture,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    return client.getGovernanceLocksTyped("ref-1");
+  };
+
+  const legacy = await parseCustody((lock) => {
+    lock.custody = null;
+  });
+  assert.equal(Object.values(legacy.locks)[0].custody, null);
+
+  for (const fixture of [
+    {
+      label: "missing custody",
+      mutate(lock) {
+        delete lock.custody;
+      },
+      error: /custody must be an object/u,
+    },
+    {
+      label: "missing custody field",
+      mutate(lock) {
+        delete lock.custody.bond_escrow_account;
+      },
+      error: /custody must contain exactly/u,
+    },
+    {
+      label: "extra custody field",
+      mutate(lock) {
+        lock.custody.asset_id = lock.custody.asset_definition_id;
+      },
+      error: /custody must contain exactly/u,
+    },
+    {
+      label: "wrong custody field type",
+      mutate(lock) {
+        lock.custody.escrowed = "true";
+      },
+      error: /custody\.escrowed must be a boolean/u,
+    },
+  ]) {
+    await assert.rejects(
+      () => parseCustody(fixture.mutate),
+      fixture.error,
+      fixture.label,
+    );
+  }
 });
 
 test("getGovernanceLocksTyped rejects noncanonical and numeric JSON quantities", async () => {
@@ -21141,7 +21214,7 @@ test("registerContractCode posts manifest JSON", async () => {
         dynamicWrites: [
           {
             base_key: "state:Votes",
-            key_type: "ReferendumId",
+            key_type: "Name",
             bound_kind: "range",
             max_keys: "2",
           },
@@ -21149,6 +21222,10 @@ test("registerContractCode posts manifest JSON", async () => {
       },
       entrypoints: [
         { name: "kaizen", kind: "Kaizen" },
+      ],
+      states: [
+        { name: "Balances", typeName: "StateMap<AccountId, quantity>" },
+        { name: "Votes", typeName: "StateMap<Name, bool>" },
       ],
       kotoba: [
         {
@@ -21190,7 +21267,7 @@ test("registerContractCode posts manifest JSON", async () => {
         dynamic_writes: [
           {
             base_key: "state:Votes",
-            key_type: "ReferendumId",
+            key_type: "Name",
             bound_kind: "range",
             max_keys: 2,
           },
@@ -21212,7 +21289,10 @@ test("registerContractCode posts manifest JSON", async () => {
           triggers: [],
         },
       ],
-      states: null,
+      states: [
+        { name: "Balances", type_name: "StateMap<AccountId, quantity>" },
+        { name: "Votes", type_name: "StateMap<Name, bool>" },
+      ],
       error_codes: null,
       kotoba: [
         {
@@ -21227,6 +21307,207 @@ test("registerContractCode posts manifest JSON", async () => {
     },
     code_bytes: Buffer.from("hello").toString("base64"),
   });
+});
+
+test("registerContractCode enforces exact V1 dynamic access hints", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+  const submit = (hint) =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest: {
+        states: [
+          { name: "Balances", typeName: "StateMap<AccountId, quantity>" },
+          { name: "amount", typeName: "StateMap<AccountId, quantity>" },
+        ],
+        accessSetHints: {
+          dynamicReads: [{
+            baseKey: "state:Balances",
+            keyType: "AccountId",
+            boundKind: "take",
+            maxKeys: 1,
+            ...hint,
+          }],
+        },
+      },
+    });
+
+  for (const baseKey of ["state:Balances", "state:amount"]) {
+    await submit({ baseKey });
+  }
+  for (const [baseKey, expected] of [
+    [
+      "state:",
+      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+    ],
+    [
+      "state:*",
+      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+    ],
+    [
+      "state:Balances/",
+      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+    ],
+    [
+      "state:Balances/suffix",
+      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+    ],
+    [
+      "state:Balances:suffix",
+      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+    ],
+    [
+      "state:int",
+      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+    ],
+    [
+      "account:alice",
+      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+    ],
+    [
+      " state:Balances",
+      /dynamic_reads\[0\]\.base_key must not contain surrounding whitespace/u,
+    ],
+    [
+      "state:Balances ",
+      /dynamic_reads\[0\]\.base_key must not contain surrounding whitespace/u,
+    ],
+  ]) {
+    await assert.rejects(
+      submit({ baseKey }),
+      expected,
+    );
+  }
+  for (const keyType of ["Json", "ReferendumId", "Int", "Quantity", "Amount"]) {
+    await assert.rejects(
+      submit({ keyType }),
+      /dynamic_reads\[0\]\.key_type must be an exact Kotodama V1 StateMap key scalar/u,
+    );
+  }
+  for (const [boundKind, expected] of [
+    ["", /dynamic_reads\[0\]\.bound_kind must not be empty/u],
+    ["Take", /dynamic_reads\[0\]\.bound_kind must be exactly take or range/u],
+    ["prefix", /dynamic_reads\[0\]\.bound_kind must be exactly take or range/u],
+    [
+      "range ",
+      /dynamic_reads\[0\]\.bound_kind must not contain surrounding whitespace/u,
+    ],
+  ]) {
+    await assert.rejects(
+      submit({ boundKind }),
+      expected,
+    );
+  }
+  await assert.rejects(
+    submit({ maxKeys: 0 }),
+    /dynamic_reads\[0\]\.max_keys must be a positive integer/u,
+  );
+  for (const maxKeys of [65, 0xffff_ffff]) {
+    await assert.rejects(
+      submit({ maxKeys }),
+      /dynamic_reads\[0\]\.max_keys must be at most 64/u,
+    );
+  }
+  await submit({ maxKeys: 64 });
+  await submit({
+    base_key: "state:Balances",
+    key_type: "AccountId",
+    bound_kind: "take",
+    max_keys: 1,
+  });
+  for (const conflicting of [
+    { base_key: "state:Other" },
+    { key_type: "Name" },
+    { bound_kind: "range" },
+    { max_keys: 2 },
+  ]) {
+    await assert.rejects(
+      submit(conflicting),
+      /contains conflicting .* aliases/u,
+    );
+  }
+  assert.equal(called, true);
+});
+
+test("registerContractCode resolves dynamic hints to declared StateMaps per list", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+  const hint = {
+    baseKey: "state:Balances",
+    keyType: "AccountId",
+    boundKind: "take",
+    maxKeys: 1,
+  };
+  const submit = ({
+    dynamicReads = [],
+    dynamicWrites = [],
+    states = [{ name: "Balances", typeName: "StateMap<AccountId, quantity>" }],
+  }) =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest: {
+        states,
+        accessSetHints: { dynamicReads, dynamicWrites },
+      },
+    });
+
+  for (const field of ["dynamicReads", "dynamicWrites"]) {
+    await submit({
+      [field]: [
+        hint,
+        { ...hint, boundKind: "range", maxKeys: 2 },
+      ],
+    });
+    await assert.rejects(
+      submit({ [field]: [hint, { ...hint }] }),
+      /contains a duplicate dynamic access hint/u,
+      `${field} must reject an exact duplicate`,
+    );
+    await assert.rejects(
+      submit({ [field]: [{ ...hint, baseKey: "state:Missing" }] }),
+      /base_key must reference a declared top-level StateMap/u,
+      `${field} must reject an unknown state`,
+    );
+    await assert.rejects(
+      submit({
+        [field]: [hint],
+        states: [{ name: "Balances", typeName: "quantity" }],
+      }),
+      /base_key must reference a declared top-level StateMap/u,
+      `${field} must reject a scalar state`,
+    );
+    await assert.rejects(
+      submit({ [field]: [{ ...hint, keyType: "Name" }] }),
+      /key_type Name does not match declared StateMap key type AccountId/u,
+      `${field} must reject a mismatched key scalar`,
+    );
+  }
+
+  await submit({
+    dynamicReads: [hint],
+    dynamicWrites: [{ ...hint }],
+  });
+  await submit({
+    dynamicWrites: [{
+      ...hint,
+      baseKey: "state:amount",
+      keyType: "quantity",
+    }],
+    states: [{ name: "amount", typeName: "StateMap<quantity, int>" }],
+  });
+  assert.equal(called, true);
 });
 
 test("registerContractCode rejects retired English entrypoint kinds", async () => {
@@ -21299,6 +21580,12 @@ test("registerContractCode preserves branded romanized and Japanese lifecycle se
         },
         { name: "balance", kind: "View" },
       ],
+      states: [
+        { name: "amount", typeName: "Transfer{amount: quantity}" },
+      ],
+      errorCodes: [
+        { namespace: "LedgerError", name: "amount", code: 7 },
+      ],
     },
   });
 
@@ -21310,6 +21597,64 @@ test("registerContractCode preserves branded romanized and Japanese lifecycle se
       ["transfer", "Kotoage"],
       ["balance", "View"],
     ],
+  );
+  assert.deepEqual(body.manifest.states, [
+    { name: "amount", type_name: "Transfer{amount: quantity}" },
+  ]);
+  assert.equal(body.manifest.error_codes[0].name, "amount");
+});
+
+test("registerContractCode requires agreeing parameter and state type aliases", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 202 }),
+  });
+  const quantity = {
+    nodes: [{ kind: "Leaf", value: { kind: "Quantity", value: null } }],
+  };
+  const submit = (param, state) =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest: {
+        entrypoints: [{
+          name: "read",
+          kind: "View",
+          params: [{ name: "amount", ...param }],
+          argumentSchema: {
+            fields: [{ name: "amount", ty: quantity }],
+          },
+        }],
+        states: [{ name: "amount", ...state }],
+      },
+    });
+
+  await assert.doesNotReject(
+    submit(
+      { typeName: "quantity", type_name: "quantity" },
+      { typeName: "quantity", type_name: "quantity" },
+    ),
+  );
+  await assert.rejects(
+    submit(
+      { typeName: "quantity", type_name: "int" },
+      { typeName: "quantity" },
+    ),
+    /params\[0\]\.type_name contains conflicting type_name\/typeName aliases/u,
+  );
+  await assert.rejects(
+    submit(
+      { typeName: "quantity" },
+      { typeName: "quantity", type_name: "int" },
+    ),
+    /states\[0\]\.type_name contains conflicting type_name\/typeName aliases/u,
+  );
+  await assert.rejects(
+    submit({}, { typeName: "quantity" }),
+    /params\[0\]\.type_name must be a string/u,
+  );
+  await assert.rejects(
+    submit({ typeName: "quantity" }, {}),
+    /states\[0\]\.type_name must be a string/u,
   );
 });
 
@@ -21572,6 +21917,8 @@ test("registerContractCode rejects forged branded manifest declarations before f
 
   for (const seiyakuName of [
     "",
+    "Amount",
+    "amount",
     "seiyaku",
     "match",
     "int",
@@ -21585,6 +21932,54 @@ test("registerContractCode rejects forged branded manifest declarations before f
     await assert.rejects(
       submit({ seiyakuName }),
       /seiyaku_name must (?:not be empty|be a canonical Kotodama V1 identifier)/u,
+    );
+  }
+  for (const typeName of [
+    "Amount",
+    "amount",
+    "StateMap<AccountId, Amount>",
+    "Transfer{amount: amount}",
+  ]) {
+    await assert.rejects(
+      submit({ states: [{ name: "Balances", typeName }] }),
+      /states\[0\]\.type_name must be a canonical Kotodama V1 state type/u,
+    );
+  }
+  for (const namespace of ["Amount", "amount"]) {
+    await assert.rejects(
+      submit({
+        errorCodes: [{ namespace, name: "Denied", code: 7 }],
+      }),
+      /error_codes\[0\]\.namespace must be a canonical Kotodama V1 identifier/u,
+    );
+  }
+  for (const keyType of [
+    "Json",
+    "ReferendumId",
+    "Int",
+    "Quantity",
+    "Amount",
+    "amount",
+    "Foo{Amount: quantity}",
+    "Foo{Amount:quantity}",
+    "StateMap<AccountId, int>",
+    "\u0410mount",
+  ]) {
+    await assert.rejects(
+      submit({
+        accessSetHints: {
+          readKeys: [],
+          writeKeys: [],
+          dynamicReads: [{
+            baseKey: "state:Balances",
+            keyType,
+            boundKind: "take",
+            maxKeys: 1,
+          }],
+          dynamicWrites: [],
+        },
+      }),
+      /dynamic_reads\[0\]\.key_type must be an exact Kotodama V1 StateMap key scalar/u,
     );
   }
   for (const retired of ["U128", "Amount"]) {
@@ -24107,6 +24502,7 @@ test("getContractManifest returns normalized payload", async () => {
           },
         },
         code_hash: "11".repeat(32),
+        abi_hash: null,
       },
       headers: { "content-type": "application/json" },
     });
@@ -24148,6 +24544,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
       makeClient({
         manifest: { code_hash: canonical.toLowerCase(), abi_hash: null },
         code_hash: "bb".repeat(32),
+        abi_hash: null,
       }).getContractManifest("bb".repeat(32)),
     /canonical uppercase Norito Hash literal/u,
   );
@@ -24156,6 +24553,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
       makeClient({
         manifest: { code_hash: canonical, abi_hash: null },
         code_hash: "dd".repeat(32),
+        abi_hash: null,
       }).getContractManifest("bb".repeat(32)),
     /does not match manifest.code_hash/u,
   );
@@ -24164,9 +24562,10 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
       makeClient({
         manifest: { code_hash: canonical, abi_hash: null },
         code_hash: "bb".repeat(32),
+        abi_hash: null,
         code_bytes: null,
       }).getContractManifest("bb".repeat(32)),
-    /must not include code_bytes/u,
+    /must contain exactly/u,
   );
   await assert.rejects(
     () =>
@@ -24177,9 +24576,274 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
           abi_hash: null,
         },
         code_hash: "aa".repeat(32),
+        abi_hash: null,
       }).getContractManifest("bb".repeat(32)),
     /must set the Iroha Hash marker bit/u,
   );
+});
+
+test("getContractManifest rejects aliases, unknown fields, and unsupported feature bits", async () => {
+  const canonicalCodeHash =
+    "hash:1111111111111111111111111111111111111111111111111111111111111111#4667";
+  const signer = `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`;
+  const base = {
+    manifest: {
+      seiyaku_name: "Ledger",
+      code_hash: canonicalCodeHash,
+      abi_hash: null,
+      compiler_fingerprint: null,
+      features_bitmap: 0,
+      access_set_hints: {
+        read_keys: [],
+        write_keys: [],
+        dynamic_reads: [
+          {
+            base_key: "state:Balances",
+            key_type: "AccountId",
+            bound_kind: "take",
+            max_keys: 1,
+          },
+        ],
+        dynamic_writes: [],
+      },
+      entrypoints: [
+        {
+          name: "mutate",
+          kind: { kind: "Kotoage", value: null },
+          params: [
+            { name: "request", type_name: "struct Transfer" },
+            { name: "tags", type_name: "List<Name, 4>" },
+          ],
+          argument_schema: {
+            fields: [
+              {
+                name: "request",
+                ty: {
+                  nodes: [
+                    {
+                      kind: "Struct",
+                      value: { name: "Transfer", fields: ["amount"] },
+                    },
+                    {
+                      kind: "Leaf",
+                      value: { kind: "Quantity", value: null },
+                    },
+                  ],
+                },
+              },
+              {
+                name: "tags",
+                ty: {
+                  nodes: [
+                    { kind: "List", value: { capacity: 4 } },
+                    { kind: "Leaf", value: { kind: "Name", value: null } },
+                  ],
+                },
+              },
+            ],
+          },
+          return_type: "quantity",
+          return_schema: {
+            nodes: [
+              { kind: "Leaf", value: { kind: "Quantity", value: null } },
+            ],
+          },
+          permission: "CanMutate",
+          read_keys: [],
+          write_keys: [],
+          access_hints_complete: true,
+          access_hints_skipped: [],
+          triggers: [
+            {
+              id: "settle",
+              repeats: { Indefinitely: null },
+              filter: "AA==",
+              authority: null,
+              metadata: { round: 7 },
+              callback: { namespace: null, entrypoint: "mutate" },
+            },
+          ],
+        },
+      ],
+      states: [
+        { name: "Balances", type_name: "StateMap<AccountId, quantity>" },
+      ],
+      error_codes: [{ namespace: "LedgerError", name: "Denied", code: 1 }],
+      kotoba: [
+        {
+          msg_id: "transfer.denied",
+          translations: [{ lang: "en", text: "Denied" }],
+        },
+      ],
+      provenance: {
+        signer,
+        signature: "22".repeat(64),
+      },
+    },
+    code_hash: "11".repeat(32),
+    abi_hash: null,
+  };
+  const cases = [
+    ["unknown top-level field", (payload) => { payload.extra = true; }],
+    ["camelCase manifest alias", (payload) => {
+      payload.manifest.seiyakuName = payload.manifest.seiyaku_name;
+      delete payload.manifest.seiyaku_name;
+    }],
+    ["unsupported feature bit", (payload) => { payload.manifest.features_bitmap = 4; }],
+    ["camelCase access-hint alias", (payload) => {
+      payload.manifest.access_set_hints.readKeys = [];
+      delete payload.manifest.access_set_hints.read_keys;
+    }],
+    ["camelCase dynamic-hint alias", (payload) => {
+      const hint = payload.manifest.access_set_hints.dynamic_reads[0];
+      hint.maxKeys = hint.max_keys;
+      delete hint.max_keys;
+    }],
+    ["zero dynamic-hint bound", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].max_keys = 0;
+    }],
+    ["wildcard dynamic-hint base", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].base_key = "state:*";
+    }],
+    ["suffixed dynamic-hint base", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].base_key =
+        "state:Balances/suffix";
+    }],
+    ["non-state dynamic-hint base", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].base_key = "account:alice";
+    }],
+    ["unsupported dynamic-hint key scalar", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].key_type = "Json";
+    }],
+    ["unsupported dynamic-hint bound kind", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].bound_kind = "prefix";
+    }],
+    ["dynamic-hint bound above V1 maximum", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].max_keys = 65;
+    }],
+    ["duplicate dynamic-read hint", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads.push({
+        ...payload.manifest.access_set_hints.dynamic_reads[0],
+      });
+    }],
+    ["duplicate dynamic-write hint", (payload) => {
+      const hint = {
+        ...payload.manifest.access_set_hints.dynamic_reads[0],
+      };
+      payload.manifest.access_set_hints.dynamic_writes = [hint, { ...hint }];
+    }],
+    ["unknown dynamic-read StateMap", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].base_key =
+        "state:Missing";
+    }],
+    ["unknown dynamic-write StateMap", (payload) => {
+      payload.manifest.access_set_hints.dynamic_writes = [{
+        ...payload.manifest.access_set_hints.dynamic_reads[0],
+        base_key: "state:Missing",
+      }];
+    }],
+    ["scalar dynamic-read target", (payload) => {
+      payload.manifest.states[0].type_name = "quantity";
+    }],
+    ["scalar dynamic-write target", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads = [];
+      payload.manifest.access_set_hints.dynamic_writes = [{
+        base_key: "state:Balances",
+        key_type: "AccountId",
+        bound_kind: "take",
+        max_keys: 1,
+      }];
+      payload.manifest.states[0].type_name = "quantity";
+    }],
+    ["mismatched dynamic-read key scalar", (payload) => {
+      payload.manifest.access_set_hints.dynamic_reads[0].key_type = "Name";
+    }],
+    ["mismatched dynamic-write key scalar", (payload) => {
+      payload.manifest.access_set_hints.dynamic_writes = [{
+        base_key: "state:Balances",
+        key_type: "Name",
+        bound_kind: "range",
+        max_keys: 1,
+      }];
+    }],
+    ["unknown entrypoint field", (payload) => {
+      payload.manifest.entrypoints[0].legacy = true;
+    }],
+    ["unknown entrypoint-kind field", (payload) => {
+      payload.manifest.entrypoints[0].kind.legacy = true;
+    }],
+    ["camelCase parameter alias", (payload) => {
+      payload.manifest.entrypoints[0].params[0].typeName = "struct Transfer";
+    }],
+    ["unknown argument-schema field", (payload) => {
+      payload.manifest.entrypoints[0].argument_schema.legacy = true;
+    }],
+    ["unknown argument field", (payload) => {
+      payload.manifest.entrypoints[0].argument_schema.fields[0].legacy = true;
+    }],
+    ["unknown value-type field", (payload) => {
+      payload.manifest.entrypoints[0].argument_schema.fields[0].ty.legacy = true;
+    }],
+    ["unknown type-node field", (payload) => {
+      payload.manifest.entrypoints[0].argument_schema.fields[0].ty.nodes[0].legacy = true;
+    }],
+    ["unknown struct-node field", (payload) => {
+      payload.manifest.entrypoints[0].argument_schema.fields[0]
+        .ty.nodes[0].value.legacy = true;
+    }],
+    ["unknown leaf-kind field", (payload) => {
+      payload.manifest.entrypoints[0].argument_schema.fields[0]
+        .ty.nodes[1].value.legacy = true;
+    }],
+    ["unknown list-node field", (payload) => {
+      payload.manifest.entrypoints[0].argument_schema.fields[1]
+        .ty.nodes[0].value.legacy = true;
+    }],
+    ["unknown trigger field", (payload) => {
+      payload.manifest.entrypoints[0].triggers[0].legacy = true;
+    }],
+    ["unknown repeat variant", (payload) => {
+      payload.manifest.entrypoints[0].triggers[0].repeats.Legacy = null;
+    }],
+    ["camelCase callback alias", (payload) => {
+      payload.manifest.entrypoints[0].triggers[0].callback.entryPoint = "mutate";
+    }],
+    ["unknown provenance field", (payload) => {
+      payload.manifest.provenance.algorithm = "ed25519";
+    }],
+    ["unknown state field", (payload) => {
+      payload.manifest.states = [
+        { name: "Balances", type_name: "quantity", legacy: true },
+      ];
+    }],
+    ["camelCase error-code alias", (payload) => {
+      payload.manifest.error_codes[0].errorCode = 1;
+    }],
+    ["camelCase kotoba alias", (payload) => {
+      payload.manifest.kotoba[0].msgId = "transfer.denied";
+    }],
+    ["unknown translation field", (payload) => {
+      payload.manifest.kotoba[0].translations[0].language = "en";
+    }],
+  ];
+
+  for (const [label, mutate] of cases) {
+    const payload = JSON.parse(JSON.stringify(base));
+    mutate(payload);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getContractManifest("11".repeat(32)),
+      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or range|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap/u,
+      label,
+    );
+  }
 });
 
 test("getContractManifest returns null on 404", async () => {

@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 ## قبولیت کا ورک فلو
 
 1. **Вечеринка с фруктами**
-   - Интерфейс командной строки: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - Интерфейс командной строки: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      شامل کریں جو `ProviderAdmissionProposalV1` + пакетный пакет بنائے۔
    - ویلیڈیشن: ضروری کو یقینی بنائیں۔
 2. **Какой-то подарок**
@@ -57,7 +57,7 @@ CLI для создания пакетов (`--endpoint-attestation-intermediate
 
 ### Интерфейс командной строки
 
-ہر کمانڈ کو `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔- `proposal`
+ہر کمانڈ کو `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔- `proposal`
   - Наличие: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     И18НИ00000063Х, И18НИ00000064Х, И18НИ00000065Х,
     `--jurisdiction-code=<ISO3166-1>`, а также `--endpoint=<kind:host>`۔
@@ -96,7 +96,7 @@ CLI для создания пакетов (`--endpoint-attestation-intermediate
    `--retention-epoch` Выберите ставку/конечные точки для определения доли/конечных точек.
 2. Свобода
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -116,7 +116,7 @@ CLI для создания пакетов (`--endpoint-attestation-intermediate
 #### ہنگامی منسوخی
 1. Конверт, который можно использовать в следующих случаях:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

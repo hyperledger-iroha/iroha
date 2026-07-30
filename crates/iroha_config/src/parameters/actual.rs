@@ -224,6 +224,7 @@ impl SoracloudRuntime {
         if !self.production_mode {
             return;
         }
+        self.inrou.assert_archive_resource_bounds();
         assert!(
             self.inrou.enabled,
             "soracloud_runtime.production_mode requires soracloud_runtime.inrou.enabled = true"
@@ -247,6 +248,10 @@ impl SoracloudRuntime {
         assert!(
             !self.hf.allow_inference_bridge_fallback,
             "soracloud_runtime.production_mode forbids soracloud_runtime.hf.allow_inference_bridge_fallback"
+        );
+        assert!(
+            self.submission.signer.is_some(),
+            "soracloud_runtime.production_mode requires soracloud_runtime.submission.signer"
         );
     }
 }
@@ -290,6 +295,16 @@ pub struct SoracloudRuntimeInrou {
     pub enabled: bool,
     /// Whether the validator should act as a proxy/control-plane node only.
     pub proxy_only: bool,
+    /// Maximum compressed size accepted for one bundle archive.
+    pub bundle_archive_max_compressed_bytes: NonZeroU64,
+    /// Maximum decoded size accepted for one bundle archive.
+    pub bundle_archive_max_decoded_bytes: NonZeroU64,
+    /// Maximum number of entries accepted from one bundle archive.
+    pub bundle_archive_max_entries: NonZeroU32,
+    /// Maximum decoded size accepted for one file in a bundle archive.
+    pub bundle_archive_max_file_bytes: NonZeroU64,
+    /// Maximum aggregate decoded file size accepted from one bundle archive.
+    pub bundle_archive_max_total_file_bytes: NonZeroU64,
     /// Startup grace window before the manager treats the VM as failed.
     pub start_grace: Duration,
     /// Shutdown grace window before the manager force-stops the VMM process.
@@ -302,9 +317,57 @@ impl Default for SoracloudRuntimeInrou {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             enabled: defaults::soracloud_runtime::INROU_ENABLED,
             proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            bundle_archive_max_compressed_bytes:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+            bundle_archive_max_decoded_bytes:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+            bundle_archive_max_entries:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+            bundle_archive_max_file_bytes:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+            bundle_archive_max_total_file_bytes:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
             start_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
             stop_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS),
         }
+    }
+}
+
+impl SoracloudRuntimeInrou {
+    fn assert_archive_resource_bounds(&self) {
+        assert!(
+            self.bundle_archive_max_compressed_bytes.get()
+                <= defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT,
+            "soracloud_runtime.inrou.bundle_archive_max_compressed_bytes exceeds its hard ceiling"
+        );
+        assert!(
+            self.bundle_archive_max_decoded_bytes.get()
+                <= defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT,
+            "soracloud_runtime.inrou.bundle_archive_max_decoded_bytes exceeds its hard ceiling"
+        );
+        assert!(
+            self.bundle_archive_max_entries.get()
+                <= defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES_LIMIT,
+            "soracloud_runtime.inrou.bundle_archive_max_entries exceeds its hard ceiling"
+        );
+        assert!(
+            self.bundle_archive_max_file_bytes.get()
+                <= defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT,
+            "soracloud_runtime.inrou.bundle_archive_max_file_bytes exceeds its hard ceiling"
+        );
+        assert!(
+            self.bundle_archive_max_total_file_bytes.get()
+                <= defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT,
+            "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes exceeds its hard ceiling"
+        );
+        assert!(
+            self.bundle_archive_max_file_bytes <= self.bundle_archive_max_total_file_bytes,
+            "soracloud_runtime.inrou.bundle_archive_max_file_bytes must not exceed bundle_archive_max_total_file_bytes"
+        );
+        assert!(
+            self.bundle_archive_max_total_file_bytes <= self.bundle_archive_max_decoded_bytes,
+            "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed bundle_archive_max_decoded_bytes"
+        );
     }
 }
 
@@ -313,6 +376,29 @@ impl Default for SoracloudRuntimeInrou {
 pub struct SoracloudRuntimeSubmission {
     /// Exact fee payer used for runtime-originated control-plane submissions.
     pub fee_payer: SoracloudRuntimeFeePayer,
+    /// Exact public binding for the deployment-owned mutation and provenance signer.
+    pub signer: Option<SoracloudRuntimeMutationSignerBinding>,
+}
+
+/// Public identity and qualification of the Soracloud runtime mutation signer.
+///
+/// The opaque handle is resolved through deployment-owned runtime injection.
+/// Private keys, credentials, tokens, PINs, and vendor connection material are
+/// intentionally absent from this configuration boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoracloudRuntimeMutationSignerBinding {
+    /// Stable opaque production provider handle.
+    pub handle: String,
+    /// Canonical transaction authority derived from `public_key`.
+    pub authority: AccountId,
+    /// Exact signature algorithm exposed by the runtime provider.
+    pub algorithm: Algorithm,
+    /// Exact public key exposed by the runtime provider.
+    pub public_key: PublicKey,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
 }
 
 /// Signature-bound fee source for runtime-originated Soracloud transactions.
@@ -397,6 +483,10 @@ pub struct SoracloudRuntimeHuggingFace {
     pub import_max_file_bytes: u64,
     /// Maximum aggregate size imported for one Hub source.
     pub import_max_total_bytes: u64,
+    /// Maximum in-memory response accepted from the Hub model-info API.
+    pub model_info_max_response_bytes: u64,
+    /// Maximum in-memory response accepted from the HF inference bridge.
+    pub inference_max_response_bytes: u64,
     /// File-selection allowlist used by the local importer.
     pub import_file_allowlist: Vec<String>,
     /// Optional bearer token used for the HF Inference bridge.
@@ -425,6 +515,10 @@ impl Default for SoracloudRuntimeHuggingFace {
             import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
             import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
             import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
+            model_info_max_response_bytes:
+                defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
+            inference_max_response_bytes:
+                defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
             import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
             inference_token: None,
         }
@@ -9589,7 +9683,8 @@ pub struct SorafsProviderIngestOutbox {
     pub retry_max_delay_ms: u64,
     /// Maximum finalized-block age of a terminal tombstone.
     pub terminal_retention_blocks: u64,
-    /// Maximum canonical size of one signed completion transaction.
+    /// Maximum canonical size of one signed completion transaction; this must
+    /// meet the production floor and leave room for two retained canonical copies.
     pub max_signed_transaction_bytes: Bytes<u64>,
     /// Maximum payload-free rows returned by one status page.
     pub max_status_page_size: usize,

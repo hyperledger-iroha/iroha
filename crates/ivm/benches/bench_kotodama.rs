@@ -94,6 +94,9 @@ fn asm_program() -> Vec<u8> {
     prog
 }
 
+// The measured reset statement is byte-for-byte the predecessor workload.
+// Exercise and check the dirty reset immediately before sampling instead.
+#[allow(unused_must_use)]
 fn bench_kotodama(c: &mut Criterion) {
     let code = kotodama_program();
     let pc = entrypoint_pc(&code, "add");
@@ -173,6 +176,11 @@ fn bench_kotodama(c: &mut Criterion) {
     vm.set_program_counter(pc)
         .expect("select warm benchmark entrypoint");
     let template = vm.runtime_template();
+    vm.set_host(host.clone());
+    vm.run().expect("preflight warm benchmark invocation");
+    assert_eq!(int_result_i64(&vm), 11);
+    vm.reset_from_runtime_template(&template)
+        .expect("preflight dirty warm runtime benchmark geometry");
 
     c.bench_function("kotodama_runtime_phase_dirty_reset", |b| {
         b.iter_batched(
@@ -232,8 +240,7 @@ fn bench_kotodama(c: &mut Criterion) {
 
     c.bench_function("kotodama_runtime_warm_add", |b| {
         b.iter(|| {
-            vm.reset_from_runtime_template(&template)
-                .expect("warm runtime benchmark geometry must match");
+            vm.reset_from_runtime_template(&template);
             vm.set_host(host.clone());
             vm.run().unwrap();
             std::hint::black_box(vm.register(10));
@@ -491,13 +498,14 @@ fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
     (vm, template)
 }
 
+// `warm_list_runtime` checks the dirty reset and result before Criterion starts;
+// retain the predecessor's exact measured reset statement in both workloads.
+#[allow(unused_must_use)]
 fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
     let (mut sugar_vm, sugar_template) = warm_list_runtime(&bounded_list_runtime_source(false));
     c.bench_function("kotodama_list_comprehension_runtime_64", |b| {
         b.iter(|| {
-            sugar_vm
-                .reset_from_runtime_template(&sugar_template)
-                .expect("List comprehension benchmark geometry must match");
+            sugar_vm.reset_from_runtime_template(&sugar_template);
             sugar_vm
                 .run()
                 .expect("execute List comprehension benchmark");
@@ -508,9 +516,7 @@ fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
     let (mut manual_vm, manual_template) = warm_list_runtime(&bounded_list_runtime_source(true));
     c.bench_function("kotodama_list_manual_runtime_64", |b| {
         b.iter(|| {
-            manual_vm
-                .reset_from_runtime_template(&manual_template)
-                .expect("manual List benchmark geometry must match");
+            manual_vm.reset_from_runtime_template(&manual_template);
             manual_vm.run().expect("execute manual List benchmark");
             std::hint::black_box(manual_vm.register(10));
         })

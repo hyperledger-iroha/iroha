@@ -131,8 +131,8 @@ struct SoraFsManifestV1 {
     chunking: ChunkingProfileV1,   // Captures CDC parameters + multihash codes.
     chunk_digest_sha3_256: [u8; 32], // SHA3-256 of ordered LE64 offsets, LE64 lengths, and BLAKE3 digests.
     content_length: u64,           // Total bytes represented by the DAG.
-    car_digest: [u8; 32],          // BLAKE3-256 of the CAR payload section.
-    car_size: u64,                 // Bytes of the CAR file (payload + index).
+    car_digest: [u8; 32],          // BLAKE3-256 of the entire canonical CARv2 archive.
+    car_size: u64,                 // Complete CARv2 archive bytes.
     pin_policy: PinPolicy,         // Minimum replicas, storage class, retention TTL.
     governance: GovernanceProofs,  // Signatures / VRF proofs authorising the pin.
     alias_claims: [AliasClaim; N], // Optional alias bindings bundled with the manifest.
@@ -143,6 +143,14 @@ struct SoraFsManifestV1 {
 The canonical encoding ships as [`ManifestV1`](../../crates/sorafs_manifest/src/lib.rs) with
 [`ManifestBuilder`](../../crates/sorafs_manifest/src/lib.rs) wiring Norito values
 into manifests that the CLI emits.
+
+The V1 archive commitment is exact: `car_digest` hashes every byte of the
+canonical CARv2 file—the pragma, CARv2 header, embedded CARv1 payload, and
+MultihashIndexSorted index—and `car_size` is that complete file's byte length.
+Neither field is a raw-payload commitment. JSON reports and fetch plans that
+need the BLAKE3-256 digest of the unchunked payload must carry the explicit
+top-level `payload_digest_hex`; consumers MUST NOT substitute
+`manifest.car_digest_hex` when it is absent.
 
 Supporting structures:
 
@@ -541,7 +549,9 @@ Operational expectations:
   every response so clients can verify alias bindings without extra round-trips.
 - CLI tooling MUST expose expectation flags (`--car-digest=<hex>`,
   `--car-size=<bytes>`, `--root-cid=<hex>`, etc.) so build pipelines can pin
-  exact outputs and detect tampering automatically.
+  exact outputs and detect tampering automatically. In V1, `--car-digest` and
+  `--car-size` refer to the entire canonical CARv2 archive; raw-payload
+  expectations use separately named payload fields and flags.
 
 ## Release Decisions
 

@@ -12,10 +12,13 @@ use iroha_config::parameters::{
     defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
     is_production_runtime_handle,
 };
+use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 
 use crate::IrohaRuntimeDeps;
 
 const MAX_PROVIDER_INGEST_SOURCE_STREAMS_V1: u32 = 1_024;
+const GOVERNANCE_DAG_SIGNER_STARTUP_CHALLENGE_DOMAIN_V1: &[u8] =
+    b"sorafs.governance-dag.registry-startup-possession.v1\0";
 
 /// One runtime-provider role understood by the V1 daemon launcher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -118,6 +121,8 @@ pub enum IrohaRuntimeProviderSlotV1 {
     EvidenceViewerCompactionArchive = 47,
     /// Reputation finalized-archive sealed retention approval authority.
     ReputationFinalizedArchiveRetentionAuthority = 48,
+    /// Soracloud runtime mutation and purpose-separated provenance signer.
+    SoracloudRuntimeMutationSigner = 49,
 }
 
 impl IrohaRuntimeProviderSlotV1 {
@@ -144,6 +149,8 @@ pub struct IrohaRuntimeProviderBindingV1 {
     pop_credential_runtime_binding: Option<PopCredentialRuntimeBindingV1>,
     potr_runtime_binding: Option<iroha_config::parameters::actual::SorafsPotrRuntimeBinding>,
     native_signer_binding: Option<iroha_torii::SorafsNativeTransactionSignerBindingV1>,
+    soracloud_runtime_signer_binding:
+        Option<crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1>,
     provider_ingest_signer_binding: Option<sorafs_node::ProviderIngestCompletionSignerBindingV1>,
     provider_ingest_source_limits: Option<ProviderIngestSourceLimitsV1>,
     provider_ingest_checkpoint_max_bytes: Option<u64>,
@@ -157,6 +164,8 @@ pub struct IrohaRuntimeProviderBindingV1 {
     evidence_viewer_archive_id: Option<[u8; 32]>,
     evidence_viewer_archive_public_key: Option<[u8; 32]>,
     evidence_viewer_archive_max_bytes: Option<u64>,
+    governance_dag_publisher_peer_id: Option<Vec<u8>>,
+    governance_dag_publisher_public_key: Option<[u8; 32]>,
     governance_request_auth_public_key: Option<[u8; 32]>,
     governance_request_auth_max_body_bytes: Option<u64>,
 }
@@ -243,6 +252,7 @@ impl IrohaRuntimeProviderBindingV1 {
             pop_credential_runtime_binding: None,
             potr_runtime_binding: None,
             native_signer_binding: None,
+            soracloud_runtime_signer_binding: None,
             provider_ingest_signer_binding: None,
             provider_ingest_source_limits: None,
             provider_ingest_checkpoint_max_bytes: None,
@@ -256,9 +266,53 @@ impl IrohaRuntimeProviderBindingV1 {
             evidence_viewer_archive_id: None,
             evidence_viewer_archive_public_key: None,
             evidence_viewer_archive_max_bytes: None,
+            governance_dag_publisher_peer_id: None,
+            governance_dag_publisher_public_key: None,
             governance_request_auth_public_key: None,
             governance_request_auth_max_body_bytes: None,
         })
+    }
+
+    fn try_new_governance_dag_signer(
+        handle: impl Into<String>,
+        revision: u64,
+        policy_digest: [u8; 32],
+        publisher_peer_id: &str,
+        publisher_public_key_hex: &str,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let slot = IrohaRuntimeProviderSlotV1::GovernanceDagSigner;
+        if publisher_peer_id.is_empty()
+            || publisher_peer_id.len()
+                > sorafs_manifest::GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1
+            || !publisher_peer_id
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic())
+            || publisher_public_key_hex.len() != 64
+            || !publisher_public_key_hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+        }
+        let public_key = iroha_crypto::PublicKey::from_hex(
+            iroha_crypto::Algorithm::Ed25519,
+            publisher_public_key_hex,
+        )
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+        let (algorithm, public_key_bytes) = public_key.to_bytes();
+        let public_key_bytes: [u8; 32] = public_key_bytes
+            .try_into()
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+        if algorithm != iroha_crypto::Algorithm::Ed25519
+            || iroha_crypto::ed25519_parse_public_key(&public_key_bytes).is_err()
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+        }
+
+        let mut projected = Self::try_new(slot, handle, Some(revision), Some(policy_digest))?;
+        projected.governance_dag_publisher_peer_id = Some(publisher_peer_id.as_bytes().to_vec());
+        projected.governance_dag_publisher_public_key = Some(public_key_bytes);
+        Ok(projected)
     }
 
     fn try_new_stream_token_signer(
@@ -654,6 +708,25 @@ impl IrohaRuntimeProviderBindingV1 {
         Ok(projected)
     }
 
+    fn try_new_soracloud_runtime_signer(
+        binding: &iroha_config::parameters::actual::SoracloudRuntimeMutationSignerBinding,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let slot = IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner;
+        let exact =
+            crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1::try_from_config(
+                binding,
+            )
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+        let mut projected = Self::try_new(
+            slot,
+            exact.handle(),
+            Some(exact.qualification().revision()),
+            Some(exact.qualification().policy_digest()),
+        )?;
+        projected.soracloud_runtime_signer_binding = Some(exact);
+        Ok(projected)
+    }
+
     fn try_new_provider_ingest_signer(
         slot: IrohaRuntimeProviderSlotV1,
         handle: impl Into<String>,
@@ -667,7 +740,8 @@ impl IrohaRuntimeProviderBindingV1 {
             IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver
                 | IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
         ) || signer_binding.validate().is_err()
-            || max_signed_transaction_bytes == 0
+            || max_signed_transaction_bytes
+                < provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
             || max_signed_transaction_bytes
                 > provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
         {
@@ -780,6 +854,14 @@ impl IrohaRuntimeProviderBindingV1 {
             .ok()
     }
 
+    /// Return the exact Soracloud runtime signer binding, when requested.
+    #[must_use]
+    pub const fn soracloud_runtime_signer_binding(
+        &self,
+    ) -> Option<&crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1> {
+        self.soracloud_runtime_signer_binding.as_ref()
+    }
+
     /// Return the exact governed provider-ingest completion-signer binding.
     pub(crate) fn provider_ingest_signer_binding(
         &self,
@@ -802,6 +884,18 @@ impl IrohaRuntimeProviderBindingV1 {
     /// Return the configured canonical signed-completion-transaction byte bound.
     pub(crate) const fn provider_ingest_max_signed_transaction_bytes(&self) -> Option<u64> {
         self.provider_ingest_max_signed_transaction_bytes
+    }
+
+    /// Return the exact configured Governance DAG publisher peer identity.
+    #[must_use]
+    pub(crate) fn governance_dag_publisher_peer_id(&self) -> Option<&[u8]> {
+        self.governance_dag_publisher_peer_id.as_deref()
+    }
+
+    /// Return the exact configured Governance DAG publisher verification key.
+    #[must_use]
+    pub(crate) const fn governance_dag_publisher_public_key(&self) -> Option<[u8; 32]> {
+        self.governance_dag_publisher_public_key
     }
 
     /// Return the exact finalized-PoR archive identity and verification binding.
@@ -911,6 +1005,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         collect_pop_potr_gateway_bindings(config, &mut bindings)?;
         collect_reputation_billing_bindings(config, &mut bindings)?;
         collect_provider_ingest_bindings(config, &mut bindings)?;
+        collect_soracloud_runtime_signer_binding(config, &mut bindings)?;
 
         // Moderation strict ingress does not yet have a concrete
         // `IrohaRuntimeDeps` slot. Its service-owned startup validator, rather
@@ -1062,6 +1157,23 @@ impl IrohaRuntimeProviderBindingsV1 {
     }
 }
 
+fn collect_soracloud_runtime_signer_binding(
+    config: &Config,
+    bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let slot = IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner;
+    match config.soracloud_runtime.submission.signer.as_ref() {
+        Some(binding) => {
+            bindings.push(IrohaRuntimeProviderBindingV1::try_new_soracloud_runtime_signer(binding)?)
+        }
+        None if config.soracloud_runtime.production_mode => {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+        }
+        None => {}
+    }
+    Ok(())
+}
+
 fn append_binding(
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
     slot: IrohaRuntimeProviderSlotV1,
@@ -1141,18 +1253,30 @@ fn collect_storage_security_bindings(
     // Repeat the parser's all-or-nothing qualification check because callers
     // can manually construct or mutate the public actual configuration.
     match (
+        storage.governance_dag_publisher_peer_id.as_deref(),
         storage.governance_dag_signer_handle.as_deref(),
         storage.governance_dag_signer_revision,
         storage.governance_dag_signer_policy_digest,
+        storage.governance_dag_publisher_public_key_hex.as_deref(),
     ) {
-        (None, None, None) => {}
-        (Some(handle), Some(revision), Some(policy_digest)) => append_binding(
-            bindings,
-            IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
-            handle,
+        (None, None, None, None, None) if storage.governance_dag_dir.is_none() => {}
+        (
+            Some(publisher_peer_id),
+            Some(handle),
             Some(revision),
             Some(policy_digest),
-        )?,
+            Some(publisher_public_key_hex),
+        ) if storage.enabled && storage.governance_dag_dir.is_some() => {
+            bindings.push(
+                IrohaRuntimeProviderBindingV1::try_new_governance_dag_signer(
+                    handle,
+                    revision,
+                    policy_digest,
+                    publisher_peer_id,
+                    publisher_public_key_hex,
+                )?,
+            );
+        }
         _ => {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                 IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
@@ -1549,6 +1673,42 @@ fn collect_provider_ingest_bindings(
     let Some(ingest) = config.torii.sorafs_storage.provider_ingest_runtime.as_ref() else {
         return Ok(());
     };
+    if ingest.outbox.max_signed_transaction_bytes.0
+        < provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
+        || ingest.outbox.max_signed_transaction_bytes.0
+            > provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
+        ));
+    }
+    if ingest.outbox.checkpoint_max_bytes.0 == 0
+        || ingest.outbox.checkpoint_max_bytes.0
+            > provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
+        ));
+    }
+    sorafs_node::ProviderIngestOutboxPolicyV1 {
+        max_active_entries: ingest.outbox.max_active_entries,
+        max_terminal_entries: ingest.outbox.max_terminal_entries,
+        max_attempts: ingest.outbox.max_attempts,
+        checkpoint_max_bytes: ingest.outbox.checkpoint_max_bytes.0,
+        checkpoint_operation_timeout_ms: ingest.outbox.checkpoint_operation_timeout_ms,
+        source_lease_ttl_ms: ingest.outbox.source_lease_ttl_ms,
+        retry_base_delay_ms: ingest.outbox.retry_base_delay_ms,
+        retry_max_delay_ms: ingest.outbox.retry_max_delay_ms,
+        terminal_retention_blocks: ingest.outbox.terminal_retention_blocks,
+        max_signed_transaction_bytes: ingest.outbox.max_signed_transaction_bytes.0,
+        max_status_page_size: ingest.outbox.max_status_page_size,
+    }
+    .validate()
+    .map_err(|_| {
+        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
+        )
+    })?;
     let max_source_providers = u32::try_from(ingest.max_source_providers).map_err(|_| {
         IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
             IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource,
@@ -1684,8 +1844,12 @@ impl std::error::Error for IrohaRuntimeProviderRegistryErrorV1 {}
 /// successful registry resolution as independent provider attestation.
 /// The launcher additionally wraps each configured native proof, repair,
 /// reserve, and orderbook signer in Torii's immutable exact-binding facade
-/// before forwarding the dependency set.
+/// before forwarding the dependency set. The Soracloud mutation signer is
+/// likewise bound to its exact authority and key plus an active, non-test
+/// qualification before the runtime manager can start.
 ///
+/// Governance DAG signers are independently cross-bound here to the configured
+/// handle, qualification, publisher peer identity, and Ed25519 public key.
 /// Stream-token providers currently have only handle/public-key binding.
 pub trait IrohaRuntimeProviderRegistryV1: Send + Sync {
     /// Resolve the complete dependency set for one standard daemon launch.
@@ -1741,13 +1905,175 @@ fn resolve_runtime_deps_from_bindings(
         return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
     }
     qualify_fenced_privacy_dependencies(bindings, &dependencies)?;
+    qualify_governance_dag_signer_dependency(bindings, &dependencies)?;
     qualify_governance_request_auth_dependencies(bindings, &dependencies)?;
     qualify_native_transaction_signers(bindings, &mut dependencies)?;
+    qualify_soracloud_runtime_signer(bindings, &mut dependencies)?;
     qualify_provider_ingest_dependencies(bindings, &dependencies)?;
     qualify_reputation_retention_dependency(bindings, &dependencies)?;
     qualify_por_replay_archive_dependency(bindings, &dependencies)?;
     qualify_evidence_viewer_archive_dependency(bindings, &dependencies)?;
     Ok(dependencies)
+}
+
+fn map_soracloud_runtime_signer_qualification_error(
+    error: crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationErrorV1,
+) -> IrohaRuntimeProviderRegistryErrorV1 {
+    use crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationErrorV1 as Error;
+
+    match error {
+        Error::ProviderUnavailable => IrohaRuntimeProviderRegistryErrorV1::Unavailable,
+        Error::InvalidProviderHandle | Error::TestProviderRejected => {
+            IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected
+        }
+        Error::InvalidProviderQualification
+        | Error::ProviderInactive
+        | Error::RevisionMismatch
+        | Error::PolicyDigestMismatch
+        | Error::ProviderDrift => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+        Error::UnsupportedProviderKeyAlgorithm
+        | Error::HandleMismatch
+        | Error::AuthorityMismatch
+        | Error::PublicKeyMismatch
+        | Error::ProviderAuthorityKeyMismatch => {
+            IrohaRuntimeProviderRegistryErrorV1::BindingMismatch
+        }
+    }
+}
+
+fn qualify_soracloud_runtime_signer(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &mut IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let slot = IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner;
+    let Some(binding) = bindings.iter().find(|binding| binding.slot() == slot) else {
+        return Ok(());
+    };
+    let exact = binding
+        .soracloud_runtime_signer_binding()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+    let provider = dependencies
+        .soracloud_runtime_mutation_signer
+        .take()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    dependencies.soracloud_runtime_mutation_signer = Some(
+        crate::soracloud_runtime_signer::qualify_soracloud_runtime_mutation_signer_v1(
+            exact.clone(),
+            provider,
+        )
+        .map_err(map_soracloud_runtime_signer_qualification_error)?,
+    );
+    Ok(())
+}
+
+fn qualify_governance_dag_signer_dependency(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let slot = IrohaRuntimeProviderSlotV1::GovernanceDagSigner;
+    let Some(expected) = bindings.iter().find(|binding| binding.slot() == slot) else {
+        return Ok(());
+    };
+    let signer = dependencies
+        .sorafs_governance_dag_signer
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    let expected_revision = expected
+        .revision()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+    let expected_policy_digest = expected
+        .policy_digest()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+    let expected_publisher_peer_id = expected
+        .governance_dag_publisher_peer_id()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+    let expected_public_key = expected
+        .governance_dag_publisher_public_key()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+
+    let observe = || {
+        let handle = signer.handle().to_owned();
+        if !is_production_runtime_handle(&handle) {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
+        }
+        let qualification = signer
+            .qualification()
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
+        Ok((
+            handle,
+            qualification,
+            signer.publisher_peer_id().to_vec(),
+            signer.public_key(),
+        ))
+    };
+    let first = observe()?;
+    if first.0 != expected.handle()
+        || first.2.as_slice() != expected_publisher_peer_id
+        || first.3 != expected_public_key
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    if first.1.revision == 0
+        || first.1.policy_digest == [0; 32]
+        || first.1.revision != expected_revision
+        || first.1.policy_digest != expected_policy_digest
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+    let mut nonce = [0_u8; 32];
+    OsRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
+    let challenge = governance_dag_signer_startup_challenge_v1(
+        nonce,
+        bindings.chain_id(),
+        expected.handle(),
+        expected_revision,
+        expected_policy_digest,
+        expected_publisher_peer_id,
+        expected_public_key,
+    )?;
+    let signature_result = signer.sign(&challenge);
+    let second = observe()?;
+    if second != first {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+    let signature_bytes =
+        signature_result.map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
+    let public_key =
+        iroha_crypto::PublicKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &expected_public_key)
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+    let signature = iroha_crypto::Signature::try_from_bytes(&signature_bytes)
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+    signature
+        .verify(&public_key, &challenge)
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+    Ok(())
+}
+
+fn governance_dag_signer_startup_challenge_v1(
+    nonce: [u8; 32],
+    chain_id: &str,
+    handle: &str,
+    revision: u64,
+    policy_digest: [u8; 32],
+    publisher_peer_id: &[u8],
+    public_key: [u8; 32],
+) -> Result<[u8; 32], IrohaRuntimeProviderRegistryErrorV1> {
+    let slot = IrohaRuntimeProviderSlotV1::GovernanceDagSigner;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GOVERNANCE_DAG_SIGNER_STARTUP_CHALLENGE_DOMAIN_V1);
+    hasher.update(&nonce);
+    for component in [chain_id.as_bytes(), handle.as_bytes(), publisher_peer_id] {
+        let length = u64::try_from(component.len())
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+        hasher.update(&length.to_le_bytes());
+        hasher.update(component);
+    }
+    hasher.update(&revision.to_le_bytes());
+    hasher.update(&policy_digest);
+    hasher.update(&public_key);
+    Ok(*hasher.finalize().as_bytes())
 }
 
 fn qualify_governance_request_auth_dependencies(
@@ -2504,6 +2830,7 @@ fn dependency_is_present(
         Slot::EvidenceViewerCompactionArchive => {
             deps.sorafs_evidence_viewer_compaction_archive.is_some()
         }
+        Slot::SoracloudRuntimeMutationSigner => deps.soracloud_runtime_mutation_signer.is_some(),
     }
 }
 
@@ -2517,6 +2844,11 @@ fn has_unrequested_dependency(
         || has_unrequested_pop_potr_gateway_dependency(bindings, dependencies)
         || has_unrequested_reputation_billing_dependency(bindings, dependencies)
         || has_unrequested_provider_ingest_dependency(bindings, dependencies)
+        || dependency_is_unrequested(
+            bindings,
+            IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner,
+            dependencies.soracloud_runtime_mutation_signer.is_some(),
+        )
 }
 
 fn dependency_is_unrequested(
@@ -2856,6 +3188,7 @@ mod tests {
     const GOVERNANCE_HEAD_HANDLE: &str = "vault://governance/head-primary";
     const GOVERNANCE_CHECKPOINT_HANDLE: &str = "kms://governance/checkpoint-primary";
     const GOVERNANCE_SIGNER_HANDLE: &str = "hsm://governance/producer-signer-primary";
+    const GOVERNANCE_PUBLISHER_PEER_ID: &str = "12D3KooWGovernanceProducerPrimary";
     const GOVERNANCE_QUALIFICATION: sorafs_node::GovernanceDagRuntimeProviderQualificationV1 =
         sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(7, [0x71; 32]);
     const EVIDENCE_CHECKPOINT_HANDLE: &str = "sealed://sorafs/evidence-viewer/checkpoint-primary";
@@ -2886,6 +3219,20 @@ mod tests {
         let mut bytes = [0_u8; 32];
         bytes.copy_from_slice(&public_key);
         bytes
+    }
+
+    fn governance_signer_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("Governance DAG signer key")
+    }
+
+    fn governance_signer_public_key(seed: u8) -> [u8; 32] {
+        governance_signer_keypair(seed)
+            .public_key()
+            .to_bytes()
+            .1
+            .try_into()
+            .expect("Ed25519 public key has 32 bytes")
     }
 
     fn por_archive_binding(seed: u8) -> sorafs_node::PorFinalizedReplayArchiveBindingV1 {
@@ -3064,6 +3411,7 @@ mod tests {
             Slot::PorFinalizedReplayArchive,
             Slot::EvidenceViewerCompactionArchive,
             Slot::ReputationFinalizedArchiveRetentionAuthority,
+            Slot::SoracloudRuntimeMutationSigner,
         ];
         for (index, slot) in slots.into_iter().enumerate() {
             assert_eq!(
@@ -3072,6 +3420,47 @@ mod tests {
                 "V1 broker role identifiers must stay contiguous and immutable"
             );
         }
+    }
+
+    #[test]
+    fn soracloud_runtime_signer_projects_only_exact_public_metadata() {
+        let key_pair =
+            KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519).expect("test key");
+        let configured = iroha_config::parameters::actual::SoracloudRuntimeMutationSignerBinding {
+            handle: "hsm://soracloud/runtime-primary".to_owned(),
+            authority: iroha_data_model::account::AccountId::new(key_pair.public_key().clone()),
+            algorithm: Algorithm::Ed25519,
+            public_key: key_pair.public_key().clone(),
+            revision: 11,
+            policy_digest: [0xD2; 32],
+        };
+        let projected =
+            IrohaRuntimeProviderBindingV1::try_new_soracloud_runtime_signer(&configured)
+                .expect("valid public signer binding");
+
+        assert_eq!(
+            projected.slot(),
+            IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner
+        );
+        assert_eq!(projected.handle(), configured.handle);
+        assert_eq!(projected.revision(), Some(configured.revision));
+        assert_eq!(projected.policy_digest(), Some(configured.policy_digest));
+        let exact = projected
+            .soracloud_runtime_signer_binding()
+            .expect("exact signer metadata");
+        assert_eq!(exact.authority(), &configured.authority);
+        assert_eq!(exact.public_key(), &configured.public_key);
+        assert!(exact.qualification().active());
+        assert!(!exact.qualification().test_only());
+
+        let mut test_marked = configured;
+        test_marked.handle = "hsm://soracloud/test".to_owned();
+        assert_eq!(
+            IrohaRuntimeProviderBindingV1::try_new_soracloud_runtime_signer(&test_marked),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner,
+            ))
+        );
     }
 
     fn pop_registry_config() -> iroha_config::parameters::actual::SorafsPopCredentialService {
@@ -3502,6 +3891,106 @@ mod tests {
         fn with_key_from(mut self, handle: &'static str) -> Self {
             self.key_handle = handle;
             self
+        }
+    }
+
+    #[derive(Debug)]
+    struct GovernanceSigner {
+        handle: &'static str,
+        later_handle: Option<&'static str>,
+        handle_calls: AtomicUsize,
+        publisher_peer_id: Vec<u8>,
+        later_publisher_peer_id: Option<Vec<u8>>,
+        publisher_peer_id_calls: AtomicUsize,
+        key_pair: KeyPair,
+        signing_key_pair: Option<KeyPair>,
+        sign_error: bool,
+        first_qualification: sorafs_node::GovernanceDagRuntimeProviderQualificationV1,
+        later_qualification: Option<sorafs_node::GovernanceDagRuntimeProviderQualificationV1>,
+        qualification_calls: AtomicUsize,
+        later_public_key: Option<[u8; 32]>,
+        public_key_calls: AtomicUsize,
+    }
+
+    impl GovernanceSigner {
+        fn exact() -> Self {
+            Self {
+                handle: GOVERNANCE_SIGNER_HANDLE,
+                later_handle: None,
+                handle_calls: AtomicUsize::new(0),
+                publisher_peer_id: GOVERNANCE_PUBLISHER_PEER_ID.as_bytes().to_vec(),
+                later_publisher_peer_id: None,
+                publisher_peer_id_calls: AtomicUsize::new(0),
+                key_pair: governance_signer_keypair(0x73),
+                signing_key_pair: None,
+                sign_error: false,
+                first_qualification: GOVERNANCE_QUALIFICATION,
+                later_qualification: None,
+                qualification_calls: AtomicUsize::new(0),
+                later_public_key: None,
+                public_key_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceSigner {
+        fn handle(&self) -> &str {
+            let call = self.handle_calls.fetch_add(1, Ordering::Relaxed);
+            if call == 0 {
+                self.handle
+            } else {
+                self.later_handle.unwrap_or(self.handle)
+            }
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
+            let call = self.qualification_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(if call == 0 {
+                self.first_qualification
+            } else {
+                self.later_qualification.unwrap_or(self.first_qualification)
+            })
+        }
+
+        fn publisher_peer_id(&self) -> &[u8] {
+            let call = self.publisher_peer_id_calls.fetch_add(1, Ordering::Relaxed);
+            if call == 0 {
+                &self.publisher_peer_id
+            } else {
+                self.later_publisher_peer_id
+                    .as_deref()
+                    .unwrap_or(&self.publisher_peer_id)
+            }
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            let first = self
+                .key_pair
+                .public_key()
+                .to_bytes()
+                .1
+                .try_into()
+                .expect("Ed25519 public key has 32 bytes");
+            let call = self.public_key_calls.fetch_add(1, Ordering::Relaxed);
+            if call == 0 {
+                first
+            } else {
+                self.later_public_key.unwrap_or(first)
+            }
+        }
+
+        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+            if self.sign_error {
+                return Err("redacted Governance DAG signing failure".to_owned());
+            }
+            let key_pair = self.signing_key_pair.as_ref().unwrap_or(&self.key_pair);
+            iroha_crypto::Signature::try_new(key_pair.private_key(), payload)
+                .map_err(|_| "redacted Governance DAG signing failure".to_owned())?
+                .payload()
+                .try_into()
+                .map_err(|_| "redacted Governance DAG signature width failure".to_owned())
         }
     }
 
@@ -4008,12 +4497,12 @@ mod tests {
         let storage = &mut config.torii.sorafs_storage;
         storage.enabled = true;
         storage.governance_dag_dir = Some("/var/lib/iroha/governance-producer".into());
-        storage.governance_dag_publisher_peer_id =
-            Some("12D3KooWGovernanceProducerPrimary".to_owned());
+        storage.governance_dag_publisher_peer_id = Some(GOVERNANCE_PUBLISHER_PEER_ID.to_owned());
         storage.governance_dag_signer_handle = Some(GOVERNANCE_SIGNER_HANDLE.to_owned());
         storage.governance_dag_signer_revision = Some(GOVERNANCE_QUALIFICATION.revision);
         storage.governance_dag_signer_policy_digest = Some(GOVERNANCE_QUALIFICATION.policy_digest);
-        storage.governance_dag_publisher_public_key_hex = Some("31".repeat(32));
+        storage.governance_dag_publisher_public_key_hex =
+            Some(hex::encode(governance_signer_public_key(0x73)));
 
         let service = &mut storage.governance_dag_service;
         service.enabled = false;
@@ -4260,10 +4749,10 @@ mod tests {
                         retention_authority: None,
                     },
                 outbox: iroha_config::parameters::actual::SorafsProviderIngestOutbox {
-                    max_active_entries: 128,
+                    max_active_entries: 32,
                     max_terminal_entries: 4_096,
                     max_attempts: 8,
-                    checkpoint_max_bytes: Bytes(64 * 1024 * 1024),
+                    checkpoint_max_bytes: Bytes(160 * 1024 * 1024),
                     checkpoint_operation_timeout_ms: 30_000,
                     source_lease_ttl_ms: 30_000,
                     retry_base_delay_ms: 1_000,
@@ -5158,7 +5647,7 @@ mod tests {
             .expect("checkpoint-store binding");
         assert_eq!(
             checkpoint.provider_ingest_checkpoint_max_bytes(),
-            Some(64 * 1024 * 1024)
+            Some(160 * 1024 * 1024)
         );
 
         let mut excessive_streams = config;
@@ -5175,16 +5664,69 @@ mod tests {
     }
 
     #[test]
-    fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
-        let mut exact = default_runtime_config();
-        configure_provider_ingest_runtime(&mut exact);
-        let exact_outbox = &mut exact
+    fn provider_ingest_catalog_accepts_enabled_default_outbox_capacity() {
+        let mut config = default_runtime_config();
+        configure_provider_ingest_runtime(&mut config);
+        let ingest = config
             .torii
             .sorafs_storage
             .provider_ingest_runtime
             .as_mut()
-            .expect("configured provider ingest")
-            .outbox;
+            .expect("configured provider ingest");
+        ingest.outbox = iroha_config::parameters::actual::SorafsProviderIngestOutbox {
+            max_active_entries: provider_ingest_outbox_defaults::MAX_ACTIVE_ENTRIES,
+            max_terminal_entries: provider_ingest_outbox_defaults::MAX_TERMINAL_ENTRIES,
+            max_attempts: provider_ingest_outbox_defaults::MAX_ATTEMPTS,
+            checkpoint_max_bytes: provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES,
+            checkpoint_operation_timeout_ms:
+                provider_ingest_outbox_defaults::CHECKPOINT_OPERATION_TIMEOUT_MS,
+            source_lease_ttl_ms: provider_ingest_outbox_defaults::SOURCE_LEASE_TTL_MS,
+            retry_base_delay_ms: provider_ingest_outbox_defaults::RETRY_BASE_DELAY_MS,
+            retry_max_delay_ms: provider_ingest_outbox_defaults::RETRY_MAX_DELAY_MS,
+            terminal_retention_blocks: provider_ingest_outbox_defaults::TERMINAL_RETENTION_BLOCKS,
+            max_signed_transaction_bytes:
+                provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES,
+            max_status_page_size: provider_ingest_outbox_defaults::MAX_STATUS_PAGE_SIZE,
+        };
+
+        let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
+            .expect("enabled default provider-ingest outbox must project");
+        assert_eq!(
+            bindings
+                .iter()
+                .find(|binding| {
+                    binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore
+                })
+                .and_then(IrohaRuntimeProviderBindingV1::provider_ingest_checkpoint_max_bytes),
+            Some(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES.0)
+        );
+        assert_eq!(
+            bindings
+                .iter()
+                .find(|binding| {
+                    binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
+                })
+                .and_then(
+                    IrohaRuntimeProviderBindingV1::provider_ingest_max_signed_transaction_bytes
+                ),
+            Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES.0)
+        );
+    }
+
+    #[test]
+    fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
+        let mut exact = default_runtime_config();
+        configure_provider_ingest_runtime(&mut exact);
+        let exact_ingest = exact
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_mut()
+            .expect("configured provider ingest");
+        exact_ingest.max_source_jobs_per_tick = 1;
+        let exact_outbox = &mut exact_ingest.outbox;
+        exact_outbox.max_active_entries = 1;
+        exact_outbox.max_terminal_entries = 1;
         exact_outbox.checkpoint_max_bytes =
             Bytes(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT);
         exact_outbox.max_signed_transaction_bytes =
@@ -5246,6 +5788,78 @@ mod tests {
             Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                 IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
             ))
+        );
+
+        let mut legacy_128_mib_transaction = default_runtime_config();
+        configure_provider_ingest_runtime(&mut legacy_128_mib_transaction);
+        let legacy_ingest = legacy_128_mib_transaction
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_mut()
+            .expect("configured provider ingest");
+        legacy_ingest.max_source_jobs_per_tick = 1;
+        legacy_ingest.outbox.max_active_entries = 1;
+        legacy_ingest.outbox.max_terminal_entries = 1;
+        legacy_ingest.outbox.checkpoint_max_bytes =
+            Bytes(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT);
+        legacy_ingest.outbox.max_signed_transaction_bytes = Bytes(128 * 1024 * 1024);
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::try_from_config(&legacy_128_mib_transaction),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
+            )),
+            "the former 128 MiB transaction limit must not project under a 192 MiB checkpoint"
+        );
+
+        let mut below_envelope_reserve = default_runtime_config();
+        configure_provider_ingest_runtime(&mut below_envelope_reserve);
+        below_envelope_reserve
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_mut()
+            .expect("configured provider ingest")
+            .outbox
+            .max_signed_transaction_bytes =
+            Bytes(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN - 1);
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::try_from_config(&below_envelope_reserve),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
+            ))
+        );
+
+        let mut exact_minimum = default_runtime_config();
+        configure_provider_ingest_runtime(&mut exact_minimum);
+        exact_minimum
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_mut()
+            .expect("configured provider ingest")
+            .outbox
+            .max_signed_transaction_bytes =
+            Bytes(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN);
+        IrohaRuntimeProviderBindingsV1::try_from_config(&exact_minimum)
+            .expect("exact signed-transaction minimum must project");
+
+        let mut impossible_aggregate = default_runtime_config();
+        configure_provider_ingest_runtime(&mut impossible_aggregate);
+        impossible_aggregate
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_mut()
+            .expect("configured provider ingest")
+            .outbox
+            .max_active_entries = 128;
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::try_from_config(&impossible_aggregate),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
+            )),
+            "an aggregate outbox capacity above its checkpoint bound must fail projection"
         );
     }
 
@@ -5485,6 +6099,14 @@ mod tests {
             signer.policy_digest(),
             Some(GOVERNANCE_QUALIFICATION.policy_digest)
         );
+        assert_eq!(
+            signer.governance_dag_publisher_peer_id(),
+            Some(GOVERNANCE_PUBLISHER_PEER_ID.as_bytes())
+        );
+        assert_eq!(
+            signer.governance_dag_publisher_public_key(),
+            Some(governance_signer_public_key(0x73))
+        );
         let checkpoint_store = bindings
             .iter()
             .find(|binding| {
@@ -5510,6 +6132,115 @@ mod tests {
     }
 
     #[test]
+    fn governance_signer_resolution_rejects_substitution_staleness_and_drift() {
+        let mut config = default_runtime_config();
+        configure_governance_producer(&mut config);
+        let mut requested = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
+            .expect("project Governance DAG signer binding");
+        requested
+            .bindings
+            .retain(|binding| binding.slot() == IrohaRuntimeProviderSlotV1::GovernanceDagSigner);
+        assert_eq!(requested.bindings.len(), 1);
+
+        let resolve = |signer: GovernanceSigner| {
+            let registry = FixedRegistry(
+                IrohaRuntimeDeps::default().with_sorafs_governance_dag_signer(Arc::new(signer)),
+            );
+            resolve_runtime_deps_from_bindings(&requested, Some(&registry))
+        };
+
+        let resolved =
+            resolve(GovernanceSigner::exact()).expect("exact Governance DAG signer must resolve");
+        assert!(resolved.sorafs_governance_dag_signer.is_some());
+
+        let mut substituted_peer = GovernanceSigner::exact();
+        substituted_peer.publisher_peer_id = b"12D3KooWGovernanceProducerSubstitute".to_vec();
+        assert!(matches!(
+            resolve(substituted_peer),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+
+        let mut substituted_key = GovernanceSigner::exact();
+        substituted_key.key_pair = governance_signer_keypair(0x74);
+        assert!(matches!(
+            resolve(substituted_key),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+
+        let mut lying_key = GovernanceSigner::exact();
+        lying_key.signing_key_pair = Some(governance_signer_keypair(0x74));
+        assert!(matches!(
+            resolve(lying_key),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+
+        let mut failed_sign = GovernanceSigner::exact();
+        failed_sign.sign_error = true;
+        assert!(matches!(
+            resolve(failed_sign),
+            Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+        ));
+
+        let mut failed_sign_with_drift = GovernanceSigner::exact();
+        failed_sign_with_drift.sign_error = true;
+        failed_sign_with_drift.later_public_key = Some(governance_signer_public_key(0x75));
+        assert!(matches!(
+            resolve(failed_sign_with_drift),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+
+        let mut substituted_handle = GovernanceSigner::exact();
+        substituted_handle.handle = "hsm://governance/producer-signer-secondary";
+        assert!(matches!(
+            resolve(substituted_handle),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+
+        let mut stale = GovernanceSigner::exact();
+        stale.first_qualification = sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+            GOVERNANCE_QUALIFICATION.revision + 1,
+            GOVERNANCE_QUALIFICATION.policy_digest,
+        );
+        assert!(matches!(
+            resolve(stale),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+
+        let mut qualification_drift = GovernanceSigner::exact();
+        qualification_drift.later_qualification = Some(
+            sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                GOVERNANCE_QUALIFICATION.revision + 1,
+                GOVERNANCE_QUALIFICATION.policy_digest,
+            ),
+        );
+        assert!(matches!(
+            resolve(qualification_drift),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+
+        let mut handle_drift = GovernanceSigner::exact();
+        handle_drift.later_handle = Some("hsm://governance/producer-signer-secondary");
+        assert!(matches!(
+            resolve(handle_drift),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+
+        let mut peer_drift = GovernanceSigner::exact();
+        peer_drift.later_publisher_peer_id = Some(b"12D3KooWGovernanceProducerRotated".to_vec());
+        assert!(matches!(
+            resolve(peer_drift),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+
+        let mut key_drift = GovernanceSigner::exact();
+        key_drift.later_public_key = Some(governance_signer_public_key(0x75));
+        assert!(matches!(
+            resolve(key_drift),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+    }
+
+    #[test]
     fn governance_signer_catalog_rejects_unqualified_manual_actual_config() {
         let mut config = default_runtime_config();
         configure_governance_producer(&mut config);
@@ -5519,6 +6250,52 @@ mod tests {
 
         assert_eq!(
             IrohaRuntimeProviderBindingsV1::try_from_config(&config),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
+            ))
+        );
+
+        let mut missing_peer = default_runtime_config();
+        configure_governance_producer(&mut missing_peer);
+        missing_peer
+            .torii
+            .sorafs_storage
+            .governance_dag_publisher_peer_id = None;
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::try_from_config(&missing_peer),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
+            ))
+        );
+
+        let mut invalid_key = default_runtime_config();
+        configure_governance_producer(&mut invalid_key);
+        invalid_key
+            .torii
+            .sorafs_storage
+            .governance_dag_publisher_public_key_hex = Some("00".repeat(32));
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::try_from_config(&invalid_key),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
+            ))
+        );
+
+        let mut missing_directory = default_runtime_config();
+        configure_governance_producer(&mut missing_directory);
+        missing_directory.torii.sorafs_storage.governance_dag_dir = None;
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::try_from_config(&missing_directory),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
+            ))
+        );
+
+        let mut disabled_storage = default_runtime_config();
+        configure_governance_producer(&mut disabled_storage);
+        disabled_storage.torii.sorafs_storage.enabled = false;
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::try_from_config(&disabled_storage),
             Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                 IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
             ))

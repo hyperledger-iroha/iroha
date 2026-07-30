@@ -7,6 +7,18 @@ authors.workspace = true
 
 license.workspace = true
 
+[features]
+default = []
+# The only workspace edge allowed to expose core's deterministic release
+# evidence API. The daemon intentionally has no corresponding forwarding
+# feature.
+privacy-release-evidence = ["iroha_core/privacy-release-evidence"]
+
+[[bin]]
+name = "taira_privacy_release_runner"
+path = "src/bin/taira_privacy_release_runner.rs"
+required-features = ["privacy-release-evidence"]
+
 [dependencies]
 norito = {workspace = true}
 iroha.workspace = true

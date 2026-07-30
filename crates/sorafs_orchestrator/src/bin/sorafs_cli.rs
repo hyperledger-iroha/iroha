@@ -15937,6 +15937,27 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+fn manifest_root_cid_hex(manifest: &ManifestV1) -> Result<String, String> {
+    if manifest.root_cid.is_empty() {
+        return Err("manifest root_cid is empty".to_string());
+    }
+    Ok(hex_encode(&manifest.root_cid))
+}
+
+fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, String> {
+    Ok(ChunkProfile {
+        min_size: usize::try_from(manifest.chunking.min_size)
+            .map_err(|_| "manifest chunking.min_size exceeds host limits".to_string())?,
+        target_size: usize::try_from(manifest.chunking.target_size)
+            .map_err(|_| "manifest chunking.target_size exceeds host limits".to_string())?,
+        max_size: usize::try_from(manifest.chunking.max_size)
+            .map_err(|_| "manifest chunking.max_size exceeds host limits".to_string())?,
+        break_mask: u64::from(manifest.chunking.break_mask),
+    })
+}
+
+type StoragePinPayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
+
 fn load_storage_pin_payload(
     input: &Path,
     manifest: &ManifestV1,
@@ -22781,7 +22802,7 @@ mod tests {
 
     #[test]
     fn honey_audit_expected_catalog_digest_is_exact_lowercase_hex() {
-        let valid = "a1".repeat(32);
+        let valid = "ab".repeat(32);
         let accepted = moderation_honey_audit(vec![format!("--expected-catalog-digest={valid}")])
             .expect_err("manifest is still required");
         assert!(accepted.contains("missing required `--manifest-id`"));
@@ -22936,7 +22957,8 @@ mod tests {
         pending.manifest.status = PinStatus::Pending;
         assert!(
             validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &pending)
-                .expect_err("pending record must fail")
+                .err()
+                .expect("pending record must fail")
                 .contains("Approved")
         );
 

@@ -261,6 +261,132 @@ impl OpenAssetLock {
 }
 
 isi! {
+    /// Open an attestor-bound conditional escrow with ordered all-of release semantics.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OpenConditionalEscrow {
+        /// Caller-selected escrow identifier.
+        pub escrow_id: crate::escrow::EscrowId,
+        /// Asset definition to lock in protocol custody.
+        pub asset_definition: crate::asset::AssetDefinitionId,
+        /// Account that receives the full amount after every condition passes.
+        pub beneficiary: crate::account::AccountId,
+        /// Amount to lock.
+        pub amount: iroha_primitives::numeric::Quantity,
+        /// Immutable typed predicates and optional ledger-time window.
+        pub conditions: Vec<crate::escrow::ConditionalEscrowCondition>,
+        /// Absolute Unix timestamp (milliseconds) at or after which anyone may trigger refund.
+        pub expires_at_ms: u64,
+        /// Evidence hashes attached when opening the escrow.
+        #[cfg_attr(feature = "json", norito(default))]
+        pub evidence_hashes: Vec<iroha_crypto::Hash>,
+    }
+}
+
+impl OpenConditionalEscrow {
+    /// Construct a native ordered all-of conditional escrow.
+    #[must_use]
+    pub fn new(
+        escrow_id: crate::escrow::EscrowId,
+        asset_definition: crate::asset::AssetDefinitionId,
+        beneficiary: crate::account::AccountId,
+        amount: impl Into<iroha_primitives::numeric::Quantity>,
+        conditions: Vec<crate::escrow::ConditionalEscrowCondition>,
+        expires_at_ms: u64,
+    ) -> Self {
+        Self {
+            escrow_id,
+            asset_definition,
+            beneficiary,
+            amount: amount.into(),
+            conditions,
+            expires_at_ms,
+            evidence_hashes: Vec::new(),
+        }
+    }
+
+    /// Construct a native conditional escrow with opening evidence.
+    #[must_use]
+    pub fn with_evidence_hashes(
+        escrow_id: crate::escrow::EscrowId,
+        asset_definition: crate::asset::AssetDefinitionId,
+        beneficiary: crate::account::AccountId,
+        amount: impl Into<iroha_primitives::numeric::Quantity>,
+        conditions: Vec<crate::escrow::ConditionalEscrowCondition>,
+        expires_at_ms: u64,
+        evidence_hashes: Vec<iroha_crypto::Hash>,
+    ) -> Self {
+        Self {
+            escrow_id,
+            asset_definition,
+            beneficiary,
+            amount: amount.into(),
+            conditions,
+            expires_at_ms,
+            evidence_hashes,
+        }
+    }
+}
+
+isi! {
+    /// Attest the next ordered predicate of one native conditional escrow.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct AttestEscrowCondition {
+        /// Conditional escrow to update.
+        pub escrow_id: crate::escrow::EscrowId,
+        /// Exact immutable condition identifier.
+        pub condition_id: crate::name::Name,
+        /// Typed value evaluated by the ledger.
+        pub value: crate::escrow::ConditionalEscrowValue,
+        /// Optional external evidence digest.
+        pub evidence_hash: Option<iroha_crypto::Hash>,
+    }
+}
+
+impl AttestEscrowCondition {
+    /// Construct an ordered conditional-escrow attestation.
+    #[must_use]
+    pub const fn new(
+        escrow_id: crate::escrow::EscrowId,
+        condition_id: crate::name::Name,
+        value: crate::escrow::ConditionalEscrowValue,
+        evidence_hash: Option<iroha_crypto::Hash>,
+    ) -> Self {
+        Self {
+            escrow_id,
+            condition_id,
+            value,
+            evidence_hash,
+        }
+    }
+}
+
+isi! {
+    /// Refund a native conditional escrow whose authoritative deadline has passed.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct ExpireConditionalEscrow {
+        /// Conditional escrow to expire.
+        pub escrow_id: crate::escrow::EscrowId,
+    }
+}
+
+impl ExpireConditionalEscrow {
+    /// Construct a conditional-escrow expiry instruction.
+    #[must_use]
+    pub const fn new(escrow_id: crate::escrow::EscrowId) -> Self {
+        Self { escrow_id }
+    }
+}
+
+isi! {
     /// Draw down funds from an active generic asset lock.
     pub struct DrawdownAssetLock {
         /// Lock to draw down.
@@ -631,6 +757,9 @@ impl crate::seal::Instruction for CancelAssetEscrow {}
 impl crate::seal::Instruction for OpenEscrowDispute {}
 impl crate::seal::Instruction for ResolveEscrowDispute {}
 impl crate::seal::Instruction for OpenAssetLock {}
+impl crate::seal::Instruction for OpenConditionalEscrow {}
+impl crate::seal::Instruction for AttestEscrowCondition {}
+impl crate::seal::Instruction for ExpireConditionalEscrow {}
 impl crate::seal::Instruction for DrawdownAssetLock {}
 impl crate::seal::Instruction for CancelAssetLock {}
 impl crate::seal::Instruction for ExpireAssetLock {}
@@ -717,6 +846,27 @@ impl_escrow_decode_from_slice!(OpenAssetLock {
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
 
+impl_escrow_decode_from_slice!(OpenConditionalEscrow {
+    escrow_id: crate::escrow::EscrowId,
+    asset_definition: crate::asset::AssetDefinitionId,
+    beneficiary: crate::account::AccountId,
+    amount: iroha_primitives::numeric::Quantity,
+    conditions: Vec<crate::escrow::ConditionalEscrowCondition>,
+    expires_at_ms: u64,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+});
+
+impl_escrow_decode_from_slice!(AttestEscrowCondition {
+    escrow_id: crate::escrow::EscrowId,
+    condition_id: crate::name::Name,
+    value: crate::escrow::ConditionalEscrowValue,
+    evidence_hash: Option<iroha_crypto::Hash>,
+});
+
+impl_escrow_decode_from_slice!(ExpireConditionalEscrow {
+    escrow_id: crate::escrow::EscrowId,
+});
+
 impl_escrow_decode_from_slice!(DrawdownAssetLock {
     escrow_id: crate::escrow::EscrowId,
     amount: iroha_primitives::numeric::Quantity,
@@ -783,6 +933,8 @@ impl_escrow_decode_from_slice!(ResolveAnonymousEscrowDispute {
 
 #[cfg(test)]
 mod tests {
+    use core::num::{NonZeroU32, NonZeroU64};
+
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::codec::Encode;
@@ -831,6 +983,29 @@ mod tests {
 
     fn evidence_hashes() -> Vec<Hash> {
         vec![Hash::new("escrow-slice-evidence")]
+    }
+
+    fn conditional_conditions(
+        attestor: crate::account::AccountId,
+    ) -> Vec<crate::escrow::ConditionalEscrowCondition> {
+        vec![
+            crate::escrow::ConditionalEscrowCondition::Oracle(
+                crate::escrow::ConditionalEscrowOracleCondition {
+                    id: "delivery_confirmed".parse().expect("condition id"),
+                    attestor,
+                    predicate: crate::escrow::ConditionalEscrowPredicate::Equals(
+                        crate::escrow::ConditionalEscrowValue::Bool(true),
+                    ),
+                    sequence: NonZeroU32::new(1).expect("non-zero sequence"),
+                },
+            ),
+            crate::escrow::ConditionalEscrowCondition::Within(
+                crate::escrow::ConditionalEscrowWithinCondition {
+                    id: "delivery_window".parse().expect("condition id"),
+                    duration_ms: NonZeroU64::new(60_000).expect("non-zero duration"),
+                },
+            ),
+        ]
     }
 
     fn assert_slice_roundtrip<T>(value: T)
@@ -1202,6 +1377,62 @@ mod tests {
             OpenAssetEscrow::decode_from_slice(&forged.encode()).is_err(),
             "a negative signed payload must not decode as a native escrow instruction"
         );
+    }
+
+    #[test]
+    fn conditional_escrow_instructions_roundtrip_and_decode_from_default_registry() {
+        let registry = crate::isi::registry::default();
+        let escrow_id = escrow_id();
+        let open = OpenConditionalEscrow::with_evidence_hashes(
+            escrow_id,
+            asset_definition_id(),
+            account(0xC3),
+            Quantity::from(25_u64),
+            conditional_conditions(account(0xC4)),
+            120_000,
+            evidence_hashes(),
+        );
+        let attest = AttestEscrowCondition::new(
+            escrow_id,
+            "delivery_confirmed".parse().expect("condition id"),
+            crate::escrow::ConditionalEscrowValue::Bool(true),
+            Some(Hash::new("signed-delivery-evidence")),
+        );
+        let expire = ExpireConditionalEscrow::new(escrow_id);
+
+        assert_slice_roundtrip(open.clone());
+        assert_slice_roundtrip(attest.clone());
+        assert_slice_roundtrip(expire.clone());
+        assert_registry_decodes(&registry, open);
+        assert_registry_decodes(&registry, attest);
+        assert_registry_decodes(&registry, expire);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn conditional_escrow_json_preserves_typed_conditions() {
+        let open = OpenConditionalEscrow::new(
+            escrow_id(),
+            asset_definition_id(),
+            account(0xC5),
+            Quantity::from(25_u64),
+            conditional_conditions(account(0xC6)),
+            120_000,
+        );
+
+        let json = norito::json::to_json(&open).expect("serialize conditional escrow");
+        let decoded: OpenConditionalEscrow =
+            norito::json::from_str(&json).expect("deserialize conditional escrow");
+
+        assert_eq!(decoded, open);
+        assert!(matches!(
+            decoded.conditions[0],
+            crate::escrow::ConditionalEscrowCondition::Oracle(_)
+        ));
+        assert!(matches!(
+            decoded.conditions[1],
+            crate::escrow::ConditionalEscrowCondition::Within(_)
+        ));
     }
 
     #[test]

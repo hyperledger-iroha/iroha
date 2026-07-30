@@ -12546,13 +12546,34 @@ public struct ToriiContractDynamicAccessHint: Codable, Sendable, Equatable {
         case maxKeys = "max_keys"
     }
 
+    private var hasCanonicalBaseKey: Bool {
+        let prefix = "state:"
+        guard baseKey.hasPrefix(prefix),
+              isExactContractManifestString(baseKey) else {
+            return false
+        }
+        return ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(
+            String(baseKey.dropFirst(prefix.count))
+        )
+    }
+
+    private var hasCanonicalKeyType: Bool {
+        ToriiEntrypointValueTypeV1.isCanonicalStateMapKeyType(keyType)
+    }
+
+    private var hasCanonicalBoundKind: Bool {
+        ToriiEntrypointValueTypeV1.isCanonicalDynamicAccessBoundKind(boundKind)
+    }
+
+    private var hasCanonicalMaximum: Bool {
+        ToriiEntrypointValueTypeV1.isCanonicalDynamicAccessMaximum(maxKeys)
+    }
+
     private var isCanonical: Bool {
-        baseKey.hasPrefix("state:")
-            && baseKey != "state:*"
-            && isExactContractManifestString(baseKey)
-            && isExactContractManifestString(keyType)
-            && isExactContractManifestString(boundKind)
-            && maxKeys != 0
+        hasCanonicalBaseKey
+            && hasCanonicalKeyType
+            && hasCanonicalBoundKind
+            && hasCanonicalMaximum
     }
 
     public init(from decoder: Decoder) throws {
@@ -12566,11 +12587,35 @@ public struct ToriiContractDynamicAccessHint: Codable, Sendable, Equatable {
         keyType = try container.decode(String.self, forKey: .keyType)
         boundKind = try container.decode(String.self, forKey: .boundKind)
         maxKeys = try container.decode(UInt32.self, forKey: .maxKeys)
-        guard isCanonical else {
+        guard hasCanonicalBaseKey else {
             throw DecodingError.dataCorruptedError(
                 forKey: .baseKey,
                 in: container,
-                debugDescription: "dynamic access hints require a positive bounded concrete state key"
+                debugDescription:
+                    "dynamic access hint base_key must be state: followed by one "
+                    + "canonical state declaration identifier"
+            )
+        }
+        guard hasCanonicalKeyType else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .keyType,
+                in: container,
+                debugDescription:
+                    "dynamic access hint key_type must be an exact canonical StateMap key type"
+            )
+        }
+        guard hasCanonicalBoundKind else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .boundKind,
+                in: container,
+                debugDescription: "dynamic access hint bound_kind must be take or range"
+            )
+        }
+        guard hasCanonicalMaximum else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .maxKeys,
+                in: container,
+                debugDescription: "dynamic access hint max_keys must be in 1...64"
             )
         }
     }
@@ -12580,7 +12625,9 @@ public struct ToriiContractDynamicAccessHint: Codable, Sendable, Equatable {
             throw EncodingError.invalidValue(
                 self,
                 .init(codingPath: encoder.codingPath,
-                      debugDescription: "dynamic access hints require a positive bounded concrete state key")
+                      debugDescription:
+                          "dynamic access hint must use a canonical state declaration, "
+                          + "StateMap key type, take/range bound, and max_keys in 1...64")
             )
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -12994,6 +13041,12 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",
         "__kotodama_decimal_to_int_round",
+        "is_some",
+        "is_none",
+        "is_ok",
+        "is_err",
+        "unwrap_or",
+        "unwrap_err_or",
     ]
     private static let retiredNumericTypeNames: Set<String> = [
         "i8",
@@ -13023,10 +13076,51 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "Quantity",
         "number",
     ]
+    private static let stateMapKeyTypeNames: Set<String> = [
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "DataSpaceId",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "NftId",
+        "DomainId",
+        "Name",
+    ]
+    private static let dynamicAccessBoundKinds: Set<String> = [
+        "range",
+        "take",
+    ]
+    private static let maximumDynamicAccessKeys: UInt32 = 64
     // END GENERATED: kotodama-v1-validator-policy
+    private static let stateScalarTypeNames: Set<String> = [
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "DataSpaceId",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "NftId",
+        "DomainId",
+        "Name",
+        "Json",
+    ]
+    // Mirrors ivm_abi::state_value::MAX_STATE_VALUE_NODES.
+    private static let maximumStateTypeDepth = 256
+    private static let maximumStateTypeNodes = 256
 
     fileprivate static func isCanonicalIdentifier(_ value: String) -> Bool {
-        guard !value.isEmpty, !reservedIdentifiers.contains(value) else {
+        guard !value.isEmpty,
+              !reservedIdentifiers.contains(value),
+              !value.hasPrefix("__kotodama_link_") else {
             return false
         }
         let scalars = Array(value.unicodeScalars)
@@ -13050,11 +13144,201 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
     fileprivate static func isCanonicalDeclarationIdentifier(_ value: String) -> Bool {
         isCanonicalIdentifier(value)
             && !reservedDeclarationIdentifiers.contains(value)
-            && !value.hasPrefix("__kotodama_link_")
     }
 
     fileprivate static func isCanonicalTypeDeclarationIdentifier(_ value: String) -> Bool {
         isCanonicalDeclarationIdentifier(value) && !retiredNumericTypeNames.contains(value)
+    }
+
+    fileprivate static func isCanonicalStateMapKeyType(_ value: String) -> Bool {
+        stateMapKeyTypeNames.contains(value)
+    }
+
+    fileprivate static func isCanonicalDynamicAccessBoundKind(_ value: String) -> Bool {
+        dynamicAccessBoundKinds.contains(value)
+    }
+
+    fileprivate static func isCanonicalDynamicAccessMaximum(_ value: UInt32) -> Bool {
+        (1...maximumDynamicAccessKeys).contains(value)
+    }
+
+    fileprivate static func isCanonicalStateTypeName(_ value: String) -> Bool {
+        guard !value.isEmpty else {
+            return false
+        }
+
+        let bytes = Array(value.utf8)
+        var cursor = 0
+        var nodes = 0
+
+        func isASCIILetter(_ byte: UInt8) -> Bool {
+            (65...90).contains(byte) || (97...122).contains(byte)
+        }
+
+        func isASCIIDigit(_ byte: UInt8) -> Bool {
+            (48...57).contains(byte)
+        }
+
+        func consume(_ literal: String) -> Bool {
+            let token = literal.utf8
+            guard cursor + token.count <= bytes.count else {
+                return false
+            }
+            for (offset, byte) in token.enumerated() where bytes[cursor + offset] != byte {
+                return false
+            }
+            cursor += token.count
+            return true
+        }
+
+        func identifier() -> String? {
+            let start = cursor
+            guard cursor < bytes.count,
+                  bytes[cursor] == 95 || isASCIILetter(bytes[cursor]) else {
+                return nil
+            }
+            cursor += 1
+            while cursor < bytes.count {
+                let byte = bytes[cursor]
+                guard byte == 95 || isASCIILetter(byte) || isASCIIDigit(byte) else {
+                    break
+                }
+                cursor += 1
+            }
+            return String(decoding: bytes[start..<cursor], as: UTF8.self)
+        }
+
+        func listCapacity() -> Bool {
+            let start = cursor
+            var capacity = 0
+            var exceededMaximum = false
+            while cursor < bytes.count, isASCIIDigit(bytes[cursor]) {
+                if !exceededMaximum {
+                    capacity = capacity * 10 + Int(bytes[cursor] - 48)
+                    exceededMaximum = capacity > 64
+                }
+                cursor += 1
+            }
+            guard cursor != start,
+                  !(cursor - start > 1 && bytes[start] == 48) else {
+                return false
+            }
+            return !exceededMaximum && (1...64).contains(capacity)
+        }
+
+        func parseType(allowStateMap: Bool, depth: Int) -> String? {
+            nodes += 1
+            guard depth <= maximumStateTypeDepth,
+                  nodes <= maximumStateTypeNodes else {
+                return nil
+            }
+
+            if consume("(") {
+                guard parseType(allowStateMap: false, depth: depth + 1) != nil,
+                      consume(", "),
+                      parseType(allowStateMap: false, depth: depth + 1) != nil else {
+                    return nil
+                }
+                while consume(", ") {
+                    guard parseType(allowStateMap: false, depth: depth + 1) != nil else {
+                        return nil
+                    }
+                }
+                return consume(")") ? "" : nil
+            }
+
+            guard let name = identifier() else {
+                return nil
+            }
+            if stateScalarTypeNames.contains(name) {
+                return name
+            }
+            if name == "Option" {
+                guard consume("<"),
+                      parseType(allowStateMap: false, depth: depth + 1) != nil,
+                      consume(">") else {
+                    return nil
+                }
+                return ""
+            }
+            if name == "Result" {
+                guard consume("<"),
+                      parseType(allowStateMap: false, depth: depth + 1) != nil,
+                      consume(", "),
+                      parseType(allowStateMap: false, depth: depth + 1) != nil,
+                      consume(">") else {
+                    return nil
+                }
+                return ""
+            }
+            if name == "List" {
+                guard consume("<"),
+                      parseType(allowStateMap: false, depth: depth + 1) != nil,
+                      consume(", "),
+                      listCapacity(),
+                      consume(">") else {
+                    return nil
+                }
+                return ""
+            }
+            if name == "StateMap" {
+                guard allowStateMap,
+                      consume("<") else {
+                    return nil
+                }
+                // Runtime reconstructs only V as StateValueSchemaV1, so the
+                // wrapper and scalar key do not consume value-schema nodes.
+                nodes -= 1
+                // EmbeddedStateType depth still includes the map wrapper.
+                guard let keyType = identifier(),
+                      stateMapKeyTypeNames.contains(keyType),
+                      consume(", "),
+                      parseType(allowStateMap: false, depth: depth + 1) != nil,
+                      consume(">") else {
+                    return nil
+                }
+                return ""
+            }
+            guard isCanonicalTypeDeclarationIdentifier(name),
+                  consume("{") else {
+                return nil
+            }
+            var fields: Set<String> = []
+            while true {
+                guard let field = identifier(),
+                      isCanonicalIdentifier(field),
+                      fields.insert(field).inserted,
+                      consume(": "),
+                      parseType(allowStateMap: false, depth: depth + 1) != nil else {
+                    return nil
+                }
+                if consume("}") {
+                    return ""
+                }
+                guard consume(", ") else {
+                    return nil
+                }
+            }
+        }
+
+        return parseType(allowStateMap: true, depth: 1) != nil && cursor == bytes.count
+    }
+
+    fileprivate static func topLevelStateMapKeyType(_ value: String) -> String? {
+        let prefix = "StateMap<"
+        guard value.hasPrefix(prefix),
+              isCanonicalStateTypeName(value) else {
+            return nil
+        }
+        let keyStart = value.index(value.startIndex, offsetBy: prefix.count)
+        guard let separator = value.range(
+            of: ", ",
+            range: keyStart..<value.endIndex
+        ) else {
+            return nil
+        }
+        let keyType = String(value[keyStart..<separator.lowerBound])
+        return stateMapKeyTypeNames.contains(keyType) ? keyType : nil
     }
 
     fileprivate static func isCanonicalEntrypointName(_ value: String) -> Bool {
@@ -13903,23 +14187,29 @@ public struct ToriiContractStateDescriptor: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
         typeName = try container.decode(String.self, forKey: .typeName)
-        guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(name),
-              isExactContractManifestString(typeName) else {
+        guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(name) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .name,
                 in: container,
-                debugDescription: "Kotodama state descriptor requires a canonical name and type"
+                debugDescription: "Kotodama state descriptor requires a canonical name"
+            )
+        }
+        guard ToriiEntrypointValueTypeV1.isCanonicalStateTypeName(typeName) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .typeName,
+                in: container,
+                debugDescription: "Kotodama state descriptor requires a canonical V1 state type"
             )
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(name),
-              isExactContractManifestString(typeName) else {
+              ToriiEntrypointValueTypeV1.isCanonicalStateTypeName(typeName) else {
             throw EncodingError.invalidValue(
                 self,
                 .init(codingPath: encoder.codingPath,
-                      debugDescription: "Kotodama state descriptor requires a canonical name and type")
+                      debugDescription: "Kotodama state descriptor requires a canonical name and V1 state type")
             )
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -13955,13 +14245,25 @@ public struct ToriiContractErrorCodeDescriptor: Codable, Sendable, Equatable {
         namespace = try container.decode(String.self, forKey: .namespace)
         name = try container.decode(String.self, forKey: .name)
         code = try container.decode(UInt32.self, forKey: .code)
-        guard ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(namespace),
-              ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name),
-              code != 0 else {
+        guard ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(namespace) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .namespace,
+                in: container,
+                debugDescription: "Kotodama error namespace must be a canonical type declaration"
+            )
+        }
+        guard ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .name,
+                in: container,
+                debugDescription: "Kotodama error variant must be a canonical identifier"
+            )
+        }
+        guard code != 0 else {
             throw DecodingError.dataCorruptedError(
                 forKey: .code,
                 in: container,
-                debugDescription: "Kotodama error descriptors require names and a non-zero u32 code"
+                debugDescription: "Kotodama error code must be a non-zero u32"
             )
         }
     }
@@ -14223,8 +14525,42 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
                 }
             }
         }
-        if let states, Set(states.map(\.name)).count != states.count {
-            return "state names must be unique"
+        if let states {
+            if Set(states.map(\.name)).count != states.count {
+                return "state names must be unique"
+            }
+        }
+        if let accessSetHints {
+            let stateMapKeyTypes = Dictionary(
+                uniqueKeysWithValues: (states ?? []).compactMap { state in
+                    ToriiEntrypointValueTypeV1.topLevelStateMapKeyType(state.typeName)
+                        .map { (state.name, $0) }
+                }
+            )
+            let dynamicLists = [
+                ("access_set_hints.dynamic_reads", accessSetHints.dynamicReads),
+                ("access_set_hints.dynamic_writes", accessSetHints.dynamicWrites),
+            ]
+            for (field, hints) in dynamicLists {
+                for index in hints.indices {
+                    let hint = hints[index]
+                    if hints[..<index].contains(hint) {
+                        return "\(field) contains duplicate hint `\(hint.baseKey)`"
+                    }
+                    let prefix = "state:"
+                    guard hint.baseKey.hasPrefix(prefix) else {
+                        continue
+                    }
+                    let stateName = String(hint.baseKey.dropFirst(prefix.count))
+                    guard let expectedKeyType = stateMapKeyTypes[stateName] else {
+                        return "\(field) hint `\(hint.baseKey)` must reference a declared top-level StateMap"
+                    }
+                    if hint.keyType != expectedKeyType {
+                        return "\(field) hint `\(hint.baseKey)` declares key_type `\(hint.keyType)` "
+                            + "but its StateMap key type is `\(expectedKeyType)`"
+                    }
+                }
+            }
         }
         if let errorCodes {
             let paths = errorCodes.map { "\($0.namespace)::\($0.name)" }
@@ -18949,6 +19285,57 @@ public struct ToriiGovernanceProposalGetResponse: Decodable, Sendable {
     public let proposal: ToriiGovernanceProposalRecord?
 }
 
+public struct ToriiGovernanceLockCustody: Decodable, Sendable, Equatable {
+    public let escrowed: Bool
+    public let assetDefinitionId: String
+    public let bondEscrowAccount: String
+    public let slashReceiverAccount: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case escrowed
+        case assetDefinitionId = "asset_definition_id"
+        case bondEscrowAccount = "bond_escrow_account"
+        case slashReceiverAccount = "slash_receiver_account"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "governance lock custody"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        escrowed = try container.decode(Bool.self, forKey: .escrowed)
+        let decodedAssetDefinitionId = try container.decode(
+            String.self,
+            forKey: .assetDefinitionId
+        )
+        assetDefinitionId = try ToriiValidation.normalizedExactNonEmpty(
+            decodedAssetDefinitionId,
+            field: "governance lock custody.asset_definition_id",
+            codingPath: container.codingPath + [CodingKeys.assetDefinitionId]
+        )
+        let decodedBondEscrowAccount = try container.decode(
+            String.self,
+            forKey: .bondEscrowAccount
+        )
+        bondEscrowAccount = try ToriiValidation.normalizedExactNonEmpty(
+            decodedBondEscrowAccount,
+            field: "governance lock custody.bond_escrow_account",
+            codingPath: container.codingPath + [CodingKeys.bondEscrowAccount]
+        )
+        let decodedSlashReceiverAccount = try container.decode(
+            String.self,
+            forKey: .slashReceiverAccount
+        )
+        slashReceiverAccount = try ToriiValidation.normalizedExactNonEmpty(
+            decodedSlashReceiverAccount,
+            field: "governance lock custody.slash_receiver_account",
+            codingPath: container.codingPath + [CodingKeys.slashReceiverAccount]
+        )
+    }
+}
+
 public struct ToriiGovernanceLockRecord: Decodable, Sendable {
     public let owner: String
     public let amount: String
@@ -18956,6 +19343,7 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
     public let expiryHeight: UInt64
     public let direction: UInt8
     public let durationBlocks: UInt64
+    public let custody: ToriiGovernanceLockCustody?
 
     private enum CodingKeys: String, CodingKey {
         case owner
@@ -18964,6 +19352,7 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
         case expiryHeight = "expiry_height"
         case direction
         case durationBlocks = "duration_blocks"
+        case custody
     }
 
     public init(from decoder: Decoder) throws {
@@ -18984,6 +19373,19 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
         expiryHeight = try container.decode(UInt64.self, forKey: .expiryHeight)
         direction = try container.decode(UInt8.self, forKey: .direction)
         durationBlocks = try container.decodeIfPresent(UInt64.self, forKey: .durationBlocks) ?? 0
+        guard container.contains(.custody) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.custody,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "governance lock custody is required (explicit null is allowed)"
+                )
+            )
+        }
+        custody = try container.decodeIfPresent(
+            ToriiGovernanceLockCustody.self,
+            forKey: .custody
+        )
     }
 }
 

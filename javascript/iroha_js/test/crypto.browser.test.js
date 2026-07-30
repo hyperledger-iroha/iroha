@@ -1,9 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   buildKaigiRosterJoinProof,
-  buildZkAceTransferAuthorizationV1,
   generateKeyPair,
   normalizeCryptoAlgorithm,
   supportedCryptoAlgorithms,
@@ -11,15 +10,21 @@ import {
 import * as srcBrowserCrypto from "../src/crypto.browser.js";
 import * as distBrowserCrypto from "../dist/crypto.browser.js";
 
-test("browser crypto bundle exposes Kaigi roster proof helper as unsupported", () => {
+test("browser crypto bundle exposes Kaigi roster proof helper and omits retired ZK-ACE helpers", () => {
   assert.throws(
     () => buildKaigiRosterJoinProof({ seed: Buffer.from("seed") }),
     /buildKaigiRosterJoinProof is unavailable in browser-only crypto builds/,
   );
-  assert.throws(
-    () => buildZkAceTransferAuthorizationV1({}),
-    /buildZkAceTransferAuthorizationV1 is unavailable in browser-only crypto builds/,
-  );
+  for (const [label, crypto] of [
+    ["src", srcBrowserCrypto],
+    ["dist", distBrowserCrypto],
+  ]) {
+    assert.equal(
+      "buildZkAceTransferAuthorizationV1" in crypto,
+      false,
+      `${label} retired ZK-ACE builder must be absent`,
+    );
+  }
 });
 
 test("browser crypto normalizes all algorithm labels but only signs Ed25519 locally", () => {
@@ -84,13 +89,20 @@ test("browser crypto exposes recovery phrase helpers in source and dist bundles"
   }
 });
 
-test("browser crypto exposes privacy native helpers as safe stubs", () => {
+test("browser crypto exposes only the privacy capability bridge as a safe stub", () => {
   for (const [label, crypto] of [["src", srcBrowserCrypto], ["dist", distBrowserCrypto]]) {
-    assert.equal(crypto.isPrivacyNativeAvailable(), false, ` privacy bridge must be unavailable`);
+    assert.equal(crypto.isPrivacyNativeAvailable(), false, `${label} privacy bridge must be unavailable`);
     assert.throws(
       () => crypto.privacyCapabilitiesV1(),
       /unavailable in browser-only crypto builds/,
     );
+    for (const retired of [
+      "privacyProofRequestV1",
+      "privacyBuildProofV1",
+      "privacyVerifyProofV1",
+    ]) {
+      assert.equal(retired in crypto, false, `${label} ${retired} must be retired`);
+    }
   }
 });
 
@@ -119,7 +131,7 @@ test("browser crypto covers the package root crypto export surface", () => {
   );
 });
 
-test("browser package wiring keeps privacy catalogs on mapped crypto stubs", () => {
+test("browser package wiring omits the retired privacy catalog module", () => {
   const packageJson = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
@@ -130,16 +142,10 @@ test("browser package wiring keeps privacy catalogs on mapped crypto stubs", () 
     ["src", "../src/privacyAlgorithms.js"],
     ["dist", "../dist/privacyAlgorithms.js"],
   ]) {
-    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
-    assert.match(
-      source,
-      /^import \{ isPrivacyNativeAvailable \} from "\.\/crypto\.js";/m,
-      `${label} privacy catalog must route bridge detection through browser-mapped crypto.js`,
-    );
-    assert.doesNotMatch(
-      source,
-      /iroha_js_host|__IROHA_NATIVE_BINDING__|privacyCapabilitiesV1|privacyBuildProofV1|privacyVerifyProofV1/,
-      `${label} privacy catalog must not call native privacy FFI directly`,
+    assert.equal(
+      existsSync(new URL(relativePath, import.meta.url)),
+      false,
+      `${label} privacy catalog must remain deleted`,
     );
   }
 });

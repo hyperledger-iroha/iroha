@@ -109,6 +109,57 @@ impl MaskedRelaxedDimensionsV1 {
                 .ok_or(MaskedRelaxedErrorV1::InvalidProfile)?,
         })
     }
+
+    pub(super) fn proof_decode_limits(
+        self,
+        expected_instances: usize,
+        payload_len: usize,
+        max_proof_bytes: usize,
+    ) -> Result<norito::DecodeLimits, MaskedRelaxedErrorV1> {
+        validate_count(expected_instances)?;
+        let max_sequence_elements = [
+            self.witness_commitment_points,
+            self.error_commitment_points,
+            self.public_input_count,
+            expected_instances,
+            self.outer_sumcheck_rounds,
+            self.inner_sumcheck_rounds,
+            MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
+        ]
+        .into_iter()
+        .max()
+        .ok_or(MaskedRelaxedErrorV1::InvalidProfile)?;
+        let nested_commitment_elements = self
+            .witness_commitment_points
+            .checked_add(self.error_commitment_points)
+            .and_then(|points| points.checked_mul(expected_instances))
+            .ok_or(MaskedRelaxedErrorV1::InvalidProfile)?;
+        let max_total_elements = self
+            .witness_commitment_points
+            .checked_add(self.error_commitment_points)
+            .and_then(|total| total.checked_add(self.public_input_count))
+            .and_then(|total| {
+                expected_instances
+                    .checked_mul(2)
+                    .and_then(|outer_vectors| total.checked_add(outer_vectors))
+            })
+            .and_then(|total| total.checked_add(nested_commitment_elements))
+            .and_then(|total| total.checked_add(self.outer_sumcheck_rounds))
+            .and_then(|total| total.checked_add(self.inner_sumcheck_rounds))
+            .and_then(|total| {
+                MASKED_RELAXED_COMMITMENT_COLUMNS_V1
+                    .checked_mul(2)
+                    .and_then(|openings| total.checked_add(openings))
+            })
+            .ok_or(MaskedRelaxedErrorV1::InvalidProfile)?;
+        Ok(norito::DecodeLimits::new(
+            max_sequence_elements,
+            payload_len,
+            max_total_elements,
+            max_proof_bytes.saturating_mul(8),
+            24,
+        ))
+    }
 }
 
 #[derive(
@@ -117,7 +168,7 @@ impl MaskedRelaxedDimensionsV1 {
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 pub(super) struct MaskedRelaxedCommitmentWireV1 {
-    points: Vec<VegaPointWireV1>,
+    pub(super) points: Vec<VegaPointWireV1>,
 }
 
 #[derive(
@@ -180,7 +231,7 @@ pub(super) fn prove_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
         .and_then(|key| key.with_worker_count(worker_count))
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
 
-    let _health = SecretScalar::new(sample_nonzero_scalar(random)?);
+    validate_random_health(random)?;
     let (mut folded_instance, folded_witness) =
         sample_relaxed_mask(random, &shape, &key, dimensions)?;
     let mut folded_witness = SecretRelaxedWitness::new(folded_witness);
@@ -627,6 +678,19 @@ fn sample_nonzero_scalar<R: MaskedRelaxedRandomSourceV1>(
     Err(MaskedRelaxedErrorV1::DegenerateRandomness)
 }
 
+fn validate_random_health<R: MaskedRelaxedRandomSourceV1>(
+    random: &mut R,
+) -> Result<(), MaskedRelaxedErrorV1> {
+    let first = SecretScalar::new(sample_nonzero_scalar(random)?);
+    for _ in 0..RANDOM_HEALTH_RETRIES {
+        let candidate = SecretScalar::new(sample_nonzero_scalar(random)?);
+        if *candidate != *first {
+            return Ok(());
+        }
+    }
+    Err(MaskedRelaxedErrorV1::DegenerateRandomness)
+}
+
 fn sample_scalars<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     count: usize,
@@ -802,5 +866,48 @@ impl Drop for SecretRelaxedWitness {
         self.0.witness_blindings.fill(Scalar::zero());
         self.0.error.fill(Scalar::zero());
         self.0.error_blindings.fill(Scalar::zero());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct ConstantRandom(u8);
+
+    impl MaskedRelaxedRandomSourceV1 for ConstantRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            destination.fill(self.0);
+            Ok(())
+        }
+    }
+
+    struct FailureRandom;
+
+    impl MaskedRelaxedRandomSourceV1 for FailureRandom {
+        fn fill_bytes(
+            &mut self,
+            _destination: &mut [u8],
+        ) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            Err(MaskedRelaxedRandomErrorV1::Unavailable)
+        }
+    }
+
+    #[test]
+    fn random_health_rejects_unavailable_zero_and_constant_sources() {
+        assert_eq!(
+            validate_random_health(&mut FailureRandom),
+            Err(MaskedRelaxedErrorV1::Random(
+                MaskedRelaxedRandomErrorV1::Unavailable
+            ))
+        );
+        assert_eq!(
+            validate_random_health(&mut ConstantRandom(0)),
+            Err(MaskedRelaxedErrorV1::DegenerateRandomness)
+        );
+        assert_eq!(
+            validate_random_health(&mut ConstantRandom(1)),
+            Err(MaskedRelaxedErrorV1::DegenerateRandomness)
+        );
     }
 }

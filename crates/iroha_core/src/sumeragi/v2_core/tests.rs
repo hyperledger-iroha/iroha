@@ -1614,6 +1614,17 @@ fn same_round_timeout_upgrade_rebinds_lock_and_retains_current_timeout_vote() {
             && *fetched_subject == subject
             && certificate.reference() == prepare.reference()
     )));
+    assert_eq!(
+        reducer
+            .outbound_messages()
+            .filter_map(|message| match message {
+                ConsensusMessageV2::TimeoutCertificate(certificate) => Some(certificate),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![&upgrade],
+        "the exact strict same-round upgrade replaces the old retained TC owner"
+    );
 
     let retransmit = reducer
         .step(Event::RetransmitElapsed {

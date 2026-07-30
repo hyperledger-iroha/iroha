@@ -464,12 +464,24 @@ pub fn verify_zk_ams_admission_relation_v1(
             max: MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
         });
     }
-    let proof = norito::codec::decode_exact_from_slice::<ZkAmsAdmissionProofWireV1>(proof_bytes)
-        .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidProofEncoding)?;
+    let shape = canonical_shape()?;
+    let dimensions = MaskedRelaxedDimensionsV1::from_shape(&shape)
+        .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?;
+    let decode_limits = dimensions
+        .proof_decode_limits(
+            public_inputs.len(),
+            proof_bytes.len(),
+            MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+        )
+        .map_err(map_composition_error)?;
+    let proof = norito::codec::decode_exact_from_slice_with_limits::<ZkAmsAdmissionProofWireV1>(
+        proof_bytes,
+        decode_limits,
+    )
+    .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidProofEncoding)?;
     if proof.version != PROOF_VERSION_V1 || norito::codec::encode_adaptive(&proof) != proof_bytes {
         return Err(ZkAmsAdmissionRelationErrorV1::InvalidProofEncoding);
     }
-    let shape = canonical_shape()?;
     let strict_public_inputs = public_inputs
         .iter()
         .copied()
@@ -870,5 +882,139 @@ fn map_composition_error(error: MaskedRelaxedErrorV1) -> ZkAmsAdmissionRelationE
         MaskedRelaxedErrorV1::Random(MaskedRelaxedRandomErrorV1::Unavailable) => {
             ZkAmsAdmissionRelationErrorV1::RandomUnavailable
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vega::{
+        VegaPointWireV1, VegaScalarWireV1,
+        masked_relaxed::{MASKED_RELAXED_COMMITMENT_COLUMNS_V1, MaskedRelaxedCommitmentWireV1},
+    };
+    use norito::NoritoSerialize;
+
+    fn synthetic_dimensions() -> MaskedRelaxedDimensionsV1 {
+        MaskedRelaxedDimensionsV1 {
+            variable_count: 524_288,
+            constraint_count: 1_048_576,
+            public_input_count: ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1,
+            witness_commitment_points: 512,
+            error_commitment_points: 1_024,
+            outer_sumcheck_rounds: 20,
+            inner_sumcheck_rounds: 20,
+        }
+    }
+
+    fn empty_relation() -> MaskedRelaxedProofWireV1 {
+        let scalar = VegaScalarWireV1::from_raw_bytes_for_test([0; 32]);
+        MaskedRelaxedProofWireV1 {
+            version: 1,
+            strict_instance_count: 1,
+            mask_witness_commitment: MaskedRelaxedCommitmentWireV1 { points: Vec::new() },
+            mask_error_commitment: MaskedRelaxedCommitmentWireV1 { points: Vec::new() },
+            mask_relaxation: scalar,
+            mask_public_inputs: Vec::new(),
+            strict_witness_commitments: Vec::new(),
+            cross_term_commitments: Vec::new(),
+            outer_sumcheck_rounds: Vec::new(),
+            outer_claims: [scalar; 3],
+            inner_sumcheck_rounds: Vec::new(),
+            witness_opening: Vec::new(),
+            witness_opening_blinding: scalar,
+            error_opening: Vec::new(),
+            error_opening_blinding: scalar,
+        }
+    }
+
+    fn empty_proof() -> ZkAmsAdmissionProofWireV1 {
+        ZkAmsAdmissionProofWireV1 {
+            version: PROOF_VERSION_V1,
+            relation: empty_relation(),
+        }
+    }
+
+    #[test]
+    fn admission_decoder_preflights_oversized_and_forged_nested_counts() {
+        let dimensions = synthetic_dimensions();
+        let point = VegaPointWireV1::from_raw_bytes_for_test([1; 33]);
+        let mut proof = empty_proof();
+        proof.relation.mask_witness_commitment.points =
+            vec![point; MASKED_RELAXED_COMMITMENT_COLUMNS_V1 + 1];
+        let encoded = norito::codec::encode_adaptive(&proof);
+        let limits = dimensions
+            .proof_decode_limits(
+                1,
+                encoded.len(),
+                MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+            )
+            .expect("released relation limits");
+        assert!(matches!(
+            norito::codec::decode_exact_from_slice_with_limits::<ZkAmsAdmissionProofWireV1>(
+                &encoded, limits
+            ),
+            Err(norito::Error::SequenceLengthExceeded {
+                length: 1_025,
+                limit: 1_024
+            })
+        ));
+
+        let encoded_count = 1_025_u32.to_le_bytes();
+        let count_offset = encoded
+            .windows(encoded_count.len())
+            .rposition(|window| window == encoded_count)
+            .expect("oversized nested count is present in canonical wire");
+        let mut forged = encoded;
+        forged[count_offset..count_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let limits = dimensions
+            .proof_decode_limits(
+                1,
+                forged.len(),
+                MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+            )
+            .expect("released relation limits");
+        let forged_error = norito::codec::decode_exact_from_slice_with_limits::<
+            ZkAmsAdmissionProofWireV1,
+        >(&forged, limits)
+        .expect_err("forged nested count must fail before allocation");
+        assert!(
+            matches!(forged_error, norito::Error::SequenceLengthExceeded { length, limit }
+                if length == u64::from(u32::MAX)
+                    && limit <= MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 as u64
+                    && limit < length),
+            "unexpected forged-count rejection: {forged_error:?}"
+        );
+    }
+
+    #[test]
+    fn admission_decoder_rejects_truncation_trailing_and_alternate_layout() {
+        let proof = empty_proof();
+        let canonical = norito::codec::encode_adaptive(&proof);
+        let decode = |bytes: &[u8]| {
+            let limits = synthetic_dimensions()
+                .proof_decode_limits(1, bytes.len(), MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1)
+                .expect("released relation limits");
+            norito::codec::decode_exact_from_slice_with_limits::<ZkAmsAdmissionProofWireV1>(
+                bytes, limits,
+            )
+        };
+        assert_eq!(decode(&canonical).expect("canonical wire"), proof);
+
+        assert!(decode(&canonical[..canonical.len() - 1]).is_err());
+        let mut trailing = canonical.clone();
+        trailing.push(0);
+        assert!(decode(&trailing).is_err());
+
+        let mut alternate = Vec::new();
+        {
+            let flags =
+                norito::core::default_encode_flags() & !norito::core::header_flags::COMPACT_LEN;
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            proof
+                .serialize(&mut alternate)
+                .expect("encode alternate length layout");
+        }
+        assert_ne!(alternate, canonical);
+        assert!(decode(&alternate).is_err());
     }
 }

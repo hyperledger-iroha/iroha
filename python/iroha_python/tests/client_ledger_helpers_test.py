@@ -42,10 +42,10 @@ from iroha_python.repo import (
 )
 from iroha_python.settlement import SettlementLeg
 from iroha_python.tx import (
-    _normalize_positive_u128_literal,
     _normalize_quantity,
     _normalize_rwa_quantity_fields,
     _normalize_u128_quantity,
+    _require_canonical_positive_u128_literal,
 )
 
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
@@ -339,6 +339,8 @@ def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() 
         "penumbra-masp:external-security-review",
         "jindo-lattice-pcs-zk:release-ready",
         "miden-stark:dev-fixture",
+        "sis-hints-anoncred-pq-v0",
+        "sis-with-hints",
         "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
         "halo2/ipa/orchard:kzg",
         "orchard:universal-srs",
@@ -2321,82 +2323,10 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     assert captured["kwargs"]["private_key_hex"] == "23" * 32
 
 
-def test_zk_ace_transfer_helper_normalizes_configured_chain_discriminant_for_transaction_draft(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client = ToriiClient(
-        "http://torii.example",
-        session=FakeSession([]),
-        max_retries=0,
-        chain_discriminant=0x0171,
-    )
-    captured: dict[str, object] = {}
-    source = account_address(0x50, 0x0171)
-    destination = account_address(0x51, 0x0171)
-    fixed_source = account_address(0x50)
-    fixed_destination = account_address(0x51)
-    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
-
-    def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
-        captured["draft"] = draft
-        captured["kwargs"] = kwargs
-        return {
-            "hash": "zk-ace-transfer-taira",
-            "status": {"kind": "Committed"},
-        }
-
-    def fake_zk_ace_authorized_transfer(
-        draft: TransactionDraft,
-        **kwargs: object,
-    ) -> TransactionDraft:
-        captured["zk_ace_kwargs"] = kwargs
-        return draft
-
-    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
-    monkeypatch.setattr(
-        TransactionDraft,
-        "zk_ace_authorized_transfer",
-        fake_zk_ace_authorized_transfer,
-    )
-
-    assert client.zk_ace_authorized_transfer_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="24" * 32,
-        from_account_id=source,
-        to_account_id=destination,
-        asset_definition_id=asset_definition_id,
-        amount="123",
-        identity_commitment="11" * 32,
-        tx_digest="22" * 32,
-        domain_tag="iroha:zk-ace:pq-authorization:v0",
-        action_class="transparent_asset_transfer",
-        replay_nullifier="33" * 32,
-        policy_hash="44" * 32,
-        proof={
-            "backend": "stark/fri/sha256-goldilocks",
-            "proof_b64": base64.b64encode(b"proof").decode("ascii"),
-            "verifying_key_ref": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-        },
-        wait=False,
-    ) == {
-        "hash": "zk-ace-transfer-taira",
-        "status": {"kind": "Committed"},
-    }
-
-    draft = captured["draft"]
-    assert draft.config.authority == fixed_source
-    assert captured["zk_ace_kwargs"]["from_account_id"] == fixed_source
-    assert captured["zk_ace_kwargs"]["to_account_id"] == fixed_destination
-    assert captured["kwargs"]["private_key_hex"] == "24" * 32
-
-
 def test_zk_instruction_helpers_serialize_full_surface() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x61)
     destination = account_address(0x62)
-    zk_ace_verifier = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0"
     proof = {
         "backend": "halo2/ipa",
         "proof_bytes": b"proof-bytes",
@@ -2436,50 +2366,37 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
             outputs=["ee" * 32],
             root_hint="ff" * 32,
         ),
-        Instruction.register_zk_ace_identity_commitment(
-            asset_definition_id,
-            "11" * 32,
-            "22" * 32,
-            [source],
-            zk_ace_verifier,
-        ),
-        Instruction.rotate_zk_ace_identity_commitment(
-            asset_definition_id,
-            "11" * 32,
-            "12" * 32,
-            "22" * 32,
-            [source],
-            zk_ace_verifier,
-        ),
         Instruction.verify_proof(proof),
     ]
 
     encoded = [instruction.to_json() for instruction in instructions]
     assert all(payload for payload in encoded)
-    json_roundtrip_indexes = [0, 1, 4, 5]
+    json_roundtrip_indexes = [0, 1]
     assert [
         Instruction.from_json(encoded[index]).to_json()
         for index in json_roundtrip_indexes
     ] == [encoded[index] for index in json_roundtrip_indexes]
 
-    alternate_source = account_address(0x63)
-    alternate_register = Instruction.register_zk_ace_identity_commitment(
-        asset_definition_id,
-        "11" * 32,
-        "22" * 32,
-        [alternate_source],
-        zk_ace_verifier,
-    )
-    alternate_rotate = Instruction.rotate_zk_ace_identity_commitment(
-        asset_definition_id,
-        "11" * 32,
-        "12" * 32,
-        "22" * 32,
-        [alternate_source],
-        zk_ace_verifier,
-    )
-    assert alternate_register.to_json() != instructions[-2].to_json()
-    assert alternate_rotate.to_json() != instructions[-1].to_json()
+
+def test_legacy_zk_ace_instruction_and_client_surfaces_are_absent() -> None:
+    for name in (
+        "register_zk_ace_identity_commitment",
+        "rotate_zk_ace_identity_commitment",
+        "revoke_zk_ace_identity_commitment",
+        "zk_ace_authorized_transfer",
+    ):
+        assert not hasattr(Instruction, name)
+        assert not hasattr(TransactionDraft, name)
+
+    for name in (
+        "register_zk_ace_identity_commitment_and_wait",
+        "rotate_zk_ace_identity_commitment_and_wait",
+        "revoke_zk_ace_identity_commitment_and_wait",
+        "zk_ace_authorized_transfer_and_wait",
+    ):
+        assert not hasattr(ToriiClient, name)
+
+    assert hasattr(TransactionDraft, "sign_privacy_zk_ace_transfer_action_v1")
 
 
 def test_zk_instruction_helpers_accept_tuple_inputs() -> None:
@@ -3096,126 +3013,6 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
             "duplicates",
             id="unshield-duplicate-output",
         ),
-        pytest.param(
-            lambda asset, source, destination, _proof: Instruction.zk_ace_authorized_transfer(
-                source,
-                destination,
-                asset,
-                "1",
-                "11" * 32,
-                "22" * 32,
-                "chain",
-                "iroha:zk-ace:pq-authorization:v0",
-                "transparent_asset_transfer",
-                "33" * 32,
-                "44" * 32,
-                {
-                    "backend": "halo2/ipa",
-                    "proof_bytes": b"proof-bytes",
-                    "verifying_key_ref": "halo2/ipa:vk_wrong",
-                },
-            ),
-            ValueError,
-            "stark/fri/sha256-goldilocks",
-            id="zk-ace-transfer-wrong-proof-backend",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
-                asset,
-                "00" * 32,
-                "22" * 32,
-                [source],
-                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-            ),
-            ValueError,
-            "identity_commitment",
-            id="zk-ace-register-zero-identity",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.rotate_zk_ace_identity_commitment(
-                asset,
-                "11" * 32,
-                "11" * 32,
-                "22" * 32,
-                [source],
-                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-            ),
-            ValueError,
-            "must differ",
-            id="zk-ace-rotate-same-identity",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
-                asset,
-                "11" * 32,
-                "22" * 32,
-                [source],
-                "halo2/ipa:zk_ace_pq_authorization_v0",
-            ),
-            ValueError,
-            "stark/fri/sha256-goldilocks",
-            id="zk-ace-register-wrong-verifier-backend",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
-                asset,
-                "11" * 32,
-                "22" * 32,
-                [],
-                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-            ),
-            ValueError,
-            "allowed_accounts.*non-empty",
-            id="zk-ace-register-empty-allowlist",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
-                asset,
-                "11" * 32,
-                "22" * 32,
-                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-            ),
-            TypeError,
-            "allowed_accounts",
-            id="zk-ace-register-requires-allowlist",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
-                asset,
-                "11" * 32,
-                "22" * 32,
-                [source, source],
-                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-            ),
-            ValueError,
-            "duplicates",
-            id="zk-ace-register-duplicate-allowlist",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
-                asset,
-                "11" * 32,
-                "22" * 32,
-                [source] * 17,
-                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-            ),
-            ValueError,
-            "at most 16",
-            id="zk-ace-register-oversized-allowlist",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.rotate_zk_ace_identity_commitment(
-                asset,
-                "11" * 32,
-                "12" * 32,
-                "22" * 32,
-                [source] * 17,
-                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-            ),
-            ValueError,
-            "at most 16",
-            id="zk-ace-rotate-oversized-allowlist",
-        ),
     ],
 )
 def test_zk_instruction_helpers_reject_adversarial_inputs(
@@ -3304,41 +3101,6 @@ def test_zk_instruction_helpers_reject_adversarial_inputs(
             "public_amount",
             id="unshield-negative-public-amount",
         ),
-        pytest.param(
-            lambda draft, asset, account, proof: draft.register_zk_ace_identity_commitment(
-                asset,
-                identity_commitment="00" * 32,
-                policy_hash="22" * 32,
-                allowed_accounts=[account],
-                verifier_key="stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-            ),
-            ValueError,
-            "identity_commitment",
-            id="zk-ace-register-zero-identity",
-        ),
-        pytest.param(
-            lambda draft, asset, account, proof: draft.zk_ace_authorized_transfer(
-                from_account_id=account,
-                to_account_id=account_address(0x6C),
-                asset_definition_id=asset,
-                amount=1,
-                identity_commitment="11" * 32,
-                tx_digest="22" * 32,
-                chain_id="chain",
-                domain_tag="iroha:zk-ace:pq-authorization:v0",
-                action_class="wrong-action",
-                replay_nullifier="33" * 32,
-                policy_hash="44" * 32,
-                proof={
-                    "backend": "stark/fri/sha256-goldilocks",
-                    "proof_bytes": b"proof-bytes",
-                    "verifying_key_ref": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-                },
-            ),
-            ValueError,
-            "transparent_asset_transfer",
-            id="zk-ace-transfer-wrong-action",
-        ),
     ],
 )
 def test_zk_transaction_draft_rejects_invalid_inputs(
@@ -3375,12 +3137,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         "proof_bytes": b"proof-bytes",
         "verifying_key_ref": "halo2/ipa:vk_transfer",
     }
-    zk_ace_proof = {
-        "backend": "stark/fri/sha256-goldilocks",
-        "proof_bytes": b"zk-ace-proof",
-        "verifying_key_ref": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-    }
-    zk_ace_verifier = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0"
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
         captured.append((draft, kwargs))
@@ -3436,59 +3192,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         proof=proof,
         root_hint="ff" * 32,
     ) == {"hash": "zk-4"}
-    assert client.register_zk_ace_identity_commitment_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="55" * 32,
-        asset_definition_id=asset_definition_id,
-        identity_commitment="11" * 32,
-        policy_hash="22" * 32,
-        allowed_accounts=[source],
-        verifier_key=zk_ace_verifier,
-        wait=False,
-    ) == {"hash": "zk-5"}
-    assert client.rotate_zk_ace_identity_commitment_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="66" * 32,
-        asset_definition_id=asset_definition_id,
-        old_identity_commitment="11" * 32,
-        new_identity_commitment="12" * 32,
-        policy_hash="22" * 32,
-        allowed_accounts=[source],
-        verifier_key=zk_ace_verifier,
-        wait=False,
-    ) == {"hash": "zk-6"}
-    assert client.revoke_zk_ace_identity_commitment_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="77" * 32,
-        asset_definition_id=asset_definition_id,
-        identity_commitment="12" * 32,
-        reason_hash="55" * 32,
-        wait=False,
-    ) == {"hash": "zk-7"}
-    assert client.zk_ace_authorized_transfer_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="88" * 32,
-        from_account_id=source,
-        to_account_id=destination,
-        asset_definition_id=asset_definition_id,
-        amount="7",
-        identity_commitment="11" * 32,
-        tx_digest="22" * 32,
-        domain_tag="iroha:zk-ace:pq-authorization:v0",
-        action_class="transparent_asset_transfer",
-        replay_nullifier="33" * 32,
-        policy_hash="44" * 32,
-        proof=zk_ace_proof,
-        wait=False,
-    ) == {"hash": "zk-8"}
     assert client.register_asset_hidden_zk_pool_and_wait(
         chain_id="chain",
         authority=source,
@@ -3499,7 +3202,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         asset_set_root="55" * 32,
         vk_transfer="halo2/ipa:asset_hidden_transfer_v1",
         wait=False,
-    ) == {"hash": "zk-9"}
+    ) == {"hash": "zk-5"}
     assert client.asset_hidden_zk_transfer_prepared_and_wait(
         chain_id="chain",
         authority=source,
@@ -3511,7 +3214,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         proof=proof,
         root_hint="88" * 32,
         wait=False,
-    ) == {"hash": "zk-10"}
+    ) == {"hash": "zk-6"}
     assert client.verify_proof_and_wait(
         chain_id="chain",
         authority=source,
@@ -3519,136 +3222,25 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         private_key_hex="bb" * 32,
         proof=proof,
         wait=False,
-    ) == {"hash": "zk-11"}
+    ) == {"hash": "zk-7"}
 
-    assert [len(draft) for draft, _kwargs in captured] == [1] * 11
+    assert [len(draft) for draft, _kwargs in captured] == [1] * 7
     assert captured[0][0].config.metadata == {"purpose": "zk-register"}
     assert captured[0][1]["wait"] is False
     assert captured[1][1]["private_key_hex"] == "22" * 32
-    assert captured[10][1]["private_key_hex"] == "bb" * 32
+    assert captured[6][1]["private_key_hex"] == "bb" * 32
 
 
-def test_zk_ace_waited_helpers_enrich_receipts_from_asset_metadata() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
-    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
-    source = account_address(0x63)
-    destination = account_address(0x64)
-    verifier_key = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0"
-    submit_calls: list[dict[str, object]] = []
-    metadata_payloads = [
-        {
-            "metadata": {
-                "zk.ace.identity.last": {
-                    "identity_commitment": "11" * 32,
-                    "policy_hash": "22" * 32,
-                }
-            }
-        },
-        {
-            "metadata": {
-                "zk.ace.transfer.last": {
-                    "identity_commitment": "11" * 32,
-                    "tx_digest": "33" * 32,
-                    "replay_nullifier": "44" * 32,
-                    "policy_hash": "55" * 32,
-                }
-            }
-        },
-    ]
-
-    def fake_submit(_draft: object, **kwargs: object) -> dict[str, object]:
-        submit_calls.append(kwargs)
-        return {"hash": f"{len(submit_calls):02x}" * 32}
-
-    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
-    client.get_asset_definition = (  # type: ignore[method-assign]
-        lambda _asset_definition_id: metadata_payloads.pop(0)
-    )
-
-    registration = client.register_zk_ace_identity_commitment_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="55" * 32,
-        asset_definition_id=asset_definition_id,
-        identity_commitment="11" * 32,
-        policy_hash="22" * 32,
-        allowed_accounts=[source],
-        verifier_key=verifier_key,
-        action_class="transparent_asset_transfer",
-        domain_tag="iroha:zk-ace:pq-authorization:v0",
-        wait=True,
-    )
-    assert registration["identity_commitment_state"] == {
-        "identity_commitment": "11" * 32,
-        "policy_hash": "22" * 32,
-        "chain_id": "chain",
-        "domain_tag": "iroha:zk-ace:pq-authorization:v0",
-        "action_class": "transparent_asset_transfer",
-        "verifier_key_id": {
-            "backend": "stark/fri/sha256-goldilocks",
-            "name": "zk_ace_pq_authorization_v0",
-        },
-        "allowed_accounts": [source],
-        "commitment_status": "active",
-        "revoked": False,
-        "revocation_status": "not_revoked",
-        "rotation_state": "current",
-    }
-
-    transfer = client.zk_ace_authorized_transfer_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="88" * 32,
-        from_account_id=source,
-        to_account_id=destination,
-        asset_definition_id=asset_definition_id,
-        amount="7",
-        identity_commitment="11" * 32,
-        tx_digest="33" * 32,
-        domain_tag="iroha:zk-ace:pq-authorization:v0",
-        action_class="transparent_asset_transfer",
-        replay_nullifier="44" * 32,
-        policy_hash="55" * 32,
-        proof={
-            "backend": "stark/fri/sha256-goldilocks",
-            "proof_bytes": b"zk-ace-proof",
-            "verifying_key_ref": verifier_key,
-        },
-        wait=True,
-    )
-    assert transfer["replay_state"] == {
-        "identity_commitment": "11" * 32,
-        "tx_digest": "33" * 32,
-        "replay_nullifier": "44" * 32,
-        "policy_hash": "55" * 32,
-        "chain_id": "chain",
-        "domain_tag": "iroha:zk-ace:pq-authorization:v0",
-        "action_class": "transparent_asset_transfer",
-        "verifier_key_id": {
-            "backend": "stark/fri/sha256-goldilocks",
-            "name": "zk_ace_pq_authorization_v0",
-        },
-        "source_account": source,
-        "source_account_allowed": True,
-        "replay_status": "fresh",
-        "duplicate": False,
-        "already_seen": False,
-    }
-    assert [call["wait"] for call in submit_calls] == [True, True]
-
-
-def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -> None:
+def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
     u128_max = str((1 << 128) - 1)
-    assert _normalize_positive_u128_literal("00017", "amount") == "17"
-    assert _normalize_positive_u128_literal(23, "amount") == "23"
-    assert _normalize_positive_u128_literal(u128_max, "amount") == u128_max
+    assert _require_canonical_positive_u128_literal("17", "amount") == "17"
+    assert _require_canonical_positive_u128_literal(u128_max, "amount") == u128_max
 
     for amount in [
         None,
         True,
         False,
+        23,
         0,
         -1,
         1.5,
@@ -3656,6 +3248,9 @@ def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -
         "",
         " ",
         "0",
+        "00",
+        "01",
+        "00017",
         "-1",
         "+1",
         "1.0",
@@ -3667,9 +3262,9 @@ def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -
     ]:
         with pytest.raises(
             (TypeError, ValueError),
-            match="amount must be a positive decimal u128 string",
+            match="amount must be a canonical positive decimal u128 string",
         ):
-            _normalize_positive_u128_literal(amount, "amount")
+            _require_canonical_positive_u128_literal(amount, "amount")
 
 
 @pytest.mark.parametrize(
@@ -3779,65 +3374,6 @@ def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -
             TypeError,
             "proof must be a mapping",
             id="asset-hidden-proof-not-mapping",
-        ),
-        pytest.param(
-            "register_zk_ace_identity_commitment_and_wait",
-            {
-                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "identity_commitment": "11" * 32,
-                "policy_hash": "22" * 32,
-                "allowed_accounts": [account_address(0x6D)],
-                "verifier_key": "halo2/ipa:zk_ace_pq_authorization_v0",
-            },
-            ValueError,
-            "stark/fri/sha256-goldilocks",
-            id="zk-ace-register-wrong-verifier-backend",
-        ),
-        pytest.param(
-            "zk_ace_authorized_transfer_and_wait",
-            {
-                "from_account_id": account_address(0x6D),
-                "to_account_id": account_address(0x6E),
-                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "amount": 1,
-                "identity_commitment": "11" * 32,
-                "tx_digest": "22" * 32,
-                "domain_tag": "iroha:zk-ace:pq-authorization:v0",
-                "action_class": "transparent_asset_transfer",
-                "replay_nullifier": "33" * 32,
-                "policy_hash": "44" * 32,
-                "proof": {
-                    "backend": "halo2/ipa",
-                    "proof_bytes": b"proof-bytes",
-                    "verifying_key_ref": "halo2/ipa:vk_wrong",
-                },
-            },
-            ValueError,
-            "stark/fri/sha256-goldilocks",
-            id="zk-ace-transfer-wrong-proof-backend",
-        ),
-        pytest.param(
-            "zk_ace_authorized_transfer_and_wait",
-            {
-                "from_account_id": account_address(0x6D),
-                "to_account_id": account_address(0x6E),
-                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "amount": 0,
-                "identity_commitment": "11" * 32,
-                "tx_digest": "22" * 32,
-                "domain_tag": "iroha:zk-ace:pq-authorization:v0",
-                "action_class": "transparent_asset_transfer",
-                "replay_nullifier": "33" * 32,
-                "policy_hash": "44" * 32,
-                "proof": {
-                    "backend": "stark/fri/sha256-goldilocks",
-                    "proof_bytes": b"proof-bytes",
-                    "verifying_key_ref": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-                },
-            },
-            ValueError,
-            "positive decimal u128",
-            id="zk-ace-transfer-zero-amount",
         ),
     ],
 )

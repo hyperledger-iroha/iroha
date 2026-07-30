@@ -39,7 +39,7 @@ use super::{
         IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
         ProductionApplicationTraceProjection, ProductionDecisionIdentityProjection,
         ProductionDurableBodyIdentityProjection, ProductionQuorumCertificateIdentityProjection,
-        TagProjection, production_application_trace_refines_decision_completion_kernel,
+        TagProjection, check_production_application_transition,
     },
     v2_effects::{ApplyTask, DurableApplyCompletion, EffectWorkId},
 };
@@ -430,6 +430,96 @@ fn application_body_projection(
             durable.frame_hash(),
         ),
     }
+}
+
+fn prospective_application_refinement_projection(
+    context: &wire::HeightContext,
+    task: &ApplyTask,
+    proposal_block_hash: HashOf<BlockHeader>,
+    canonical_proposal_wire_hash: Hash,
+    artifact: &wire::finality::V2FinalityArtifact,
+) -> Option<ProductionApplicationTraceProjection> {
+    let context_id = application_typed_identity(
+        IDENTITY_DOMAIN_CONTEXT,
+        IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+        context.id().0,
+    );
+    let artifact_hash = HashOf::new(artifact);
+    Some(ProductionApplicationTraceProjection {
+        task_tag: TagProjection {
+            height: task.tag().height(),
+            view: task.tag().view(),
+            generation: task.tag().generation().get(),
+        },
+        owner_tag: TagProjection {
+            height: task.authorized_owner_tag().height(),
+            view: task.authorized_owner_tag().view(),
+            generation: task.authorized_owner_tag().generation().get(),
+        },
+        task_generation: task.tag().generation().get(),
+        context_id,
+        context_height: context.height,
+        commit_qc: application_certificate_projection(task.certificate())?,
+        validated_body: application_body_projection(task.validated_receipt()),
+        validated_execution_commitment: application_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_EXECUTION_COMMITMENT,
+            HashOf::new(&task.validated_receipt().execution_commitment()),
+        ),
+        proposal_block_hash: application_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_BLOCK_HEADER,
+            proposal_block_hash,
+        ),
+        proposal_payload_hash: application_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            canonical_proposal_wire_hash,
+        ),
+        committed_block_hash: application_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_BLOCK_HEADER,
+            task.subject().block_hash,
+        ),
+        executed_block_wire_hash: application_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+            task.certificate()
+                .execution_commitment
+                .executed_block_wire_hash,
+        ),
+        kura_decision: application_decision_projection(task.certificate().as_ref()),
+        kura_artifact_hash: application_typed_identity(
+            IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+            IDENTITY_KIND_FINALITY_ARTIFACT,
+            artifact_hash,
+        ),
+        artifact_context_id: application_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            artifact.height_context.id().0,
+        ),
+        artifact_height: artifact.height,
+        artifact_subject: application_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            HashOf::new(&artifact.subject),
+        ),
+        artifact_block_hash: application_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_BLOCK_HEADER,
+            artifact.block_hash,
+        ),
+        artifact_commit_qc: application_certificate_projection(&artifact.commit_qc)?,
+        artifact_hash: application_typed_identity(
+            IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+            IDENTITY_KIND_FINALITY_ARTIFACT,
+            artifact_hash,
+        ),
+        state_height_after: context.height,
+        task_work_id: task.id().get(),
+        completion_work_id: task.id().get(),
+    })
 }
 
 /// Complete native identity crossing the durable application boundary.
@@ -992,6 +1082,26 @@ impl V2ApplyService {
         artifact
             .verify()
             .map_err(V2ApplyError::FinalityCryptography)?;
+        let prospective_application = prospective_application_refinement_projection(
+            context,
+            task,
+            proposal_block_hash,
+            canonical_proposal_wire_hash,
+            &artifact,
+        )
+        .ok_or_else(|| {
+            V2ApplyError::Validation(
+                "prospective application identity cannot be represented losslessly".to_owned(),
+            )
+        })?;
+        let checked_application = check_production_application_transition(prospective_application)
+            .ok_or_else(|| {
+                V2ApplyError::Validation(
+                    "prospective durable application does not refine its Decision completion"
+                        .to_owned(),
+                )
+            })?;
+        let prospective_application = checked_application.into_projection();
 
         let height = usize::try_from(context.height).map_err(|_| V2ApplyError::HeightOverflow)?;
         let height = NonZeroUsize::new(height).ok_or(V2ApplyError::HeightOverflow)?;
@@ -1147,12 +1257,39 @@ impl V2ApplyService {
             completion_work_id: task.id(),
             state_height_after: self.state.committed_height(),
         };
-        self.finish_durable_apply_completion(evidence)
+        self.finish_durable_apply_completion_against(evidence, prospective_application)
     }
 
+    #[cfg(test)]
     fn finish_durable_apply_completion(
         &self,
         evidence: DurableApplicationEvidence,
+    ) -> Result<DurableApplyCompletion, V2ApplyError> {
+        let application_trace = evidence
+            .application_refinement_projection()
+            .ok_or_else(|| {
+                V2ApplyError::committed_recovery_required(
+                    "application refinement evidence",
+                    &"native application identity cannot be represented losslessly",
+                )
+            })?;
+        let checked_application = check_production_application_transition(application_trace)
+            .ok_or_else(|| {
+                V2ApplyError::committed_recovery_required(
+                    "application refinement evidence",
+                    &"durable application does not refine its Decision completion",
+                )
+            })?;
+        self.finish_durable_apply_completion_against(
+            evidence,
+            checked_application.into_projection(),
+        )
+    }
+
+    fn finish_durable_apply_completion_against(
+        &self,
+        evidence: DurableApplicationEvidence,
+        prospective_application: ProductionApplicationTraceProjection,
     ) -> Result<DurableApplyCompletion, V2ApplyError> {
         if !evidence.is_exact() {
             return Err(V2ApplyError::committed_recovery_required(
@@ -1168,10 +1305,10 @@ impl V2ApplyService {
                     &"native application identity cannot be represented losslessly",
                 )
             })?;
-        if !production_application_trace_refines_decision_completion_kernel(application_trace) {
+        if application_trace != prospective_application {
             return Err(V2ApplyError::committed_recovery_required(
                 "application refinement evidence",
-                &"durable application does not refine its Decision completion",
+                &"durable application differs from its pre-authorized Decision completion",
             ));
         }
         Ok(DurableApplyCompletion::new(
@@ -1424,10 +1561,11 @@ impl V2ApplyService {
         {
             return Err(V2ApplyError::InjectedCrashAfterWsvCheckpoint);
         }
-        // TODO: Add authenticated prefix compaction/retention before treating
-        // this bounded append-only archive as suitable for indefinite node
-        // operation. Reaching either configured archive ceiling intentionally
-        // remains a fail-stop committed-recovery condition.
+        // TODO: Add an automatic governed retention controller and deployment
+        // policy before treating this bounded archive as suitable for indefinite
+        // node operation. Explicit Kura-authenticated, sealed-CAS-approved prefix
+        // compaction is available; reaching a configured ceiling without an
+        // authorized retention decision intentionally remains fail-stop.
         if let Some(archive) = self.provider_ingest_finalized_archive.as_ref() {
             let receipt = pre_wsv_finality_receipt.as_ref().ok_or_else(|| {
                 V2ApplyError::CommittedRecoveryRequired {
@@ -2887,6 +3025,23 @@ mod tests {
             state_height_after: fixture.state.committed_height(),
         };
         assert!(evidence.is_exact());
+        assert_eq!(
+            prospective_application_refinement_projection(
+                &fixture.context,
+                &fixture.task,
+                fixture.body.hash(),
+                fixture
+                    .body
+                    .canonical_proposal_wire_hash()
+                    .expect("hash proposal wire"),
+                evidence.artifact(),
+            )
+            .expect("prospective application projection"),
+            evidence
+                .application_refinement_projection()
+                .expect("observed application projection"),
+            "preflight and observed durable application identities must be exact"
+        );
         assert_eq!(evidence.task_tag(), fixture.task.tag());
         assert_eq!(evidence.owner_tag(), fixture.task.authorized_owner_tag());
         assert_eq!(

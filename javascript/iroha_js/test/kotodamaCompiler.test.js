@@ -14,10 +14,18 @@ import { compileKotodamaWithNativeBinding } from "../src/kotodamaCompiler/native
 import { normalizeCompilerResult } from "../src/kotodamaCompiler/normalize.js";
 import { blake2b256 } from "../src/blake2b.js";
 import {
+  KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS,
+  KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
   KOTODAMA_V1_DECLARATION_RESERVED,
   KOTODAMA_V1_KEYWORDS,
   KOTODAMA_V1_RETIRED_TYPE_NAMES,
+  KOTODAMA_V1_STATE_MAP_KEY_TYPES,
+  isCanonicalKotodamaDynamicAccessBaseKey,
   isCanonicalKotodamaIdentifier,
+  isCanonicalKotodamaStateTypeName,
+  isKotodamaV1DynamicAccessBoundKind,
+  isKotodamaV1StateMapKeyTypeName,
+  kotodamaV1StateMapKeyTypeName,
 } from "../src/kotodamaIdentifiers.js";
 
 const CRC64_MASK = 0xffff_ffff_ffff_ffffn;
@@ -44,6 +52,145 @@ test("Kotodama identifier policy keeps retired types contextual", () => {
   for (const name of ["int", "decimal", "quantity"]) {
     assert.equal(isCanonicalKotodamaIdentifier(name), true);
     assert.equal(isCanonicalKotodamaIdentifier(name, { declaration: true }), false);
+  }
+});
+
+test("Kotodama dynamic-access policy exposes the exact ordered V1 contract", () => {
+  assert.deepEqual(KOTODAMA_V1_STATE_MAP_KEY_TYPES, [
+    "int",
+    "decimal",
+    "quantity",
+    "bool",
+    "string",
+    "bytes",
+    "DataSpaceId",
+    "AccountId",
+    "AssetDefinitionId",
+    "AssetId",
+    "NftId",
+    "DomainId",
+    "Name",
+  ]);
+  assert.deepEqual(KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS, ["range", "take"]);
+  assert.equal(KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS, 64);
+
+  for (const keyType of KOTODAMA_V1_STATE_MAP_KEY_TYPES) {
+    assert.equal(isKotodamaV1StateMapKeyTypeName(keyType), true, keyType);
+  }
+  for (const keyType of ["Json", "ReferendumId", "Int", "Quantity", "Amount"]) {
+    assert.equal(isKotodamaV1StateMapKeyTypeName(keyType), false, keyType);
+  }
+  for (const boundKind of KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS) {
+    assert.equal(isKotodamaV1DynamicAccessBoundKind(boundKind), true, boundKind);
+  }
+  for (const boundKind of ["", "Take", "prefix", "range "]) {
+    assert.equal(isKotodamaV1DynamicAccessBoundKind(boundKind), false, boundKind);
+  }
+  for (const baseKey of ["state:Balances", "state:amount", "state:_private2"]) {
+    assert.equal(isCanonicalKotodamaDynamicAccessBaseKey(baseKey), true, baseKey);
+  }
+  for (const baseKey of [
+    "",
+    "state:",
+    "state:*",
+    "state:Balances/",
+    "state:Balances/suffix",
+    "state:Balances:suffix",
+    "state:int",
+    "state:state",
+    "state:__kotodama_link_forged",
+    "account:alice",
+    " state:Balances",
+    "state:Balances ",
+  ]) {
+    assert.equal(isCanonicalKotodamaDynamicAccessBaseKey(baseKey), false, baseKey);
+  }
+
+  assert.equal(
+    kotodamaV1StateMapKeyTypeName("StateMap<AccountId, quantity>"),
+    "AccountId",
+  );
+  assert.equal(
+    kotodamaV1StateMapKeyTypeName("StateMap<quantity, int>"),
+    "quantity",
+  );
+  for (const typeName of [
+    "quantity",
+    "Option<StateMap<AccountId, quantity>>",
+    "StateMap<AccountId, Amount>",
+    "StateMap<AccountId,quantity>",
+  ]) {
+    assert.equal(kotodamaV1StateMapKeyTypeName(typeName), null, typeName);
+  }
+});
+
+test("Kotodama state type names reject retired types without poisoning fields", () => {
+  for (const canonical of [
+    "quantity",
+    "(int, decimal)",
+    "Option<Result<quantity, string>>",
+    "List<Transfer{amount: quantity}, 64>",
+    "StateMap<AccountId, Transfer{amount: quantity, memo: Option<string>}>",
+  ]) {
+    assert.equal(
+      isCanonicalKotodamaStateTypeName(canonical),
+      true,
+      `${canonical} must be canonical`,
+    );
+  }
+  for (const retiredOrMalformed of [
+    "Amount",
+    "amount",
+    "Amount: quantity",
+    "Option<Amount>",
+    "List<amount, 1>",
+    "StateMap<AccountId, Amount>",
+    "StateMap<AccountId, Amount: quantity>",
+    "Transfer{amount: amount}",
+    "Transfer{amount:: quantity}",
+    "Amount{amount: quantity}",
+    "Transfer{amount: quantity, amount: int}",
+    "Option<StateMap<AccountId, quantity>>",
+    "StateMap<Json, quantity>",
+    "List<quantity, 01>",
+    "Transfer {amount: quantity}",
+  ]) {
+    assert.equal(
+      isCanonicalKotodamaStateTypeName(retiredOrMalformed),
+      false,
+      `${retiredOrMalformed} must be rejected`,
+    );
+  }
+});
+
+test("Kotodama state type names enforce the runtime 256-node schema boundary", () => {
+  const wideType = (nodes) =>
+    `(${Array.from({ length: nodes - 1 }, () => "int").join(", ")})`;
+  const deepType = (nodes) =>
+    `${"Option<".repeat(nodes - 1)}int${">".repeat(nodes - 1)}`;
+
+  assert.equal(isCanonicalKotodamaStateTypeName(wideType(256)), true);
+  assert.equal(isCanonicalKotodamaStateTypeName(deepType(256)), true);
+  assert.equal(
+    isCanonicalKotodamaStateTypeName(`StateMap<AccountId, ${wideType(256)}>`),
+    true,
+    "StateMap wrapper and key are outside its stored value node budget",
+  );
+  assert.equal(
+    isCanonicalKotodamaStateTypeName(`StateMap<AccountId, ${deepType(255)}>`),
+    true,
+    "StateMap wrapper consumes one CNTR descriptor-depth level",
+  );
+  assert.equal(
+    isCanonicalKotodamaStateTypeName(`StateMap<AccountId, ${deepType(256)}>`),
+    false,
+  );
+  for (const overLimit of [wideType(257), deepType(257)]) {
+    assert.equal(isCanonicalKotodamaStateTypeName(overLimit), false);
+    assert.equal(
+      isCanonicalKotodamaStateTypeName(`StateMap<AccountId, ${overLimit}>`),
+      false,
+    );
   }
 });
 
@@ -369,20 +516,17 @@ test("JavaScript identifier validation consumes the normative V1 keyword table",
   const typeNames = [...typeTable[1].matchAll(/"([A-Za-z_][A-Za-z0-9_]*)"/gu)].map(
     (match) => match[1],
   );
-  const intrinsicNames = [
-    ...semantic.matchAll(
-      /pub\(crate\) const [A-Z0-9_]+_INTRINSIC: &str = "([^"]+)";/gu,
-    ),
+  const reservedExtraTable =
+    /pub const V1_DECLARATION_RESERVED_EXTRA_NAMES: &\[&str\] = &\[([\s\S]*?)\];/u.exec(
+      semantic,
+    );
+  assert.ok(reservedExtraTable, "semantic V1 reserved-extra table is missing");
+  const reservedExtraNames = [
+    ...reservedExtraTable[1].matchAll(/"([A-Za-z_][A-Za-z0-9_]*)"/gu),
   ].map((match) => match[1]);
   assert.deepEqual(KOTODAMA_V1_DECLARATION_RESERVED, [
     ...typeNames,
-    "AxtDescriptor",
-    "AssetHandle",
-    "ProofBlob",
-    "SoracloudRequest",
-    "SoracloudResponse",
-    "state_map_get",
-    ...intrinsicNames,
+    ...reservedExtraNames,
   ]);
 });
 
@@ -688,7 +832,22 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
     ["始まり", "kaizen", "mutate"],
   );
 
+  const contextualAmount = await compileResponse((manifest) => {
+    manifest.states = [
+      { name: "amount", type_name: "Transfer{amount: quantity}" },
+    ];
+    manifest.error_codes = [
+      { namespace: "LedgerError", name: "amount", code: 7 },
+    ];
+  });
+  assert.deepEqual(contextualAmount.output.manifest.states, [
+    { name: "amount", type_name: "Transfer{amount: quantity}" },
+  ]);
+  assert.equal(contextualAmount.output.manifest.error_codes[0].name, "amount");
+
   for (const seiyakuName of [
+    "Amount",
+    "amount",
     "seiyaku",
     "match",
     "int",
@@ -701,7 +860,30 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
       compileResponse((manifest) => {
         manifest.seiyaku_name = seiyakuName;
       }),
-      /seiyaku_name must be a canonical V1 declaration identifier/u,
+      /seiyaku_name must be a canonical V1 type declaration identifier/u,
+    );
+  }
+  for (const typeName of [
+    "Amount",
+    "amount",
+    "StateMap<AccountId, Amount>",
+    "Transfer{amount: amount}",
+  ]) {
+    await assert.rejects(
+      compileResponse((manifest) => {
+        manifest.states = [{ name: "Balances", type_name: typeName }];
+      }),
+      /state 0\.type_name is not a canonical V1 state type/u,
+    );
+  }
+  for (const namespace of ["Amount", "amount"]) {
+    await assert.rejects(
+      compileResponse((manifest) => {
+        manifest.error_codes = [
+          { namespace, name: "Denied", code: 7 },
+        ];
+      }),
+      /canonical namespace and variant identifiers/u,
     );
   }
   await assert.rejects(
@@ -803,6 +985,9 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
     ["unsafe features bitmap", ({ manifest }) => {
       manifest.features_bitmap = Number.MAX_SAFE_INTEGER + 1;
     }, /features_bitmap.*unsigned safe integer/u],
+    ["unknown features bitmap bit", ({ manifest }) => {
+      manifest.features_bitmap = 4;
+    }, /features_bitmap.*0\.\.3/u],
     ["unknown entrypoint field", ({ manifest }) => {
       manifest.entrypoints[0].unknown = true;
     }, /entrypoint 0 has an invalid field set/u],
@@ -847,6 +1032,101 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
         dynamic_writes: [],
       };
     }, /max_keys.*unsigned safe integer/u],
+    ["zero dynamic bound", ({ manifest }) => {
+      manifest.access_set_hints = {
+        read_keys: [],
+        write_keys: [],
+        dynamic_reads: [{
+          base_key: "state:amount",
+          key_type: "quantity",
+          bound_kind: "range",
+          max_keys: 0,
+        }],
+        dynamic_writes: [],
+      };
+    }, /max_keys must be in the V1 range 1\.\.64/u],
+    ["dynamic bound above V1 maximum", ({ manifest }) => {
+      manifest.access_set_hints = {
+        read_keys: [],
+        write_keys: [],
+        dynamic_reads: [{
+          base_key: "state:Balances",
+          key_type: "Name",
+          bound_kind: "take",
+          max_keys: 65,
+        }],
+        dynamic_writes: [],
+      };
+    }, /max_keys.*0\.\.64/u],
+    ...[
+      "state:",
+      "state:*",
+      "state:Balances/suffix",
+      "state:Balances:suffix",
+      "state:int",
+      "account:alice",
+    ].map((baseKey) => [
+      `noncanonical dynamic base ${baseKey}`,
+      ({ manifest }) => {
+        manifest.access_set_hints = {
+          read_keys: [],
+          write_keys: [],
+          dynamic_reads: [{
+            base_key: baseKey,
+            key_type: "AccountId",
+            bound_kind: "take",
+            max_keys: 1,
+          }],
+          dynamic_writes: [],
+        };
+      },
+      /base_key must be state: plus one canonical state declaration identifier/u,
+    ]),
+    ...[
+      "Json",
+      "ReferendumId",
+      "Int",
+      "Quantity",
+      "Amount",
+      "amount",
+      "Foo{Amount: quantity}",
+      "Foo{Amount:quantity}",
+      "StateMap<AccountId, int>",
+      "\u0410mount",
+    ].map((keyType) => [
+      `noncanonical dynamic key type ${keyType}`,
+      ({ manifest }) => {
+        manifest.access_set_hints = {
+          read_keys: [],
+          write_keys: [],
+          dynamic_reads: [{
+            base_key: "state:Balances",
+            key_type: keyType,
+            bound_kind: "take",
+            max_keys: 1,
+          }],
+          dynamic_writes: [],
+        };
+      },
+      /key_type must be an exact Kotodama V1 StateMap key scalar/u,
+    ]),
+    ...["Take", "prefix", "range "].map((boundKind) => [
+      `noncanonical dynamic bound kind ${boundKind}`,
+      ({ manifest }) => {
+        manifest.access_set_hints = {
+          read_keys: [],
+          write_keys: [],
+          dynamic_reads: [{
+            base_key: "state:Balances",
+            key_type: "AccountId",
+            bound_kind: boundKind,
+            max_keys: 1,
+          }],
+          dynamic_writes: [],
+        };
+      },
+      /bound_kind must be exactly take or range/u,
+    ]),
     ["duplicate kotoba language", ({ manifest }) => {
       manifest.kotoba = [{
         msg_id: "demo.message",
@@ -859,6 +1139,63 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
   ];
   for (const [label, mutate, expected] of cases) {
     await assert.rejects(compileMutatedServiceResponse(mutate), expected, label);
+  }
+});
+
+test("compiler manifest dynamic hints resolve declared StateMaps per list", async () => {
+  const hint = {
+    base_key: "state:Balances",
+    key_type: "AccountId",
+    bound_kind: "take",
+    max_keys: 1,
+  };
+  const configure = (manifest, field, hints, states) => {
+    manifest.states = states;
+    manifest.access_set_hints = {
+      read_keys: [],
+      write_keys: [],
+      dynamic_reads: [],
+      dynamic_writes: [],
+      [field]: hints,
+    };
+  };
+
+  for (const field of ["dynamic_reads", "dynamic_writes"]) {
+    const cases = [
+      [
+        "exact duplicate",
+        [hint, { ...hint }],
+        [{ name: "Balances", type_name: "StateMap<AccountId, quantity>" }],
+        /contains a duplicate dynamic access hint/u,
+      ],
+      [
+        "unknown state",
+        [{ ...hint, base_key: "state:Missing" }],
+        [{ name: "Balances", type_name: "StateMap<AccountId, quantity>" }],
+        /base_key must reference a declared top-level StateMap/u,
+      ],
+      [
+        "scalar state",
+        [hint],
+        [{ name: "Balances", type_name: "quantity" }],
+        /base_key must reference a declared top-level StateMap/u,
+      ],
+      [
+        "mismatched key scalar",
+        [{ ...hint, key_type: "Name" }],
+        [{ name: "Balances", type_name: "StateMap<AccountId, quantity>" }],
+        /key_type Name does not match declared StateMap key type AccountId/u,
+      ],
+    ];
+    for (const [label, hints, states, expected] of cases) {
+      await assert.rejects(
+        compileMutatedServiceResponse(({ manifest }) => {
+          configure(manifest, field, hints, states);
+        }),
+        expected,
+        `${field}: ${label}`,
+      );
+    }
   }
 });
 

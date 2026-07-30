@@ -24,8 +24,10 @@ bytes.
 - the retired nested `EscrowId` binary layout, whose redundant wrapper makes an
   86-byte frame, which Norito decoders reject;
 - a noncanonical quantity spelling, which the JSON decoder rejects;
-- a zero expected amount, which is structurally codec-valid but rejected by
-  native ledger execution before custody is changed.
+- a zero expected amount, which the Rust structural codec admits so reference
+  validation can classify it as `SFS-VAL-001`; strict external SDK codecs reject
+  zero at their public boundaries, and native ledger execution rejects it before
+  custody is changed.
 
 Strict decoder tests also append trailing bytes to the canonical frame and
 require rejection; the closed eight-file payload set uses the retired nested
@@ -42,7 +44,7 @@ reference-SDK inventory:
 ```sh
 cargo run --locked -p iroha_data_model --features test-fixtures \
   --bin cancel_asset_lock_fixtures
-cargo run --locked -p sorafs_manifest --bin generate_por_fixtures
+cargo run --locked -p sorafs_manifest --bin generate_por_fixtures -- --write
 python3 scripts/check_sorafs_reference_sdk_fixtures.py
 ```
 

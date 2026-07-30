@@ -107,9 +107,9 @@ use iroha_data_model::{
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey,
-        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtReplayRecord, DataSpaceCatalog,
-        DataSpaceId, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
-        DomainEndorsementRecord, FeeDebitSource, FeeSponsorBudgetCounter,
+        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
+        AxtReplayRecord, DataSpaceCatalog, DataSpaceId, DomainCommittee, DomainEndorsement,
+        DomainEndorsementPolicy, DomainEndorsementRecord, FeeDebitSource, FeeSponsorBudgetCounter,
         FeeSponsorBudgetCounterKey, FeeSponsorEnrollment, FeeSponsorEnrollmentKey,
         FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
         FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey, FeeSponsorVault,
@@ -318,7 +318,7 @@ fn checked_keypair() -> KeyPair {
 }
 
 #[cfg(any(test, feature = "bench"))]
-fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+pub(crate) fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("state fixture key generation for requested algorithm should succeed")
 }
@@ -1813,7 +1813,8 @@ impl NativeAmxParticipantApplicationDiagnosticIdentity {
     }
 
     fn canonical_bytes(self) -> Vec<u8> {
-        norito::to_bytes(&self).expect("bounded Native AMX diagnostics identity must encode")
+        norito::encode_canonical(&self)
+            .expect("bounded Native AMX diagnostics identity must encode")
     }
 }
 
@@ -1940,10 +1941,10 @@ fn decode_canonical_merge_reservation_key(
         MAX_MERGE_EXECUTION_RESERVATION_KEY_BYTES,
         "lane reservation key",
     )?;
-    let decoded = norito::decode_from_bytes::<crate::queue::LaneQueueReservationKeyV2>(encoded)
+    let decoded = norito::decode_canonical::<crate::queue::LaneQueueReservationKeyV2>(encoded)
         .map_err(|error| {
             MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "encoded lane reservation key is not valid exact framed Norito: {error}"
+                "encoded lane reservation key is not canonical exact framed Norito: {error}"
             ))
         })?;
     decoded.validate().map_err(|reason| {
@@ -1951,16 +1952,6 @@ fn decode_canonical_merge_reservation_key(
             "encoded lane reservation key failed validation: {reason}"
         ))
     })?;
-    let canonical = norito::to_bytes(&decoded).map_err(|error| {
-        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-            "canonical lane reservation key encoding failed: {error}"
-        ))
-    })?;
-    if canonical != encoded {
-        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded lane reservation key is not canonical framed Norito".to_owned(),
-        ));
-    }
     Ok(decoded)
 }
 
@@ -1972,23 +1963,11 @@ fn decode_canonical_merge_routing_plan(
         MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES,
         "routing plan",
     )?;
-    let decoded =
-        norito::decode_from_bytes::<crate::queue::RoutingPlan>(encoded).map_err(|error| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "encoded routing plan is not valid exact framed Norito: {error}"
-            ))
-        })?;
-    let canonical = norito::to_bytes(&decoded).map_err(|error| {
+    norito::decode_canonical::<crate::queue::RoutingPlan>(encoded).map_err(|error| {
         MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-            "canonical routing plan encoding failed: {error}"
+            "encoded routing plan is not canonical exact framed Norito: {error}"
         ))
-    })?;
-    if canonical != encoded {
-        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded routing plan is not canonical framed Norito".to_owned(),
-        ));
-    }
-    Ok(decoded)
+    })
 }
 
 /// Return the transaction-membership hashes committed by an execution batch.
@@ -8992,6 +8971,21 @@ impl json::JsonDeserialize for GovernanceReferendumMode {
     }
 }
 
+/// Immutable asset-custody identities retained with a governance lock.
+#[derive(
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct GovernanceLockCustody {
+    /// Whether the lock amount was actually transferred into escrow.
+    pub escrowed: bool,
+    /// Asset definition whose balance is held by the lock.
+    pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
+    /// Escrow account holding the locked balance.
+    pub bond_escrow_account: iroha_data_model::account::AccountId,
+    /// Account receiving any slashed balance.
+    pub slash_receiver_account: iroha_data_model::account::AccountId,
+}
+
 /// Lock record for governance voting (plain mode)
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct GovernanceLockRecord {
@@ -9010,6 +9004,13 @@ pub struct GovernanceLockRecord {
     /// Duration in blocks that this lock was requested for (used for conviction).
     #[norito(default)]
     pub duration_blocks: u64,
+    /// Immutable custody identities used for lock, slash, restitution, and release.
+    ///
+    /// Legacy records decode as `None` and continue to use the active governance
+    /// configuration. New records always retain `Some`.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub custody: Option<GovernanceLockCustody>,
 }
 
 /// Locks for a single referendum keyed by voter account id
@@ -9260,6 +9261,9 @@ fn build_validation_fee_plain_electorate_snapshot<'a>(
         if account_id != &record.owner {
             return Err("validation-fee citizen storage key differs from its canonical owner");
         }
+        if account_id == &rules.bond_escrow_account || account_id == &rules.slash_receiver_account {
+            continue;
+        }
         if record.amount < rules.citizenship_amount {
             continue;
         }
@@ -9314,6 +9318,8 @@ mod validation_fee_plain_electorate_snapshot_tests {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
                 .parse()
                 .expect("voting asset id"),
+            bond_escrow_account: account(90),
+            slash_receiver_account: account(91),
             ballot_amount: 150_u64.into(),
             ballot_duration_blocks: 3_600,
             citizenship_amount: 10_000_u64.into(),
@@ -9447,6 +9453,37 @@ mod validation_fee_plain_electorate_snapshot_tests {
             ),
             Err("validation-fee citizen storage key differs from its canonical owner")
         );
+
+        for custody_account in [account(90), account(91)] {
+            let operator_citizen = CitizenshipRecord::new(
+                proposal_operator.clone(),
+                10_000_u64.into(),
+                approval_gate_height,
+            );
+            let custody_citizen = CitizenshipRecord::new(
+                custody_account.clone(),
+                10_000_u64.into(),
+                approval_gate_height + 1,
+            );
+            let citizens = [
+                (proposal_operator.clone(), operator_citizen),
+                (custody_account.clone(), custody_citizen),
+            ];
+            let snapshot = build_validation_fee_plain_electorate_snapshot(
+                proposal_id,
+                &proposal_operator,
+                captured_at_height,
+                approval_gate_height,
+                &rules(256),
+                citizens
+                    .iter()
+                    .map(|(account_id, record)| (account_id, record)),
+            );
+            let snapshot = snapshot.expect("custody accounts must be excluded from the electorate");
+            assert_eq!(snapshot.member_count, 1);
+            assert!(snapshot.contains(&proposal_operator));
+            assert!(!snapshot.contains(&custody_account));
+        }
     }
 }
 
@@ -10841,6 +10878,9 @@ pub struct StateBlock<'state> {
     fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
     axt_envelopes: Vec<AxtEnvelopeRecord>,
+    /// Durable native independent-batch leg outcomes keyed by entrypoint hash.
+    batch_transfer_outcomes:
+        BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>>,
     /// Verified lane relay records captured while executing this block.
     verified_lane_relay_records: Vec<VerifiedLaneRelayRecord>,
     /// Captured execution witness for the block (SBV‑AM).
@@ -11037,7 +11077,7 @@ impl<'state> StateBlock<'state> {
             return;
         }
 
-        crate::privacy_state::validate_non_pgc_privacy_root_retention_v1(
+        crate::privacy_state::validate_unanchored_privacy_root_retention_v1(
             &self.world.privacy_roots,
             pending.next_limits.retained_root_count,
         )
@@ -11047,17 +11087,23 @@ impl<'state> StateBlock<'state> {
                  {incoming_height}: {error}"
             )
         });
-        let plans = crate::privacy_state::plan_privacy_root_retention_reduction_v1(
-            &self.world.privacy_roots,
-            iroha_data_model::privacy::PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            pending.next_limits.retained_root_count,
-        )
-        .unwrap_or_else(|error| {
-            panic!(
-                "scheduled Anonymous PGC retention tightening failed at incoming block height \
-                 {incoming_height}: {error}"
-            )
-        });
+        let mut plans = Vec::new();
+        for protocol_id in crate::privacy_state::PRIVACY_ROOT_RETENTION_ANCHORED_PROTOCOLS_V1 {
+            plans.extend(
+                crate::privacy_state::plan_privacy_root_retention_reduction_v1(
+                    &self.world.privacy_roots,
+                    protocol_id,
+                    pending.next_limits.retained_root_count,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "scheduled typed privacy retention tightening for {protocol_id:?} failed at \
+                         incoming block height {incoming_height}: {error}"
+                    )
+                }),
+            );
+        }
+        plans.sort_unstable_by_key(|plan| plan.head_key);
         let mut head_updates = Vec::with_capacity(plans.len());
         for plan in &plans {
             let head = self
@@ -11067,8 +11113,10 @@ impl<'state> StateBlock<'state> {
                 .copied()
                 .unwrap_or_else(|| {
                     panic!(
-                        "Anonymous PGC retention plan has no head at incoming block height \
-                         {incoming_height}"
+                        "typed privacy retention plan for {:?}/{:?} has no head at incoming block \
+                         height {incoming_height}",
+                        plan.head_key.namespace(),
+                        plan.head_key.role(),
                     )
                 });
             let next_head = crate::privacy_state::PrivacyRootHeadRecordV1::new(
@@ -11079,8 +11127,10 @@ impl<'state> StateBlock<'state> {
             )
             .unwrap_or_else(|error| {
                 panic!(
-                    "Anonymous PGC retention anchor is invalid at incoming block height \
-                     {incoming_height}: {error}"
+                    "typed privacy retention anchor for {:?}/{:?} is invalid at incoming block \
+                     height {incoming_height}: {error}",
+                    plan.head_key.namespace(),
+                    plan.head_key.role(),
                 )
             });
             head_updates.push((plan.head_key, next_head));
@@ -11253,6 +11303,14 @@ impl<'state> StateBlock<'state> {
         core::mem::take(&mut self.axt_envelopes)
     }
 
+    /// Drain durable native independent-batch outcomes captured during this block.
+    #[must_use]
+    pub fn drain_batch_transfer_outcomes(
+        &mut self,
+    ) -> BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>> {
+        core::mem::take(&mut self.batch_transfer_outcomes)
+    }
+
     fn prune_axt_replay_ledger(&mut self, current_slot: u64, retention_slots: u64) {
         let expired: Vec<_> = self
             .world
@@ -11273,7 +11331,16 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Replace the cached AXT policies for this block scope with `snapshot`.
-    pub fn install_axt_policy_snapshot(&mut self, snapshot: &AxtPolicySnapshot) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when `snapshot` is not
+    /// canonically ordered or its version does not bind its exact entries.
+    pub fn install_axt_policy_snapshot(
+        &mut self,
+        snapshot: &AxtPolicySnapshot,
+    ) -> Result<(), AxtPolicySnapshotValidationError> {
+        snapshot.validate()?;
         let stale: Vec<_> = self
             .world
             .axt_policies
@@ -11288,6 +11355,7 @@ impl<'state> StateBlock<'state> {
         }
         #[cfg(feature = "telemetry")]
         self.telemetry.set_axt_policy_snapshot_version(snapshot);
+        Ok(())
     }
 
     fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
@@ -11354,7 +11422,9 @@ impl<'state> StateBlock<'state> {
             }
         }
 
-        self.install_axt_policy_snapshot(snap);
+        snap.version = AxtPolicySnapshot::compute_version(&snap.entries);
+        self.install_axt_policy_snapshot(snap)
+            .expect("directory-derived AXT policy snapshot must be canonical");
         snapshot
     }
 
@@ -11661,6 +11731,14 @@ pub struct StateTransaction<'block, 'state> {
     block_axt_envelopes: &'block mut Vec<AxtEnvelopeRecord>,
     /// Pending AXT envelopes captured during this transaction execution.
     pending_axt_envelopes: Vec<AxtEnvelopeRecord>,
+    /// Block-level accumulator for durable native independent-batch outcomes.
+    block_batch_transfer_outcomes: &'block mut BTreeMap<
+        HashOf<TransactionEntrypoint>,
+        Vec<data_pre::AssetBatchTransferOutcome>,
+    >,
+    /// Independent-batch outcomes staged until this transaction commits.
+    pending_batch_transfer_outcomes:
+        BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>>,
     /// Block-level accumulator for verified lane relay records that should
     /// hydrate the runtime relay cache after the block commits.
     block_verified_lane_relay_records: &'block mut Vec<VerifiedLaneRelayRecord>,
@@ -17194,7 +17272,13 @@ impl DetachedStateTransactionDelta {
             stx.world.current_dataspace_id = Some(dataspace_id);
         }
         let result: Result<(), iroha_data_model::ValidationFail> = (|| {
-            let asset_adds = aggregate_quantities(&self.asset_add_ids, &self.asset_add_qtys)?;
+            let resolved_asset_add_ids = self
+                .asset_add_ids
+                .iter()
+                .map(|id| stx.world.resolve_asset_id_for_current_scope(id))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
+            let asset_adds = aggregate_quantities(&resolved_asset_add_ids, &self.asset_add_qtys)?;
             let asset_subs = aggregate_quantities(&self.asset_sub_ids, &self.asset_sub_qtys)?;
             let asset_def_adds =
                 aggregate_quantities(&self.asset_def_add_ids, &self.asset_def_add_qtys)?;
@@ -17227,17 +17311,6 @@ impl DetachedStateTransactionDelta {
             );
             let asset_def_kv_dels =
                 gather_set_keyed(&self.asset_def_kv_del_ids, &self.asset_def_kv_del_key_ids);
-            // Validate numeric specs for all changes prior to mutating state (aggregated).
-            for (id, qty) in &asset_adds {
-                let def = stx.world.asset_definition(id.definition())?;
-                let spec = def.spec();
-                ensure_asset_quantity_value(qty, spec)
-                    .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-                if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_quantity_value(value.as_ref(), spec)
-                        .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-                }
-            }
             for (id, qty) in &asset_subs {
                 let def = stx.world.asset_definition(id.definition())?;
                 let spec = def.spec();
@@ -17326,27 +17399,28 @@ impl DetachedStateTransactionDelta {
                     let _ = stx.world.remove_asset_and_metadata(id);
                 }
             }
-            // Apply asset additions (aggregated per id) and defer event emission until totals update.
+            // Apply asset additions (aggregated per id) through the checked credit primitive and
+            // defer event emission until totals update. Checking at this mutation boundary
+            // accounts for transfers and subtractions applied earlier in the detached delta. The
+            // enclosing state transaction is discarded on error, so a rejected credit cannot
+            // commit any preceding mutations.
             for (id, qty) in &asset_adds {
-                let is_nonzero = {
-                    let dst = stx.world.asset_or_insert(id, Quantity::zero())?;
-                    let qref: &mut Quantity = &mut *dst;
-                    // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    let updated = qref.checked_add(qty).map_err(|_| {
-                        iroha_data_model::ValidationFail::NotPermitted(
-                            "numeric overflow".to_owned(),
-                        )
-                    })?;
-                    *qref = updated;
-                    let is_nonzero = !qref.is_zero();
-                    // Witness: record post-value
-                    crate::sumeragi::witness::record_write_asset(id, qref);
-                    is_nonzero
-                };
-                if is_nonzero {
-                    stx.world.track_nonzero_asset_holder(id);
-                }
+                let previous = stx
+                    .world
+                    .assets
+                    .get(id)
+                    .map(|value| value.as_ref().clone())
+                    .unwrap_or_else(Quantity::zero);
+                crate::sumeragi::witness::record_read_asset(id, Some(&previous));
+                stx.world
+                    .deposit_numeric_asset_exact(id, qty)
+                    .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
+                let updated = stx
+                    .world
+                    .assets
+                    .get(id)
+                    .expect("checked exact deposit must leave the destination balance present");
+                crate::sumeragi::witness::record_write_asset(id, updated.as_ref());
             }
             // Update asset definition totals
             for (def, qty) in &asset_def_adds {
@@ -24003,32 +24077,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.resolve_asset_id_for_scope_hint(id, None)
     }
 
-    /// Get asset or inserts new with `default_asset_value`.
-    ///
-    /// # Errors
-    /// - There is no account with such name.
-    /// - The default or existing asset balance violates the definition's numeric spec.
-    #[allow(clippy::missing_panics_doc)]
-    pub fn asset_or_insert(
-        &mut self,
-        asset_id: &AssetId,
-        default_asset_value: impl Into<Quantity>,
-    ) -> Result<&mut AssetValue, Error> {
-        let resolved_id = self.resolve_asset_id_for_current_scope(asset_id)?;
-        self.asset_or_insert_exact(&resolved_id, default_asset_value)
-    }
-
-    /// Get asset or inserts new with `default_asset_value` using the exact provided [`AssetId`].
+    /// Get an asset or initialize it with `default_asset_value` using the exact provided
+    /// [`AssetId`].
     ///
     /// Callers must only use this with a balance id that has already been canonicalized for the
     /// intended scope. This is required for transfer destinations whose bound account dataspace
-    /// differs from the current execution dataspace.
+    /// differs from the current execution dataspace. This low-level helper does not enforce
+    /// transfer-control holding limits and is restricted to independently validated
+    /// initialization; production credit paths must use the checked exact deposit helper.
     ///
     /// # Errors
     /// - There is no account with such name.
     /// - The default or existing asset balance violates the definition's numeric spec.
     #[allow(clippy::missing_panics_doc)]
-    pub fn asset_or_insert_exact(
+    pub(crate) fn asset_or_insert_exact(
         &mut self,
         asset_id: &AssetId,
         default_asset_value: impl Into<Quantity>,
@@ -26781,6 +26843,7 @@ impl State {
                 }
             }
         }
+        snap.version = AxtPolicySnapshot::compute_version(&snap.entries);
 
         let existing_keys: Vec<_> = tx.view().iter().map(|(dsid, _)| *dsid).collect();
         for dsid in existing_keys {
@@ -28250,6 +28313,7 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
             pending_da_commitments: None,
@@ -28845,34 +28909,99 @@ impl State {
                 .iter()
                 .map(|(rid, _)| rid.clone())
                 .collect();
-            let mut swept_in_block = false;
+            let mut sweep_attempted = false;
+            let mut sweep_failed = false;
             for rid in lock_ids {
+                let mut validation_fee_proposal_key_mismatch = false;
+                let validation_fee_custody = (rid.len() == 64
+                    && rid
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+                .then(|| hex::decode(&rid).ok())
+                .flatten()
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                .and_then(|proposal_id| {
+                    let proposal = wtx.governance_proposals.get(&proposal_id)?;
+                    let rules = validation_fee_plain_electorate_rules(&proposal.kind)?;
+                    if proposal.kind.fingerprint() != proposal_id {
+                        validation_fee_proposal_key_mismatch = true;
+                        return None;
+                    }
+                    Some(GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: rules.voting_asset_id.clone(),
+                        bond_escrow_account: rules.bond_escrow_account.clone(),
+                        slash_receiver_account: rules.slash_receiver_account.clone(),
+                    })
+                });
                 if let Some(mut locks) = wtx.governance_locks.get(&rid).cloned() {
                     // Collect owners to remove
                     let mut to_remove: Vec<iroha_data_model::account::AccountId> = Vec::new();
                     for (owner, rec) in &locks.locks {
                         if rec.expiry_height < now_h {
-                            if !sb.gov.min_bond_amount.is_zero() {
-                                let def_id = sb.gov.voting_asset_id.clone();
+                            sweep_attempted = true;
+                            if validation_fee_proposal_key_mismatch {
+                                warn!(
+                                    %rid,
+                                    owner = %owner,
+                                    "retaining validation-fee governance lock whose proposal storage key differs from its exact typed fingerprint"
+                                );
+                                sweep_failed = true;
+                                continue;
+                            }
+                            let custody = match (&rec.custody, &validation_fee_custody) {
+                                (Some(actual), Some(expected)) if actual != expected => {
+                                    warn!(
+                                        %rid,
+                                        owner = %owner,
+                                        "retaining validation-fee governance lock with mismatched immutable custody"
+                                    );
+                                    sweep_failed = true;
+                                    continue;
+                                }
+                                (None, Some(_)) => {
+                                    warn!(
+                                        %rid,
+                                        owner = %owner,
+                                        "retaining validation-fee governance lock without immutable custody"
+                                    );
+                                    sweep_failed = true;
+                                    continue;
+                                }
+                                (Some(custody), _) => custody.clone(),
+                                (None, None) => GovernanceLockCustody {
+                                    escrowed: !sb.gov.min_bond_amount.is_zero(),
+                                    asset_definition_id: sb.gov.voting_asset_id.clone(),
+                                    bond_escrow_account: sb.gov.bond_escrow_account.clone(),
+                                    slash_receiver_account: sb.gov.slash_receiver_account.clone(),
+                                },
+                            };
+                            let release = if custody.escrowed && !rec.amount.is_zero() {
                                 let owner_asset_id = iroha_data_model::asset::AssetId::new(
-                                    def_id.clone(),
+                                    custody.asset_definition_id.clone(),
                                     owner.clone(),
                                 );
                                 let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-                                    def_id,
-                                    sb.gov.bond_escrow_account.clone(),
+                                    custody.asset_definition_id,
+                                    custody.bond_escrow_account,
                                 );
-                                let amount = rec.amount.clone();
-                                if let Err(err) =
-                                    wtx.withdraw_numeric_asset(&escrow_asset_id, &amount)
-                                {
-                                    warn!(%rid, owner=%owner, error=%err, "failed to withdraw governance bond from escrow");
-                                }
-                                if let Err(err) =
-                                    wtx.deposit_numeric_asset(&owner_asset_id, &amount)
-                                {
-                                    warn!(%rid, owner=%owner, error=%err, "failed to return governance bond to voter");
-                                }
+                                wtx.transfer_numeric_asset_exact(
+                                    &escrow_asset_id,
+                                    &owner_asset_id,
+                                    &rec.amount,
+                                )
+                            } else {
+                                Ok(())
+                            };
+                            if let Err(err) = release {
+                                warn!(
+                                    %rid,
+                                    owner = %owner,
+                                    error = %err,
+                                    "retaining governance lock after atomic escrow release failed"
+                                );
+                                sweep_failed = true;
+                                continue;
                             }
                             // Emit unlock event
                             wtx.emit_events(Some(
@@ -28892,11 +29021,10 @@ impl State {
                             locks.locks.remove(&owner);
                         }
                         wtx.governance_locks.insert(rid.clone(), locks);
-                        swept_in_block = true;
                     }
                 }
             }
-            if swept_in_block {
+            if sweep_attempted && !sweep_failed {
                 *wtx.governance_last_unlock_sweep_height.get_mut() = now_h;
             }
             update_governance_pipeline_slas(&mut wtx, now_h, &sb.gov);
@@ -29024,6 +29152,7 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
             pending_da_commitments: None,
@@ -29133,6 +29262,7 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
             pending_da_commitments: None,
@@ -32492,7 +32622,7 @@ impl State {
         let encoded_reservations = executable_payload
             .reservation_keys
             .iter()
-            .map(norito::to_bytes)
+            .map(norito::encode_canonical)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -32502,7 +32632,7 @@ impl State {
         let encoded_plans = executable_payload
             .routing_plans
             .iter()
-            .map(norito::to_bytes)
+            .map(norito::encode_canonical)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -32780,7 +32910,7 @@ impl State {
             }
             let results = raw_results
                 .into_iter()
-                .map(|(_, _, result)| TransactionResult(result))
+                .map(|(_, _, result)| TransactionResult::new(result))
                 .collect::<Vec<_>>();
             let result_hashes = results
                 .iter()
@@ -32838,7 +32968,7 @@ impl State {
                     .input
                     .reservation_keys
                     .iter()
-                    .map(norito::to_bytes)
+                    .map(norito::encode_canonical)
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|error| {
                         MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -32849,7 +32979,7 @@ impl State {
                     .input
                     .routing_plans
                     .iter()
-                    .map(norito::to_bytes)
+                    .map(norito::encode_canonical)
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|error| {
                         MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -36029,12 +36159,12 @@ impl State {
                             let reservation_bytes = payload
                                 .reservation_keys
                                 .iter()
-                                .map(norito::to_bytes)
+                                .map(norito::encode_canonical)
                                 .collect::<std::result::Result<Vec<_>, _>>();
                             let routing_bytes = payload
                                 .routing_plans
                                 .iter()
-                                .map(norito::to_bytes)
+                                .map(norito::encode_canonical)
                                 .collect::<std::result::Result<Vec<_>, _>>();
                             let exact = bundle.bundle_hash().ok()
                                 == Some(execution.source_bundle_hash)
@@ -48211,6 +48341,8 @@ impl<'state> StateBlock<'state> {
             pending_transfer_transcripts: Vec::new(),
             block_axt_envelopes: &mut self.axt_envelopes,
             pending_axt_envelopes: Vec::new(),
+            block_batch_transfer_outcomes: &mut self.batch_transfer_outcomes,
+            pending_batch_transfer_outcomes: BTreeMap::new(),
             block_verified_lane_relay_records: &mut self.verified_lane_relay_records,
             pending_verified_lane_relay_records: Vec::new(),
             perm_cache: PermissionCheckCache::default(),
@@ -49603,7 +49735,8 @@ impl<'state> StateBlock<'state> {
         }
 
         if let Some(snapshot) = block.as_ref().axt_policy_snapshot() {
-            self.install_axt_policy_snapshot(snapshot);
+            self.install_axt_policy_snapshot(snapshot)
+                .expect("committed block must contain a canonical AXT policy snapshot");
         }
         let current_slot =
             current_axt_slot_from_block(&block.as_ref().header(), self.nexus.axt.slot_length_ms);
@@ -61650,6 +61783,22 @@ impl StateTransaction<'_, '_> {
         self.pending_axt_envelopes.push(record);
     }
 
+    /// Stage one correlated native independent-batch leg outcome for block persistence.
+    ///
+    /// Ad-hoc instruction execution used by low-level tests has no transaction
+    /// entrypoint identity; it still emits the live event but cannot produce a
+    /// durable transaction receipt row.
+    pub fn record_batch_transfer_outcome(&mut self, outcome: data_pre::AssetBatchTransferOutcome) {
+        let Some(call_hash) = self.tx_call_hash else {
+            return;
+        };
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(call_hash);
+        self.pending_batch_transfer_outcomes
+            .entry(entrypoint_hash)
+            .or_default()
+            .push(outcome);
+    }
+
     /// Stage a verified lane relay record so the committed block can hydrate
     /// the runtime relay cache after its contract-visible state is durable.
     pub(crate) fn stage_verified_lane_relay_record(&mut self, record: VerifiedLaneRelayRecord) {
@@ -61734,7 +61883,7 @@ impl StateTransaction<'_, '_> {
     /// committed-fragment position, not merely block height. Applying a transaction advances the
     /// fragment before another transaction can commit in the same block.
     pub(crate) fn direct_execution_identity(&self) -> Result<iroha_crypto::Hash, &'static str> {
-        let block_header = norito::to_bytes(&self._curr_block)
+        let block_header = ivm::codec::encode_canonical_norito(&self._curr_block)
             .map_err(|_| "failed to encode direct execution block identity")?;
         let fragment = u64::try_from(*self.committed_fragments).unwrap_or(u64::MAX);
         let mut preimage = Vec::from(&b"iroha:direct-execution:v1\0"[..]);
@@ -61821,6 +61970,8 @@ impl StateTransaction<'_, '_> {
             mut pending_transfer_transcripts,
             block_axt_envelopes,
             mut pending_axt_envelopes,
+            block_batch_transfer_outcomes,
+            pending_batch_transfer_outcomes,
             block_verified_lane_relay_records,
             mut pending_verified_lane_relay_records,
             implicit_account_creations_in_block,
@@ -61915,6 +62066,12 @@ impl StateTransaction<'_, '_> {
         }
         if !pending_axt_envelopes.is_empty() {
             block_axt_envelopes.append(&mut pending_axt_envelopes);
+        }
+        for (entrypoint_hash, mut outcomes) in pending_batch_transfer_outcomes {
+            block_batch_transfer_outcomes
+                .entry(entrypoint_hash)
+                .or_default()
+                .append(&mut outcomes);
         }
         if !pending_verified_lane_relay_records.is_empty() {
             block_verified_lane_relay_records.append(&mut pending_verified_lane_relay_records);
@@ -62454,7 +62611,6 @@ impl StateTransaction<'_, '_> {
             crate::pipeline::overlay::resolve_streaming_metadata(self, authority);
         let bound_contract_records =
             crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self);
-        let axt_policy_snapshot = self.axt_policy_snapshot();
         let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
             authority.clone(),
             accounts,
@@ -62466,8 +62622,9 @@ impl StateTransaction<'_, '_> {
         host.set_amx_limits(
             crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(&self.pipeline),
         );
-        host.set_axt_timing(self.nexus.axt);
-        host.hydrate_axt_replay_ledger(self);
+        host.hydrate_axt_state(self).map_err(|error| {
+            ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+        })?;
         let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
             .expect("block creation timestamp must fit into u64");
         host.set_trigger_id(id.clone());
@@ -62483,7 +62640,6 @@ impl StateTransaction<'_, '_> {
         host.set_vrf_epoch_seeds_from_world(&self.world);
         host.set_query_state(self);
         host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
-        host = host.with_axt_policy_snapshot(&axt_policy_snapshot);
         crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
         host.set_zk_snapshots_from_world(&self.world, &self.zk)
             .map_err(|error| {
@@ -62894,6 +63050,9 @@ impl StateTransaction<'_, '_> {
                         contract_call_context.prepared_argument_record().cloned(),
                     );
                 host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                host.hydrate_axt_state(self).map_err(|error| {
+                    ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+                })?;
                 let current_block_time_ms =
                     u64::try_from(self._curr_block.creation_time().as_millis())
                         .expect("block creation timestamp must fit into u64");
@@ -63134,6 +63293,11 @@ impl StateTransaction<'_, '_> {
                                 host.set_entrypoint_argument_record(Some(record.clone()));
                             }
                             host.set_prepared_contract_cache(prepared_cache);
+                            host.hydrate_axt_state(self).map_err(|error| {
+                                ValidationFail::InternalError(format!(
+                                    "invalid AXT policy snapshot: {error}"
+                                ))
+                            })?;
                             let current_block_time_ms =
                                 u64::try_from(self._curr_block.creation_time().as_millis())
                                     .expect("block creation timestamp must fit into u64");
@@ -64048,7 +64212,7 @@ pub(crate) mod deserialize {
                     field: "state.world.privacy_consensus_policy".to_owned(),
                     message: error.to_string(),
                 })?;
-            crate::privacy_state::validate_privacy_activation_schedules_at_committed_height_v1(
+            crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
                 &world.privacy_activations.view(),
                 committed_height,
             )
@@ -65129,6 +65293,15 @@ pub(crate) mod deserialize {
             &privacy_commitments.view(),
             &privacy_roots.view(),
             &privacy_root_heads.view(),
+        )
+        .map_err(|message| json::Error::InvalidField {
+            field: "world.privacy_state".to_owned(),
+            message,
+        })?;
+        crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
+            &privacy_commitments.view(),
+            &accounts.view(),
+            &asset_definitions.view(),
         )
         .map_err(|message| json::Error::InvalidField {
             field: "world.privacy_state".to_owned(),
@@ -66246,8 +66419,8 @@ mod tests {
             time::{ExecutionTime, Schedule, TimeEventFilter},
         },
         isi::{
-            Burn, Mint, Register, RemoveAssetKeyValue, SetAssetKeyValue, SetKeyValue, Transfer,
-            Unregister, error::InstructionExecutionError,
+            Burn, Mint, Register, RemoveAssetKeyValue, SetAssetHoldingLimit, SetAssetKeyValue,
+            SetKeyValue, Transfer, Unregister, error::InstructionExecutionError,
         },
         merge::MergeQuorumCertificate,
         name::Name,
@@ -68113,6 +68286,149 @@ seiyaku SequentialNfts {
         (state, definition_id, asset_id)
     }
 
+    fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
+        use iroha_data_model::privacy::{
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyActiveLifecycleV1,
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
+        };
+
+        let domain_id = DomainId::try_new("orchard_snapshot", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let owner = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let reserve_account = BOB_ID.clone();
+        let reserve = Account::new(reserve_account.clone()).build(&ALICE_ID);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let definition = AssetDefinition::new(asset_definition_id.clone(), NumericSpec::integer())
+            .with_name("coin".to_owned())
+            .build(&ALICE_ID);
+        let mut world = World::with_assets([domain], [owner, reserve], [definition], [], []);
+
+        let namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xA1; 32]),
+            }),
+        );
+        let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new([0xA2; 32]);
+        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
+            bootstrap_digest,
+            asset_definition_id.clone(),
+            reserve_account.clone(),
+        )
+        .expect("canonical Orchard pool state");
+        let root = pool_state.root();
+        let provenance = crate::privacy_state::PrivacyRootProvenanceV1::orchard_pool_bootstrap(
+            bootstrap_digest,
+            1,
+        )
+        .expect("canonical Orchard bootstrap provenance");
+        let root_key = crate::privacy_state::PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+            root,
+        )
+        .expect("canonical Orchard bootstrap root key");
+        let head_key = crate::privacy_state::PrivacyRootHeadKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+        )
+        .expect("canonical Orchard root-head key");
+        let state_key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
+            .expect("canonical Orchard pool-state key");
+        let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        )
+        .expect("compiled Orchard profile");
+        world.privacy_activations.insert(
+            crate::privacy_state::PrivacyActivationKeyV1::new(
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            ),
+            profile.activation_record(PrivacyProtocolLifecycleV1::Active(
+                PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1,
+                    activated_at_height: 2,
+                    state_since_height: 2,
+                },
+            )),
+        );
+        world.privacy_commitments.insert(
+            state_key,
+            crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
+                .expect("canonical Orchard pool-state record"),
+        );
+        world.privacy_roots.insert(root_key, provenance);
+        world.privacy_root_heads.insert(
+            head_key,
+            crate::privacy_state::PrivacyRootHeadRecordV1::new(
+                PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+                root,
+                provenance,
+                None,
+            )
+            .expect("canonical Orchard root head"),
+        );
+        (
+            State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            ),
+            reserve_account,
+            asset_definition_id,
+        )
+    }
+
+    #[test]
+    fn state_snapshot_rejects_dangling_orchard_public_dependencies() {
+        let (valid_state, _, _) = snapshot_state_with_orchard_pool();
+        let valid_value =
+            norito::json::to_value(&valid_state).expect("serialize valid Orchard snapshot");
+        deserialize_state_snapshot_value(valid_value)
+            .expect("complete Orchard public dependencies restore");
+
+        let (missing_reserve, reserve_account, _) = snapshot_state_with_orchard_pool();
+        let mut accounts = missing_reserve.world.accounts.block();
+        assert!(accounts.remove(reserve_account.clone()).is_some());
+        accounts.commit();
+        let value =
+            norito::json::to_value(&missing_reserve).expect("serialize missing-reserve snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("missing Orchard reserve account must fail closed");
+        let error = error.to_string();
+        assert!(error.contains("world.privacy_state"), "{error}");
+        assert!(
+            error.contains("references missing reserve account"),
+            "{error}"
+        );
+        assert!(error.contains(&reserve_account.to_string()), "{error}");
+
+        let (missing_definition, _, asset_definition_id) = snapshot_state_with_orchard_pool();
+        let mut asset_definitions = missing_definition.world.asset_definitions.block();
+        assert!(
+            asset_definitions
+                .remove(asset_definition_id.clone())
+                .is_some()
+        );
+        asset_definitions.commit();
+        let value = norito::json::to_value(&missing_definition)
+            .expect("serialize missing-definition snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("missing Orchard asset definition must fail closed");
+        let error = error.to_string();
+        assert!(error.contains("world.privacy_state"), "{error}");
+        assert!(
+            error.contains("references missing asset definition"),
+            "{error}"
+        );
+        assert!(error.contains(&asset_definition_id.to_string()), "{error}");
+    }
+
     #[test]
     fn quantity_rejects_negative_initial_balance() {
         let error = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
@@ -69603,6 +69919,7 @@ seiyaku SequentialNfts {
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: vec![Hash::new("public-evidence")],
+            conditions: Vec::new(),
             created_at_ms: 1,
             accepted_at_ms: Some(2),
             payment_sent_at_ms: Some(3),
@@ -73347,12 +73664,38 @@ seiyaku SequentialNfts {
             LaneId::new(7),
             DataSpaceId::new(9),
         ));
-        let framed = norito::to_bytes(&plan).expect("canonical framed routing plan");
+        let framed = norito::encode_canonical(&plan).expect("canonical framed routing plan");
         assert_eq!(
             decode_canonical_merge_routing_plan(&framed)
                 .expect("canonical framed routing plan must decode"),
             plan
         );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&plan).expect("alternate-layout routing plan")
+        };
+        assert_ne!(
+            alternate, framed,
+            "fixture must exercise a non-canonical routing-plan layout"
+        );
+        assert!(
+            matches!(
+                decode_canonical_merge_routing_plan(&alternate),
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                    if message.contains("canonical exact framed Norito")
+            ),
+            "alternate-layout routing plan must reject"
+        );
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                decode_canonical_merge_routing_plan(&framed)
+                    .expect("canonical routing plan must ignore ambient layout"),
+                plan
+            );
+        }
 
         let assert_framed_rejected = |candidate: &[u8], context: &str| {
             assert!(
@@ -73443,17 +73786,43 @@ seiyaku SequentialNfts {
             reservation_owner_hash: Hash::new(b"merge-reservation-owner"),
             proposal_identity_hash: Hash::new(b"merge-reservation-proposal"),
         };
-        let framed = norito::to_bytes(&key).expect("encode current merge reservation key");
+        let framed = norito::encode_canonical(&key).expect("encode current merge reservation key");
         assert_eq!(
             decode_canonical_merge_reservation_key(&framed)
                 .expect("current merge reservation key must decode"),
             key
         );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&key).expect("encode alternate-layout merge reservation key")
+        };
+        assert_ne!(
+            alternate, framed,
+            "fixture must exercise a non-canonical reservation-key layout"
+        );
+        assert!(
+            matches!(
+                decode_canonical_merge_reservation_key(&alternate),
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                    if message.contains("canonical exact framed Norito")
+            ),
+            "alternate-layout merge reservation key must reject"
+        );
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                decode_canonical_merge_reservation_key(&framed)
+                    .expect("canonical reservation key must ignore ambient layout"),
+                key
+            );
+        }
 
         for malformed_version in [0, crate::queue::LaneQueueReservationKeyV2::VERSION + 1] {
             let mut malformed = key;
             malformed.version = malformed_version;
-            let framed = norito::to_bytes(&malformed)
+            let framed = norito::encode_canonical(&malformed)
                 .expect("encode canonical malformed-version reservation key");
             assert!(
                 matches!(
@@ -73468,7 +73837,7 @@ seiyaku SequentialNfts {
         let mut mismatched_hashes = key;
         mismatched_hashes.signed_transaction_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"mismatched-merge-signed-transaction"));
-        let framed = norito::to_bytes(&mismatched_hashes)
+        let framed = norito::encode_canonical(&mismatched_hashes)
             .expect("encode canonical hash-mismatched reservation key");
         assert!(
             matches!(
@@ -75526,7 +75895,7 @@ seiyaku SequentialNfts {
                 results,
                 BTreeMap::new(),
                 Vec::new(),
-                None,
+                AxtPolicySnapshot::default(),
             )
             .expect("empty autoscale test block should accept an empty result");
         block.set_committed_fragment_count(committed_fragments);
@@ -87135,7 +87504,7 @@ seiyaku SequentialNfts {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(2),
+            commit_height: 2,
         };
 
         let mut state_block = state.block(second.header());
@@ -113486,7 +113855,7 @@ seiyaku SequentialNfts {
                 }],
                 proofs: vec![proof_fragment.clone()],
                 handles: vec![handle_fragment.clone()],
-                commit_height: Some(1),
+                commit_height: 1,
             });
             stx.apply();
             block.commit().expect("commit recorded envelope");
@@ -113506,7 +113875,8 @@ seiyaku SequentialNfts {
         let restarted =
             State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
 
-        let mut host = CoreHost::from_state(authority.clone(), &restarted);
+        let mut host =
+            CoreHost::from_state(authority.clone(), &restarted).expect("canonical state snapshots");
         let mut vm = IVM::new(100_000);
         let desc_ptr = store_tlv_norito(&mut vm, PointerType::AxtDescriptor, &ivm_descriptor);
         vm.set_register(10, desc_ptr);
@@ -113721,7 +114091,7 @@ seiyaku SequentialNfts {
                 }],
                 proofs: vec![proof_fragment.clone()],
                 handles: vec![handle_fragment.clone()],
-                commit_height: Some(1),
+                commit_height: 1,
             });
             stx.apply();
         }
@@ -113758,7 +114128,8 @@ seiyaku SequentialNfts {
             "ledger entries should be pruned after retention window"
         );
 
-        let mut host = CoreHost::from_state(authority.clone(), &state);
+        let mut host =
+            CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
         let mut vm = IVM::new(100_000);
         let desc_ptr = store_tlv_norito(&mut vm, PointerType::AxtDescriptor, &ivm_descriptor);
         vm.set_register(10, desc_ptr);
@@ -113835,7 +114206,9 @@ seiyaku SequentialNfts {
             entries,
         };
 
-        block.install_axt_policy_snapshot(&snapshot);
+        block
+            .install_axt_policy_snapshot(&snapshot)
+            .expect("test policy snapshot must be canonical");
 
         let stored = block.world.axt_policies.get(&dsid).expect("policy written");
         assert_eq!(stored.manifest_root, entry.manifest_root);
@@ -113843,6 +114216,39 @@ seiyaku SequentialNfts {
         assert_eq!(stored.min_handle_era, entry.min_handle_era);
         assert_eq!(stored.min_sub_nonce, entry.min_sub_nonce);
         assert_eq!(stored.current_slot, entry.current_slot);
+
+        let duplicate_entries = vec![
+            AxtPolicyBinding {
+                dsid,
+                policy: entry,
+            },
+            AxtPolicyBinding {
+                dsid,
+                policy: AxtPolicyEntry {
+                    manifest_root: [0x99; 32],
+                    ..entry
+                },
+            },
+        ];
+        let invalid = AxtPolicySnapshot {
+            version: AxtPolicySnapshot::compute_version(&duplicate_entries),
+            entries: duplicate_entries,
+        };
+        assert!(matches!(
+            block.install_axt_policy_snapshot(&invalid),
+            Err(AxtPolicySnapshotValidationError::DuplicateDataspaceId(
+                duplicate
+            )) if duplicate == dsid
+        ));
+        let stored_after = block
+            .world
+            .axt_policies
+            .get(&dsid)
+            .expect("original policy remains installed");
+        assert_eq!(
+            *stored_after, entry,
+            "failed snapshot installation must not mutate cached policy state"
+        );
     }
 
     #[cfg(feature = "telemetry")]
@@ -113870,7 +114276,9 @@ seiyaku SequentialNfts {
             entries,
         };
 
-        block.install_axt_policy_snapshot(&snapshot);
+        block
+            .install_axt_policy_snapshot(&snapshot)
+            .expect("test policy snapshot must be canonical");
 
         assert_eq!(metrics.axt_policy_snapshot_version.get(), snapshot.version);
     }
@@ -113930,11 +114338,7 @@ seiyaku SequentialNfts {
         state.configure_test_runtime_defaults();
         let snapshot = state.view().axt_policy_snapshot();
 
-        let expected = if snapshot.version != 0 {
-            snapshot.version
-        } else {
-            AxtPolicySnapshot::compute_version(&snapshot.entries)
-        };
+        let expected = snapshot.version;
 
         assert_eq!(
             metrics
@@ -114276,7 +114680,7 @@ seiyaku SequentialNfts {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(1),
+            commit_height: 1,
         };
 
         stx.record_axt_envelope(envelope);
@@ -114369,7 +114773,7 @@ seiyaku SequentialNfts {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(1),
+            commit_height: 1,
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
@@ -114423,7 +114827,7 @@ seiyaku SequentialNfts {
             },
             touches: Vec::new(),
             proofs: Vec::new(),
-            commit_height: Some(2),
+            commit_height: 2,
         });
         stx.apply();
 
@@ -114469,7 +114873,7 @@ seiyaku SequentialNfts {
                     results,
                     BTreeMap::new(),
                     vec![envelope],
-                    Some(snapshot),
+                    snapshot,
                 )
                 .expect("empty test block should attach AXT envelope results");
             block
@@ -114494,7 +114898,7 @@ seiyaku SequentialNfts {
                     results,
                     BTreeMap::new(),
                     vec![envelope],
-                    Some(snapshot),
+                    snapshot,
                 )
                 .expect("empty committed test block should attach AXT envelope results");
             let env_len = committed
@@ -114637,7 +115041,7 @@ seiyaku SequentialNfts {
             touches: vec![touch_fragment],
             proofs: vec![proof_fragment],
             handles: vec![handle_fragment.clone()],
-            commit_height: Some(1),
+            commit_height: 1,
         };
         let snapshot = state.axt_policy_snapshot();
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
@@ -116117,7 +116521,7 @@ seiyaku SequentialNfts {
         let alice_id = ALICE_ID.clone();
         let asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
         stx.world
-            .asset_or_insert(&asset_id, 1_u32)
+            .deposit_numeric_asset(&asset_id, &Quantity::from(1_u32))
             .expect("insert asset through helper");
         assert!(
             stx.world
@@ -117964,6 +118368,73 @@ seiyaku SequentialNfts {
     }
 
     #[test]
+    fn governance_lock_record_legacy_wire_and_json_default_custody_to_none() {
+        use norito::codec::DecodeAll as _;
+
+        #[derive(Encode)]
+        struct LegacyGovernanceLockRecord {
+            owner: AccountId,
+            amount: Quantity,
+            slashed: Quantity,
+            expiry_height: u64,
+            direction: u8,
+            duration_blocks: u64,
+        }
+
+        let owner = (*ALICE_ID).clone();
+        let legacy = LegacyGovernanceLockRecord {
+            owner: owner.clone(),
+            amount: Quantity::from(150_u32),
+            slashed: Quantity::from(5_u32),
+            expiry_height: 100,
+            direction: 1,
+            duration_blocks: 3_600,
+        };
+        let encoded = legacy.encode();
+        let mut bytes = encoded.as_slice();
+        let decoded = GovernanceLockRecord::decode_all(&mut bytes)
+            .expect("legacy governance lock record must decode");
+        assert!(bytes.is_empty());
+        assert_eq!(decoded.owner, owner);
+        assert_eq!(decoded.amount, Quantity::from(150_u32));
+        assert_eq!(decoded.slashed, Quantity::from(5_u32));
+        assert_eq!(decoded.custody, None);
+
+        #[cfg(feature = "json")]
+        {
+            let current = GovernanceLockRecord {
+                owner,
+                amount: Quantity::from(150_u32),
+                slashed: Quantity::zero(),
+                expiry_height: 100,
+                direction: 1,
+                duration_blocks: 3_600,
+                custody: Some(GovernanceLockCustody {
+                    escrowed: true,
+                    asset_definition_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+                        .parse()
+                        .expect("asset definition id"),
+                    bond_escrow_account: (*BOB_ID).clone(),
+                    slash_receiver_account: (*BOB_ID).clone(),
+                }),
+            };
+            let mut value =
+                norito::json::to_value(&current).expect("serialize governance lock JSON");
+            assert!(
+                value
+                    .as_object_mut()
+                    .expect("governance lock JSON object")
+                    .remove("custody")
+                    .is_some(),
+                "current governance lock JSON must include custody"
+            );
+            let decoded: GovernanceLockRecord =
+                norito::json::from_value(value).expect("legacy governance lock JSON must decode");
+            assert_eq!(decoded.custody, None);
+        }
+    }
+
+    #[test]
     fn block_sweeps_expired_governance_locks_and_records_height() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -117984,6 +118455,12 @@ seiyaku SequentialNfts {
                     expiry_height: 5,
                     direction: 0,
                     duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: false,
+                        asset_definition_id: state.gov.voting_asset_id.clone(),
+                        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+                        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+                    }),
                 },
             );
             world_block
@@ -118009,6 +118486,293 @@ seiyaku SequentialNfts {
         assert!(
             locks_after.locks.is_empty(),
             "expired locks must be removed during sweep"
+        );
+    }
+
+    #[test]
+    fn block_retains_expired_governance_lock_when_atomic_release_fails() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let referendum_id = "release-must-remain-atomic".to_owned();
+        let voter = (*ALICE_ID).clone();
+        let custody = GovernanceLockCustody {
+            escrowed: true,
+            asset_definition_id: state.gov.voting_asset_id.clone(),
+            bond_escrow_account: state.gov.bond_escrow_account.clone(),
+            slash_receiver_account: state.gov.slash_receiver_account.clone(),
+        };
+
+        {
+            let mut world_block = state.world.block();
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                voter.clone(),
+                GovernanceLockRecord {
+                    owner: voter.clone(),
+                    amount: 42_u64.into(),
+                    slashed: Quantity::zero(),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(custody),
+                },
+            );
+            world_block
+                .governance_locks
+                .insert(referendum_id.clone(), locks);
+            *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
+            world_block.commit();
+        }
+
+        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let block = state.block(header);
+        let locks_after = block
+            .world
+            .governance_locks
+            .get(&referendum_id)
+            .expect("failed release must retain the referendum entry");
+        assert!(
+            locks_after.locks.contains_key(&voter),
+            "failed release must retain the exact lock"
+        );
+        assert_eq!(
+            *block.world.governance_last_unlock_sweep_height, 1,
+            "a failed release must not advance the successful sweep marker"
+        );
+    }
+
+    #[test]
+    fn block_releases_expired_governance_lock_through_stored_custody_after_config_change() {
+        let domain_id = DomainId::try_new("governance", "custody").expect("domain id");
+        let old_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "old_vote".parse().expect("asset name"));
+        let live_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "live_vote".parse().expect("asset name"));
+        let old_escrow = (*BOB_ID).clone();
+        let live_escrow = AccountId::new(checked_keypair().public_key().clone());
+        let voter = (*ALICE_ID).clone();
+        let old_escrow_asset_id = AssetId::new(old_definition_id.clone(), old_escrow.clone());
+        let voter_asset_id = AssetId::new(old_definition_id.clone(), voter.clone());
+        let live_escrow_asset_id = AssetId::new(live_definition_id.clone(), live_escrow.clone());
+        let world = World::with_assets(
+            [Domain::new(domain_id).build(&voter)],
+            [
+                Account::new(voter.clone()).build(&voter),
+                Account::new(old_escrow.clone()).build(&voter),
+                Account::new(live_escrow.clone()).build(&voter),
+            ],
+            [
+                AssetDefinition::numeric(old_definition_id.clone())
+                    .with_name("old_vote".to_owned())
+                    .build(&voter),
+                AssetDefinition::numeric(live_definition_id.clone())
+                    .with_name("live_vote".to_owned())
+                    .build(&voter),
+            ],
+            [
+                Asset::new(old_escrow_asset_id.clone(), Quantity::from(42_u32)),
+                Asset::new(live_escrow_asset_id.clone(), Quantity::from(7_u32)),
+            ],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query);
+        let mut live_governance = state.gov.clone();
+        live_governance.voting_asset_id = live_definition_id;
+        live_governance.bond_escrow_account = live_escrow.clone();
+        state.set_gov(live_governance);
+
+        let referendum_id = "stored-custody-release".to_owned();
+        {
+            let mut world_block = state.world.block();
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                voter.clone(),
+                GovernanceLockRecord {
+                    owner: voter.clone(),
+                    amount: Quantity::from(42_u32),
+                    slashed: Quantity::zero(),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: old_definition_id,
+                        bond_escrow_account: old_escrow,
+                        slash_receiver_account: live_escrow,
+                    }),
+                },
+            );
+            world_block
+                .governance_locks
+                .insert(referendum_id.clone(), locks);
+            *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
+            world_block.commit();
+        }
+
+        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let block = state.block(header);
+        assert!(
+            block.world.assets.get(&old_escrow_asset_id).is_none(),
+            "stored escrow must be debited and its zero balance removed"
+        );
+        assert_eq!(
+            block
+                .world
+                .assets
+                .get(&voter_asset_id)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(42_u32)),
+            "stored custody asset must return to the lock owner"
+        );
+        assert_eq!(
+            block
+                .world
+                .assets
+                .get(&live_escrow_asset_id)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(7_u32)),
+            "changed live governance custody must remain untouched"
+        );
+        assert!(
+            block
+                .world
+                .governance_locks
+                .get(&referendum_id)
+                .is_some_and(|locks| locks.locks.is_empty()),
+            "successfully released lock must be removed"
+        );
+        assert_eq!(
+            *block.world.governance_last_unlock_sweep_height, 10,
+            "fully successful stored-custody release must advance the sweep marker"
+        );
+    }
+
+    #[test]
+    fn block_removes_expired_fully_slashed_governance_lock_without_source_asset() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let referendum_id = "fully-slashed-release".to_owned();
+        let voter = (*ALICE_ID).clone();
+
+        {
+            let mut world_block = state.world.block();
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                voter.clone(),
+                GovernanceLockRecord {
+                    owner: voter.clone(),
+                    amount: Quantity::zero(),
+                    slashed: Quantity::from(150_u32),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: state.gov.voting_asset_id.clone(),
+                        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+                        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+                    }),
+                },
+            );
+            world_block
+                .governance_locks
+                .insert(referendum_id.clone(), locks);
+            *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
+            world_block.commit();
+        }
+
+        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let block = state.block(header);
+        assert!(
+            block
+                .world
+                .governance_locks
+                .get(&referendum_id)
+                .is_some_and(|locks| locks.locks.is_empty()),
+            "a fully slashed zero-balance lock must not require a missing escrow asset"
+        );
+        assert_eq!(
+            *block.world.governance_last_unlock_sweep_height, 10,
+            "successful zero-balance cleanup must advance the sweep marker"
+        );
+    }
+
+    #[test]
+    fn block_does_not_advance_sweep_marker_after_partial_release_failure() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let referendum_id = "partial-release-failure".to_owned();
+        let released_voter = (*ALICE_ID).clone();
+        let retained_voter = (*BOB_ID).clone();
+
+        {
+            let mut world_block = state.world.block();
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                released_voter.clone(),
+                GovernanceLockRecord {
+                    owner: released_voter.clone(),
+                    amount: Quantity::from(1_u32),
+                    slashed: Quantity::zero(),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: false,
+                        asset_definition_id: state.gov.voting_asset_id.clone(),
+                        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+                        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+                    }),
+                },
+            );
+            locks.locks.insert(
+                retained_voter.clone(),
+                GovernanceLockRecord {
+                    owner: retained_voter.clone(),
+                    amount: Quantity::from(1_u32),
+                    slashed: Quantity::zero(),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: state.gov.voting_asset_id.clone(),
+                        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+                        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+                    }),
+                },
+            );
+            world_block
+                .governance_locks
+                .insert(referendum_id.clone(), locks);
+            *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
+            world_block.commit();
+        }
+
+        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let block = state.block(header);
+        let locks_after = block
+            .world
+            .governance_locks
+            .get(&referendum_id)
+            .expect("referendum lock container remains");
+        assert!(
+            !locks_after.locks.contains_key(&released_voter),
+            "successful release in a partial sweep must still be applied"
+        );
+        assert!(
+            locks_after.locks.contains_key(&retained_voter),
+            "failed release in a partial sweep must remain retryable"
+        );
+        assert_eq!(
+            *block.world.governance_last_unlock_sweep_height, 1,
+            "an incomplete sweep must not advance the successful sweep marker"
         );
     }
 
@@ -119666,8 +120430,7 @@ seiyaku IdentitylessRawCallback {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new(world, kura, query_handle);
-        state.chain_id = ChainId::from("chain");
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
 
         let trigger_id: TriggerId = "rollback_trigger_block".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
@@ -124887,6 +125650,81 @@ seiyaku IdentitylessRawCallback {
         assert!(
             state_block.world.external_event_buf.is_empty(),
             "failed aggregation must not emit events"
+        );
+    }
+
+    #[test]
+    fn detached_asset_credit_over_holding_limit_is_atomic() {
+        let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut setup = state_block.transaction();
+            SetAssetHoldingLimit::new(
+                ALICE_ID.clone(),
+                definition_id.clone(),
+                Some(Quantity::from(5_u32)),
+            )
+            .execute(&ALICE_ID, &mut setup)
+            .expect("asset owner sets a holding limit at the current balance");
+            setup.apply();
+        }
+        let _ = state_block.world.take_external_events();
+
+        let initial_balance = state_block
+            .world
+            .assets
+            .get(&asset_id)
+            .expect("asset exists")
+            .as_ref()
+            .clone();
+        let initial_total = state_block
+            .world
+            .asset_definition(&definition_id)
+            .expect("asset definition exists")
+            .total_quantity()
+            .clone();
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.add_asset_add(asset_id.clone(), Quantity::one());
+        delta.add_total_add(definition_id.clone(), Quantity::one());
+
+        let error = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect_err("detached credit above the holding limit must fail");
+        assert!(matches!(
+            error,
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::InstructionFailed(
+                    InstructionExecutionError::AssetTransferAdmission(
+                        iroha_data_model::isi::error::AssetTransferAdmissionError::HoldingLimitExceeded(
+                            _
+                        )
+                    )
+                )
+            )
+        ));
+        assert_eq!(
+            state_block
+                .world
+                .assets
+                .get(&asset_id)
+                .expect("asset remains")
+                .as_ref(),
+            &initial_balance,
+            "rejected detached credit must not mutate the balance"
+        );
+        assert_eq!(
+            state_block
+                .world
+                .asset_definition(&definition_id)
+                .expect("asset definition remains")
+                .total_quantity(),
+            &initial_total,
+            "rejected detached credit must not mutate total supply"
+        );
+        assert!(
+            state_block.world.external_event_buf.is_empty(),
+            "rejected detached credit must not emit events"
         );
     }
 

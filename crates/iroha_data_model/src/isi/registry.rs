@@ -53,9 +53,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
             "identity::SetAccountAliasBinding",
         )
     },
-    InstructionRegistry::register_slice::<offline::IssueOfflineNote>,
-    InstructionRegistry::register_slice::<offline::RedeemOfflineNote>,
-    InstructionRegistry::register_slice::<offline::AuditOfflineNote>,
     InstructionRegistry::register_slice::<offline::TopUpKagemushaRecursiveV4>,
     InstructionRegistry::register_slice::<offline::RedeemKagemushaRecursiveV4>,
     InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
@@ -111,6 +108,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<escrow::OpenEscrowDispute>,
     InstructionRegistry::register_slice::<escrow::ResolveEscrowDispute>,
     InstructionRegistry::register_slice::<escrow::OpenAssetLock>,
+    InstructionRegistry::register_slice::<escrow::OpenConditionalEscrow>,
+    InstructionRegistry::register_slice::<escrow::AttestEscrowCondition>,
+    InstructionRegistry::register_slice::<escrow::ExpireConditionalEscrow>,
     InstructionRegistry::register_slice::<escrow::DrawdownAssetLock>,
     InstructionRegistry::register_slice::<escrow::CancelAssetLock>,
     InstructionRegistry::register_slice::<escrow::ExpireAssetLock>,
@@ -299,17 +299,28 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>,
     InstructionRegistry::register_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>,
     InstructionRegistry::register_slice::<privacy::PublishPrivacyRootV1>,
+    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyOrchardPoolV1>,
+    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyProofManagedPoolV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyPgcAccountsV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyZkAmsRegistryV1>,
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkAcePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RotatePrivacyZkAcePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RevokePrivacyZkAcePolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RotatePrivacyBootleLanternIssuerPolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RevokePrivacyBootleLanternIssuerPolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RegisterPrivacyVegaIssuerV1>,
+    InstructionRegistry::register_slice::<privacy::RotatePrivacyVegaIssuerV1>,
+    InstructionRegistry::register_slice::<privacy::RevokePrivacyVegaIssuerV1>,
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509TrustAnchorV1>,
     InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509TrustAnchorV1>,
     InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509TrustAnchorV1>,
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509CertificatePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509CertificatePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509CertificatePolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509CrlV1>,
+    InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509CrlV1>,
+    InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509CrlV1>,
     InstructionRegistry::register_slice::<privacy::SubmitPrivacyProofV1>,
     InstructionRegistry::register_slice::<kaigi::CreateKaigi>,
     InstructionRegistry::register_slice::<kaigi::JoinKaigi>,
@@ -323,10 +334,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<zk::ScheduleConfidentialPolicyTransition>,
     InstructionRegistry::register_slice::<zk::CancelConfidentialPolicyTransition>,
     InstructionRegistry::register_slice::<zk::Shield>,
-    InstructionRegistry::register_slice::<zk::RegisterZkAceIdentityCommitment>,
-    InstructionRegistry::register_slice::<zk::RotateZkAceIdentityCommitment>,
-    InstructionRegistry::register_slice::<zk::RevokeZkAceIdentityCommitment>,
-    InstructionRegistry::register_slice::<zk::SubmitZkAceAuthorizedTransfer>,
     InstructionRegistry::register_slice::<zk::ZkTransfer>,
     InstructionRegistry::register_slice::<zk::Unshield>,
     InstructionRegistry::register_slice::<zk::CreateElection>,
@@ -492,6 +499,12 @@ fn with_privacy_stable_ids(mut registry: InstructionRegistry) -> InstructionRegi
     registry = registry.register_with_id_slice::<privacy::PublishPrivacyRootV1>(
         privacy::PublishPrivacyRootV1::WIRE_ID,
     );
+    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyOrchardPoolV1>(
+        privacy::BootstrapPrivacyOrchardPoolV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyProofManagedPoolV1>(
+        privacy::BootstrapPrivacyProofManagedPoolV1::WIRE_ID,
+    );
     registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyPgcAccountsV1>(
         privacy::BootstrapPrivacyPgcAccountsV1::WIRE_ID,
     );
@@ -506,6 +519,27 @@ fn with_privacy_stable_ids(mut registry: InstructionRegistry) -> InstructionRegi
     );
     registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkAcePolicyV1>(
         privacy::RevokePrivacyZkAcePolicyV1::WIRE_ID,
+    );
+    registry = registry
+        .register_with_id_slice::<privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>(
+            privacy::RegisterPrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        );
+    registry = registry
+        .register_with_id_slice::<privacy::RotatePrivacyBootleLanternIssuerPolicyV1>(
+            privacy::RotatePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        );
+    registry = registry
+        .register_with_id_slice::<privacy::RevokePrivacyBootleLanternIssuerPolicyV1>(
+            privacy::RevokePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        );
+    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyVegaIssuerV1>(
+        privacy::RegisterPrivacyVegaIssuerV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RotatePrivacyVegaIssuerV1>(
+        privacy::RotatePrivacyVegaIssuerV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RevokePrivacyVegaIssuerV1>(
+        privacy::RevokePrivacyVegaIssuerV1::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<privacy::RegisterPrivacyZkX509TrustAnchorV1>(
         privacy::RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
@@ -525,6 +559,15 @@ fn with_privacy_stable_ids(mut registry: InstructionRegistry) -> InstructionRegi
     );
     registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509CertificatePolicyV1>(
         privacy::RevokePrivacyZkX509CertificatePolicyV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyZkX509CrlV1>(
+        privacy::RegisterPrivacyZkX509CrlV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RotatePrivacyZkX509CrlV1>(
+        privacy::RotatePrivacyZkX509CrlV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509CrlV1>(
+        privacy::RevokePrivacyZkX509CrlV1::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<privacy::SubmitPrivacyProofV1>(
         privacy::SubmitPrivacyProofV1::WIRE_ID,
@@ -1017,6 +1060,89 @@ mod tests {
     }
 
     #[test]
+    fn bootle_lantern_governance_instructions_have_unique_canonical_registrations() {
+        let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
+        let registry = default();
+        let mut wire_ids = std::collections::BTreeSet::new();
+
+        macro_rules! assert_bootle_registration {
+            ($instruction:ty) => {{
+                let type_name = std::any::type_name::<$instruction>();
+                let wire_id = <$instruction>::WIRE_ID;
+
+                assert!(
+                    static_registry.contains(type_name),
+                    "{type_name} must be present in the built-in registrar list"
+                );
+                assert_eq!(
+                    registry.wire_id(type_name),
+                    Some(wire_id),
+                    "{type_name} must resolve to its canonical wire id"
+                );
+                assert!(
+                    registry.contains(wire_id),
+                    "{wire_id} must be a canonical registry lookup key"
+                );
+                assert!(
+                    wire_ids.insert(wire_id),
+                    "duplicate Bootle/Lantern governance wire id: {wire_id}"
+                );
+            }};
+        }
+
+        assert_bootle_registration!(privacy::RegisterPrivacyBootleLanternIssuerPolicyV1);
+        assert_bootle_registration!(privacy::RotatePrivacyBootleLanternIssuerPolicyV1);
+        assert_bootle_registration!(privacy::RevokePrivacyBootleLanternIssuerPolicyV1);
+        assert_bootle_registration!(privacy::RegisterPrivacyVegaIssuerV1);
+        assert_bootle_registration!(privacy::RotatePrivacyVegaIssuerV1);
+        assert_bootle_registration!(privacy::RevokePrivacyVegaIssuerV1);
+    }
+
+    #[test]
+    fn x509_governance_instructions_have_unique_canonical_registrations() {
+        let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
+        let registry = default();
+        let mut wire_ids = std::collections::BTreeSet::new();
+
+        macro_rules! assert_x509_registration {
+            ($instruction:ty) => {{
+                let type_name = std::any::type_name::<$instruction>();
+                let wire_id = <$instruction>::WIRE_ID;
+
+                assert!(
+                    static_registry.contains(type_name),
+                    "{type_name} must be present in the built-in registrar list"
+                );
+                assert_eq!(
+                    registry.wire_id(type_name),
+                    Some(wire_id),
+                    "{type_name} must resolve to its canonical wire id"
+                );
+                assert!(
+                    registry.contains(wire_id),
+                    "{wire_id} must be a canonical registry lookup key"
+                );
+                assert!(
+                    wire_ids.insert(wire_id),
+                    "duplicate X.509 governance wire id: {wire_id}"
+                );
+            }};
+        }
+
+        assert_x509_registration!(privacy::RegisterPrivacyZkX509TrustAnchorV1);
+        assert_x509_registration!(privacy::RotatePrivacyZkX509TrustAnchorV1);
+        assert_x509_registration!(privacy::RevokePrivacyZkX509TrustAnchorV1);
+        assert_x509_registration!(privacy::RegisterPrivacyZkX509CertificatePolicyV1);
+        assert_x509_registration!(privacy::RotatePrivacyZkX509CertificatePolicyV1);
+        assert_x509_registration!(privacy::RevokePrivacyZkX509CertificatePolicyV1);
+        assert_x509_registration!(privacy::RegisterPrivacyZkX509CrlV1);
+        assert_x509_registration!(privacy::RotatePrivacyZkX509CrlV1);
+        assert_x509_registration!(privacy::RevokePrivacyZkX509CrlV1);
+
+        assert_eq!(wire_ids.len(), 9);
+    }
+
+    #[test]
     fn sponsor_program_wire_id_lookup_is_clean_break() {
         assert!(is_instruction_wire_id_registered(
             "nexus::CreateFeeSponsorProgram"
@@ -1101,6 +1227,46 @@ mod tests {
             assert!(
                 registry.contains(wire_id),
                 "replacement alias lifecycle instruction must decode: {wire_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn retired_offline_note_instruction_ids_reject_valid_and_adversarial_payloads() {
+        let registry = default();
+        let valid_instruction = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let raw = raw_instruction_payload(&valid_instruction);
+        let framed = framed_instruction_payload(&valid_instruction);
+        let retired_ids = [
+            "iroha_data_model::isi::offline::IssueOfflineNote",
+            "iroha_data_model::isi::offline::RedeemOfflineNote",
+            "iroha_data_model::isi::offline::AuditOfflineNote",
+            "iroha.offline.note.issue",
+            "iroha.offline.note.redeem",
+            "iroha.offline.note.audit",
+        ];
+
+        for wire_id in retired_ids {
+            assert!(
+                !registry.contains(wire_id),
+                "retired offline-note instruction id must not be registered: {wire_id}"
+            );
+            assert!(
+                registry.decode(wire_id, &framed).is_none(),
+                "a valid current payload must not revive retired id {wire_id}"
+            );
+            assert!(
+                registry.decode(wire_id, &[0xFF; 64]).is_none(),
+                "adversarial bytes under retired id {wire_id} must remain unknown"
+            );
+            assert!(!is_instruction_wire_id_registered(wire_id));
+            assert!(
+                crate::isi::frame_instruction_payload(wire_id, &raw).is_err(),
+                "public framing must reject retired id {wire_id}"
+            );
+            assert!(
+                crate::isi::decode_instruction_from_pair(wire_id, &framed).is_err(),
+                "public pair decoding must reject retired id {wire_id}"
             );
         }
     }
@@ -1815,6 +1981,26 @@ mod tests {
             account: account(0xA4),
             upto_epoch: Some(9),
         });
+    }
+
+    #[test]
+    fn default_registry_rejects_retired_zk_ace_instruction_wires() {
+        let registry = default();
+        for retired in [
+            "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment",
+            "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment",
+            "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment",
+            "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer",
+        ] {
+            assert!(
+                !registry.contains(retired),
+                "retired ZK-ACE instruction wire unexpectedly remains registered: {retired}"
+            );
+            assert!(
+                registry.decode(retired, &[]).is_none(),
+                "retired ZK-ACE instruction wire unexpectedly remains decodable: {retired}"
+            );
+        }
     }
 
     #[cfg(feature = "governance")]

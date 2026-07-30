@@ -19,6 +19,7 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity},
     numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
 };
+use ivm_abi::codec::decode_canonical_norito as decode_abi_canonical_norito;
 use ivm_abi::entrypoint::{
     EntrypointArgumentRecordV1, EntrypointArgumentSchemaV1, EntrypointValueAtomV1,
     EntrypointValueKindV1, EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
@@ -29,7 +30,9 @@ use ivm_abi::entrypoint::{
 };
 use ivm_abi::list::ListLayoutV1;
 use ivm_abi::sum::SumLayoutV1;
-use norito::{NoritoSerialize, decode_from_bytes, json as njson, to_bytes};
+use norito::{NoritoSerialize, json as njson};
+#[cfg(test)]
+use norito::{decode_from_bytes, to_bytes};
 
 use crate::{
     VMError,
@@ -529,10 +532,7 @@ fn canonical_norito_frame_len<T: NoritoSerialize>(value: &T) -> usize {
 }
 
 fn canonical_norito_frame<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, norito::core::Error> {
-    // Contract-boundary bytes must never inherit an ambient decoder's layout
-    // policy, including while validating a nested Norito value.
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    to_bytes(value)
+    norito::encode_canonical(value)
 }
 
 fn decoded_table_envelope_len(word_count: usize) -> usize {
@@ -1099,11 +1099,8 @@ fn decode_schema(payload: &[u8]) -> Result<EntrypointArgumentSchemaV1, VMError> 
         return Err(VMError::DecodeError);
     }
     let schema: EntrypointArgumentSchemaV1 =
-        decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
-    if !schema.validate()
-        || schema.fields.len() > MAX_ENTRYPOINT_ARGUMENTS
-        || canonical_norito_frame(&schema).map_err(|_| VMError::DecodeError)? != payload
-    {
+        norito::decode_canonical(payload).map_err(|_| VMError::DecodeError)?;
+    if !schema.validate() || schema.fields.len() > MAX_ENTRYPOINT_ARGUMENTS {
         return Err(VMError::DecodeError);
     }
     Ok(schema)
@@ -1115,12 +1112,7 @@ fn decode_record(payload: &[u8]) -> Result<EntrypointArgumentRecordV1, VMError> 
     }
     #[cfg(any(test, debug_assertions))]
     RECORD_DECODE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
-    let record: EntrypointArgumentRecordV1 =
-        decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
-    if canonical_norito_frame(&record).map_err(|_| VMError::DecodeError)? != payload {
-        return Err(VMError::DecodeError);
-    }
-    Ok(record)
+    norito::decode_canonical(payload).map_err(|_| VMError::DecodeError)
 }
 
 fn validate_argument_envelope_lengths(record: &Tlv<'_>, schema: &Tlv<'_>) -> Result<(), VMError> {
@@ -1168,11 +1160,7 @@ fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: norito::codec::Decode + norito::codec::Encode,
 {
-    let value = decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
-    if canonical_norito_frame(&value).map_err(|_| VMError::DecodeError)? != payload {
-        return Err(VMError::DecodeError);
-    }
-    Ok(value)
+    decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
 
 fn validate_pointer_payload(kind: EntrypointValueKindV1, payload: &[u8]) -> Result<(), VMError> {

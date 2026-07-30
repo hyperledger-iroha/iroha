@@ -1098,7 +1098,7 @@ fn proof_attachment_envelope_with_context(
             context.max_open_verify_bytes
         )));
     }
-    norito::decode_from_bytes::<OpenVerifyEnvelope>(&attachment.proof.bytes)
+    norito::decode_canonical::<OpenVerifyEnvelope>(&attachment.proof.bytes)
         .map_err(|err| invalid_parameter(format!("invalid {}: {err}", context.open_verify_label)))
 }
 
@@ -1364,7 +1364,7 @@ fn validate_soracloud_fhe_input_admission_envelope(
         ));
     }
     let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+        norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "invalid FHE input admission STARK public-input wrapper: {err}"
             ))
@@ -1452,7 +1452,7 @@ fn verify_soracloud_fhe_input_admission_backend(
         ));
     }
     let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+        norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "invalid FHE input admission STARK public-input wrapper: {err}"
             ))
@@ -1724,7 +1724,7 @@ fn validate_soracloud_fhe_statement_open_verify_envelope(
             contract.proof_label
         )));
     }
-    let open = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| invalid_parameter(format!("invalid {}: {err}", contract.wrapper_label)))?;
     if open.version != 1 {
         return Err(invalid_parameter(format!(
@@ -1752,12 +1752,12 @@ fn validate_soracloud_fhe_full_bootstrap_native_air_statement_binding_v1(
     expected_circuit_id: &str,
 ) -> Result<(), InstructionExecutionError> {
     validate_soracloud_fhe_full_bootstrap_prover_statement_hash(label, statement_hash)?;
-    let native: crate::zk_stark::StarkVerifyEnvelopeV1 = norito::decode_from_bytes(envelope_bytes)
+    let native: crate::zk_stark::StarkVerifyEnvelopeV1 = norito::decode_canonical(envelope_bytes)
         .map_err(|err| {
-            invalid_parameter(format!(
-                "{label} native AIR envelope must decode as STARK/FRI v1: {err}"
-            ))
-        })?;
+        invalid_parameter(format!(
+            "{label} native AIR envelope must decode as STARK/FRI v1: {err}"
+        ))
+    })?;
     let transcript_label_matches = if expected_transcript_label
         == iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
     {
@@ -1818,7 +1818,7 @@ fn validate_soracloud_fhe_stark_verifier_key_payload(
         )));
     }
     let payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-        norito::decode_from_bytes(&verifier_key.bytes).map_err(|err| {
+        norito::decode_canonical(&verifier_key.bytes).map_err(|err| {
             invalid_parameter(format!(
                 "{label} verifier-key has invalid STARK payload: {err}"
             ))
@@ -1845,7 +1845,7 @@ fn validate_soracloud_fhe_stark_native_air_binding(
     statement_hash: Hash,
 ) -> Result<(), InstructionExecutionError> {
     let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+        norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
             invalid_parameter(format!("invalid {label} STARK public-input wrapper: {err}"))
         })?;
     let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
@@ -1856,7 +1856,7 @@ fn validate_soracloud_fhe_stark_native_air_binding(
     }
 
     let native: crate::zk_stark::StarkVerifyEnvelopeV1 =
-        norito::decode_from_bytes(&open.envelope_bytes).map_err(|err| {
+        norito::decode_canonical(&open.envelope_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "{label} native AIR envelope must decode as STARK/FRI v1: {err}"
             ))
@@ -2829,7 +2829,7 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
         )));
     }
     let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+        norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
             invalid_parameter(format!("invalid {label} STARK public-input wrapper: {err}"))
         })?;
     if open.envelope_bytes.len() > guardrails.stark_max_proof_bytes {
@@ -2838,7 +2838,7 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
         )));
     }
     let native: crate::zk_stark::StarkVerifyEnvelopeV1 =
-        norito::decode_from_bytes(&open.envelope_bytes).map_err(|err| {
+        norito::decode_canonical(&open.envelope_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "{label} native AIR envelope must decode as STARK/FRI v1: {err}"
             ))
@@ -2963,7 +2963,7 @@ fn verify_soracloud_fhe_full_bootstrap_material_stark_air(
         )));
     }
     let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+        norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
             invalid_parameter(format!("invalid {label} STARK public-input wrapper: {err}"))
         })?;
     if open.envelope_bytes.len() > guardrails.stark_max_proof_bytes {
@@ -2972,7 +2972,7 @@ fn verify_soracloud_fhe_full_bootstrap_material_stark_air(
         )));
     }
     let native: crate::zk_stark::StarkVerifyEnvelopeV1 =
-        norito::decode_from_bytes(&open.envelope_bytes).map_err(|err| {
+        norito::decode_canonical(&open.envelope_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "{label} native material AIR envelope must decode as STARK/FRI v1: {err}"
             ))
@@ -3013,12 +3013,12 @@ fn validate_soracloud_fhe_full_bootstrap_material_native_air_envelope_bytes_for_
     }
     let mut limits = crate::zk_stark::StarkVerifierLimits::default();
     limits.max_envelope_bytes = max_envelope_bytes;
-    let native: crate::zk_stark::StarkVerifyEnvelopeV1 = norito::decode_from_bytes(envelope_bytes)
+    let native: crate::zk_stark::StarkVerifyEnvelopeV1 = norito::decode_canonical(envelope_bytes)
         .map_err(|err| {
-            invalid_parameter(format!(
-                "{label} native material AIR envelope must decode as STARK/FRI v1: {err}"
-            ))
-        })?;
+        invalid_parameter(format!(
+            "{label} native material AIR envelope must decode as STARK/FRI v1: {err}"
+        ))
+    })?;
     if native.transcript_label != FHE_FULL_BOOTSTRAP_MATERIAL_NATIVE_AIR_TRANSCRIPT_LABEL_V1 {
         return Err(invalid_parameter(format!(
             "{label} native material AIR transcript label mismatch"
@@ -3350,7 +3350,7 @@ fn validate_soracloud_fhe_public_key_proof_envelope(
         ));
     }
     let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+        norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "invalid FHE public-key STARK public-input wrapper: {err}"
             ))
@@ -3420,7 +3420,7 @@ fn validate_soracloud_fhe_bootstrap_key_proof_envelope(
         ));
     }
     let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+        norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "invalid FHE bootstrap-key STARK public-input wrapper: {err}"
             ))
@@ -3744,7 +3744,7 @@ fn verify_soracloud_fhe_bootstrap_key_proof_backend(
         ));
     }
     let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+        norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "invalid FHE bootstrap-key STARK public-input wrapper: {err}"
             ))
@@ -4101,6 +4101,9 @@ fn governed_full_bootstrap_execution_verifier_key(
         .ok_or_else(|| {
             invalid_parameter("FHE full-bootstrap execution proof requires full-bootstrap material")
         })?;
+    validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
+        &artifacts.verifier_key,
+    )?;
     if let Err(err) =
         validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(params, material, artifacts)
     {
@@ -4159,6 +4162,60 @@ fn governed_full_bootstrap_execution_verifier_key(
     Ok(verifier_key_box)
 }
 
+fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
+    artifact_bytes: &[u8],
+) -> Result<(), InstructionExecutionError> {
+    if artifact_bytes.len()
+        > iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES
+    {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap execution verifier-key artifact exceeds the V1 byte cap",
+        ));
+    }
+    let artifact: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1 =
+        norito::decode_canonical(artifact_bytes).map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution verifier-key artifact must use canonical V1 bytes: {err}"
+            ))
+        })?;
+    let key: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1 = norito::decode_canonical(
+        &artifact.payload,
+    )
+    .map_err(|err| {
+        invalid_parameter(format!(
+            "FHE full-bootstrap execution verifier-key payload must use canonical V1 bytes: {err}"
+        ))
+    })?;
+    let material_envelope: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
+        norito::decode_canonical(&key.key_material).map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution verifier-key material envelope must use canonical V1 bytes: {err}"
+            ))
+        })?;
+    let native_material: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1 =
+        norito::decode_canonical(&material_envelope.native_key_material).map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution native verifier-key material must use canonical V1 bytes: {err}"
+            ))
+        })?;
+    // A governed artifact may carry either the normalized Core STARK key or
+    // the richer audited BFV-native descriptor. These are distinct typed
+    // artifact formats; each must use its one canonical V1 representation.
+    if let Err(core_err) = norito::decode_canonical::<crate::zk_stark::StarkFriVerifyingKeyV1>(
+        &native_material.native_payload,
+    ) {
+        norito::decode_canonical::<
+            iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
+        >(&native_material.native_payload)
+        .map_err(|native_err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution native verifier-key payload must use one canonical governed V1 format: core payload decode failed: {core_err}; native payload decode failed: {native_err}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(feature = "zk-stark")]
 fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -4169,12 +4226,12 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
         return None;
     }
     let artifact: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1 =
-        norito::decode_from_bytes(&artifacts.verifier_key).ok()?;
+        norito::decode_canonical(&artifacts.verifier_key).ok()?;
     if artifact.role != BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey {
         return None;
     }
     let key: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1 =
-        norito::decode_from_bytes(&artifact.payload).ok()?;
+        norito::decode_canonical(&artifact.payload).ok()?;
     if key.key_role != BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey {
         return None;
     }
@@ -4184,7 +4241,7 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
         return None;
     }
     let material_envelope: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
-        norito::decode_from_bytes(&key.key_material).ok()?;
+        norito::decode_canonical(&key.key_material).ok()?;
     let material_envelope_preflight =
         governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_for_circuit_fallback(
         &key,
@@ -4196,8 +4253,8 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
         )));
     }
     let native_material: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1 =
-        norito::decode_from_bytes(&material_envelope.native_key_material).ok()?;
-    if let Ok(native_payload) = norito::decode_from_bytes::<
+        norito::decode_canonical(&material_envelope.native_key_material).ok()?;
+    if let Ok(native_payload) = norito::decode_canonical::<
         iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
     >(&native_material.native_payload)
         && native_payload.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1
@@ -4248,8 +4305,8 @@ fn governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_
         ));
     }
 
-    let canonical_envelope =
-        norito::to_bytes(envelope).map_err(|err| format!("canonical encoding failed: {err}"))?;
+    let canonical_envelope = norito::encode_canonical(envelope)
+        .map_err(|err| format!("canonical encoding failed: {err}"))?;
     if canonical_envelope != key.key_material {
         return Err("canonical bytes do not match proof key material".to_owned());
     }
@@ -4377,13 +4434,13 @@ fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
             "FHE full-bootstrap execution verifier-key artifact backend mismatch",
         ));
     }
-    let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = match norito::decode_from_bytes(
+    let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = match norito::decode_canonical(
         &verifier_key.bytes,
     ) {
         Ok(payload) => payload,
         Err(core_err) => {
             let native_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
-                    norito::decode_from_bytes(&verifier_key.bytes).map_err(|native_err| {
+                    norito::decode_canonical(&verifier_key.bytes).map_err(|native_err| {
                         invalid_parameter(format!(
                             "FHE full-bootstrap execution verifier-key artifact has invalid STARK payload: {core_err}; native payload decode failed: {native_err}"
                         ))
@@ -4467,7 +4524,7 @@ fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
                 merkle_arity: native_payload.merkle_arity,
                 hash_fn: native_payload.hash_fn,
             };
-            verifier_key.bytes = norito::to_bytes(&payload).map_err(|err| {
+            verifier_key.bytes = norito::encode_canonical(&payload).map_err(|err| {
                     invalid_parameter(format!(
                         "FHE full-bootstrap execution verifier-key artifact canonical STARK payload encoding failed: {err}"
                     ))
@@ -4520,7 +4577,7 @@ fn canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
         return Ok(verifier_key);
     }
     let payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-        norito::decode_from_bytes(&verifier_key.bytes).map_err(|err| {
+        norito::decode_canonical(&verifier_key.bytes).map_err(|err| {
             invalid_parameter(format!(
                 "{label} verifier-key has invalid STARK payload: {err}"
             ))
@@ -9562,6 +9619,13 @@ fn decode_soracloud_fhe_envelope(
     Ok(norito::core::NoritoDeserialize::deserialize(archived))
 }
 
+fn encode_soracloud_fhe_output_payload(
+    output: &BfvIdentifierCiphertext,
+) -> Result<Vec<u8>, InstructionExecutionError> {
+    norito::encode_canonical(output)
+        .map_err(|err| invalid_parameter(format!("failed to encode FHE output: {err}")))
+}
+
 struct LoadedSoracloudFheInput {
     envelope: BfvIdentifierCiphertext,
     bound: u128,
@@ -11997,8 +12061,7 @@ impl Execute for isi::RunSoracloudFheJob {
             self.full_bootstrap_circuit_artifacts.as_ref(),
             &self.full_bootstrap_execution_proofs,
         )?;
-        let output_payload = norito::to_bytes(&output_envelope)
-            .map_err(|err| invalid_parameter(format!("failed to encode FHE output: {err}")))?;
+        let output_payload = encode_soracloud_fhe_output_payload(&output_envelope)?;
         let output_payload_bytes = u64::try_from(output_payload.len())
             .map_err(|_| invalid_parameter("FHE output payload length exceeds u64 range"))?;
 
@@ -16843,7 +16906,7 @@ fn soracloud_fhe_full_bootstrap_execution_proof_from_native_air_envelope_v1(
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
         crate::zk::hash_vk(verifier_key),
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-        norito::to_bytes(&open).map_err(|err| {
+        norito::encode_canonical(&open).map_err(|err| {
             invalid_parameter(format!(
                 "FHE full-bootstrap execution STARK public-input wrapper encoding failed: {err}"
             ))
@@ -16851,7 +16914,7 @@ fn soracloud_fhe_full_bootstrap_execution_proof_from_native_air_envelope_v1(
     );
     let proof_box = iroha_data_model::proof::ProofBox::new(
         verifier_key.backend.clone(),
-        norito::to_bytes(&proof_envelope).map_err(|err| {
+        norito::encode_canonical(&proof_envelope).map_err(|err| {
             invalid_parameter(format!(
                 "FHE full-bootstrap execution OpenVerifyEnvelope encoding failed: {err}"
             ))
@@ -16906,7 +16969,7 @@ fn soracloud_fhe_full_bootstrap_material_proof_from_native_air_envelope_v1(
         SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
         crate::zk::hash_vk(verifier_key),
         SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-        norito::to_bytes(&open).map_err(|err| {
+        norito::encode_canonical(&open).map_err(|err| {
             invalid_parameter(format!(
                 "FHE full-bootstrap material STARK public-input wrapper encoding failed: {err}"
             ))
@@ -16914,7 +16977,7 @@ fn soracloud_fhe_full_bootstrap_material_proof_from_native_air_envelope_v1(
     );
     let proof_box = iroha_data_model::proof::ProofBox::new(
         verifier_key.backend.clone(),
-        norito::to_bytes(&proof_envelope).map_err(|err| {
+        norito::encode_canonical(&proof_envelope).map_err(|err| {
             invalid_parameter(format!(
                 "FHE full-bootstrap material OpenVerifyEnvelope encoding failed: {err}"
             ))
@@ -17387,7 +17450,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
         .proof_input_material
         .statement_hash;
     let native_envelope: crate::zk_stark::StarkVerifyEnvelopeV1 =
-        norito::decode_from_bytes(envelope_bytes).map_err(|err| {
+        norito::decode_canonical(envelope_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "FHE full-bootstrap execution native AIR envelope decode failed: {err}"
             ))
@@ -18279,6 +18342,7 @@ mod tests {
             SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
             SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
             SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
+            SoracloudRuntimeProvenancePurposeV1, encode_soracloud_runtime_provenance_preimage_v1,
         },
         sorafs::pin_registry::ManifestDigest,
     };
@@ -20012,6 +20076,596 @@ mod tests {
     const FHE_INPUT_ADMISSION_BACKEND: &str = "stark/fri/sha256-goldilocks";
     const FHE_INPUT_ADMISSION_CIRCUIT_ID: &str = SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1;
 
+    fn encode_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(value).expect("encode alternate-layout Norito frame")
+        };
+        let canonical = norito::encode_canonical(value).expect("encode canonical Norito frame");
+        assert_ne!(
+            alternate, canonical,
+            "adversarial fixture must use a distinct Norito layout"
+        );
+        alternate
+    }
+
+    type SoracloudProofEnvelopeValidator =
+        fn(&ProofAttachment, &OpenVerifyEnvelope, Hash) -> Result<(), InstructionExecutionError>;
+
+    struct SoracloudProofCanonicalityCase {
+        label: &'static str,
+        context: &'static SoracloudFheProofAttachmentDecodeContext,
+        circuit_id: &'static str,
+        public_inputs_schema: &'static [u8],
+        validate: SoracloudProofEnvelopeValidator,
+    }
+
+    fn canonical_proof_attachment_fixture(
+        case: &SoracloudProofCanonicalityCase,
+        statement_hash: Hash,
+    ) -> (ProofAttachment, OpenVerifyEnvelope, StarkFriOpenProofV1) {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+            envelope_bytes: vec![0xA5; 32],
+        };
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            case.circuit_id,
+            [0x5A; Hash::LENGTH],
+            case.public_inputs_schema.to_vec(),
+            norito::encode_canonical(&open).expect("encode canonical STARK wrapper"),
+        );
+        let proof_box = iroha_data_model::proof::ProofBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.to_owned(),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical Soracloud OpenVerifyEnvelope"),
+        );
+        let mut attachment = ProofAttachment::new_ref(
+            FHE_INPUT_ADMISSION_BACKEND.to_owned(),
+            proof_box,
+            iroha_data_model::proof::VerifyingKeyId::new(
+                FHE_INPUT_ADMISSION_BACKEND,
+                case.circuit_id,
+            ),
+        );
+        attachment.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &attachment.proof.bytes,
+        )));
+        attachment.vk_commitment = Some(envelope.vk_hash);
+        (attachment, envelope, open)
+    }
+
+    #[test]
+    fn soracloud_fhe_proof_boundaries_reject_alternate_outer_and_wrapper_layouts() {
+        let cases = [
+            SoracloudProofCanonicalityCase {
+                label: "input admission",
+                context: &FHE_INPUT_ADMISSION_ATTACHMENT_CONTEXT,
+                circuit_id: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+                public_inputs_schema: SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+                validate: validate_soracloud_fhe_input_admission_envelope,
+            },
+            SoracloudProofCanonicalityCase {
+                label: "public key",
+                context: &FHE_PUBLIC_KEY_PROOF_ATTACHMENT_CONTEXT,
+                circuit_id: SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+                public_inputs_schema: SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                validate: validate_soracloud_fhe_public_key_proof_envelope,
+            },
+            SoracloudProofCanonicalityCase {
+                label: "bootstrap key",
+                context: &FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT,
+                circuit_id: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+                public_inputs_schema: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                validate: validate_soracloud_fhe_bootstrap_key_proof_envelope,
+            },
+            SoracloudProofCanonicalityCase {
+                label: "full-bootstrap material",
+                context: &FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_ATTACHMENT_CONTEXT,
+                circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+                public_inputs_schema:
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                validate: validate_soracloud_fhe_full_bootstrap_material_proof_envelope,
+            },
+            SoracloudProofCanonicalityCase {
+                label: "full-bootstrap execution",
+                context: &FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_ATTACHMENT_CONTEXT,
+                circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                public_inputs_schema:
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                validate: validate_soracloud_fhe_full_bootstrap_execution_proof_envelope,
+            },
+        ];
+
+        for case in cases {
+            let statement_hash = Hash::new(case.label.as_bytes());
+            let (attachment, envelope, open) =
+                canonical_proof_attachment_fixture(&case, statement_hash);
+            let decoded = proof_attachment_envelope_with_context(&attachment, case.context)
+                .expect("canonical outer proof envelope must decode");
+            (case.validate)(&attachment, &decoded, statement_hash)
+                .expect("canonical nested proof wrapper must validate");
+
+            let mut alternate_outer = attachment.clone();
+            alternate_outer.proof.bytes = encode_alternate_norito_layout(&envelope);
+            alternate_outer.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+                &alternate_outer.proof.bytes,
+            )));
+            let outer_error =
+                proof_attachment_envelope_with_context(&alternate_outer, case.context)
+                    .expect_err("alternate outer proof envelope must be rejected");
+            assert!(
+                outer_error.to_string().contains("non-canonical encoding"),
+                "{} alternate outer layout returned the wrong error: {outer_error}",
+                case.label
+            );
+
+            let mut alternate_wrapper_envelope = envelope;
+            alternate_wrapper_envelope.proof_bytes = encode_alternate_norito_layout(&open);
+            let mut alternate_wrapper = attachment;
+            alternate_wrapper.proof.bytes = norito::encode_canonical(&alternate_wrapper_envelope)
+                .expect("encode canonical outer envelope");
+            alternate_wrapper.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+                &alternate_wrapper.proof.bytes,
+            )));
+            let decoded = proof_attachment_envelope_with_context(&alternate_wrapper, case.context)
+                .expect("canonical outer proof envelope must decode");
+            let wrapper_error = (case.validate)(&alternate_wrapper, &decoded, statement_hash)
+                .expect_err("alternate nested STARK wrapper must be rejected");
+            assert!(
+                wrapper_error.to_string().contains("non-canonical encoding"),
+                "{} alternate wrapper layout returned the wrong error: {wrapper_error}",
+                case.label
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_fhe_output_payload_is_canonical_under_alternate_ambient_layout() {
+        let output = BfvIdentifierCiphertext { slots: Vec::new() };
+        let canonical =
+            encode_soracloud_fhe_output_payload(&output).expect("encode canonical FHE output");
+        let alternate = encode_alternate_norito_layout(&output);
+        assert_ne!(
+            alternate, canonical,
+            "FHE output fixture must distinguish alternate framing"
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let under_alternate_ambient = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            encode_soracloud_fhe_output_payload(&output)
+                .expect("encode FHE output under alternate ambient layout")
+        };
+        assert_eq!(under_alternate_ambient, canonical);
+        assert!(
+            norito::decode_canonical::<BfvIdentifierCiphertext>(&canonical).is_ok(),
+            "FHE output must be admitted by the canonical V1 decoder"
+        );
+        assert!(
+            norito::decode_canonical::<BfvIdentifierCiphertext>(&alternate).is_err(),
+            "alternate-layout FHE output must not be admitted"
+        );
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn minimal_stark_verify_envelope() -> crate::zk_stark::StarkVerifyEnvelopeV1 {
+        crate::zk_stark::StarkVerifyEnvelopeV1 {
+            params: crate::zk_stark::StarkFriParamsV1 {
+                version: 1,
+                n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                fold_arity: 2,
+                queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+                merkle_arity: 2,
+                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+                domain_tag: "soracloud-canonicality-test".to_owned(),
+            },
+            proof: crate::zk_stark::StarkProofV1 {
+                version: 1,
+                commits: crate::zk_stark::StarkCommitmentsV1 {
+                    version: 1,
+                    roots: vec![[0x41; Hash::LENGTH]],
+                    comp_root: None,
+                },
+                queries: Vec::new(),
+                comp_values: None,
+                air: None,
+            },
+            transcript_label: "soracloud-canonicality-test".to_owned(),
+        }
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_proof_families_reject_alternate_native_envelope_layout() {
+        let native = minimal_stark_verify_envelope();
+        let alternate_native = encode_alternate_norito_layout(&native);
+        assert!(
+            norito::decode_from_bytes::<crate::zk_stark::StarkVerifyEnvelopeV1>(&alternate_native)
+                .is_ok(),
+            "ordinary Norito must accept the alternate native-envelope fixture"
+        );
+        let statement_hash = Hash::new(b"soracloud-native-envelope-canonicality");
+
+        for (label, circuit_id, public_inputs_schema) in [
+            (
+                "FHE input admission",
+                SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                "FHE public-key",
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                "FHE bootstrap-key",
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+        ] {
+            let open = StarkFriOpenProofV1 {
+                version: 1,
+                public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+                envelope_bytes: alternate_native.clone(),
+            };
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Stark,
+                circuit_id,
+                [0x5A; Hash::LENGTH],
+                public_inputs_schema.to_vec(),
+                norito::encode_canonical(&open).expect("encode canonical STARK wrapper"),
+            );
+            let error = validate_soracloud_fhe_stark_native_air_binding(
+                label,
+                FHE_INPUT_ADMISSION_BACKEND,
+                &envelope,
+                statement_hash,
+            )
+            .expect_err("alternate native STARK envelope must be rejected");
+            assert!(
+                error.to_string().contains("non-canonical encoding"),
+                "{label} alternate native envelope returned the wrong error: {error}"
+            );
+        }
+
+        for (label, transcript_label, circuit_id) in [
+            (
+                "FHE full-bootstrap material proof",
+                FHE_FULL_BOOTSTRAP_MATERIAL_NATIVE_AIR_TRANSCRIPT_LABEL_V1,
+                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            ),
+            (
+                "FHE full-bootstrap execution proof",
+                iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1,
+                iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            ),
+        ] {
+            let error = validate_soracloud_fhe_full_bootstrap_native_air_statement_binding_v1(
+                label,
+                &alternate_native,
+                statement_hash,
+                transcript_label,
+                circuit_id,
+            )
+            .expect_err("alternate full-bootstrap native STARK envelope must be rejected");
+            assert!(
+                error.to_string().contains("non-canonical encoding"),
+                "{label} alternate native envelope returned the wrong error: {error}"
+            );
+        }
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn canonical_stark_verifier_key_box(
+        circuit_id: &str,
+    ) -> iroha_data_model::proof::VerifyingKeyBox {
+        let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.to_owned(),
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+        };
+        iroha_data_model::proof::VerifyingKeyBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.to_owned(),
+            norito::encode_canonical(&payload).expect("encode canonical STARK verifier key"),
+        )
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn alternate_stark_verifier_key_box(
+        circuit_id: &str,
+    ) -> iroha_data_model::proof::VerifyingKeyBox {
+        let canonical = canonical_stark_verifier_key_box(circuit_id);
+        let payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+            norito::decode_canonical(&canonical.bytes)
+                .expect("decode canonical STARK verifier key");
+        iroha_data_model::proof::VerifyingKeyBox::new(
+            canonical.backend,
+            encode_alternate_norito_layout(&payload),
+        )
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_proof_families_reject_alternate_verifier_key_layouts() {
+        for (label, circuit_id) in [
+            (
+                "FHE input admission",
+                SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            ),
+            (
+                "FHE public-key",
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            ),
+            (
+                "FHE bootstrap-key",
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            ),
+        ] {
+            validate_soracloud_fhe_stark_verifier_key_payload(
+                label,
+                &canonical_stark_verifier_key_box(circuit_id),
+                circuit_id,
+            )
+            .expect("canonical STARK verifier key must validate");
+            let error = validate_soracloud_fhe_stark_verifier_key_payload(
+                label,
+                &alternate_stark_verifier_key_box(circuit_id),
+                circuit_id,
+            )
+            .expect_err("alternate-layout STARK verifier key must be rejected");
+            assert!(
+                error.to_string().contains("non-canonical encoding"),
+                "{label} alternate verifier key returned the wrong error: {error}"
+            );
+        }
+
+        let material_circuit_id = SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1;
+        canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
+            "FHE full-bootstrap material proof",
+            &canonical_stark_verifier_key_box(material_circuit_id),
+            material_circuit_id,
+        )
+        .expect("canonical material-proof verifier key must validate");
+        let material_error = canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
+            "FHE full-bootstrap material proof",
+            &alternate_stark_verifier_key_box(material_circuit_id),
+            material_circuit_id,
+        )
+        .expect_err("alternate material-proof verifier key must be rejected");
+        assert!(
+            material_error
+                .to_string()
+                .contains("non-canonical encoding"),
+            "material-proof alternate verifier key returned the wrong error: {material_error}"
+        );
+
+        let execution_circuit_id = SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1;
+        let mut canonical_execution = canonical_stark_verifier_key_box(execution_circuit_id);
+        validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
+            &mut canonical_execution,
+        )
+        .expect("canonical execution-proof verifier key must validate");
+        let mut alternate_execution = alternate_stark_verifier_key_box(execution_circuit_id);
+        let execution_error =
+            validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
+                &mut alternate_execution,
+            )
+            .expect_err("alternate execution-proof verifier key must be rejected");
+        assert!(
+            execution_error
+                .to_string()
+                .contains("non-canonical encoding"),
+            "execution-proof alternate verifier key returned the wrong error: {execution_error}"
+        );
+
+        let native_bytes =
+            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
+                execution_circuit_id,
+            )
+            .expect("encode governed native execution verifier key");
+        let native_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
+            norito::decode_canonical(&native_bytes)
+                .expect("decode governed native execution verifier key");
+        let mut alternate_native = iroha_data_model::proof::VerifyingKeyBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.to_owned(),
+            encode_alternate_norito_layout(&native_payload),
+        );
+        let native_error = validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
+            &mut alternate_native,
+        )
+        .expect_err("alternate governed native verifier key must be rejected");
+        assert!(
+            native_error.to_string().contains("non-canonical encoding"),
+            "native alternate verifier key returned the wrong error: {native_error}"
+        );
+
+        let mut expected_native = iroha_data_model::proof::VerifyingKeyBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.to_owned(),
+            native_bytes.clone(),
+        );
+        validate_governed_full_bootstrap_execution_stark_verifier_key_payload(&mut expected_native)
+            .expect("canonical governed native verifier key must validate");
+        let mut under_alternate_ambient = iroha_data_model::proof::VerifyingKeyBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.to_owned(),
+            native_bytes,
+        );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
+                &mut under_alternate_ambient,
+            )
+            .expect("governed native verifier key must validate under alternate ambient layout");
+        }
+        assert_eq!(under_alternate_ambient.bytes, expected_native.bytes);
+        assert!(
+            norito::decode_canonical::<crate::zk_stark::StarkFriVerifyingKeyV1>(
+                &under_alternate_ambient.bytes
+            )
+            .is_ok(),
+            "normalized governed verifier key must use canonical core STARK bytes"
+        );
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn canonical_verifier_key_artifact_bytes_with_nested_material(
+        outer: &iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1,
+        key: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1,
+        material_envelope: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1,
+        native_material: &iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1,
+    ) -> Vec<u8> {
+        let mut material_envelope = material_envelope.clone();
+        material_envelope.native_key_material = norito::encode_canonical(native_material)
+            .expect("encode canonical native verifier-key material");
+        let mut key = key.clone();
+        key.key_material = norito::encode_canonical(&material_envelope)
+            .expect("encode canonical verifier-key material envelope");
+        let mut outer = outer.clone();
+        outer.payload =
+            norito::encode_canonical(&key).expect("encode canonical verifier-key payload");
+        norito::encode_canonical(&outer).expect("encode canonical verifier-key artifact")
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn governed_full_bootstrap_verifier_artifact_rejects_each_alternate_nested_layout() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
+        validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
+            &artifacts.verifier_key,
+        )
+        .expect("canonical governed verifier-key artifact must validate");
+
+        let outer: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1 =
+            norito::decode_canonical(&artifacts.verifier_key)
+                .expect("decode canonical verifier-key artifact");
+        let key: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1 =
+            norito::decode_canonical(&outer.payload)
+                .expect("decode canonical verifier-key payload");
+        let material_envelope: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
+            norito::decode_canonical(&key.key_material)
+                .expect("decode canonical verifier-key material envelope");
+        let native_material: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1 =
+            norito::decode_canonical(&material_envelope.native_key_material)
+                .expect("decode canonical native verifier-key material");
+        let native_payload:
+            iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
+            norito::decode_canonical(&native_material.native_payload)
+                .expect("decode canonical governed native verifier-key payload");
+
+        let mut outer_with_alternate_key = outer.clone();
+        outer_with_alternate_key.payload = encode_alternate_norito_layout(&key);
+
+        let mut key_with_alternate_envelope = key.clone();
+        key_with_alternate_envelope.key_material =
+            encode_alternate_norito_layout(&material_envelope);
+        let mut outer_with_alternate_envelope = outer.clone();
+        outer_with_alternate_envelope.payload =
+            norito::encode_canonical(&key_with_alternate_envelope)
+                .expect("encode canonical outer verifier-key payload");
+
+        let mut envelope_with_alternate_native = material_envelope.clone();
+        envelope_with_alternate_native.native_key_material =
+            encode_alternate_norito_layout(&native_material);
+        let mut key_with_alternate_native = key.clone();
+        key_with_alternate_native.key_material =
+            norito::encode_canonical(&envelope_with_alternate_native)
+                .expect("encode canonical verifier-key material envelope");
+        let mut outer_with_alternate_native = outer.clone();
+        outer_with_alternate_native.payload = norito::encode_canonical(&key_with_alternate_native)
+            .expect("encode canonical outer verifier-key payload");
+
+        let mut native_with_alternate_payload = native_material.clone();
+        native_with_alternate_payload.native_payload =
+            encode_alternate_norito_layout(&native_payload);
+        let alternate_native_payload_artifact =
+            canonical_verifier_key_artifact_bytes_with_nested_material(
+                &outer,
+                &key,
+                &material_envelope,
+                &native_with_alternate_payload,
+            );
+
+        let alternate_artifacts = [
+            ("artifact", encode_alternate_norito_layout(&outer)),
+            (
+                "proof-key payload",
+                norito::encode_canonical(&outer_with_alternate_key)
+                    .expect("encode canonical outer artifact"),
+            ),
+            (
+                "material envelope",
+                norito::encode_canonical(&outer_with_alternate_envelope)
+                    .expect("encode canonical outer artifact"),
+            ),
+            (
+                "native material",
+                norito::encode_canonical(&outer_with_alternate_native)
+                    .expect("encode canonical outer artifact"),
+            ),
+            ("native payload", alternate_native_payload_artifact),
+        ];
+        for (layout, bytes) in alternate_artifacts {
+            let error =
+                validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
+                    &bytes,
+                )
+                .expect_err("alternate governed verifier-key layout must be rejected");
+            assert!(
+                error.to_string().contains("non-canonical encoding"),
+                "alternate {layout} returned the wrong error: {error}"
+            );
+        }
+
+        let core_payload = canonical_stark_verifier_key_box(
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        )
+        .bytes;
+        let mut native_with_core_payload = native_material.clone();
+        native_with_core_payload.native_payload = core_payload.clone();
+        let canonical_core_artifact = canonical_verifier_key_artifact_bytes_with_nested_material(
+            &outer,
+            &key,
+            &material_envelope,
+            &native_with_core_payload,
+        );
+        validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
+            &canonical_core_artifact,
+        )
+        .expect("the distinct governed core verifier-key format must remain supported");
+
+        let core_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+            norito::decode_canonical(&core_payload).expect("decode canonical core verifier key");
+        native_with_core_payload.native_payload = encode_alternate_norito_layout(&core_payload);
+        let alternate_core_artifact = canonical_verifier_key_artifact_bytes_with_nested_material(
+            &outer,
+            &key,
+            &material_envelope,
+            &native_with_core_payload,
+        );
+        let error =
+            validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
+                &alternate_core_artifact,
+            )
+            .expect_err("alternate governed core verifier-key layout must be rejected");
+        assert!(
+            error.to_string().contains("non-canonical encoding"),
+            "alternate governed core verifier-key payload returned the wrong error: {error}"
+        );
+    }
+
     fn sample_fhe_input_admission_attachment(
         proof_box: iroha_data_model::proof::ProofBox,
     ) -> iroha_data_model::proof::ProofAttachment {
@@ -20595,10 +21249,10 @@ mod tests {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -22660,10 +23314,10 @@ mod tests {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_string(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -29726,10 +30380,11 @@ mod tests {
             envelope.circuit_id,
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1
         );
-        let open: StarkFriOpenProofV1 =
-            norito::decode_from_bytes(&envelope.proof_bytes).expect("decode STARK wrapper");
+        let open: StarkFriOpenProofV1 = norito::decode_canonical(&envelope.proof_bytes)
+            .expect("decode canonical STARK wrapper");
         let native: crate::zk_stark::StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&open.envelope_bytes).expect("decode native material AIR");
+            norito::decode_canonical(&open.envelope_bytes)
+                .expect("decode canonical native material AIR");
         assert_eq!(
             native.transcript_label,
             FHE_FULL_BOOTSTRAP_MATERIAL_NATIVE_AIR_TRANSCRIPT_LABEL_V1
@@ -29746,6 +30401,25 @@ mod tests {
         assert_eq!(
             air.public_digest,
             <[u8; Hash::LENGTH]>::from(proof.statement_hash)
+        );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let rewrapped_under_alternate_ambient = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            soracloud_fhe_full_bootstrap_material_proof_from_native_air_envelope_v1(
+                input_material.statement_hash,
+                &vk_box,
+                open.envelope_bytes.clone(),
+            )
+            .expect("rewrap material proof under alternate ambient layout")
+        };
+        assert_eq!(
+            rewrapped_under_alternate_ambient.proof.proof.bytes, proof.proof.proof.bytes,
+            "material proof wrapper bytes must be ambient-layout independent"
+        );
+        assert_eq!(
+            rewrapped_under_alternate_ambient.proof.envelope_hash, proof.proof.envelope_hash,
+            "material proof envelope hash must be ambient-layout independent"
         );
 
         let mut auxiliary_composition_native = native.clone();
@@ -32143,8 +32817,7 @@ mod tests {
         );
         let mut weak_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
             norito::decode_from_bytes(&weak_vk.bytes).expect("decode sample STARK VK");
-        weak_payload.n_log2 =
-            crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2.saturating_sub(1);
+        weak_payload.n_log2 = crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2.saturating_sub(1);
         let canonical_native_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
             norito::decode_from_bytes(
                 &iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
@@ -33557,11 +34230,11 @@ mod tests {
         assert_eq!(proof.proof.vk_commitment, Some(crate::zk::hash_vk(&vk_box)));
         let envelope = full_bootstrap_execution_proof_attachment_envelope(&proof.proof)
             .expect("decode generated full-bootstrap execution proof envelope");
-        let open: StarkFriOpenProofV1 = norito::decode_from_bytes(&envelope.proof_bytes)
-            .expect("decode generated full-bootstrap execution STARK wrapper");
+        let open: StarkFriOpenProofV1 = norito::decode_canonical(&envelope.proof_bytes)
+            .expect("decode canonical generated full-bootstrap execution STARK wrapper");
         let native: crate::zk_stark::StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&open.envelope_bytes)
-                .expect("decode generated BFV-native AIR envelope");
+            norito::decode_canonical(&open.envelope_bytes)
+                .expect("decode canonical generated BFV-native AIR envelope");
         assert!(
             soracloud_fhe_full_bootstrap_native_air_transcript_label_is_allowed_v1(
                 &native.transcript_label,
@@ -33576,6 +34249,25 @@ mod tests {
                 .expect("generated proof carries native AIR")
                 .public_digest,
             <[u8; Hash::LENGTH]>::from(proof.statement_hash)
+        );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let rewrapped_under_alternate_ambient = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            soracloud_fhe_full_bootstrap_execution_proof_from_native_air_envelope_v1(
+                proof.statement_hash,
+                &vk_box,
+                open.envelope_bytes.clone(),
+            )
+            .expect("rewrap execution proof under alternate ambient layout")
+        };
+        assert_eq!(
+            rewrapped_under_alternate_ambient.proof.proof.bytes, proof.proof.proof.bytes,
+            "execution proof wrapper bytes must be ambient-layout independent"
+        );
+        assert_eq!(
+            rewrapped_under_alternate_ambient.proof.envelope_hash, proof.proof.envelope_hash,
+            "execution proof envelope hash must be ambient-layout independent"
         );
 
         let mut stale_prefix_witness = prover_input_material
@@ -43031,6 +43723,44 @@ mod tests {
             signer: ALICE_KEYPAIR.public_key().clone(),
             signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
+    }
+
+    #[test]
+    fn model_host_heartbeat_verifier_rejects_cross_purpose_replay() {
+        let heartbeat_expires_at_ms = 160_000;
+        let valid = model_host_heartbeat_provenance(&ALICE_ID, heartbeat_expires_at_ms);
+        verify_model_host_heartbeat_provenance(
+            &ALICE_ID,
+            &ALICE_ID,
+            heartbeat_expires_at_ms,
+            &valid,
+        )
+        .expect("correctly purpose-bound heartbeat provenance must verify");
+
+        let semantic_payload =
+            norito::encode_canonical(&(ALICE_ID.clone(), heartbeat_expires_at_ms))
+                .expect("encode heartbeat semantic payload");
+        let wrong_purpose_preimage = encode_soracloud_runtime_provenance_preimage_v1(
+            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+            &semantic_payload,
+        )
+        .expect("encode cross-purpose replay preimage");
+        let replay = ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &wrong_purpose_preimage),
+        };
+
+        let error = verify_model_host_heartbeat_provenance(
+            &ALICE_ID,
+            &ALICE_ID,
+            heartbeat_expires_at_ms,
+            &replay,
+        )
+        .expect_err("an Inrou-purpose signature must not verify as a heartbeat");
+        assert_invalid_parameter_contains(
+            error,
+            "model host heartbeat provenance signature verification failed",
+        );
     }
 
     fn model_host_withdraw_provenance(validator_account_id: &AccountId) -> ManifestProvenance {

@@ -7,6 +7,17 @@
 
 use thiserror::Error;
 
+use crate::privacy_engines::{
+    aggregate_stark::{
+        AggregateFriTheorem2BoundV1, AggregateFriTheorem2CertificateV1, AggregateProofLayoutV1,
+        AggregateStarkParametersV1, AggregateTraceGroupLayoutV1,
+        validate_affine_batched_fri_theorem2_v1,
+    },
+    transparent_stark::{
+        checked_transparent_stark_work_security_v1, transparent_stark_zk_mask_geometry_v1,
+    },
+};
+
 /// Exact native relation version.
 pub(crate) const ZK_X509_RELATION_VERSION_V1: u16 = 1;
 /// Exact native proof-container version.
@@ -23,25 +34,24 @@ pub(crate) const ZK_X509_MIN_CHAIN_DEPTH_V1: usize = 2;
 pub(crate) const ZK_X509_MAX_CHAIN_DEPTH_V1: usize = 3;
 /// Maximum DER bytes in the private CRL witness.
 ///
-/// Deployments with larger revocation sets must publish partitioned,
-/// issuer-scoped CRLs and corresponding policy records.  Unbounded parsing is
-/// deliberately excluded from a consensus circuit.
-pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 16 * 1024;
+/// Unbounded parsing is deliberately excluded from a consensus circuit.
+pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 4_096;
 /// Maximum revoked-certificate entries accepted in the private DER CRL.
 ///
-/// The sparse root is reconstructed from every entry in-circuit.  Sixty-four
-/// entries keep that SHA-256 work bounded; issuers use partitioned CRLs for
-/// larger populations.
+/// Every active serial is parsed and compared in the RFC 5280 AIR. Sixty-four
+/// entries keep that exact comparison table bounded. A policy whose issuer's
+/// complete base CRL exceeds this ceiling is unusable under v0; partitioning,
+/// delta CRLs, and omission are not fallback paths.
 pub(crate) const ZK_X509_MAX_CRL_ENTRIES_V1: usize = 64;
 /// Maximum canonical unsigned certificate-serial bytes.
 pub(crate) const ZK_X509_MAX_SERIAL_BYTES_V1: usize = 20;
-/// Exact depth of the governed CA sparse-membership tree.
+/// Exact depth of the governed CA membership tree.
 ///
-/// All 256 SHA-256 key bits select the path.  Truncating this to 32 would make
-/// distinct SPKIs collide at only 32 bits and is forbidden.
-pub(crate) const ZK_X509_CA_TREE_DEPTH_V1: usize = 256;
-/// Exact depth of the governed CRL sparse non-membership tree.
-pub(crate) const ZK_X509_CRL_TREE_DEPTH_V1: usize = 256;
+/// The first-release registry admits at most 4,096 trust-anchor SPKIs, so the
+/// sole canonical tree is the complete depth-12 tree used by the codec,
+/// Merkle relation, SHA-call schedule, accumulator AIR, and X5C1 proof.  There
+/// is no parallel 256-level profile or legacy decoder.
+pub(crate) const ZK_X509_CA_TREE_DEPTH_V1: usize = 12;
 /// Maximum accepted lag between trusted block time and CRL `thisUpdate`.
 pub(crate) const ZK_X509_MAX_CRL_AGE_SECONDS_V1: u64 = 300;
 /// Maximum accepted future skew for any witness time.
@@ -93,15 +103,7 @@ pub(crate) const ZK_X509_CA_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.leaf.v1";
 pub(crate) const ZK_X509_CA_EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.empty-leaf.v1";
 /// Domain for CA internal tree nodes.
 pub(crate) const ZK_X509_CA_NODE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.node.v1";
-/// Domain for CRL sparse-tree keys.
-pub(crate) const ZK_X509_CRL_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.key.v1";
-/// Domain for occupied CRL leaves.
-pub(crate) const ZK_X509_CRL_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.leaf.v1";
-/// Domain for empty CRL leaves.
-pub(crate) const ZK_X509_CRL_EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.empty-leaf.v1";
-/// Domain for CRL internal tree nodes.
-pub(crate) const ZK_X509_CRL_NODE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.node.v1";
-/// Domain for the chain- and policy-scoped leaf-key commitment.
+/// Domain for the governance-scoped leaf-SPKI commitment.
 pub(crate) const ZK_X509_SCOPED_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-x509.scoped-subject-key.v1";
 /// Domain for deterministic certificate nullifiers.
 pub(crate) const ZK_X509_NULLIFIER_DOMAIN_V1: &[u8] = b"iroha.zk-x509.certificate-nullifier.v1";
@@ -115,14 +117,29 @@ pub(crate) const ZK_X509_CRL_DER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.d
 pub(crate) const ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-x509.crl.issuer-spki.v1";
 
+/// Canonical schema of one immutable governed trust-anchor revision.
+pub(crate) const ZK_X509_TRUST_ANCHOR_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-be=1|trust_anchor_id:bytes32|record_epoch:u64-be|trust_store_digest:bytes32|ca_membership_root:bytes32-compact-depth12|ca_membership_root_epoch:u64-be|previous_record_digest:tag-plus-bytes32|lifecycle:u8-active-or-revoked|record_digest:domain-framed-sha256";
+
+/// Canonical schema of one immutable governed certificate-policy revision.
+pub(crate) const ZK_X509_CERTIFICATE_POLICY_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-be=1|trust_anchor_id:bytes32|policy_id:bytes32|record_epoch:u64-be|policy_digest:bytes32|required_key_usage:u8-mask-bits0through3-upper-zero|required_extended_key_usages:u8-count-plus-strictly-sorted-u8-codes-max3|required_disclosed_attribute_indices:u8-count-plus-strictly-sorted-u8-indices-max4|previous_record_digest:tag-plus-bytes32|lifecycle:u8-active-or-revoked|record_digest:domain-framed-sha256";
+
 /// Canonical schema of one immutable governed CRL revision.
 ///
 /// The authoritative data-model record must carry all of these fields and a
-/// domain-separated self-digest.  The relation recomputes `der_digest`,
-/// `issuer_spki_digest`, both times, and `revoked_serials_root` from the
-/// private signed CRL.  Thus the signature check and non-revocation predicate
-/// cannot refer to unrelated revocation sources.
-pub(crate) const ZK_X509_CRL_REVISION_SCHEMA_V1: &[u8] = b"version:u16|trust_anchor_id:bytes32|certificate_policy_id:bytes32|record_epoch:u64|der_digest:sha256|issuer_spki_digest:sha256|this_update_unix_seconds:u64|next_update_unix_seconds:u64|revoked_serials_root:sha256|root_epoch:u64|previous_record_digest:option<bytes32>|lifecycle:active-or-revoked|record_digest:bytes32";
+/// domain-separated self-digest. The relation recomputes `der_digest`,
+/// `issuer_spki_digest`, and both times from the private signed CRL, then proves
+/// the leaf serial differs from every active entry. There is deliberately no
+/// parallel sparse-root state that could diverge from the signed CRL.
+pub(crate) const ZK_X509_CRL_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-be=1|trust_anchor_id:bytes32|certificate_policy_id:bytes32|record_epoch:u64-be|crl_number:u64-be-strictly-increasing|crl_der_digest:domain-framed-sha256-of-complete-exact-signed-der|issuer_spki_digest:domain-framed-sha256|this_update_unix_seconds:u64-be|next_update_unix_seconds:u64-be|complete-crl-entry-nonrevocation:proved-in-rfc5280-stark-no-secondary-root|previous_record_digest:tag-plus-bytes32|lifecycle:u8-active-or-revoked|record_digest:domain-framed-sha256";
+/// Closed revocation scope for the first release.
+///
+/// One certificate-policy lineage identifies exactly one leaf-certificate
+/// issuer and its complete, non-partitioned signed CRL. The relation checks
+/// revocation of the leaf certificate only. Deployments with multiple
+/// intermediate issuers use separate policy lineages; delta CRLs, indirect
+/// CRLs, distribution-point partitions, and incomplete shard claims are
+/// rejected rather than interpreted.
+pub(crate) const ZK_X509_CRL_SCOPE_PROFILE_V1: &[u8] = b"leaf-only:one-issuer-per-certificate-policy:complete-base-crl:no-delta:no-indirect:no-partition:no-distribution-point";
 
 /// Exact extension roles admitted on every certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,15 +156,38 @@ pub(crate) enum ZkX509CertificateExtensionV1 {
     ExtendedKeyUsage,
 }
 
-/// Complete certificate extension allow-list in DER OID order.
-pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1:
-    [ZkX509CertificateExtensionV1; 5] = [
+/// Complete certificate extension allow-list in canonical engine role order.
+pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1: [ZkX509CertificateExtensionV1; 5] = [
     ZkX509CertificateExtensionV1::AuthorityKeyIdentifier,
     ZkX509CertificateExtensionV1::SubjectKeyIdentifier,
     ZkX509CertificateExtensionV1::KeyUsage,
     ZkX509CertificateExtensionV1::BasicConstraints,
     ZkX509CertificateExtensionV1::ExtendedKeyUsage,
 ];
+
+/// Exact extension roles admitted on the complete base CRL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ZkX509CrlExtensionV1 {
+    /// RFC 5280 authority key identifier, non-critical.
+    AuthorityKeyIdentifier,
+    /// RFC 5280 monotonically increasing CRLNumber, non-critical.
+    CrlNumber,
+}
+
+/// Complete CRL extension allow-list in canonical engine role order.
+pub(crate) const ZK_X509_ALLOWED_CRL_EXTENSIONS_V1: [ZkX509CrlExtensionV1; 2] = [
+    ZkX509CrlExtensionV1::AuthorityKeyIdentifier,
+    ZkX509CrlExtensionV1::CrlNumber,
+];
+
+/// Canonical rules for the admitted complete base CRL.
+///
+/// Every CRL is v2, direct, complete, and issuer-scoped. AKI and CRLNumber are
+/// required exactly once and non-critical. CRLNumber must fit `u64` and
+/// strictly increase in governance. Delta, indirect, partitioned, and
+/// distribution-point CRLs are forbidden. No CRL-entry extension is allowed,
+/// including certificateIssuer and reasonCode.
+pub(crate) const ZK_X509_CRL_PROFILE_V1: &[u8] = b"rfc5280-crl-closed-v1:der-only:v2:ecdsa-sha256-absent-params:aki-required-noncritical:crl-number-required-noncritical-u64-strictly-increasing:no-delta-crl-indicator:no-issuing-distribution-point:no-freshest-crl:no-indirect:no-partition:no-entry-extensions:complete-base-crl:max64-revoked-entries";
 
 /// Canonical rules for the admitted RFC 5280 subset.
 ///
@@ -165,7 +205,7 @@ pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1:
 /// PolicyMappings, CertificatePolicies, PolicyConstraints, InhibitAnyPolicy,
 /// alternate names, distribution points, and every other extension are
 /// forbidden rather than silently ignored.
-pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:utc-time-1950-2049:generalized-time-2050-9999:seconds-z-no-fraction:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-aki-ski-basicconstraints-keyusage-and-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign:direct-issuer-crlsign:pathlen:root-self-name-self-signature:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points";
+pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:name-oids-only-c-o-ou-cn:no-duplicate-name-attributes:c-printablestring-two-uppercase-ascii:o-ou-cn-utf8string-or-printablestring:max-name-value256:disclosed-attribute-hash-content-octets-only:utf8-well-formed-no-u0000-u001f-u007f-u009f:utc-time-1970-2049:generalized-time-2050-9999:seconds-z-no-fraction:certificate-validity-inclusive:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-order-aki-ski-keyusage-basicconstraints-and-optional-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign-and-crlsign-only:ca-pathlen-required-explicit:direct-leaf-issuer-crlsign:root-self-name-self-signature:leaf-revocation-only:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points:no-freshest-crl";
 
 /// ECDSA signature canonicalization rules.
 ///
@@ -175,150 +215,125 @@ pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-onl
 /// ownership signature is controlled by this protocol and must additionally
 /// use low `s`, eliminating an avoidable witness malleability.
 pub(crate) const ZK_X509_ECDSA_RULES_V1: &[u8] =
-    b"cert-and-crl:minimal-der-rs-valid-range-high-or-low-s|wallet:minimal-der-rs-valid-range-low-s";
+    b"cert-and-crl:ecdsa-with-sha256-over-exact-tbs:minimal-der-rs-valid-range-high-or-low-s|wallet:ecdsa-p256-prehash-over-exact-32-byte-ownership-digest:minimal-der-rs-valid-range-low-s";
 
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const ZK_X509_GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
-/// Binary logarithm of the maximum independently committed trace segment.
-pub(crate) const ZK_X509_SEGMENT_LOG_ROWS_V1: u8 = 20;
-/// Maximum rows in one independently committed trace segment.
-pub(crate) const ZK_X509_SEGMENT_ROWS_V1: u32 = 1 << ZK_X509_SEGMENT_LOG_ROWS_V1;
-/// Maximum number of sequential trace segments in one proof.
-pub(crate) const ZK_X509_MAX_TRACE_SEGMENTS_V1: usize = 16;
-/// Maximum base-trace column count in one segment.
-pub(crate) const ZK_X509_MAX_TRACE_COLUMNS_V1: u16 = 64;
+/// Maximum native trace logarithm in the canonical aggregate registration.
+pub(crate) const ZK_X509_MAX_NATIVE_TRACE_LOG2_V1: u8 = 19;
+/// Maximum native rows in one logical registration.
+pub(crate) const ZK_X509_MAX_NATIVE_TRACE_ROWS_V1: u32 = 1 << ZK_X509_MAX_NATIVE_TRACE_LOG2_V1;
+/// Exact logical registrations in the canonical X5S1 aggregate.
+pub(crate) const ZK_X509_LOGICAL_REGISTRATIONS_V1: usize = 49;
+/// Exact equal-native-log trace groups in the canonical X5S1 aggregate.
+///
+/// Their native logarithms are `[5, 8, 15, 16, 18, 19]`.
+pub(crate) const ZK_X509_TRACE_GROUPS_V1: usize = 6;
+/// Exact 64-column physical commitment chunks in the canonical X5S1 aggregate.
+pub(crate) const ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1: usize = 79;
+/// Column width of one independently committed physical chunk.
+pub(crate) const ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1: u16 = 64;
 /// Maximum columns transformed in one streaming LDE batch.
 pub(crate) const ZK_X509_LDE_COLUMN_BATCH_V1: u16 = 8;
-/// Hard peak-memory target for the native prover.
-pub(crate) const ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
+/// Hard peak-memory envelope for the native prover.
+///
+/// The implementation bound is approximately 8.85 GiB. Twelve GiB leaves
+/// explicit allocator and stack overhead under the fixed release benchmark.
+pub(crate) const ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1: u64 = 12 * 1024 * 1024 * 1024;
 /// Hard wall-clock target for one proof on the release benchmark machine.
 pub(crate) const ZK_X509_PROVER_TARGET_SECONDS_V1: u64 = 300;
 /// Maximum algebraic constraint degree before quotienting.
 pub(crate) const ZK_X509_MAX_CONSTRAINT_DEGREE_V1: u8 = 4;
 /// Low-degree-extension blow-up factor.
-pub(crate) const ZK_X509_FRI_BLOWUP_FACTOR_V1: u8 = 8;
+pub(crate) const ZK_X509_FRI_BLOWUP_FACTOR_V1: u8 = 64;
+/// Sole common MAIN LDE logarithm.
+///
+/// The maximum native registration is the four-segment SHA batch at log 19;
+/// the release blow-up is 64 (log 6), so every MAIN prover, verifier, fixed
+/// preprocessing certificate, and resource calculation must use log 25.
+pub(crate) const ZK_X509_MAIN_COMMON_LDE_LOG2_V1: u8 =
+    ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 + ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8;
 /// Number of independent Fiat-Shamir query positions.
-pub(crate) const ZK_X509_FRI_QUERY_COUNT_V1: u8 = 56;
+pub(crate) const ZK_X509_FRI_QUERY_COUNT_V1: u8 = 58;
 /// Number of independently mixed composition lanes.
-pub(crate) const ZK_X509_COMPOSITION_LANES_V1: u8 = 3;
+pub(crate) const ZK_X509_COMPOSITION_LANES_V1: u8 = 1;
 /// Binary FRI folding arity.
 pub(crate) const ZK_X509_FRI_FOLDING_ARITY_V1: u8 = 2;
 /// Maximum final FRI polynomial length.
-pub(crate) const ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1: u16 = 32;
+pub(crate) const ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1: u16 = 1_024;
+/// Maximum degree of the terminal FRI polynomial.
+pub(crate) const ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 31;
+/// Coefficient chunks used to normalize the degree-four quotient.
+pub(crate) const ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 4;
+/// Inclusive degree of each trace zero-knowledge mask multiplier.
+pub(crate) const ZK_X509_TRACE_MASK_DEGREE_V1: u16 = 429;
+/// Exact common-domain FRI rounds at the maximum native trace size.
+pub(crate) const ZK_X509_FRI_ROUNDS_V1: u8 = 15;
+/// Exclusive common FRI degree cap.
+pub(crate) const ZK_X509_FRI_EXCLUSIVE_DEGREE_CAP_V1: u32 = 1_048_576;
+/// Exact effective-code-rate numerator.
+pub(crate) const ZK_X509_FRI_EFFECTIVE_RATE_NUMERATOR_V1: u16 = 1;
+/// Exact effective-code-rate denominator.
+pub(crate) const ZK_X509_FRI_EFFECTIVE_RATE_DENOMINATOR_V1: u16 = 32;
+/// BCI/Haböck affine batching parameter, distinct from the one Fp4 lane.
+pub(crate) const ZK_X509_FRI_BATCHING_PARAMETER_M_V1: u8 = 3;
+/// Exact affine arities in theorem order.
+pub(crate) const ZK_X509_FRI_AFFINE_ARITIES_V1: [u8; 3] = [2, 2, 2];
+/// Proven lower-bound exponent `|F_{p^4}| > 2^252`.
+pub(crate) const ZK_X509_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 252;
+/// Number of transcript-derived DEEP points per subproof.
+pub(crate) const ZK_X509_DEEP_POINT_COUNT_V1: usize = 1;
+/// Compact-CA local LDE logarithm.
+pub(crate) const ZK_X509_CA_FRI_LDE_LOG2_V1: u8 = 14;
+/// Compact-CA FRI terminal logarithm.
+pub(crate) const ZK_X509_CA_FRI_TERMINAL_LOG2_V1: u8 = 9;
+/// Compact-CA terminal degree bound.
+pub(crate) const ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 15;
+/// Compact-CA binary fold count.
+pub(crate) const ZK_X509_CA_FRI_ROUNDS_V1: u8 = 5;
+/// Compact-CA composition coefficient chunks.
+pub(crate) const ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 3;
+/// Compact-CA trace mask degree for `h = 5q + 16 = 306`.
+pub(crate) const ZK_X509_CA_TRACE_MASK_DEGREE_V1: u16 = 305;
+/// Exact maximum of the main aggregate proof before DEEP openings.
+pub(crate) const ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 6_661_368;
+/// Exact maximum of the compact-CA aggregate proof before DEEP openings.
+pub(crate) const ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 984_216;
+/// Exact X5C1 claim-envelope bytes around the compact-CA aggregate proof.
+pub(crate) const ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1: u32 = 1_310;
+/// Exact X5M1 fixed framing plus DER, RFC, SHA, and P-256 terminal frames.
+pub(crate) const ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 10_788;
+/// Exact maximum canonical reduced SHA fixed-oracle X5F1 sidecar.
+pub(crate) const ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1: u32 = 383_196;
+/// Exact main plus compact-CA current/next Fp4 DEEP openings and composition claims.
+pub(crate) const ZK_X509_DEEP_OPENING_BYTES_V1: u32 = 402_336;
 /// Fiat-Shamir proof-of-work grinding bits.
 pub(crate) const ZK_X509_GRINDING_BITS_V1: u8 = 20;
-/// Claimed minimum computational soundness after conservative loss budget.
-pub(crate) const ZK_X509_MIN_SOUNDNESS_BITS_V1: u16 = 128;
-/// Consensus proof-byte ceiling inherited by this engine.
-pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 8 * 1024 * 1024;
-/// Maximum number of independently mixed constraints in one segment.
-pub(crate) const ZK_X509_MAX_CONSTRAINTS_PER_SEGMENT_V1: u16 = 512;
-/// Conservative upper bound on events union-bounded by the verifier.
-pub(crate) const ZK_X509_MAX_SOUNDNESS_EVENTS_V1: u16 = 32;
-/// Whether release-machine measurements have fixed row, time, and memory use.
+/// Required computational-soundness target for the released proof system.
 ///
-/// This is separate from cryptographic correctness: a prover that is sound
-/// but cannot meet Taira's bounded resource envelope is not releasable.
+/// The finalized analysis derives this bound from the implemented AIR degree
+/// schedule, FRI proximity theorem, transcript, opening schedule, hash
+/// assumptions, and every verifier union-bound event.
+pub(crate) const ZK_X509_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
+/// Consensus proof-byte ceiling inherited by this engine.
+pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 9 * 1024 * 1024;
+/// Exact maximum encoded canonical aggregate proof under the frozen layout.
+pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 8_443_306;
+/// Provisional first-release transparent-proof envelope descriptor.
+///
+/// Its algebraic and wire bounds are fixed for implementation, but it is not
+/// activatable until the full credential constructor/verifier, combined CA
+/// envelope, KATs, and measured resource run exist.
+pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=79|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-oracle-independent-width=340-reconstruct-full472|max-sha-fixed-sidecar=383196|shared-x5b1-challenges=main-six-base-roots+ca-base-root+main-and-ca-public-profile|main-trace-hiding-coefficients=430|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=4|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=8443306|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|resource-measurement=pending|full-credential-verifier=pending|activation=false";
+/// Whether the implementation-derived full credential soundness analysis is fixed.
+pub(crate) const ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1: bool = false;
+/// Whether release-machine row, time, and peak-memory measurements are fixed.
 pub(crate) const ZK_X509_RESOURCE_PROFILE_FINALIZED_V1: bool = false;
 
 /// Whether consensus may expose a compiled profile for this engine.
 ///
-/// This remains false until strict DER/RFC path processing, SHA-256, P-256,
-/// accumulator, output-projection, prover, verifier, deterministic KAT, and
-/// adversarial suites are all implemented and independently differential
-/// tested.  Runtime governance code must not bypass this gate.
+/// This remains false until the canonical full credential proof is executable.
 pub(crate) const ZK_X509_ENGINE_ACTIVATION_READY_V1: bool = false;
-
-/// One bounded subtrace family in the purpose-built segmented AIR.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509TraceSegmentV1 {
-    /// Stable segment name included in the engine manifest.
-    pub(crate) name: &'static str,
-    /// Maximum padded rows per segment instance.
-    pub(crate) max_rows: u32,
-    /// Maximum number of instances.
-    pub(crate) max_instances: u8,
-    /// Maximum columns used by this chip.
-    pub(crate) columns: u16,
-    /// Maximum local transition degree.
-    pub(crate) constraint_degree: u8,
-}
-
-impl ZkX509TraceSegmentV1 {
-    /// Maximum rows across this segment family.
-    pub(crate) const fn total_rows(self) -> u64 {
-        self.max_rows as u64 * self.max_instances as u64
-    }
-}
-
-/// Provisional segmented trace families.
-///
-/// These are hard engineering ceilings, not claimed measurements.  Activation
-/// remains impossible while
-/// [`ZK_X509_RESOURCE_PROFILE_FINALIZED_V1`] is false.  Each segment exposes
-/// binding digests to a final projection segment, and cross-segment
-/// permutation products bind private byte memory without publishing witness
-/// digests.  Base columns and LDE columns are committed in eight-column
-/// streaming batches; only one `2^20 × 8 × blowup` batch plus Merkle frontiers
-/// is live, bounding peak memory instead of materializing the full LDE.
-pub(crate) const ZK_X509_TRACE_SEGMENTS_V1: [ZkX509TraceSegmentV1; 8] = [
-    ZkX509TraceSegmentV1 {
-        name: "strict_der_decode",
-        max_rows: 262_144,
-        max_instances: 1,
-        columns: 48,
-        constraint_degree: 3,
-    },
-    ZkX509TraceSegmentV1 {
-        name: "byte_memory_permutation",
-        max_rows: 262_144,
-        max_instances: 1,
-        columns: 40,
-        constraint_degree: 4,
-    },
-    ZkX509TraceSegmentV1 {
-        name: "sha256_certificate_crl_and_frames",
-        max_rows: 524_288,
-        max_instances: 2,
-        columns: 64,
-        constraint_degree: 3,
-    },
-    ZkX509TraceSegmentV1 {
-        name: "p256_field_and_ecdsa",
-        max_rows: 524_288,
-        max_instances: 5,
-        columns: 64,
-        constraint_degree: 4,
-    },
-    ZkX509TraceSegmentV1 {
-        name: "ca_sparse_membership_sha256",
-        max_rows: 131_072,
-        max_instances: 1,
-        columns: 64,
-        constraint_degree: 3,
-    },
-    ZkX509TraceSegmentV1 {
-        name: "crl_complete_sparse_root_sha256",
-        max_rows: 1_048_576,
-        max_instances: 3,
-        columns: 64,
-        constraint_degree: 3,
-    },
-    ZkX509TraceSegmentV1 {
-        name: "rfc5280_path_state",
-        max_rows: 131_072,
-        max_instances: 1,
-        columns: 48,
-        constraint_degree: 4,
-    },
-    ZkX509TraceSegmentV1 {
-        name: "public_projection_masking_and_padding",
-        max_rows: 131_072,
-        max_instances: 1,
-        columns: 64,
-        constraint_degree: 4,
-    },
-];
 
 /// Closed checklist that must be true before activation can be compiled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -329,7 +344,7 @@ pub(crate) struct ZkX509ReadinessV1 {
     pub(crate) sha256_air: bool,
     /// P-256 field/group arithmetic and ECDSA verification are constrained.
     pub(crate) p256_air: bool,
-    /// CA membership and complete CRL sparse-root reconstruction are constrained.
+    /// Compact CA membership is constrained.
     pub(crate) accumulator_air: bool,
     /// Scoped commitment, deterministic nullifier, and disclosures are constrained.
     pub(crate) output_projection_air: bool,
@@ -343,6 +358,8 @@ pub(crate) struct ZkX509ReadinessV1 {
     pub(crate) adversarial_tests: bool,
     /// Native relation and AIR witness execution agree differentially.
     pub(crate) differential_tests: bool,
+    /// The implemented verifier has a complete, reviewed soundness analysis.
+    pub(crate) soundness_analysis: bool,
     /// Release benchmarks fix measured rows, time, and peak memory below ceilings.
     pub(crate) resource_benchmarks: bool,
 }
@@ -360,6 +377,7 @@ impl ZkX509ReadinessV1 {
             && self.known_answer_tests
             && self.adversarial_tests
             && self.differential_tests
+            && self.soundness_analysis
             && self.resource_benchmarks
     }
 }
@@ -379,48 +397,242 @@ pub(crate) enum ZkX509ProfileErrorV1 {
     /// Proof cap is zero or exceeds Taira's fixed per-action ceiling.
     #[error("zk-X509 proof cap is invalid")]
     InvalidProofCap,
-    /// FRI and algebraic batching do not meet the explicit soundness floor.
-    #[error("zk-X509 explicit soundness-loss bound is below the release floor")]
-    InvalidSoundnessBound,
     /// Consensus activation was requested before every implementation gate passed.
     #[error("zk-X509 engine is not complete and cannot be activated")]
     EngineIncomplete,
 }
 
+fn fri_parameters_v1(
+    native_trace_log2: u8,
+    blowup_log2: u8,
+    terminal_log2: u8,
+    terminal_degree_bound: usize,
+    composition_degree_chunks: usize,
+) -> AggregateStarkParametersV1 {
+    AggregateStarkParametersV1 {
+        proof_magic: *b"X5S1",
+        proof_version: ZK_X509_PROOF_VERSION_V1,
+        security_lanes: usize::from(ZK_X509_COMPOSITION_LANES_V1),
+        query_count: usize::from(ZK_X509_FRI_QUERY_COUNT_V1),
+        blowup_log2,
+        terminal_log2,
+        terminal_degree_bound,
+        composition_degree_chunks,
+        minimum_trace_log2: native_trace_log2,
+        maximum_trace_log2: native_trace_log2,
+        maximum_trace_groups: 1,
+        maximum_segment_instances: 1,
+        maximum_base_columns_per_instance: 1,
+        maximum_aux_columns_per_instance: 1,
+        maximum_proof_bytes: ZK_X509_MAX_PROOF_BYTES_V1 as usize,
+    }
+}
+
+fn fri_theorem_certificate_v1(
+    domain_log2: u8,
+    fold_count: u8,
+    terminal_log2: u8,
+    terminal_degree_bound: u16,
+) -> AggregateFriTheorem2CertificateV1 {
+    AggregateFriTheorem2CertificateV1 {
+        l_minus_one_numerator: 3,
+        l_minus_one_denominator: 2,
+        batching_parameter_m: ZK_X509_FRI_BATCHING_PARAMETER_M_V1,
+        rho_numerator: ZK_X509_FRI_EFFECTIVE_RATE_NUMERATOR_V1 as u8,
+        rho_denominator: ZK_X509_FRI_EFFECTIVE_RATE_DENOMINATOR_V1 as u8,
+        affine_arities: ZK_X509_FRI_AFFINE_ARITIES_V1,
+        domain_log2,
+        extension_field_lower_bound_bits: ZK_X509_EXTENSION_FIELD_LOWER_BOUND_BITS_V1,
+        base_field_two_adicity: 32,
+        trace_domains_are_smooth_subgroups: true,
+        evaluation_domain_is_smooth_generator_coset: true,
+        evaluation_domain_is_disjoint_from_trace_domains: true,
+        fold_count,
+        terminal_log2,
+        terminal_degree_bound,
+        query_count: ZK_X509_FRI_QUERY_COUNT_V1,
+        distinct_queries_without_replacement: true,
+        uniform_rejection_sampling: true,
+        claimed_query_error_bits: 132,
+    }
+}
+
+fn validate_fri_subproof_v1(
+    native_trace_log2: u8,
+    blowup_log2: u8,
+    terminal_log2: u8,
+    terminal_degree_bound: u16,
+    fold_count: u8,
+    composition_degree_chunks: u8,
+) -> Result<AggregateFriTheorem2BoundV1, ZkX509ProfileErrorV1> {
+    let parameters = fri_parameters_v1(
+        native_trace_log2,
+        blowup_log2,
+        terminal_log2,
+        usize::from(terminal_degree_bound),
+        usize::from(composition_degree_chunks),
+    );
+    let layout = AggregateProofLayoutV1::new(
+        parameters,
+        vec![AggregateTraceGroupLayoutV1 {
+            native_trace_log2,
+            segment_instances: 1,
+            base_width: 1,
+            aux_width: 1,
+        }],
+    )
+    .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    validate_affine_batched_fri_theorem2_v1(
+        parameters,
+        &layout,
+        fri_theorem_certificate_v1(
+            native_trace_log2
+                .checked_add(blowup_log2)
+                .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?,
+            fold_count,
+            terminal_log2,
+            terminal_degree_bound,
+        ),
+    )
+    .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)
+}
+
 /// Validate the immutable profile constants.
 pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
-    let mut expected_start = 0;
-    for segment in ZK_X509_TRACE_SEGMENTS_V1 {
-        if segment.start_row != expected_start
-            || segment.start_row >= segment.end_row
-            || segment.end_row > ZK_X509_TRACE_ROWS_V1
-        {
-            return Err(ZkX509ProfileErrorV1::InvalidTracePartition);
-        }
-        if segment.columns == 0
-            || segment.columns > ZK_X509_MAX_TRACE_COLUMNS_V1
-            || segment.constraint_degree < 2
-            || segment.constraint_degree > ZK_X509_MAX_CONSTRAINT_DEGREE_V1
-        {
-            return Err(ZkX509ProfileErrorV1::InvalidTraceSegmentBound);
-        }
-        expected_start = segment.end_row;
-    }
-    if expected_start != ZK_X509_TRACE_ROWS_V1 {
-        return Err(ZkX509ProfileErrorV1::InvalidTracePartition);
+    let maximum_native_rows = u64::from(ZK_X509_MAX_NATIVE_TRACE_ROWS_V1);
+    let common_lde_rows = maximum_native_rows
+        .checked_mul(u64::from(ZK_X509_FRI_BLOWUP_FACTOR_V1))
+        .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let fri_fold_factor = 1_u64
+        .checked_shl(u32::from(ZK_X509_FRI_ROUNDS_V1))
+        .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let fri_degree_cap = u64::from(ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1)
+        .checked_add(1)
+        .and_then(|coefficients| coefficients.checked_mul(fri_fold_factor))
+        .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let maximum_masked_trace_degree = maximum_native_rows
+        .checked_add(u64::from(ZK_X509_TRACE_MASK_DEGREE_V1))
+        .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let maximum_unsplit_quotient_degree = u64::from(ZK_X509_MAX_CONSTRAINT_DEGREE_V1)
+        .checked_mul(maximum_masked_trace_degree)
+        .and_then(|degree| degree.checked_sub(maximum_native_rows))
+        .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let maximum_chunked_composition_degree = fri_degree_cap
+        .checked_mul(u64::from(ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1))
+        .and_then(|coefficients| coefficients.checked_sub(1))
+        .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let main_mask = transparent_stark_zk_mask_geometry_v1(
+        usize::from(ZK_X509_MAX_CONSTRAINT_DEGREE_V1) - 1,
+        4,
+        ZK_X509_DEEP_POINT_COUNT_V1,
+        usize::from(ZK_X509_FRI_QUERY_COUNT_V1),
+    )
+    .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let ca_mask = transparent_stark_zk_mask_geometry_v1(
+        2,
+        4,
+        ZK_X509_DEEP_POINT_COUNT_V1,
+        usize::from(ZK_X509_FRI_QUERY_COUNT_V1),
+    )
+    .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let main_fri = validate_fri_subproof_v1(
+        ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
+        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8,
+        ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2() as u8,
+        ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1,
+        ZK_X509_FRI_ROUNDS_V1,
+        ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
+    )?;
+    let ca_fri = validate_fri_subproof_v1(
+        7,
+        ZK_X509_CA_FRI_LDE_LOG2_V1 - 7,
+        ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
+        ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1,
+        ZK_X509_CA_FRI_ROUNDS_V1,
+        ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1,
+    )?;
+    checked_transparent_stark_work_security_v1(128, 129, 256, 64)
+        .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
+    let streaming_lde_batch_bytes = u64::from(ZK_X509_MAX_NATIVE_TRACE_ROWS_V1)
+        .checked_mul(u64::from(ZK_X509_LDE_COLUMN_BATCH_V1))
+        .and_then(|value| value.checked_mul(core::mem::size_of::<u64>() as u64))
+        .and_then(|value| value.checked_mul(u64::from(ZK_X509_FRI_BLOWUP_FACTOR_V1)))
+        .ok_or(ZkX509ProfileErrorV1::InvalidTraceEnvelope)?;
+    if ZK_X509_MAX_NATIVE_TRACE_ROWS_V1
+        != 1_u32
+            .checked_shl(u32::from(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1))
+            .ok_or(ZkX509ProfileErrorV1::InvalidTraceEnvelope)?
+        || ZK_X509_LOGICAL_REGISTRATIONS_V1 == 0
+        || ZK_X509_TRACE_GROUPS_V1 == 0
+        || ZK_X509_TRACE_GROUPS_V1 > ZK_X509_LOGICAL_REGISTRATIONS_V1
+        || ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1 < ZK_X509_LOGICAL_REGISTRATIONS_V1
+        || ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1 != 64
+        || ZK_X509_LDE_COLUMN_BATCH_V1 == 0
+        || ZK_X509_LDE_COLUMN_BATCH_V1 > ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1
+        || ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1 % ZK_X509_LDE_COLUMN_BATCH_V1 != 0
+        || streaming_lde_batch_bytes > ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
+        || ZK_X509_PROVER_TARGET_SECONDS_V1 == 0
+    {
+        return Err(ZkX509ProfileErrorV1::InvalidTraceEnvelope);
     }
     if ZK_X509_GOLDILOCKS_MODULUS_V1 != 0xffff_ffff_0000_0001
-        || ZK_X509_FRI_BLOWUP_FACTOR_V1 < 8
-        || ZK_X509_FRI_QUERY_COUNT_V1 < 48
-        || ZK_X509_COMPOSITION_LANES_V1 < 3
+        || ZK_X509_FRI_BLOWUP_FACTOR_V1 != 64
+        || ZK_X509_FRI_QUERY_COUNT_V1 != 58
+        || ZK_X509_COMPOSITION_LANES_V1 != 1
         || ZK_X509_FRI_FOLDING_ARITY_V1 != 2
-        || ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1 > 32
-        || ZK_X509_GRINDING_BITS_V1 < 20
-        || ZK_X509_MIN_SOUNDNESS_BITS_V1 < 128
+        || ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1 != 1_024
+        || ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1 != 31
+        || ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1 != 4
+        || ZK_X509_TRACE_MASK_DEGREE_V1 != 429
+        || main_mask.minimum_mask_coefficients != 430
+        || main_mask.minimum_mask_degree != usize::from(ZK_X509_TRACE_MASK_DEGREE_V1)
+        || ca_mask.minimum_mask_coefficients != 306
+        || ca_mask.minimum_mask_degree != usize::from(ZK_X509_CA_TRACE_MASK_DEGREE_V1)
+        || main_fri
+            != (AggregateFriTheorem2BoundV1 {
+                query_error_bits: 132,
+                commitment_error_bits: 181,
+            })
+        || ca_fri
+            != (AggregateFriTheorem2BoundV1 {
+                query_error_bits: 132,
+                commitment_error_bits: 203,
+            })
+        || common_lde_rows
+            != 1_u64
+                .checked_shl(u32::from(ZK_X509_MAIN_COMMON_LDE_LOG2_V1))
+                .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?
+        || common_lde_rows / u64::from(ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1) != fri_fold_factor
+        || fri_degree_cap != u64::from(ZK_X509_FRI_EXCLUSIVE_DEGREE_CAP_V1)
+        || fri_degree_cap.checked_mul(u64::from(ZK_X509_FRI_EFFECTIVE_RATE_DENOMINATOR_V1))
+            != common_lde_rows.checked_mul(u64::from(ZK_X509_FRI_EFFECTIVE_RATE_NUMERATOR_V1))
+        || maximum_masked_trace_degree >= fri_degree_cap
+        || maximum_unsplit_quotient_degree > maximum_chunked_composition_degree
+        || ZK_X509_GRINDING_BITS_V1 != 20
+        || ZK_X509_TARGET_SOUNDNESS_BITS_V1 != 128
     {
         return Err(ZkX509ProfileErrorV1::InvalidStarkParameters);
     }
-    if ZK_X509_MAX_PROOF_BYTES_V1 == 0 || ZK_X509_MAX_PROOF_BYTES_V1 > 8 * 1024 * 1024 {
+    if ZK_X509_MAX_CONSTRAINT_DEGREE_V1 < 2 {
+        return Err(ZkX509ProfileErrorV1::InvalidTraceSegmentBound);
+    }
+    if ZK_X509_MAX_PROOF_BYTES_V1 == 0
+        || ZK_X509_MAX_PROOF_BYTES_V1 > 9 * 1024 * 1024
+        || ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 == 0
+        || ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1
+            .checked_add(ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1)
+            .and_then(|bytes| bytes.checked_add(ZK_X509_DEEP_OPENING_BYTES_V1))
+            .and_then(|bytes| bytes.checked_add(ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1))
+            .and_then(|bytes| bytes.checked_add(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1))
+            .and_then(|bytes| bytes.checked_add(ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1))
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1 as u32,
+                )
+            })
+            != Some(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1)
+        || ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 > ZK_X509_MAX_PROOF_BYTES_V1
+    {
         return Err(ZkX509ProfileErrorV1::InvalidProofCap);
     }
     Ok(())
@@ -431,7 +643,11 @@ pub(crate) fn require_activation_readiness_v1(
     readiness: ZkX509ReadinessV1,
 ) -> Result<(), ZkX509ProfileErrorV1> {
     validate_profile_v1()?;
-    if !ZK_X509_ENGINE_ACTIVATION_READY_V1 || !readiness.is_complete() {
+    if !ZK_X509_ENGINE_ACTIVATION_READY_V1
+        || !ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1
+        || !ZK_X509_RESOURCE_PROFILE_FINALIZED_V1
+        || !readiness.is_complete()
+    {
         return Err(ZkX509ProfileErrorV1::EngineIncomplete);
     }
     Ok(())
@@ -442,31 +658,125 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_profile_is_internally_consistent_but_not_activatable() {
+    fn fixed_algebraic_profile_is_consistent_but_activation_stays_closed() {
         validate_profile_v1().expect("fixed zk-X509 profile");
+        assert_eq!(ZK_X509_LOGICAL_REGISTRATIONS_V1, 49);
+        assert_eq!(ZK_X509_TRACE_GROUPS_V1, 6);
+        assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1, 79);
+        assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1, 64);
+        assert_eq!(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, 19);
+        assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 25);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 8_443_306);
+        assert_eq!(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1, 10_788);
+        assert_eq!(ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1, 383_196);
         assert_eq!(
-            ZK_X509_TRACE_SEGMENTS_V1
-                .iter()
-                .map(|segment| segment.rows())
-                .sum::<u32>(),
-            ZK_X509_TRACE_ROWS_V1
+            ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
+            993_878
         );
+        assert_eq!(ZK_X509_FRI_QUERY_COUNT_V1, 58);
+        assert_eq!(ZK_X509_TRACE_MASK_DEGREE_V1, 429);
+        assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1, 305);
+        assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1);
+        assert_eq!(ZK_X509_TARGET_SOUNDNESS_BITS_V1, 128);
+        assert!(!ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1);
+        assert!(!ZK_X509_RESOURCE_PROFILE_FINALIZED_V1);
         assert!(!ZK_X509_ENGINE_ACTIVATION_READY_V1);
         assert_eq!(
-            require_activation_readiness_v1(ZkX509ReadinessV1 {
-                der_and_rfc5280_air: true,
-                sha256_air: true,
-                p256_air: true,
-                accumulator_air: true,
-                output_projection_air: true,
-                prover: true,
-                verifier: true,
-                known_answer_tests: true,
-                adversarial_tests: true,
-                differential_tests: true,
-            }),
+            require_activation_readiness_v1(complete_readiness()),
             Err(ZkX509ProfileErrorV1::EngineIncomplete)
         );
+    }
+
+    #[test]
+    fn main_and_ca_fri_theorem_substitutions_fail_closed() {
+        for (native_log2, blowup_log2, terminal_log2, terminal_degree, fold_count, chunks) in
+            [(19, 6, 10, 31, 15, 4), (7, 7, 9, 15, 5, 3)]
+        {
+            let parameters = fri_parameters_v1(
+                native_log2,
+                blowup_log2,
+                terminal_log2,
+                terminal_degree,
+                chunks,
+            );
+            let layout = AggregateProofLayoutV1::new(
+                parameters,
+                vec![AggregateTraceGroupLayoutV1 {
+                    native_trace_log2: native_log2,
+                    segment_instances: 1,
+                    base_width: 1,
+                    aux_width: 1,
+                }],
+            )
+            .expect("subproof layout");
+            let certificate = fri_theorem_certificate_v1(
+                native_log2 + blowup_log2,
+                fold_count,
+                terminal_log2,
+                u16::try_from(terminal_degree).expect("small terminal degree"),
+            );
+            validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate)
+                .expect("canonical theorem certificate");
+            for mutation in [
+                AggregateFriTheorem2CertificateV1 {
+                    rho_denominator: 31,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    batching_parameter_m: 2,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    terminal_degree_bound: certificate.terminal_degree_bound - 1,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    domain_log2: certificate.domain_log2 - 1,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    l_minus_one_numerator: 2,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    extension_field_lower_bound_bits: 251,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    trace_domains_are_smooth_subgroups: false,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    evaluation_domain_is_smooth_generator_coset: false,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    evaluation_domain_is_disjoint_from_trace_domains: false,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    affine_arities: [2, 2, 1],
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    query_count: 57,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    distinct_queries_without_replacement: false,
+                    ..certificate
+                },
+                AggregateFriTheorem2CertificateV1 {
+                    uniform_rejection_sampling: false,
+                    ..certificate
+                },
+            ] {
+                assert!(
+                    validate_affine_batched_fri_theorem2_v1(parameters, &layout, mutation).is_err(),
+                    "main and compact-CA theorem substitutions must reject"
+                );
+            }
+        }
     }
 
     #[test]
@@ -512,6 +822,14 @@ mod tests {
                 differential_tests: false,
                 ..complete_readiness()
             },
+            ZkX509ReadinessV1 {
+                soundness_analysis: false,
+                ..complete_readiness()
+            },
+            ZkX509ReadinessV1 {
+                resource_benchmarks: false,
+                ..complete_readiness()
+            },
         ];
         for gate in gates {
             assert!(!gate.is_complete());
@@ -542,6 +860,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retired_sparse_crl_profile_cannot_reenter_the_release_manifest() {
+        for retired in [
+            ["crl", "_nonmembership"].concat(),
+            ["crl", "-complete-sparse"].concat(),
+            ["crl", "_complete_sparse"].concat(),
+            ["crl", "_sparse", "_root"].concat(),
+        ] {
+            assert!(
+                !String::from_utf8_lossy(ZK_X509_STARK_PROFILE_DESCRIPTOR_V1).contains(&retired),
+                "retired sparse-CRL symbol {retired} must stay outside the profile descriptor"
+            );
+        }
+    }
+
     const fn complete_readiness() -> ZkX509ReadinessV1 {
         ZkX509ReadinessV1 {
             der_and_rfc5280_air: true,
@@ -554,6 +887,8 @@ mod tests {
             known_answer_tests: true,
             adversarial_tests: true,
             differential_tests: true,
+            soundness_analysis: true,
+            resource_benchmarks: true,
         }
     }
 }

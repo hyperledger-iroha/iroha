@@ -10126,6 +10126,29 @@ pub async fn handle_v1_zk_merkle_path(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 
+/// Build a bounded V1 tally response without cloning malformed world state.
+fn validated_zk_vote_tally_response(
+    election_id: &str,
+    election: Option<&iroha_core::state::ElectionState>,
+) -> Result<ZkVoteGetTallyResponseDto> {
+    let Some(election) = election else {
+        return Ok(ZkVoteGetTallyResponseDto {
+            finalized: false,
+            tally: Vec::new(),
+        });
+    };
+    iroha_data_model::isi::zk::validate_election_tally_v1(election.options, election.tally.len())
+        .map_err(|error| {
+        zk_query_conversion_error(format!(
+            "invalid V1 election state for `{election_id}`: {error}"
+        ))
+    })?;
+    Ok(ZkVoteGetTallyResponseDto {
+        finalized: election.finalized,
+        tally: election.tally.clone(),
+    })
+}
+
 /// POST /v1/zk/vote/tally — convenience endpoint returning election tally as JSON.
 ///
 /// Example wrapper for the Norito TLV read APIs. Omitted or wildcard `Accept`
@@ -10137,16 +10160,60 @@ pub async fn handle_v1_zk_vote_tally(
 ) -> Result<Response> {
     // Read-only lookup from WSV elections
     let world = state.world_view();
-    let (finalized, tally) = match world.elections().get(&req.election_id) {
-        Some(e) => (e.finalized, e.tally.clone()),
-        None => (false, Vec::new()),
-    };
-    let payload = ZkVoteGetTallyResponseDto { finalized, tally };
+    let payload = validated_zk_vote_tally_response(
+        &req.election_id,
+        world.elections().get(&req.election_id),
+    )?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
     Ok(crate::utils::respond_with_format(payload, format))
+}
+
+#[cfg(test)]
+mod zk_vote_tally_response_tests {
+    use super::*;
+
+    fn election(options: u32, tally: Vec<u64>) -> iroha_core::state::ElectionState {
+        iroha_core::state::ElectionState {
+            options,
+            tally,
+            ..iroha_core::state::ElectionState::default()
+        }
+    }
+
+    #[test]
+    fn tally_response_rejects_corrupt_or_oversized_election_state() {
+        for (options, tally) in [
+            (0, Vec::new()),
+            (64, Vec::new()),
+            (64, vec![0; 65]),
+            (65, vec![0; 65]),
+        ] {
+            let state = election(options, tally);
+            assert!(
+                validated_zk_vote_tally_response("corrupt", Some(&state)).is_err(),
+                "shape ({options}, {}) must fail closed",
+                state.tally.len()
+            );
+        }
+    }
+
+    #[test]
+    fn tally_response_accepts_v1_boundaries_and_missing_elections() {
+        for (options, tally_len) in [(1, 1), (64, 64)] {
+            let state = election(options, vec![7; tally_len]);
+            let response = validated_zk_vote_tally_response("bounded", Some(&state))
+                .expect("bounded election response");
+            assert_eq!(response.tally.len(), tally_len);
+        }
+
+        let missing =
+            validated_zk_vote_tally_response("missing", None).expect("missing election response");
+        assert!(!missing.finalized);
+        assert!(missing.tally.is_empty());
+    }
 }
 
 /// GET /v1/sumeragi/evidence/count — returns the number of unique EvidenceV3 entries observed.
@@ -13723,6 +13790,10 @@ pub async fn handle_time_now() -> impl IntoResponse {
         "peer_count".into(),
         norito::json::Value::from(s.peer_count as u64),
     );
+    obj.insert(
+        "enforcement_mode".into(),
+        norito::json::Value::from(iroha_core::time::enforcement_mode().as_str()),
+    );
     obj.insert("fallback".into(), norito::json::Value::from(s.fallback));
     let mut health = norito::json::Map::new();
     health.insert(
@@ -13773,6 +13844,10 @@ pub async fn handle_time_status() -> impl IntoResponse {
     obj.insert(
         "confidence_ms".into(),
         norito::json::Value::from(status.confidence_ms),
+    );
+    obj.insert(
+        "enforcement_mode".into(),
+        norito::json::Value::from(iroha_core::time::enforcement_mode().as_str()),
     );
     obj.insert(
         "fallback".into(),
@@ -13866,6 +13941,13 @@ mod nts_tests {
         assert!(val.get("confidence_ms").is_some(), "missing confidence_ms");
         assert!(val.get("sample_count").is_some(), "missing sample_count");
         assert!(val.get("peer_count").is_some(), "missing peer_count");
+        assert!(
+            matches!(
+                val.get("enforcement_mode").and_then(|value| value.as_str()),
+                Some("warn" | "reject")
+            ),
+            "missing or invalid enforcement_mode"
+        );
         assert!(val.get("fallback").is_some(), "missing fallback");
         assert!(val.get("health").is_some(), "missing health");
     }
@@ -13887,6 +13969,13 @@ mod nts_tests {
         assert!(val.get("samples_used").is_some(), "missing samples_used");
         assert!(val.get("offset_ms").is_some(), "missing offset_ms");
         assert!(val.get("confidence_ms").is_some(), "missing confidence_ms");
+        assert!(
+            matches!(
+                val.get("enforcement_mode").and_then(|value| value.as_str()),
+                Some("warn" | "reject")
+            ),
+            "missing or invalid enforcement_mode"
+        );
         assert!(val.get("fallback").is_some(), "missing fallback");
         assert!(val.get("health").is_some(), "missing health");
         assert!(val.get("samples").is_some(), "missing samples");
@@ -13986,7 +14075,7 @@ mod contract_manifest_response_tests {
                 dynamic_reads: vec![DynamicAccessHint {
                     base_key: "state:Balances".to_owned(),
                     key_type: "AccountId".to_owned(),
-                    bound_kind: "List".to_owned(),
+                    bound_kind: "take".to_owned(),
                     max_keys: 64,
                 }],
                 dynamic_writes: Vec::new(),
@@ -14021,7 +14110,7 @@ mod contract_manifest_response_tests {
             }]),
             states: Some(vec![StateDescriptor {
                 name: "Balances".to_owned(),
-                type_name: "StateMap<AccountId,quantity>".to_owned(),
+                type_name: "StateMap<AccountId, quantity>".to_owned(),
             }]),
             error_codes: Some(vec![ContractErrorCodeDescriptor {
                 namespace: "TreasuryError".to_owned(),
@@ -14154,7 +14243,7 @@ pub struct ContractStateEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub value_len: Option<u64>,
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub value_json: Option<norito::json::Value>,
+    pub value_json: Option<IrohaJson>,
 }
 
 #[cfg(feature = "app_api")]
@@ -14443,8 +14532,9 @@ fn contract_state_logical_map_key_suffix(
         | ivm::EmbeddedStateType::NftId
         | ivm::EmbeddedStateType::DomainId
         | ivm::EmbeddedStateType::DataSpaceId => {
-            let decoded = decode_contract_state_pointer_json(&canonical_key, key_ty).ok()?;
-            decoded.as_str()?.to_owned()
+            let decoded =
+                decode_contract_state_pointer_json_fragment(&canonical_key, key_ty).ok()?;
+            norito::json::from_str::<String>(&decoded).ok()?
         }
         _ => return None,
     };
@@ -14486,113 +14576,46 @@ fn contract_state_logical_map_parts<'a>(
 }
 
 #[cfg(feature = "app_api")]
-fn contract_state_value_kind(
-    ty: &ivm::EmbeddedStateType,
-) -> Option<ivm::state_value::StateValueKindV1> {
-    use ivm::EmbeddedStateType as Type;
-    use ivm::state_value::StateValueKindV1 as Kind;
-
-    Some(match ty {
-        Type::Int => Kind::Int,
-        Type::Decimal => Kind::Decimal,
-        Type::Quantity => Kind::Quantity,
-        Type::Bool => Kind::Bool,
-        Type::String => Kind::String,
-        Type::Bytes => Kind::Bytes,
-        Type::DataSpaceId => Kind::DataSpaceId,
-        Type::AccountId => Kind::AccountId,
-        Type::AssetDefinitionId => Kind::AssetDefinitionId,
-        Type::AssetId => Kind::AssetId,
-        Type::NftId => Kind::NftId,
-        Type::DomainId => Kind::DomainId,
-        Type::Name => Kind::Name,
-        Type::Json => Kind::Json,
-        Type::Tuple(_)
-        | Type::Struct { .. }
-        | Type::StateMap { .. }
-        | Type::Option(_)
-        | Type::Result { .. }
-        | Type::List { .. } => return None,
-    })
-}
-
-#[cfg(feature = "app_api")]
-fn append_contract_state_schema_nodes(
-    ty: &ivm::EmbeddedStateType,
-    nodes: &mut Vec<ivm::state_value::StateValueNodeV1>,
-) -> bool {
-    use ivm::EmbeddedStateType as Type;
-    use ivm::state_value::StateValueNodeV1 as Node;
-
-    match ty {
-        Type::Struct { name, fields } => {
-            nodes.push(Node::Struct {
-                name: name.clone(),
-                fields: fields.iter().map(|field| field.name.clone()).collect(),
-            });
-            fields
-                .iter()
-                .all(|field| append_contract_state_schema_nodes(&field.ty, nodes))
-        }
-        Type::Tuple(items) => {
-            let Ok(arity) = u16::try_from(items.len()) else {
-                return false;
-            };
-            nodes.push(Node::Tuple { arity });
-            items
-                .iter()
-                .all(|item| append_contract_state_schema_nodes(item, nodes))
-        }
-        Type::Option(inner) => {
-            nodes.push(Node::Option);
-            append_contract_state_schema_nodes(inner, nodes)
-        }
-        Type::Result { ok, err } => {
-            nodes.push(Node::Result);
-            append_contract_state_schema_nodes(ok, nodes)
-                && append_contract_state_schema_nodes(err, nodes)
-        }
-        Type::List { element, capacity } => {
-            let mut element_nodes = Vec::new();
-            if !append_contract_state_schema_nodes(element, &mut element_nodes) {
-                return false;
-            }
-            let element = ivm::state_value::StateValueSchemaV1 {
-                nodes: element_nodes,
-            };
-            if !element.validate() {
-                return false;
-            }
-            nodes.push(Node::List {
-                element: Box::new(element),
-                capacity: *capacity,
-            });
-            true
-        }
-        Type::StateMap { .. } => false,
-        leaf => {
-            let Some(kind) = contract_state_value_kind(leaf) else {
-                return false;
-            };
-            nodes.push(Node::Leaf(kind));
-            true
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
 fn contract_state_value_schema(
     ty: &ivm::EmbeddedStateType,
 ) -> core::result::Result<ivm::state_value::StateValueSchemaV1, String> {
-    let mut nodes = Vec::new();
-    if !append_contract_state_schema_nodes(ty, &mut nodes) {
-        return Err("state map values require an entry key".into());
+    if let Some(schema) = ivm::state_value::state_value_schema_for_embedded_type_v1(ty) {
+        return Ok(schema);
     }
-    let schema = ivm::state_value::StateValueSchemaV1 { nodes };
-    schema
-        .validate()
-        .then_some(schema)
-        .ok_or_else(|| "embedded durable-state schema is invalid".into())
+
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        match ty {
+            ivm::EmbeddedStateType::StateMap { .. } => {
+                return Err("state map values require an entry key".into());
+            }
+            ivm::EmbeddedStateType::Tuple(items) => pending.extend(items),
+            ivm::EmbeddedStateType::Struct { fields, .. } => {
+                pending.extend(fields.iter().map(|field| &field.ty));
+            }
+            ivm::EmbeddedStateType::Option(inner) => pending.push(inner),
+            ivm::EmbeddedStateType::Result { ok, err } => {
+                pending.push(err);
+                pending.push(ok);
+            }
+            ivm::EmbeddedStateType::List { element, .. } => pending.push(element),
+            ivm::EmbeddedStateType::Int
+            | ivm::EmbeddedStateType::Decimal
+            | ivm::EmbeddedStateType::Quantity
+            | ivm::EmbeddedStateType::Bool
+            | ivm::EmbeddedStateType::String
+            | ivm::EmbeddedStateType::Bytes
+            | ivm::EmbeddedStateType::DataSpaceId
+            | ivm::EmbeddedStateType::AccountId
+            | ivm::EmbeddedStateType::AssetDefinitionId
+            | ivm::EmbeddedStateType::AssetId
+            | ivm::EmbeddedStateType::NftId
+            | ivm::EmbeddedStateType::DomainId
+            | ivm::EmbeddedStateType::Name
+            | ivm::EmbeddedStateType::Json => {}
+        }
+    }
+    Err("embedded durable-state schema is invalid".into())
 }
 
 #[cfg(feature = "app_api")]
@@ -14614,51 +14637,46 @@ where
 }
 
 #[cfg(feature = "app_api")]
-fn decode_contract_state_pointer_json(
+fn decode_contract_state_pointer_json_fragment(
     envelope: &[u8],
     ty: &ivm::EmbeddedStateType,
-) -> core::result::Result<norito::json::Value, String> {
+) -> core::result::Result<String, String> {
     use ivm::EmbeddedStateType as Type;
     use ivm::pointer_abi::PointerType;
 
-    match ty {
+    let string_value = match ty {
         Type::Int => {
             let value = ivm::numeric_tlv::decode_int_bytes(envelope)
                 .map_err(|err| format!("decode int: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::Decimal => {
             let value = ivm::numeric_tlv::decode_decimal_bytes(envelope)
                 .map_err(|err| format!("decode decimal: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::Quantity => {
             let value = ivm::numeric_tlv::decode_quantity_bytes(envelope)
                 .map_err(|err| format!("decode quantity: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::String => {
             let payload =
                 decode_contract_state_pointer_payload(envelope, PointerType::Blob, "string")?;
-            let value = std::str::from_utf8(payload)
-                .map_err(|err| format!("decode UTF-8 string: {err}"))?;
-            Ok(norito::json::Value::from(value.to_owned()))
+            std::str::from_utf8(payload)
+                .map_err(|err| format!("decode UTF-8 string: {err}"))?
+                .to_owned()
         }
         Type::Bytes => {
             let payload =
                 decode_contract_state_pointer_payload(envelope, PointerType::Blob, "bytes")?;
-            Ok(norito::json::Value::from(
-                base64::engine::general_purpose::STANDARD.encode(payload),
-            ))
+            base64::engine::general_purpose::STANDARD.encode(payload)
         }
         Type::Json => {
             let payload =
                 decode_contract_state_pointer_payload(envelope, PointerType::Json, "Json")?;
-            let value: iroha_primitives::json::Json =
-                decode_canonical_contract_state_norito(payload, "json")?;
-            value
-                .try_into_any_norito::<norito::json::Value>()
-                .map_err(|err| format!("convert json payload: {err}"))
+            let value: IrohaJson = decode_canonical_contract_state_norito(payload, "json")?;
+            return Ok(value.get().clone());
         }
         Type::Name => {
             let payload =
@@ -14670,7 +14688,7 @@ fn decode_contract_state_pointer_json(
             {
                 return Err("non-canonical name envelope".into());
             }
-            Ok(norito::json::Value::from(value.as_ref().to_owned()))
+            value.as_ref().to_owned()
         }
         Type::AccountId => {
             let payload = decode_contract_state_pointer_payload(
@@ -14680,7 +14698,7 @@ fn decode_contract_state_pointer_json(
             )?;
             let value: iroha_data_model::account::AccountId =
                 decode_canonical_contract_state_norito(payload, "account id")?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::AssetDefinitionId => {
             let payload = decode_contract_state_pointer_payload(
@@ -14690,28 +14708,28 @@ fn decode_contract_state_pointer_json(
             )?;
             let value: iroha_data_model::asset::AssetDefinitionId =
                 decode_canonical_contract_state_norito(payload, "asset definition id")?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::AssetId => {
             let payload =
                 decode_contract_state_pointer_payload(envelope, PointerType::AssetId, "AssetId")?;
             let value: iroha_data_model::asset::AssetId =
                 decode_canonical_contract_state_norito(payload, "asset id")?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::NftId => {
             let payload =
                 decode_contract_state_pointer_payload(envelope, PointerType::NftId, "NftId")?;
             let value: iroha_data_model::nft::NftId =
                 decode_canonical_contract_state_norito(payload, "nft id")?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::DomainId => {
             let payload =
                 decode_contract_state_pointer_payload(envelope, PointerType::DomainId, "DomainId")?;
             let value: iroha_data_model::domain::DomainId =
                 decode_canonical_contract_state_norito(payload, "domain id")?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::DataSpaceId => {
             let payload = decode_contract_state_pointer_payload(
@@ -14721,7 +14739,7 @@ fn decode_contract_state_pointer_json(
             )?;
             let value: iroha_data_model::nexus::DataSpaceId =
                 decode_canonical_contract_state_norito(payload, "dataspace id")?;
-            Ok(norito::json::Value::from(value.to_string()))
+            value.to_string()
         }
         Type::Bool
         | Type::Tuple(_)
@@ -14729,8 +14747,148 @@ fn decode_contract_state_pointer_json(
         | Type::StateMap { .. }
         | Type::Option(_)
         | Type::Result { .. }
-        | Type::List { .. } => Err("expected a pointer-backed state leaf".into()),
+        | Type::List { .. } => return Err("expected a pointer-backed state leaf".into()),
+    };
+    let mut json = String::new();
+    norito::json::write_json_string(&string_value, &mut json);
+    Ok(json)
+}
+
+#[cfg(feature = "app_api")]
+enum ContractStateJsonNode<'a> {
+    Fragment(String),
+    Static(&'static str),
+    Array(Vec<usize>),
+    Object(Vec<(&'a str, usize)>),
+}
+
+#[cfg(feature = "app_api")]
+fn try_push_contract_state_item<T>(
+    values: &mut Vec<T>,
+    value: T,
+) -> core::result::Result<(), String> {
+    values
+        .try_reserve(1)
+        .map_err(|_| "contract state JSON projection allocation failed".to_owned())?;
+    values.push(value);
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn push_contract_state_json_node<'a>(
+    arena: &mut Vec<ContractStateJsonNode<'a>>,
+    node: ContractStateJsonNode<'a>,
+) -> core::result::Result<usize, String> {
+    let index = arena.len();
+    try_push_contract_state_item(arena, node)?;
+    Ok(index)
+}
+
+#[cfg(feature = "app_api")]
+fn drain_contract_state_children(
+    completed: &mut Vec<usize>,
+    value_start: usize,
+    expected_values: usize,
+    context: &str,
+) -> core::result::Result<Vec<usize>, String> {
+    if completed.len().checked_sub(value_start) != Some(expected_values) {
+        return Err(format!("invalid state value {context} projection"));
     }
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(expected_values)
+        .map_err(|_| "contract state JSON projection allocation failed".to_owned())?;
+    values.extend(completed.drain(value_start..));
+    Ok(values)
+}
+
+#[cfg(feature = "app_api")]
+fn render_contract_state_json(
+    arena: &[ContractStateJsonNode<'_>],
+    root: usize,
+) -> core::result::Result<String, String> {
+    enum Render<'a> {
+        Node(usize),
+        Text(&'static str),
+        Key(&'a str),
+    }
+
+    fn append_bounded(
+        output: &mut String,
+        fragment: &str,
+        max_output_bytes: usize,
+    ) -> core::result::Result<(), String> {
+        let next_len = output
+            .len()
+            .checked_add(fragment.len())
+            .ok_or_else(|| "contract state JSON projection length overflow".to_owned())?;
+        if next_len > max_output_bytes {
+            return Err(
+                "contract state JSON projection exceeds the response byte limit".to_owned(),
+            );
+        }
+        output
+            .try_reserve(fragment.len())
+            .map_err(|_| "contract state JSON projection allocation failed".to_owned())?;
+        output.push_str(fragment);
+        Ok(())
+    }
+
+    let max_output_bytes = ivm::state_value::MAX_STATE_VALUE_RECORD_BYTES
+        .saturating_add(ivm::state_value::MAX_STATE_VALUE_SCHEMA_BYTES)
+        .saturating_mul(6);
+    let mut output = String::new();
+    let mut pending = Vec::new();
+    try_push_contract_state_item(&mut pending, Render::Node(root))?;
+    while let Some(item) = pending.pop() {
+        match item {
+            Render::Node(index) => match arena
+                .get(index)
+                .ok_or_else(|| "invalid contract state JSON projection node".to_owned())?
+            {
+                ContractStateJsonNode::Fragment(fragment) => {
+                    append_bounded(&mut output, fragment, max_output_bytes)?;
+                }
+                ContractStateJsonNode::Static(fragment) => {
+                    append_bounded(&mut output, fragment, max_output_bytes)?;
+                }
+                ContractStateJsonNode::Array(children) => {
+                    append_bounded(&mut output, "[", max_output_bytes)?;
+                    try_push_contract_state_item(&mut pending, Render::Text("]"))?;
+                    for index in (0..children.len()).rev() {
+                        try_push_contract_state_item(&mut pending, Render::Node(children[index]))?;
+                        if index != 0 {
+                            try_push_contract_state_item(&mut pending, Render::Text(","))?;
+                        }
+                    }
+                }
+                ContractStateJsonNode::Object(entries) => {
+                    append_bounded(&mut output, "{", max_output_bytes)?;
+                    try_push_contract_state_item(&mut pending, Render::Text("}"))?;
+                    for index in (0..entries.len()).rev() {
+                        let (name, child) = entries[index];
+                        try_push_contract_state_item(&mut pending, Render::Node(child))?;
+                        try_push_contract_state_item(&mut pending, Render::Key(name))?;
+                        if index != 0 {
+                            try_push_contract_state_item(&mut pending, Render::Text(","))?;
+                        }
+                    }
+                }
+            },
+            Render::Text(fragment) => {
+                append_bounded(&mut output, fragment, max_output_bytes)?;
+            }
+            Render::Key(name) => {
+                let mut key = String::new();
+                key.try_reserve(name.len().saturating_add(3))
+                    .map_err(|_| "contract state JSON projection allocation failed".to_owned())?;
+                norito::json::write_json_string(name, &mut key);
+                key.push(':');
+                append_bounded(&mut output, &key, max_output_bytes)?;
+            }
+        }
+    }
+    Ok(output)
 }
 
 #[cfg(feature = "app_api")]
@@ -14738,126 +14896,400 @@ fn decode_contract_state_atoms_json(
     ty: &ivm::EmbeddedStateType,
     atoms: &[ivm::state_value::StateValueAtomV1],
     atom_index: &mut usize,
-) -> core::result::Result<norito::json::Value, String> {
+) -> core::result::Result<IrohaJson, String> {
     use ivm::EmbeddedStateType as Type;
-    use ivm::state_value::StateValueAtomV1 as Atom;
+    use ivm::state_value::{MAX_STATE_VALUE_NODES, StateValueAtomV1 as Atom};
 
-    match ty {
-        Type::Struct { fields, .. } => {
-            let mut object = norito::json::Map::new();
-            for field in fields {
-                object.insert(
-                    field.name.clone().into(),
-                    decode_contract_state_atoms_json(&field.ty, atoms, atom_index)?,
-                );
-            }
-            Ok(norito::json::Value::Object(object))
-        }
-        Type::Tuple(items) => {
-            let mut values = Vec::with_capacity(items.len());
-            for item in items {
-                values.push(decode_contract_state_atoms_json(item, atoms, atom_index)?);
-            }
-            Ok(norito::json::Value::Array(values))
-        }
-        Type::Option(inner) => {
-            let Some(Atom::Tag(present)) = atoms.get(*atom_index) else {
-                return Err("option state value is missing its canonical tag".into());
-            };
-            *atom_index = atom_index.saturating_add(1);
-            if *present {
-                decode_contract_state_atoms_json(inner, atoms, atom_index)
-            } else {
-                Ok(norito::json::Value::Null)
-            }
-        }
-        Type::Result { ok, err } => {
-            let Some(Atom::Tag(is_ok)) = atoms.get(*atom_index) else {
-                return Err("result state value is missing its canonical tag".into());
-            };
-            *atom_index = atom_index.saturating_add(1);
-            let (label, value) = if *is_ok {
-                (
-                    "ok",
-                    decode_contract_state_atoms_json(ok, atoms, atom_index)?,
-                )
-            } else {
-                (
-                    "err",
-                    decode_contract_state_atoms_json(err, atoms, atom_index)?,
-                )
-            };
-            let mut object = norito::json::Map::new();
-            object.insert(label.into(), value);
-            Ok(norito::json::Value::Object(object))
-        }
-        Type::List { element, capacity } => {
-            let Some(Atom::List(items)) = atoms.get(*atom_index) else {
-                return Err("list state value is missing its canonical item stream".into());
-            };
-            *atom_index = atom_index.saturating_add(1);
-            if items.len() > usize::from(*capacity) {
-                return Err("list state value exceeds its embedded capacity".into());
-            }
-            let mut values = Vec::with_capacity(items.len());
-            for item_atoms in items {
-                let mut item_index = 0;
-                values.push(decode_contract_state_atoms_json(
-                    element,
-                    item_atoms,
-                    &mut item_index,
-                )?);
-                if item_index != item_atoms.len() {
-                    return Err("list item contains trailing state atoms".into());
+    struct AtomCursor<'a> {
+        atoms: &'a [Atom],
+        index: usize,
+    }
+
+    enum Pending<'a> {
+        Decode {
+            ty: &'a Type,
+            stream: usize,
+            depth: usize,
+        },
+        FinishStruct {
+            fields: &'a [ivm::EmbeddedStateFieldDescriptor],
+            value_start: usize,
+        },
+        FinishArray {
+            value_start: usize,
+            expected_values: usize,
+        },
+        FinishResult {
+            label: &'static str,
+            value_start: usize,
+        },
+        RequireExhausted {
+            stream: usize,
+        },
+    }
+
+    let mut cursors = Vec::new();
+    try_push_contract_state_item(
+        &mut cursors,
+        AtomCursor {
+            atoms,
+            index: *atom_index,
+        },
+    )?;
+    let mut pending = Vec::new();
+    try_push_contract_state_item(
+        &mut pending,
+        Pending::Decode {
+            ty,
+            stream: 0,
+            depth: 1,
+        },
+    )?;
+    // Completed values are arena indexes. Aggregate construction only moves
+    // indexes, and the complete JSON text is emitted once after atom decoding.
+    let mut completed = Vec::<usize>::new();
+    let mut arena = Vec::<ContractStateJsonNode<'_>>::new();
+    let result = (|| {
+        while let Some(item) = pending.pop() {
+            match item {
+                Pending::Decode { ty, stream, depth } => {
+                    if depth > MAX_STATE_VALUE_NODES {
+                        return Err("state value projection exceeds the V1 depth limit".into());
+                    }
+                    match ty {
+                        Type::Struct { fields, .. } => {
+                            let value_start = completed.len();
+                            let child_depth = depth.checked_add(1).ok_or_else(|| {
+                                "state value projection depth overflow".to_owned()
+                            })?;
+                            try_push_contract_state_item(
+                                &mut pending,
+                                Pending::FinishStruct {
+                                    fields,
+                                    value_start,
+                                },
+                            )?;
+                            for field in fields.iter().rev() {
+                                try_push_contract_state_item(
+                                    &mut pending,
+                                    Pending::Decode {
+                                        ty: &field.ty,
+                                        stream,
+                                        depth: child_depth,
+                                    },
+                                )?;
+                            }
+                        }
+                        Type::Tuple(items) => {
+                            let value_start = completed.len();
+                            let child_depth = depth.checked_add(1).ok_or_else(|| {
+                                "state value projection depth overflow".to_owned()
+                            })?;
+                            try_push_contract_state_item(
+                                &mut pending,
+                                Pending::FinishArray {
+                                    value_start,
+                                    expected_values: items.len(),
+                                },
+                            )?;
+                            for ty in items.iter().rev() {
+                                try_push_contract_state_item(
+                                    &mut pending,
+                                    Pending::Decode {
+                                        ty,
+                                        stream,
+                                        depth: child_depth,
+                                    },
+                                )?;
+                            }
+                        }
+                        Type::Option(inner) => {
+                            let (stream_atoms, index) = {
+                                let cursor = cursors
+                                    .get(stream)
+                                    .ok_or_else(|| "invalid state atom stream".to_owned())?;
+                                (cursor.atoms, cursor.index)
+                            };
+                            let Some(Atom::Tag(present)) = stream_atoms.get(index) else {
+                                return Err(
+                                    "option state value is missing its canonical tag".into()
+                                );
+                            };
+                            cursors[stream].index = index
+                                .checked_add(1)
+                                .ok_or_else(|| "state atom index overflow".to_owned())?;
+                            if *present {
+                                try_push_contract_state_item(
+                                    &mut pending,
+                                    Pending::Decode {
+                                        ty: inner,
+                                        stream,
+                                        depth: depth.checked_add(1).ok_or_else(|| {
+                                            "state value projection depth overflow".to_owned()
+                                        })?,
+                                    },
+                                )?;
+                            } else {
+                                let node = push_contract_state_json_node(
+                                    &mut arena,
+                                    ContractStateJsonNode::Static("null"),
+                                )?;
+                                try_push_contract_state_item(&mut completed, node)?;
+                            }
+                        }
+                        Type::Result { ok, err } => {
+                            let (stream_atoms, index) = {
+                                let cursor = cursors
+                                    .get(stream)
+                                    .ok_or_else(|| "invalid state atom stream".to_owned())?;
+                                (cursor.atoms, cursor.index)
+                            };
+                            let Some(Atom::Tag(is_ok)) = stream_atoms.get(index) else {
+                                return Err(
+                                    "result state value is missing its canonical tag".into()
+                                );
+                            };
+                            cursors[stream].index = index
+                                .checked_add(1)
+                                .ok_or_else(|| "state atom index overflow".to_owned())?;
+                            let value_start = completed.len();
+                            try_push_contract_state_item(
+                                &mut pending,
+                                Pending::FinishResult {
+                                    label: if *is_ok { "ok" } else { "err" },
+                                    value_start,
+                                },
+                            )?;
+                            try_push_contract_state_item(
+                                &mut pending,
+                                Pending::Decode {
+                                    ty: if *is_ok { ok } else { err },
+                                    stream,
+                                    depth: depth.checked_add(1).ok_or_else(|| {
+                                        "state value projection depth overflow".to_owned()
+                                    })?,
+                                },
+                            )?;
+                        }
+                        Type::List { element, capacity } => {
+                            let (stream_atoms, index) = {
+                                let cursor = cursors
+                                    .get(stream)
+                                    .ok_or_else(|| "invalid state atom stream".to_owned())?;
+                                (cursor.atoms, cursor.index)
+                            };
+                            let Some(Atom::List(items)) = stream_atoms.get(index) else {
+                                return Err(
+                                    "list state value is missing its canonical item stream".into(),
+                                );
+                            };
+                            cursors[stream].index = index
+                                .checked_add(1)
+                                .ok_or_else(|| "state atom index overflow".to_owned())?;
+                            if items.len() > usize::from(*capacity) {
+                                return Err("list state value exceeds its embedded capacity".into());
+                            }
+
+                            let value_start = completed.len();
+                            let first_item_stream = cursors.len();
+                            cursors.try_reserve(items.len()).map_err(|_| {
+                                "contract state JSON projection allocation failed".to_owned()
+                            })?;
+                            for item_atoms in items {
+                                try_push_contract_state_item(
+                                    &mut cursors,
+                                    AtomCursor {
+                                        atoms: item_atoms,
+                                        index: 0,
+                                    },
+                                )?;
+                            }
+                            try_push_contract_state_item(
+                                &mut pending,
+                                Pending::FinishArray {
+                                    value_start,
+                                    expected_values: items.len(),
+                                },
+                            )?;
+                            let child_depth = depth.checked_add(1).ok_or_else(|| {
+                                "state value projection depth overflow".to_owned()
+                            })?;
+                            for item_stream in
+                                (first_item_stream..first_item_stream + items.len()).rev()
+                            {
+                                try_push_contract_state_item(
+                                    &mut pending,
+                                    Pending::RequireExhausted {
+                                        stream: item_stream,
+                                    },
+                                )?;
+                                try_push_contract_state_item(
+                                    &mut pending,
+                                    Pending::Decode {
+                                        ty: element,
+                                        stream: item_stream,
+                                        depth: child_depth,
+                                    },
+                                )?;
+                            }
+                        }
+                        Type::Bool => {
+                            let (stream_atoms, index) = {
+                                let cursor = cursors
+                                    .get(stream)
+                                    .ok_or_else(|| "invalid state atom stream".to_owned())?;
+                                (cursor.atoms, cursor.index)
+                            };
+                            let Some(Atom::Bool(value)) = stream_atoms.get(index) else {
+                                return Err("bool state value is not a canonical bool atom".into());
+                            };
+                            cursors[stream].index = index
+                                .checked_add(1)
+                                .ok_or_else(|| "state atom index overflow".to_owned())?;
+                            let node = push_contract_state_json_node(
+                                &mut arena,
+                                ContractStateJsonNode::Static(if *value {
+                                    "true"
+                                } else {
+                                    "false"
+                                }),
+                            )?;
+                            try_push_contract_state_item(&mut completed, node)?;
+                        }
+                        Type::StateMap { .. } => {
+                            return Err("nested durable maps are not supported".into());
+                        }
+                        leaf => {
+                            let (stream_atoms, index) = {
+                                let cursor = cursors
+                                    .get(stream)
+                                    .ok_or_else(|| "invalid state atom stream".to_owned())?;
+                                (cursor.atoms, cursor.index)
+                            };
+                            let Some(Atom::Pointer(envelope)) = stream_atoms.get(index) else {
+                                return Err(
+                                    "pointer-backed state value is missing its canonical envelope"
+                                        .into(),
+                                );
+                            };
+                            cursors[stream].index = index
+                                .checked_add(1)
+                                .ok_or_else(|| "state atom index overflow".to_owned())?;
+                            let fragment =
+                                decode_contract_state_pointer_json_fragment(envelope, leaf)?;
+                            let node = push_contract_state_json_node(
+                                &mut arena,
+                                ContractStateJsonNode::Fragment(fragment),
+                            )?;
+                            try_push_contract_state_item(&mut completed, node)?;
+                        }
+                    }
+                }
+                Pending::FinishStruct {
+                    fields,
+                    value_start,
+                } => {
+                    let values = drain_contract_state_children(
+                        &mut completed,
+                        value_start,
+                        fields.len(),
+                        "struct",
+                    )?;
+                    let mut entries = Vec::new();
+                    entries.try_reserve_exact(fields.len()).map_err(|_| {
+                        "contract state JSON projection allocation failed".to_owned()
+                    })?;
+                    for (field, value) in fields.iter().zip(values) {
+                        entries.push((field.name.as_str(), value));
+                    }
+                    entries.sort_by(|left, right| left.0.cmp(right.0));
+                    let node = push_contract_state_json_node(
+                        &mut arena,
+                        ContractStateJsonNode::Object(entries),
+                    )?;
+                    try_push_contract_state_item(&mut completed, node)?;
+                }
+                Pending::FinishArray {
+                    value_start,
+                    expected_values,
+                } => {
+                    let values = drain_contract_state_children(
+                        &mut completed,
+                        value_start,
+                        expected_values,
+                        "array",
+                    )?;
+                    let node = push_contract_state_json_node(
+                        &mut arena,
+                        ContractStateJsonNode::Array(values),
+                    )?;
+                    try_push_contract_state_item(&mut completed, node)?;
+                }
+                Pending::FinishResult { label, value_start } => {
+                    let mut values =
+                        drain_contract_state_children(&mut completed, value_start, 1, "result")?;
+                    let value = values
+                        .pop()
+                        .ok_or_else(|| "invalid state value result projection".to_owned())?;
+                    let mut entries = Vec::new();
+                    entries.try_reserve_exact(1).map_err(|_| {
+                        "contract state JSON projection allocation failed".to_owned()
+                    })?;
+                    entries.push((label, value));
+                    let node = push_contract_state_json_node(
+                        &mut arena,
+                        ContractStateJsonNode::Object(entries),
+                    )?;
+                    try_push_contract_state_item(&mut completed, node)?;
+                }
+                Pending::RequireExhausted { stream } => {
+                    let cursor = cursors
+                        .get(stream)
+                        .ok_or_else(|| "invalid state atom stream".to_owned())?;
+                    if cursor.index != cursor.atoms.len() {
+                        return Err("list item contains trailing state atoms".into());
+                    }
                 }
             }
-            Ok(norito::json::Value::Array(values))
         }
-        Type::Bool => {
-            let Some(Atom::Bool(value)) = atoms.get(*atom_index) else {
-                return Err("bool state value is not a canonical bool atom".into());
-            };
-            *atom_index = atom_index.saturating_add(1);
-            Ok(norito::json::Value::Bool(*value))
+        if completed.len() != 1 {
+            return Err("invalid state value projection".into());
         }
-        Type::StateMap { .. } => Err("nested durable maps are not supported".into()),
-        leaf => {
-            let Some(Atom::Pointer(envelope)) = atoms.get(*atom_index) else {
-                return Err("pointer-backed state value is missing its canonical envelope".into());
-            };
-            *atom_index = atom_index.saturating_add(1);
-            decode_contract_state_pointer_json(envelope, leaf)
-        }
-    }
+        let root = completed
+            .pop()
+            .ok_or_else(|| "invalid state value projection".to_owned())?;
+        let json = render_contract_state_json(&arena, root)?;
+        // `value_json` is nested beneath the response object, `entries` array,
+        // and entry object. Validate at its eventual root depth so every
+        // successful response remains consumable by the same V1 JSON parser.
+        norito::json::validate_json_at_depth(&json, 4)
+            .map_err(|error| format!("projected contract state JSON is invalid: {error}"))?;
+        Ok(IrohaJson::from_string_unchecked(json))
+    })();
+    *atom_index = cursors[0].index;
+    result
 }
 
 #[cfg(feature = "app_api")]
 fn decode_contract_state_scalar_json(
     bytes: &[u8],
     ty: &ivm::EmbeddedStateType,
-) -> core::result::Result<norito::json::Value, String> {
+) -> core::result::Result<IrohaJson, String> {
     use ivm::state_value::{
-        MAX_STATE_VALUE_RECORD_BYTES, StateValueRecordV1, state_value_schema_hash_v1,
+        MAX_STATE_VALUE_RECORD_BYTES, decode_canonical_state_value_record_v1,
+        state_value_schema_hash_v1,
     };
 
     if bytes.len() > MAX_STATE_VALUE_RECORD_BYTES {
         return Err("durable state record exceeds the V1 byte limit".into());
     }
-    let record: StateValueRecordV1 = norito::decode_from_bytes(bytes)
+    let record = decode_canonical_state_value_record_v1(bytes)
         .map_err(|err| format!("decode durable state record: {err}"))?;
-    if norito::to_bytes(&record).map_err(|err| format!("re-encode durable state record: {err}"))?
-        != bytes
-    {
-        return Err("durable state record is not canonically encoded".into());
-    }
     let schema = contract_state_value_schema(ty)?;
     let schema_payload = norito::to_bytes(&schema)
         .map_err(|err| format!("encode embedded durable-state schema: {err}"))?;
     if record.schema_hash != state_value_schema_hash_v1(&schema_payload) {
         return Err("durable state record does not match its embedded schema".into());
-    }
-    if !schema.validate_atoms(&record.atoms) {
-        return Err("durable state record contains an invalid atom stream".into());
     }
     let mut atom_index = 0;
     let value = decode_contract_state_atoms_json(ty, &record.atoms, &mut atom_index)?;
@@ -14872,7 +15304,7 @@ fn decode_contract_state_value_json(
     base: &str,
     ty: &ivm::EmbeddedStateType,
     get_value: &impl Fn(&str) -> Option<Vec<u8>>,
-) -> core::result::Result<norito::json::Value, String> {
+) -> core::result::Result<IrohaJson, String> {
     if matches!(ty, ivm::EmbeddedStateType::StateMap { .. }) {
         return Err("durable maps must be decoded through a concrete key".to_owned());
     }
@@ -14886,7 +15318,7 @@ fn decode_contract_state_map_value_json(
     value_ty: &ivm::EmbeddedStateType,
     key_suffix: &str,
     get_value: &impl Fn(&str) -> Option<Vec<u8>>,
-) -> core::result::Result<norito::json::Value, String> {
+) -> core::result::Result<IrohaJson, String> {
     if matches!(value_ty, ivm::EmbeddedStateType::StateMap { .. }) {
         return Err("nested durable maps are not supported".to_owned());
     }
@@ -14939,7 +15371,7 @@ fn validate_contract_state_stored_map_key_suffix(
         | ivm::EmbeddedStateType::NftId
         | ivm::EmbeddedStateType::DomainId
         | ivm::EmbeddedStateType::DataSpaceId => {
-            decode_contract_state_pointer_json(&encoded, key_ty)
+            decode_contract_state_pointer_json_fragment(&encoded, key_ty)
                 .map_err(|error| format!("invalid typed durable map key: {error}"))?;
         }
         _ => return Err("deployed durable map key schema is not supported by V1".to_owned()),
@@ -14968,7 +15400,7 @@ fn decode_contract_state_path_json(
     registry: &BTreeMap<String, Option<ivm::EmbeddedStateType>>,
     logical_path: &str,
     get_value: &impl Fn(&str) -> Option<Vec<u8>>,
-) -> core::result::Result<norito::json::Value, String> {
+) -> core::result::Result<IrohaJson, String> {
     if let Some(direct) = registry.get(logical_path) {
         if let Some(schema) = direct {
             return decode_contract_state_value_json(logical_path, schema, get_value);
@@ -15179,35 +15611,33 @@ pub async fn handle_get_contract_state(
         .as_ref()
         .map(std::string::ToString::to_string);
 
-    let encode_entry = |path: &str,
-                        value: Option<&Vec<u8>>,
-                        found: bool,
-                        value_json: Option<norito::json::Value>| {
-        if !include_value {
-            return ContractStateEntry {
+    let encode_entry =
+        |path: &str, value: Option<&Vec<u8>>, found: bool, value_json: Option<IrohaJson>| {
+            if !include_value {
+                return ContractStateEntry {
+                    path: path.to_string(),
+                    found,
+                    value_b64: None,
+                    value_len: None,
+                    value_json,
+                };
+            }
+            let (value_b64, value_len) = if let Some(bytes) = value {
+                (
+                    Some(base64::engine::general_purpose::STANDARD.encode(bytes.as_slice())),
+                    Some(bytes.len() as u64),
+                )
+            } else {
+                (None, None)
+            };
+            ContractStateEntry {
                 path: path.to_string(),
                 found,
-                value_b64: None,
-                value_len: None,
+                value_b64,
+                value_len,
                 value_json,
-            };
-        }
-        let (value_b64, value_len) = if let Some(bytes) = value {
-            (
-                Some(base64::engine::general_purpose::STANDARD.encode(bytes.as_slice())),
-                Some(bytes.len() as u64),
-            )
-        } else {
-            (None, None)
+            }
         };
-        ContractStateEntry {
-            path: path.to_string(),
-            found,
-            value_b64,
-            value_len,
-            value_json,
-        }
-    };
 
     if let Some(path_raw) = q.path {
         let name = parse_name(&path_raw, "path")?;
@@ -15472,6 +15902,291 @@ mod contract_state_tests {
         norito::to_bytes(&record).expect("encode persisted state record")
     }
 
+    fn make_unchecked_state_record(
+        ty: &ivm::EmbeddedStateType,
+        atoms: Vec<ivm::state_value::StateValueAtomV1>,
+    ) -> Vec<u8> {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let schema = contract_state_value_schema(ty).expect("valid embedded schema");
+        let schema_payload = norito::to_bytes(&schema).expect("encode state schema");
+        let record = ivm::state_value::StateValueRecordV1 {
+            schema_hash: ivm::state_value::state_value_schema_hash_v1(&schema_payload),
+            atoms,
+        };
+        norito::to_bytes(&record).expect("encode unchecked persisted state record")
+    }
+
+    fn nested_bool_list_fixture(
+        levels: usize,
+    ) -> (
+        ivm::EmbeddedStateType,
+        Vec<ivm::state_value::StateValueAtomV1>,
+    ) {
+        let mut ty = ivm::EmbeddedStateType::Bool;
+        let mut atoms = vec![ivm::state_value::StateValueAtomV1::Bool(true)];
+        for _ in 0..levels {
+            ty = ivm::EmbeddedStateType::List {
+                element: Box::new(ty),
+                capacity: 1,
+            };
+            atoms = vec![ivm::state_value::StateValueAtomV1::List(vec![atoms])];
+        }
+        (ty, atoms)
+    }
+
+    #[test]
+    fn contract_state_response_accepts_its_exact_json_depth_boundary_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                // The response object, entries array, and entry object occupy
+                // three levels before value_json.
+                let levels = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 4;
+                let (ty, atoms) = nested_bool_list_fixture(levels);
+                let record = make_state_record(&ty, atoms);
+                let projected = decode_contract_state_scalar_json(&record, &ty)
+                    .expect("project the exact response-safe list depth");
+                let expected = format!("{}true{}", "[".repeat(levels), "]".repeat(levels));
+                assert_eq!(projected.get(), &expected);
+
+                let dto = ContractStateResponse {
+                    contract_address: None,
+                    contract_alias: None,
+                    path: Some("deep".to_owned()),
+                    paths: None,
+                    prefix: None,
+                    entries: vec![ContractStateEntry {
+                        path: "deep".to_owned(),
+                        found: true,
+                        value_b64: None,
+                        value_len: None,
+                        value_json: Some(projected),
+                    }],
+                    offset: 0,
+                    limit: 1,
+                    next_offset: None,
+                };
+                let serialized =
+                    norito::json::to_json(&dto).expect("serialize deep contract-state DTO");
+                assert!(
+                    serialized.contains(&format!("\"value_json\":{expected}")),
+                    "the flat Json field must preserve the public value_json shape"
+                );
+                norito::json::validate_json(&serialized)
+                    .expect("the complete response must fit the global JSON depth limit");
+                let response = JsonBody(dto).into_response();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(
+                    response
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok()),
+                    Some("application/json")
+                );
+
+                let over_limit_levels = levels + 1;
+                let (ty, atoms) = nested_bool_list_fixture(over_limit_levels);
+                let record = make_state_record(&ty, atoms);
+                let limit = norito::json::MAX_JSON_VALUE_NESTING_DEPTH;
+                assert_eq!(
+                    decode_contract_state_scalar_json(&record, &ty)
+                        .expect_err("a value_json response one level too deep must reject"),
+                    format!(
+                        "projected contract state JSON is invalid: JSON value nesting depth {} exceeds limit {limit}",
+                        limit + 1
+                    )
+                );
+            })
+            .expect("spawn small-stack projection worker")
+            .join()
+            .expect("small-stack projection worker");
+    }
+
+    #[test]
+    fn contract_state_projection_cleans_up_a_deep_value_before_a_malformed_later_sibling() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let (deep_ty, mut atoms) =
+                    nested_bool_list_fixture(ivm::state_value::MAX_STATE_VALUE_NODES - 3);
+                let ty = ivm::EmbeddedStateType::Struct {
+                    name: "DeepThenInvalid".to_owned(),
+                    fields: vec![
+                        ivm::EmbeddedStateFieldDescriptor {
+                            name: "deep".to_owned(),
+                            ty: deep_ty,
+                        },
+                        ivm::EmbeddedStateFieldDescriptor {
+                            name: "invalid".to_owned(),
+                            ty: ivm::EmbeddedStateType::Int,
+                        },
+                    ],
+                };
+                atoms.push(ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
+                    PointerType::Blob,
+                    b"not-an-int",
+                )));
+                let record = make_state_record(&ty, atoms);
+                let error = decode_contract_state_scalar_json(&record, &ty)
+                    .expect_err("the malformed later Int sibling must reject");
+                assert!(
+                    error.contains("decode int"),
+                    "unexpected projection error: {error}"
+                );
+            })
+            .expect("spawn malformed-sibling projection worker")
+            .join()
+            .expect("malformed-sibling projection worker");
+    }
+
+    #[test]
+    fn contract_state_scalar_rejects_trailing_atoms() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let ty = ivm::EmbeddedStateType::Bool;
+                let atoms = vec![
+                    ivm::state_value::StateValueAtomV1::Bool(true),
+                    ivm::state_value::StateValueAtomV1::Bool(false),
+                ];
+                let record = make_unchecked_state_record(&ty, atoms);
+                let error = decode_contract_state_scalar_json(&record, &ty)
+                    .expect_err("a schema-bound record with trailing atoms must reject");
+                assert!(error.contains("trailing atoms"), "{error}");
+            })
+            .expect("spawn trailing-atoms worker")
+            .join()
+            .expect("trailing-atoms worker");
+    }
+
+    #[test]
+    fn contract_state_native_json_leaf_accepts_the_json_depth_boundary_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let levels = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 4;
+                let raw = format!("{}true{}", "[".repeat(levels), "]".repeat(levels));
+                let embedded = IrohaJson::from_string_unchecked(raw.clone());
+                let payload = norito::to_bytes(&embedded).expect("encode boundary Json leaf");
+                let ty = ivm::EmbeddedStateType::Json;
+                let record = make_state_record(
+                    &ty,
+                    vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
+                        PointerType::Json,
+                        &payload,
+                    ))],
+                );
+                let decoded = decode_contract_state_scalar_json(&record, &ty)
+                    .expect("decode response-safe boundary Json leaf without an owned Value tree");
+                assert_eq!(decoded.get(), &raw);
+            })
+            .expect("spawn native-Json boundary worker")
+            .join()
+            .expect("native-Json boundary worker");
+    }
+
+    #[test]
+    fn contract_state_projection_enforces_combined_outer_and_native_json_depth() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let ty = ivm::EmbeddedStateType::Struct {
+                    name: "NativeJsonEnvelope".to_owned(),
+                    fields: vec![ivm::EmbeddedStateFieldDescriptor {
+                        name: "payload".to_owned(),
+                        ty: ivm::EmbeddedStateType::Json,
+                    }],
+                };
+                let project = |levels: usize| {
+                    let raw = format!("{}true{}", "[".repeat(levels), "]".repeat(levels));
+                    let embedded = IrohaJson::from_string_unchecked(raw.clone());
+                    let payload =
+                        norito::to_bytes(&embedded).expect("encode nested native Json leaf");
+                    let record = make_state_record(
+                        &ty,
+                        vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
+                            PointerType::Json,
+                            &payload,
+                        ))],
+                    );
+                    (raw, decode_contract_state_scalar_json(&record, &ty))
+                };
+
+                let boundary_levels = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 5;
+                let (boundary_raw, boundary) = project(boundary_levels);
+                assert_eq!(
+                    boundary
+                        .expect(
+                            "response envelope, outer object, and native Json must fit the exact global bound"
+                        )
+                        .get(),
+                    &format!("{{\"payload\":{boundary_raw}}}")
+                );
+
+                let over_limit_levels = boundary_levels + 1;
+                let (_, over_limit) = project(over_limit_levels);
+                let limit = norito::json::MAX_JSON_VALUE_NESTING_DEPTH;
+                assert_eq!(
+                    over_limit.expect_err(
+                        "an individually valid native Json leaf must not exceed the combined bound"
+                    ),
+                    format!(
+                        "projected contract state JSON is invalid: JSON value nesting depth {} exceeds limit {limit}",
+                        limit + 1
+                    )
+                );
+            })
+            .expect("spawn combined JSON-depth worker")
+            .join()
+            .expect("combined JSON-depth worker");
+    }
+
+    #[test]
+    fn contract_state_flat_projection_preserves_aggregate_shapes_and_canonical_field_order() {
+        use ivm::state_value::StateValueAtomV1 as Atom;
+
+        let ty = ivm::EmbeddedStateType::Struct {
+            name: "AggregateProjection".to_owned(),
+            fields: vec![
+                ivm::EmbeddedStateFieldDescriptor {
+                    name: "z_tuple".to_owned(),
+                    ty: ivm::EmbeddedStateType::Tuple(vec![
+                        ivm::EmbeddedStateType::Bool,
+                        ivm::EmbeddedStateType::Option(Box::new(ivm::EmbeddedStateType::Bool)),
+                        ivm::EmbeddedStateType::Result {
+                            ok: Box::new(ivm::EmbeddedStateType::Bool),
+                            err: Box::new(ivm::EmbeddedStateType::Bool),
+                        },
+                    ]),
+                },
+                ivm::EmbeddedStateFieldDescriptor {
+                    name: "a_list".to_owned(),
+                    ty: ivm::EmbeddedStateType::List {
+                        element: Box::new(ivm::EmbeddedStateType::Bool),
+                        capacity: 2,
+                    },
+                },
+            ],
+        };
+        let record = make_state_record(
+            &ty,
+            vec![
+                Atom::Bool(true),
+                Atom::Tag(false),
+                Atom::Tag(true),
+                Atom::Bool(false),
+                Atom::List(vec![vec![Atom::Bool(true)], vec![Atom::Bool(false)]]),
+            ],
+        );
+        let projected =
+            decode_contract_state_scalar_json(&record, &ty).expect("project aggregate state");
+        assert_eq!(
+            projected.get(),
+            "{\"a_list\":[true,false],\"z_tuple\":[true,null,{\"ok\":false}]}"
+        );
+    }
+
     fn scoped_state_key(
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
         logical_path: &str,
@@ -15609,10 +16324,7 @@ mod contract_state_tests {
         );
         let decoded =
             decode_contract_state_scalar_json(&encoded, &ty).expect("decode state record");
-        assert_eq!(
-            decoded,
-            norito::json::Value::from("922337203685477500012345678901234567890".to_owned())
-        );
+        assert_eq!(decoded.get(), "\"922337203685477500012345678901234567890\"");
     }
 
     #[test]
@@ -15622,7 +16334,7 @@ mod contract_state_tests {
             make_state_record(&ty, vec![ivm::state_value::StateValueAtomV1::Bool(true)]);
         assert_eq!(
             decode_contract_state_scalar_json(&persisted, &ty).expect("decode persisted record"),
-            norito::json::Value::from(true)
+            IrohaJson::from_string_unchecked("true".to_owned())
         );
 
         let transport = make_tlv(PointerType::NoritoBytes, &persisted);
@@ -15658,8 +16370,9 @@ mod contract_state_tests {
         );
         assert_eq!(
             decode_contract_state_scalar_json(&decimal_record, &decimal_ty)
-                .expect("decode exact decimal"),
-            norito::json::Value::from(decimal_text)
+                .expect("decode exact decimal")
+                .get(),
+            &format!("\"{decimal_text}\"")
         );
 
         let quantity_text = "987654321098765432109876543210.000000000000000001";
@@ -15679,8 +16392,9 @@ mod contract_state_tests {
         );
         assert_eq!(
             decode_contract_state_scalar_json(&quantity_record, &quantity_ty)
-                .expect("decode exact quantity"),
-            norito::json::Value::from(quantity_text)
+                .expect("decode exact quantity")
+                .get(),
+            &format!("\"{quantity_text}\"")
         );
     }
 
@@ -15807,8 +16521,8 @@ mod contract_state_tests {
         let quantity_json = decode_contract_state_scalar_json(&quantity_record, &quantity_ty)
             .expect("decode quantity");
 
-        assert_eq!(decimal_json, Value::from(decimal.to_string()));
-        assert_eq!(quantity_json, Value::from(quantity.to_string()));
+        assert_eq!(decimal_json.get(), &format!("\"{decimal}\""));
+        assert_eq!(quantity_json.get(), &format!("\"{quantity}\""));
     }
 
     #[test]
@@ -15850,13 +16564,10 @@ mod contract_state_tests {
         })
         .expect("decode map entry");
 
-        let mut expected = Map::new();
-        expected.insert("status".into(), Value::from("1"));
-        expected.insert(
-            "approval_alias_fqn".into(),
-            Value::from(base64::engine::general_purpose::STANDARD.encode("banking@centralbank")),
+        assert_eq!(
+            decoded.get(),
+            "{\"approval_alias_fqn\":\"YmFua2luZ0BjZW50cmFsYmFuaw==\",\"status\":\"1\"}"
         );
-        assert_eq!(decoded, Value::Object(expected));
     }
 
     #[test]
@@ -15899,7 +16610,7 @@ mod contract_state_tests {
         )
         .expect("decode slash-containing logical key");
 
-        assert_eq!(decoded, Value::from("5"));
+        assert_eq!(decoded.get(), "\"5\"");
     }
 
     #[test]
@@ -15946,10 +16657,10 @@ mod contract_state_tests {
         )
         .expect("decode json");
 
-        let mut expected = Map::new();
-        expected.insert("marketId".into(), Value::from("mkt-1"));
-        expected.insert("status".into(), Value::from("open"));
-        assert_eq!(decoded, Value::Object(expected));
+        assert_eq!(
+            decoded.get(),
+            "{\"marketId\":\"mkt-1\",\"status\":\"open\"}"
+        );
     }
 
     #[test]
@@ -17772,6 +18483,7 @@ async fn submit_contract_call_request(
         contract_alias,
         entrypoint,
         payload,
+        metadata: caller_metadata,
         creation_time_ms,
         transaction_ttl_ms,
         fee_payment,
@@ -17819,7 +18531,7 @@ async fn submit_contract_call_request(
     let arguments = bound_signed_contract_arguments(arguments).map_err(conversion_error)?;
     let payload_digest_hex = contract_payload_digest_hex(normalized_payload.as_ref());
 
-    let metadata = build_contract_call_metadata(
+    let system_metadata = build_contract_call_metadata(
         &manifest,
         &contract_address,
         &code_hash,
@@ -17827,6 +18539,7 @@ async fn submit_contract_call_request(
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
     );
+    let metadata = merge_contract_call_metadata(caller_metadata, system_metadata)?;
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
@@ -18571,6 +19284,22 @@ pub async fn handle_post_contract_call(
     )
     .await?;
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// POST /v1/contracts/call/batch/prepare — resolve and ABI-bind one exact ordered batch.
+#[cfg(feature = "app_api")]
+pub fn handle_post_contract_call_batch_prepare(
+    state: Arc<CoreState>,
+    NoritoJson(request): NoritoJson<ContractCallBatchPrepareDto>,
+) -> Result<impl IntoResponse> {
+    let response = prepare_contract_call_batch(state.as_ref(), request)?;
+    let body = norito::json::to_json_pretty(&response).map_err(norito_internal_error)?;
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -19580,6 +20309,295 @@ struct ContractCallSimulationError {
 pub const CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum number of VM executions admitted by one contract view batch.
 pub const CONTRACT_VIEW_BATCH_MAX_ITEMS: usize = 256;
+/// Maximum number of ordered executable items admitted by contract-call batch preparation.
+pub const CONTRACT_CALL_BATCH_MAX_ITEMS: usize = 256;
+
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_BATCH_BINDING_VERSION_V1: u16 = 1;
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1: &[u8] = b"iroha:contract-call-batch-binding:v1\0";
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1: &[u8] = b"iroha:contract-call-batch-arguments:v1\0";
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1: &[u8] =
+    b"iroha:contract-call-batch-instruction:v1\0";
+
+#[cfg(feature = "app_api")]
+fn contract_call_batch_digest(domain: &[u8], chunks: &[&[u8]]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    for chunk in chunks {
+        hasher.update(chunk);
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn exact_contract_hash_pin(expected: Option<&str>, actual: &Hash, field: &str) -> Result<String> {
+    let actual = hex::encode(actual.as_ref());
+    if let Some(expected) = expected {
+        let is_canonical = expected.len() == 64
+            && expected
+                .as_bytes()
+                .iter()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        if !is_canonical {
+            return Err(conversion_error(format!(
+                "{field} must contain exactly 32 lowercase hexadecimal bytes"
+            )));
+        }
+        if expected != actual {
+            return Err(conversion_error(format!(
+                "{field} `{expected}` does not match the active value `{actual}`"
+            )));
+        }
+    }
+    Ok(actual)
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_instruction_from_base64(
+    encoded: &str,
+    index: usize,
+) -> Result<(InstructionBox, Vec<u8>, String)> {
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| {
+            conversion_error(format!(
+                "batch entry {index} instruction_b64 is not valid padded base64: {error}"
+            ))
+        })?;
+    if base64::engine::general_purpose::STANDARD.encode(&raw) != encoded {
+        return Err(conversion_error(format!(
+            "batch entry {index} instruction_b64 must use exact canonical padded base64"
+        )));
+    }
+    let instruction = norito::decode_from_bytes::<InstructionBox>(&raw).map_err(|error| {
+        conversion_error(format!(
+            "batch entry {index} instruction_b64 does not contain one framed InstructionBox: {error}"
+        ))
+    })?;
+    let canonical = norito::to_bytes(&instruction).map_err(|error| {
+        conversion_error(format!(
+            "batch entry {index} native instruction cannot be canonically encoded: {error}"
+        ))
+    })?;
+    if canonical != raw {
+        return Err(conversion_error(format!(
+            "batch entry {index} native instruction is not canonically framed"
+        )));
+    }
+    let wire_id = iroha_data_model::isi::instruction_wire_id(&instruction)
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "batch entry {index} native instruction is absent from the registry"
+            ))
+        })?
+        .to_owned();
+    Ok((instruction, canonical, wire_id))
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_contract_call_batch(
+    state: &CoreState,
+    request: ContractCallBatchPrepareDto,
+) -> Result<ContractCallBatchPlanDto> {
+    if request.entries.is_empty() {
+        return Err(conversion_error(
+            "contract call batch must include at least one entry".to_owned(),
+        ));
+    }
+    if request.entries.len() > CONTRACT_CALL_BATCH_MAX_ITEMS {
+        return Err(conversion_error(format!(
+            "contract call batch exceeds the {CONTRACT_CALL_BATCH_MAX_ITEMS}-entry limit"
+        )));
+    }
+
+    let mut binding_items = Vec::with_capacity(request.entries.len());
+    let mut prepared_entries = Vec::with_capacity(request.entries.len());
+    let alias_resolution_time_ms = current_time_millis();
+    for (index, item) in request.entries.into_iter().enumerate() {
+        let response_index = u32::try_from(index).expect("batch limit fits u32");
+        match (item.contract_call, item.instruction_b64) {
+            (Some(call), None) => {
+                let prepared = match (call.contract_address.as_ref(), call.contract_alias.as_ref())
+                {
+                    (Some(address), None) => prepare_contract_call_by_address(state, address)?,
+                    (None, Some(alias)) => {
+                        prepare_contract_call_by_alias(state, alias, alias_resolution_time_ms)?
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(conversion_error(format!(
+                            "batch entry {index} must provide exactly one contract target"
+                        )));
+                    }
+                    (None, None) => {
+                        return Err(conversion_error(format!(
+                            "batch entry {index} must provide one contract target"
+                        )));
+                    }
+                };
+                let PreparedContractCall {
+                    program,
+                    code_hash,
+                    abi_hash,
+                    manifest,
+                    dataspace,
+                    contract_address,
+                    contract_alias,
+                } = prepared;
+                if let Some(expected_address) = call.expected_contract_address.as_ref() {
+                    if expected_address != &contract_address {
+                        return Err(conversion_error(format!(
+                            "batch entry {index} expected_contract_address `{expected_address}` \
+                             does not match resolved address `{contract_address}`"
+                        )));
+                    }
+                }
+                let code_hash_hex = exact_contract_hash_pin(
+                    call.expected_code_hash_hex.as_deref(),
+                    &code_hash,
+                    &format!("batch entry {index} expected_code_hash_hex"),
+                )?;
+                let abi_hash_hex = exact_contract_hash_pin(
+                    call.expected_abi_hash_hex.as_deref(),
+                    &abi_hash,
+                    &format!("batch entry {index} expected_abi_hash_hex"),
+                )?;
+                let entrypoint = explicit_contract_entrypoint(&call.entrypoint)?;
+                if entrypoint != call.entrypoint {
+                    return Err(conversion_error(format!(
+                        "batch entry {index} entrypoint must not contain surrounding whitespace"
+                    )));
+                }
+                let descriptor = ensure_contract_call_entrypoint(&manifest, entrypoint, None)?;
+                {
+                    let world = state.world_view();
+                    iroha_core::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
+                        &world,
+                        &contract_address,
+                        code_hash,
+                        descriptor.kind,
+                    )
+                    .map_err(|error| conversion_error(error.to_string()))?;
+                }
+                let normalized_payload =
+                    normalize_contract_payload(descriptor, call.payload.as_ref())?;
+                let arguments = encode_contract_argument_record(
+                    program.prepared_contract(),
+                    entrypoint,
+                    normalized_payload.as_ref(),
+                )
+                .map_err(conversion_error)?;
+                let _ =
+                    bound_signed_contract_arguments(arguments.clone()).map_err(conversion_error)?;
+                let arguments_digest_hex = match arguments.as_deref() {
+                    Some(bytes) => contract_call_batch_digest(
+                        CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1,
+                        &[&[1], bytes],
+                    ),
+                    None => {
+                        contract_call_batch_digest(CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1, &[&[0]])
+                    }
+                };
+                let payload_digest_hex = contract_payload_digest_hex(normalized_payload.as_ref());
+                let contract_alias_literal = contract_alias.as_ref().map(ToString::to_string);
+                let contract_address_literal = contract_address.to_string();
+                let entrypoint = entrypoint.to_owned();
+
+                binding_items.push(ContractCallBatchBindingItemDto {
+                    index: response_index,
+                    kind: "contract_call".to_owned(),
+                    contract_alias: contract_alias_literal,
+                    contract_address: Some(contract_address_literal.clone()),
+                    dataspace: Some(dataspace),
+                    code_hash_hex: Some(code_hash_hex.clone()),
+                    abi_hash_hex: Some(abi_hash_hex.clone()),
+                    entrypoint: Some(entrypoint.clone()),
+                    payload_digest_hex: Some(payload_digest_hex),
+                    arguments_digest_hex: Some(arguments_digest_hex),
+                    wire_id: None,
+                    instruction_digest_hex: None,
+                });
+                prepared_entries.push(ContractCallBatchPreparedItemDto {
+                    index: response_index,
+                    kind: "contract_call".to_owned(),
+                    contract_address: Some(contract_address_literal),
+                    code_hash_hex: Some(code_hash_hex),
+                    abi_hash_hex: Some(abi_hash_hex),
+                    entrypoint: Some(entrypoint),
+                    arguments_b64: arguments
+                        .as_ref()
+                        .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)),
+                    wire_id: None,
+                    instruction_b64: None,
+                });
+            }
+            (None, Some(instruction_b64)) => {
+                let (_instruction, canonical, wire_id) =
+                    canonical_instruction_from_base64(&instruction_b64, index)?;
+                let instruction_digest_hex = contract_call_batch_digest(
+                    CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1,
+                    &[&canonical],
+                );
+                binding_items.push(ContractCallBatchBindingItemDto {
+                    index: response_index,
+                    kind: "instruction".to_owned(),
+                    contract_alias: None,
+                    contract_address: None,
+                    dataspace: None,
+                    code_hash_hex: None,
+                    abi_hash_hex: None,
+                    entrypoint: None,
+                    payload_digest_hex: None,
+                    arguments_digest_hex: None,
+                    wire_id: Some(wire_id.clone()),
+                    instruction_digest_hex: Some(instruction_digest_hex),
+                });
+                prepared_entries.push(ContractCallBatchPreparedItemDto {
+                    index: response_index,
+                    kind: "instruction".to_owned(),
+                    contract_address: None,
+                    code_hash_hex: None,
+                    abi_hash_hex: None,
+                    entrypoint: None,
+                    arguments_b64: None,
+                    wire_id: Some(wire_id),
+                    instruction_b64: Some(instruction_b64),
+                });
+            }
+            _ => {
+                return Err(conversion_error(format!(
+                    "batch entry {index} must provide exactly one of contract_call or instruction_b64"
+                )));
+            }
+        }
+    }
+
+    let binding = ContractCallBatchBindingDto {
+        version: CONTRACT_CALL_BATCH_BINDING_VERSION_V1,
+        items: binding_items,
+    };
+    let binding_value = norito::json::to_value(&binding).map_err(|error| {
+        conversion_error(format!(
+            "failed to materialize canonical contract batch binding: {error}"
+        ))
+    })?;
+    let binding_bytes = norito::json::to_vec(&binding_value).map_err(|error| {
+        conversion_error(format!(
+            "failed to encode canonical contract batch binding: {error}"
+        ))
+    })?;
+    let binding_digest_hex =
+        contract_call_batch_digest(CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1, &[&binding_bytes]);
+
+    Ok(ContractCallBatchPlanDto {
+        ok: true,
+        binding,
+        binding_digest_hex,
+        prepared_entries,
+    })
+}
 
 #[cfg(feature = "app_api")]
 fn append_contract_simulation_json_literal(
@@ -20271,7 +21289,11 @@ fn execute_contract_view(
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
-    host.set_axt_timing(query_view.nexus.axt);
+    host.hydrate_axt_state(&query_view)
+        .map_err(|error| ContractViewExecutionError {
+            message: format!("invalid AXT policy snapshot: {error}"),
+            vm_diagnostic: None,
+        })?;
     host.set_public_inputs_from_parameters(query_view.world.parameters());
     host.set_vrf_epoch_seeds_from_world(&query_view.world);
     host.set_query_state(&query_view);
@@ -20478,7 +21500,14 @@ fn execute_contract_call_simulation(
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
-    host.set_axt_timing(query_view.nexus.axt);
+    host.hydrate_axt_state(&query_view)
+        .map_err(|error| ContractCallSimulationError {
+            message: format!("invalid AXT policy snapshot: {error}"),
+            vm_diagnostic: None,
+            normalized_payload: normalized_payload.clone(),
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })?;
     host.set_public_inputs_from_parameters(query_view.world.parameters());
     host.set_vrf_epoch_seeds_from_world(&query_view.world);
     host.set_query_state(&query_view);
@@ -20622,6 +21651,48 @@ fn build_contract_call_metadata(
         }
     }
     metadata
+}
+
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_RESERVED_METADATA_PREFIXES: &[&str] = &["contract_", "validation_fee_"];
+
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_RESERVED_METADATA_KEYS: &[&str] = &[
+    "fee_sponsor",
+    "fee_sponsor_account",
+    "gas_asset_id",
+    "gas_limit",
+];
+
+#[cfg(feature = "app_api")]
+fn is_reserved_contract_call_metadata_key(key: &str) -> bool {
+    CONTRACT_CALL_RESERVED_METADATA_KEYS.contains(&key)
+        || CONTRACT_CALL_RESERVED_METADATA_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+}
+
+#[cfg(feature = "app_api")]
+fn merge_contract_call_metadata(
+    mut caller_metadata: Metadata,
+    system_metadata: Metadata,
+) -> Result<Metadata> {
+    for (key, _) in caller_metadata.iter() {
+        if is_reserved_contract_call_metadata_key(key.as_ref()) {
+            return Err(conversion_error(format!(
+                "contract call metadata key `{key}` is reserved"
+            )));
+        }
+    }
+    for (key, value) in system_metadata.iter() {
+        if caller_metadata.contains(key) {
+            return Err(conversion_error(format!(
+                "contract call metadata key `{key}` is reserved"
+            )));
+        }
+        caller_metadata.insert(key.clone(), value.clone());
+    }
+    Ok(caller_metadata)
 }
 
 #[cfg(feature = "app_api")]
@@ -25107,6 +26178,7 @@ mod multisig_selector_tests {
                 contract_alias: None,
                 entrypoint: "main".to_owned(),
                 payload: None,
+                metadata: Metadata::default(),
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
                 fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -25151,6 +26223,7 @@ mod multisig_selector_tests {
                 contract_alias: None,
                 entrypoint: "main".to_owned(),
                 payload: None,
+                metadata: Metadata::default(),
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
                 fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -25190,6 +26263,7 @@ mod multisig_selector_tests {
                 contract_alias: Some("boi-preauth-ret-01::is".parse().expect("contract alias")),
                 entrypoint: "main".to_owned(),
                 payload: None,
+                metadata: Metadata::default(),
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
                 fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -29456,6 +30530,7 @@ mod vk_record_input_tests {
             "groth16/bls12-377",
             "penumbra-masp",
             "monero-fcmp++",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints",
             "post-quantum-masp",
             "unknown/privacy/backend",
@@ -30145,6 +31220,12 @@ pub struct ContractCallDto {
     /// Optional Norito JSON payload forwarded to the contract.
     #[norito(default)]
     pub payload: Option<IrohaJson>,
+    /// Caller-owned business metadata authenticated by the transaction signature.
+    ///
+    /// Contract and validation-fee namespaces are consensus-owned and rejected
+    /// on collision.
+    #[norito(default)]
+    pub metadata: Metadata,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -30153,6 +31234,171 @@ pub struct ContractCallDto {
     pub transaction_ttl_ms: Option<u64>,
     /// Explicit payer selection, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// One manifest-resolved contract-call intent in an ordered batch.
+pub struct ContractCallBatchIntentDto {
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias.
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional exact address pin for alias resolution.
+    #[norito(default)]
+    pub expected_contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional exact lowercase code-hash pin.
+    #[norito(default)]
+    pub expected_code_hash_hex: Option<String>,
+    /// Optional exact lowercase ABI-hash pin.
+    #[norito(default)]
+    pub expected_abi_hash_hex: Option<String>,
+    /// Exact callable entrypoint selector.
+    pub entrypoint: String,
+    /// Optional payload normalized against the active manifest ABI.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// One ordered input to contract-call batch preparation.
+pub struct ContractCallBatchPrepareItemDto {
+    /// Contract-call intent. Exactly one input field is required.
+    #[norito(default)]
+    pub contract_call: Option<ContractCallBatchIntentDto>,
+    /// Canonical padded base64 of one exact framed native instruction.
+    #[norito(default)]
+    pub instruction_b64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request for canonical ordered contract-call batch preparation.
+pub struct ContractCallBatchPrepareDto {
+    /// Ordered call and native-instruction items.
+    pub entries: Vec<ContractCallBatchPrepareItemDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+/// Signature-bound public descriptor for one prepared batch item.
+pub struct ContractCallBatchBindingItemDto {
+    /// Zero-based position in the prepared executable.
+    pub index: u32,
+    /// Stable item discriminator: `contract_call` or `instruction`.
+    pub kind: String,
+    /// Resolved alias when the caller selected a contract by alias.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<String>,
+    /// Canonical resolved contract address.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    /// Resolved contract dataspace.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub dataspace: Option<String>,
+    /// Lowercase hexadecimal digest of the resolved contract code.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code_hash_hex: Option<String>,
+    /// Lowercase hexadecimal digest of the resolved contract ABI.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub abi_hash_hex: Option<String>,
+    /// Resolved contract entrypoint.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Lowercase hexadecimal digest of the exact executable call payload.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_digest_hex: Option<String>,
+    /// Lowercase hexadecimal digest of the canonical call arguments.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub arguments_digest_hex: Option<String>,
+    /// Stable instruction wire identifier for a native instruction item.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub wire_id: Option<String>,
+    /// Lowercase hexadecimal digest of the exact framed native instruction.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub instruction_digest_hex: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+/// Canonical manifest embedded in signed transaction metadata.
+pub struct ContractCallBatchBindingDto {
+    /// Binding schema version.
+    pub version: u16,
+    /// Ordered descriptors for every executable item.
+    pub items: Vec<ContractCallBatchBindingItemDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+/// One exact executable item returned by batch preparation.
+pub struct ContractCallBatchPreparedItemDto {
+    /// Zero-based position in the prepared executable.
+    pub index: u32,
+    /// Stable item discriminator: `contract_call` or `instruction`.
+    pub kind: String,
+    /// Canonical contract address for a contract-call item.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    /// Lowercase hexadecimal digest of the resolved contract code.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code_hash_hex: Option<String>,
+    /// Lowercase hexadecimal digest of the resolved contract ABI.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub abi_hash_hex: Option<String>,
+    /// Resolved contract entrypoint for a contract-call item.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Canonical padded base64 of the exact executable call arguments.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub arguments_b64: Option<String>,
+    /// Stable instruction wire identifier for a native instruction item.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub wire_id: Option<String>,
+    /// Canonical padded base64 of the exact framed native instruction.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub instruction_b64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+/// Canonical plan returned by contract-call batch preparation.
+pub struct ContractCallBatchPlanDto {
+    /// Whether canonical preparation completed successfully.
+    pub ok: bool,
+    /// Signature-bound ordered manifest.
+    pub binding: ContractCallBatchBindingDto,
+    /// Lowercase hexadecimal digest of the canonical binding.
+    pub binding_digest_hex: String,
+    /// Ordered exact executable items.
+    pub prepared_entries: Vec<ContractCallBatchPreparedItemDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -41289,9 +42535,9 @@ mod tx_query_filter_tests {
         });
 
         let result = if result_ok {
-            dm::TransactionResult(Ok(dm::DataTriggerSequence::default()))
+            dm::TransactionResult::new(Ok(dm::DataTriggerSequence::default()))
         } else {
-            dm::TransactionResult(Err(dm::TransactionRejectionReason::Validation(
+            dm::TransactionResult::new(Err(dm::TransactionRejectionReason::Validation(
                 dm::ValidationFail::InternalError("x".into()),
             )))
         };
@@ -41422,7 +42668,7 @@ mod tx_query_filter_tests {
 
         let entry_hash =
             GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
-        let result = dm::TransactionResult(Ok(dm::DataTriggerSequence::default()));
+        let result = dm::TransactionResult::new(Ok(dm::DataTriggerSequence::default()));
 
         iroha_data_model::query::CommittedTransaction {
             block_hash: dummy_block_hash(),
@@ -54044,11 +55290,10 @@ mod validation_fee_torii_ingress_tests {
         )
     }
 
-    fn payout_contract_address() -> ContractAddress {
-        let (deployer, _) = account(3, "derive validation-fee payout deployer");
+    fn payout_contract_address(user: &AccountId) -> ContractAddress {
         ContractAddress::derive(
             iroha_config::parameters::defaults::common::chain_discriminant(),
-            &deployer,
+            user,
             42,
             DataSpaceId::UNIVERSAL,
         )
@@ -54206,8 +55451,11 @@ mod validation_fee_torii_ingress_tests {
         (artifact, verified.manifest)
     }
 
-    fn payout_binding(fee_asset: &AssetDefinitionId) -> ValidationFeeTreasuryPayoutBindingV1 {
-        let contract_address = payout_contract_address();
+    fn payout_binding(
+        user: &AccountId,
+        fee_asset: &AssetDefinitionId,
+    ) -> ValidationFeeTreasuryPayoutBindingV1 {
+        let contract_address = payout_contract_address(user);
         let (contract_artifact, _) = payout_contract_artifact();
         ValidationFeeTreasuryPayoutBindingV1 {
             treasury_account_id: contract_address.subject_id(),
@@ -54286,7 +55534,7 @@ mod validation_fee_torii_ingress_tests {
     ) {
         let (user, user_key_pair) = account(1, "derive validation-fee Torii user key");
         let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
-        let treasury = payout_contract_address().subject_id();
+        let treasury = payout_contract_address(&user).subject_id();
         let fee_asset = fee_asset_definition_id();
         let state = State::new_for_testing(
             test_world(&user, &recipient, &treasury, &fee_asset),
@@ -54313,7 +55561,7 @@ mod validation_fee_torii_ingress_tests {
     ) {
         let (user, user_key_pair) = account(1, "derive validation-fee Torii user key");
         let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
-        let treasury = payout_contract_address().subject_id();
+        let treasury = payout_contract_address(&user).subject_id();
         let fee_asset = fee_asset_definition_id();
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(test_world(
             &user, &recipient, &treasury, &fee_asset,
@@ -54356,11 +55604,12 @@ mod validation_fee_torii_ingress_tests {
 
     fn validation_fee_policy(
         state: &Arc<State>,
+        user: &AccountId,
         fee_asset: AssetDefinitionId,
         treasury: AccountId,
         genesis_hash: [u8; 32],
     ) -> ValidationFeePolicyV1 {
-        let payout_binding = payout_binding(&fee_asset);
+        let payout_binding = payout_binding(user, &fee_asset);
         assert_eq!(
             treasury, payout_binding.treasury_account_id,
             "policy treasury must be the immutable payout contract subject"
@@ -54442,6 +55691,8 @@ mod validation_fee_torii_ingress_tests {
         roster_root.copy_from_slice(&roster_digest[..32]);
         let plain_electorate_rules = ValidationFeePlainElectorateRulesV1 {
             voting_asset_id: policy.ds_asset_id.clone(),
+            bond_escrow_account: state.gov.bond_escrow_account.clone(),
+            slash_receiver_account: state.gov.slash_receiver_account.clone(),
             ballot_amount: 150_u64.into(),
             ballot_duration_blocks: TEST_REFERENDUM_DURATION_BLOCKS,
             citizenship_amount: 10_000_u64.into(),
@@ -54599,7 +55850,7 @@ mod validation_fee_torii_ingress_tests {
         .expect("register signed payout-contract manifest");
         iroha_core::smartcontracts::code::activate_instance(
             authority,
-            payout_contract_address(),
+            payout_binding.contract_address,
             registered_code_hash,
             &mut stx,
         )
@@ -54790,7 +56041,6 @@ mod validation_fee_torii_ingress_tests {
             crate::utils::extractors::JsonOrNoritoVersioned(transaction),
         )
         .await
-        .expect("public transaction handler should accept a statelessly valid transaction")
         .into_response()
     }
 
@@ -54875,7 +56125,8 @@ mod validation_fee_torii_ingress_tests {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         let chain_id = Arc::new(state.chain_id.clone());
         let genesis_hash = commit_empty_genesis_like_block(&state);
-        let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
+        let policy =
+            validation_fee_policy(&state, &user, fee_asset.clone(), treasury, genesis_hash);
         install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
 
         let missing_fee_queue = queue();
@@ -54940,8 +56191,13 @@ mod validation_fee_torii_ingress_tests {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         let chain_id = Arc::new(state.chain_id.clone());
         let genesis_hash = commit_empty_genesis_like_block(&state);
-        let policy =
-            validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
+        let policy = validation_fee_policy(
+            &state,
+            &user,
+            fee_asset.clone(),
+            treasury.clone(),
+            genesis_hash,
+        );
         install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
         let (multisig, _) = account(4, "derive validation-fee multisig account");
 
@@ -55065,7 +56321,8 @@ mod validation_fee_torii_ingress_tests {
     ) {
         let (app, user, user_key_pair, recipient, treasury, fee_asset) = test_app_state();
         let genesis_hash = commit_empty_genesis_like_block(&app.state);
-        let policy = validation_fee_policy(&app.state, fee_asset.clone(), treasury, genesis_hash);
+        let policy =
+            validation_fee_policy(&app.state, &user, fee_asset.clone(), treasury, genesis_hash);
         install_validation_fee_policy(&app.state, &user, &user_key_pair, policy.clone());
         (app, user, user_key_pair, recipient, policy)
     }
@@ -55088,16 +56345,20 @@ mod validation_fee_torii_ingress_tests {
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(
+            app.queue.active_len(),
+            0,
+            "stateless admission must not enqueue before authenticated durable QueuePlan admission"
+        );
+        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        let expected_reject_code = "route_unavailable";
+        #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+        let expected_reject_code = "queue_plan_synced_transport_unavailable";
+        assert_eq!(
             response
                 .headers()
                 .get("x-iroha-reject-code")
                 .and_then(|value| value.to_str().ok()),
-            Some("route_unavailable")
-        );
-        assert_eq!(
-            app.queue.active_len(),
-            0,
-            "stateless admission must not enqueue before authenticated durable QueuePlan admission"
+            Some(expected_reject_code)
         );
     }
 
@@ -79702,6 +80963,7 @@ pub async fn handle_status(
     tail: Option<&str>,
     nexus_enabled: bool,
     nexus_routing_policy: Option<&ActualLaneRoutingPolicy>,
+    authoritative_block_height: Option<u64>,
     offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
     iroha_logger::debug!(
@@ -79717,7 +80979,7 @@ pub async fn handle_status(
     }
 
     let mut status = Status::from(telemetry.metrics().await);
-    normalize_status_block_visibility(&mut status);
+    normalize_status_block_visibility(&mut status, authoritative_block_height);
     if !nexus_enabled {
         status.strip_nexus();
     } else if let Some(policy) = nexus_routing_policy {
@@ -79782,15 +81044,22 @@ pub async fn handle_status(
 }
 
 #[cfg(feature = "telemetry")]
-fn normalize_status_block_visibility(status: &mut Status) {
-    let Some(sumeragi) = status.sumeragi.as_ref() else {
-        return;
-    };
-    let finality_height = sumeragi.commit_qc_height;
-    if finality_height <= status.blocks {
-        return;
-    }
-    status.blocks = finality_height;
+/// Anchor the public chain-height field to applied state.
+///
+/// The Prometheus block counter is populated by a lazy Kura scan and can trail
+/// while a peer applies a catch-up batch. Kura is also persisted before the WSV
+/// commit boundary, so that counter can briefly lead query-visible state. The
+/// state block-hash journal publishes query-visible committed height on the
+/// apply path, so `/status.blocks` must use that height exactly whenever the
+/// handler provides it. Direct callers without a state anchor retain the legacy
+/// monotonic CommitQC fallback.
+fn normalize_status_block_visibility(status: &mut Status, authoritative_block_height: Option<u64>) {
+    let telemetry_commit_height = status
+        .sumeragi
+        .as_ref()
+        .map_or(0, |sumeragi| sumeragi.commit_qc_height);
+    status.blocks =
+        authoritative_block_height.unwrap_or_else(|| status.blocks.max(telemetry_commit_height));
 }
 
 #[cfg(feature = "telemetry")]
@@ -79983,7 +81252,10 @@ fn is_nexus_status_segment(tail: &str) -> bool {
 
 #[cfg(all(test, feature = "telemetry"))]
 mod tests {
-    use std::{io::Cursor, sync::Mutex};
+    use std::{
+        io::Cursor,
+        sync::{Arc, Mutex},
+    };
 
     use http::StatusCode;
     use http_body_util::BodyExt;
@@ -80169,14 +81441,77 @@ mod tests {
         sumeragi.highest_qc_height = 4_275;
         sumeragi.locked_qc_height = 4_273;
 
-        super::normalize_status_block_visibility(&mut status);
+        super::normalize_status_block_visibility(&mut status, None);
 
         assert_eq!(status.blocks, 4_274);
         assert_eq!(status.blocks_non_empty, 0);
 
         status.blocks = 4_273;
-        super::normalize_status_block_visibility(&mut status);
+        super::normalize_status_block_visibility(&mut status, None);
         assert_eq!(status.blocks, 4_274);
+    }
+
+    #[test]
+    fn status_block_visibility_uses_authoritative_applied_height() {
+        let metrics = Metrics::default();
+        metrics.block_height.inc_by(4_193);
+        let mut status = Status::from(&metrics);
+        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
+        sumeragi.commit_qc_height = 4_275;
+
+        super::normalize_status_block_visibility(&mut status, Some(4_274));
+
+        assert_eq!(
+            status.blocks, 4_274,
+            "a CommitQC pending apply must not lead query-visible state"
+        );
+
+        let metrics = Metrics::default();
+        metrics.block_height.inc_by(4_275);
+        let mut status = Status::from(&metrics);
+        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
+        sumeragi.commit_qc_height = 4_276;
+
+        super::normalize_status_block_visibility(&mut status, Some(4_274));
+        assert_eq!(
+            status.blocks, 4_274,
+            "a Kura-backed telemetry scan pending WSV apply must not lead state"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_response_does_not_wait_for_lazy_block_counter_sync() {
+        let metrics = Arc::new(Metrics::default());
+        metrics.block_height.inc_by(4_193);
+        let telemetry = MaybeTelemetry::from_profile(
+            Some(Telemetry::new(metrics, true)),
+            TelemetryProfile::Full,
+        );
+
+        let response = super::handle_status(
+            &telemetry,
+            Some(axum::http::HeaderValue::from_static("application/json")),
+            None,
+            true,
+            None,
+            Some(4_274),
+            None,
+        )
+        .await
+        .expect("status succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status body")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status payload");
+
+        assert_eq!(
+            payload.get("blocks").and_then(norito::json::Value::as_u64),
+            Some(4_274)
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -80205,7 +81540,7 @@ mod tests {
         });
 
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None)
+        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None, None)
             .await
             .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -80265,6 +81600,7 @@ mod tests {
             None,
             true,
             Some(&policy),
+            None,
             None,
         )
         .await
@@ -80351,6 +81687,7 @@ mod tests {
             None,
             true,
             None,
+            None,
             Some(offline.clone()),
         )
         .await
@@ -80383,6 +81720,7 @@ mod tests {
             Some("offline/assets/0/asset_definition_id"),
             true,
             None,
+            None,
             Some(offline),
         )
         .await
@@ -80402,10 +81740,17 @@ mod tests {
     #[tokio::test]
     async fn status_tail_rejects_nexus_fields_when_disabled() {
         let telemetry = MaybeTelemetry::for_tests();
-        let err =
-            super::handle_status(&telemetry, None, Some("teu_lane_commit"), false, None, None)
-                .await
-                .expect_err("lane-specific tails must be rejected when nexus is disabled");
+        let err = super::handle_status(
+            &telemetry,
+            None,
+            Some("teu_lane_commit"),
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("lane-specific tails must be rejected when nexus is disabled");
         assert!(matches!(err, Error::StatusSegmentNotFound(_)));
     }
 
@@ -80674,6 +82019,7 @@ mod tests {
             )),
             None,
             true,
+            None,
             None,
             None,
         )

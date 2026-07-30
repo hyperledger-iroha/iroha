@@ -235,6 +235,16 @@ impl From<crate::isi::privacy::PublishPrivacyRootV1> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::BootstrapPrivacyOrchardPoolV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::BootstrapPrivacyOrchardPoolV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1> for InstructionBox {
     fn from(i: crate::isi::privacy::BootstrapPrivacyPgcAccountsV1) -> Self {
         InstructionBox(Box::new(i))
@@ -257,6 +267,36 @@ impl From<crate::isi::privacy::RotatePrivacyZkAcePolicyV1> for InstructionBox {
 }
 impl From<crate::isi::privacy::RevokePrivacyZkAcePolicyV1> for InstructionBox {
     fn from(i: crate::isi::privacy::RevokePrivacyZkAcePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RegisterPrivacyVegaIssuerV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyVegaIssuerV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyVegaIssuerV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyVegaIssuerV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyVegaIssuerV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyVegaIssuerV1) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -287,6 +327,21 @@ impl From<crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1> for Instr
 }
 impl From<crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1> for InstructionBox {
     fn from(i: crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RegisterPrivacyZkX509CrlV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509CrlV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyZkX509CrlV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyZkX509CrlV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyZkX509CrlV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyZkX509CrlV1) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -369,26 +424,6 @@ impl From<crate::isi::zk::CancelConfidentialPolicyTransition> for InstructionBox
 }
 impl From<crate::isi::zk::Shield> for InstructionBox {
     fn from(i: crate::isi::zk::Shield) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::RegisterZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RegisterZkAceIdentityCommitment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::RotateZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RotateZkAceIdentityCommitment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::RevokeZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RevokeZkAceIdentityCommitment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::SubmitZkAceAuthorizedTransfer> for InstructionBox {
-    fn from(i: crate::isi::zk::SubmitZkAceAuthorizedTransfer) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -982,6 +1017,21 @@ impl From<crate::isi::escrow::OpenAssetLock> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::escrow::OpenConditionalEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenConditionalEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::AttestEscrowCondition> for InstructionBox {
+    fn from(i: crate::isi::escrow::AttestEscrowCondition) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ExpireConditionalEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::ExpireConditionalEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::escrow::DrawdownAssetLock> for InstructionBox {
     fn from(i: crate::isi::escrow::DrawdownAssetLock) -> Self {
         InstructionBox(Box::new(i))
@@ -1447,24 +1497,6 @@ impl From<crate::isi::offline::RegisterOfflineDeviceAttestation> for Instruction
 
 impl From<crate::isi::offline::SetOfflineDeviceAttestationPolicy> for InstructionBox {
     fn from(i: crate::isi::offline::SetOfflineDeviceAttestationPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::IssueOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::IssueOfflineNote) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::RedeemOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemOfflineNote) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::AuditOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::AuditOfflineNote) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2251,7 +2283,8 @@ impl norito::json::FastJsonWrite for InstructionBox {
     fn write_json(&self, out: &mut String) {
         // JSON uses base64 of the canonical Norito-framed payload so clients can
         // round-trip without guessing decode flags.
-        let bytes = norito::to_bytes(self).expect("InstructionBox should Norito-frame");
+        let bytes =
+            norito::encode_canonical(self).expect("InstructionBox should canonically Norito-frame");
         let encoded = STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
     }
@@ -2264,9 +2297,7 @@ fn instruction_box_from_base64_literal(
     let bytes = STANDARD
         .decode(encoded.as_bytes())
         .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-    let archived = norito::from_bytes::<InstructionBox>(&bytes)
-        .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-    norito::core::NoritoDeserialize::try_deserialize(archived)
+    norito::decode_canonical::<InstructionBox>(&bytes)
         .map_err(|err| norito::json::Error::Message(err.to_string()))
 }
 
@@ -3628,10 +3659,47 @@ pub mod error {
             InvalidParameter(#[source] InvalidParameterError),
             /// Account admission rejected
             AccountAdmission(#[source] AccountAdmissionError),
+            /// Asset transfer admission rejected
+            AssetTransferAdmission(#[source] AssetTransferAdmissionError),
             /// Iroha invariant violation: {0}
             ///
             /// i.e. you can't burn last key
             InvariantViolation(Box<str>),
+        }
+
+        /// Typed asset-transfer policy failure.
+        ///
+        /// The variant is the stable machine classification. Human-readable
+        /// detail is deliberately carried separately so receipt codes never
+        /// depend on matching display text.
+        #[derive(
+            Debug,
+            displaydoc::Display,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            IntoSchema,
+        )]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[derive(thiserror::Error)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub enum AssetTransferAdmissionError {
+            /// HoldingLimitExceeded: {0}
+            HoldingLimitExceeded(Box<str>),
+            /// Outbound transfer is frozen: {0}
+            Frozen(Box<str>),
+            /// Account is blacklisted for outbound transfer: {0}
+            Blacklisted(Box<str>),
+            /// Transfer policy rejected the operation: {0}
+            PolicyRejected(Box<str>),
         }
 
         /// Quota scope used by [`AccountAdmissionError::QuotaExceeded`].
@@ -4179,10 +4247,11 @@ pub mod prelude {
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },
         escrow::{
-            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
-            CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
-            MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent, OpenAnonymousAssetEscrow,
-            OpenAnonymousEscrowDispute, OpenAssetEscrow, OpenAssetLock, OpenEscrowDispute,
+            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, AttestEscrowCondition,
+            CancelAnonymousAssetEscrow, CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock,
+            ExpireAssetLock, ExpireConditionalEscrow, MarkAnonymousEscrowPaymentSent,
+            MarkEscrowPaymentSent, OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute,
+            OpenAssetEscrow, OpenAssetLock, OpenConditionalEscrow, OpenEscrowDispute,
             ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow, ResolveAnonymousEscrowDispute,
             ResolveEscrowDispute,
         },
@@ -4192,14 +4261,19 @@ pub mod prelude {
         ministry::SubmitAgendaProposal,
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         privacy::{
-            BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
+            BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
+            BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
+            PublishPrivacyRootV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
             RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
-            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
+            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyBootleLanternIssuerPolicyV1,
             RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
-            RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyZkAcePolicyV1,
-            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509TrustAnchorV1,
-            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
-            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
+            RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
+            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyZkAcePolicyV1,
+            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
+            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
+            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
+            TransitionPrivacyProtocolLifecycleV1,
         },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
@@ -4263,10 +4337,6 @@ pub mod prelude {
             SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
-        zk::{
-            RegisterZkAceIdentityCommitment, RevokeZkAceIdentityCommitment,
-            RotateZkAceIdentityCommitment, SubmitZkAceAuthorizedTransfer,
-        },
     };
 }
 
@@ -4367,6 +4437,38 @@ mod tests {
         // Verify type id and payload equivalence without relying on downcast
         assert_eq!(Instruction::id(&*decoded), name);
         assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn instruction_box_json_is_canonical_and_ambient_independent() {
+        let registry = InstructionRegistry::new().register_slice::<Log>();
+        let _registry = RegistryGuard::set(registry);
+        let instruction = InstructionBox::from(Log::new(
+            Level::INFO,
+            "canonical JSON instruction".to_owned(),
+        ));
+        let canonical_json =
+            norito::json::to_json(&instruction).expect("encode canonical InstructionBox JSON");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                norito::json::to_json(&instruction)
+                    .expect("encode InstructionBox JSON under alternate ambient layout"),
+                canonical_json
+            );
+        }
+
+        let alternate_frame = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&instruction).expect("encode alternate-layout InstructionBox")
+        };
+        let alternate_json = norito::json::to_json(&STANDARD.encode(alternate_frame))
+            .expect("encode alternate frame as JSON string");
+        norito::json::from_json::<InstructionBox>(&alternate_json)
+            .expect_err("alternate-layout InstructionBox JSON must be rejected");
     }
 
     #[test]

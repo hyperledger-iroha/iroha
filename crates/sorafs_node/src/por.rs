@@ -1397,6 +1397,19 @@ pub(crate) struct PorTrackerCheckpointV1 {
     replay_archive_receipt: Option<PorFinalizedReplayArchiveReceiptV1>,
 }
 
+#[cfg(test)]
+impl PorTrackerCheckpointV1 {
+    pub(crate) fn has_no_finalized_challenges(&self) -> bool {
+        self.finalized.is_empty()
+    }
+
+    pub(crate) const fn replay_archive_receipt(
+        &self,
+    ) -> Option<PorFinalizedReplayArchiveReceiptV1> {
+        self.replay_archive_receipt
+    }
+}
+
 /// One canonical, replay-stable PoR terminal awaiting reputation admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PorReputationTerminalWorkV1 {

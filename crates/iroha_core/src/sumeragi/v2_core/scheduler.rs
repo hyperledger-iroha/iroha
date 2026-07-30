@@ -6,8 +6,7 @@
 //! refinement.
 
 use super::refinement::{
-    ProductionSchedulerTraceProjection,
-    production_scheduler_trace_refines_protected_ownership_kernel,
+    ProductionSchedulerTraceProjection, check_production_scheduler_transition,
 };
 
 // Constructor expressions are arguments because the ordinary Rust and Verus
@@ -103,9 +102,9 @@ impl ScheduleState {
             },
             fifo_owed_after: next.fifo_owed,
         };
-        if !production_scheduler_trace_refines_protected_ownership_kernel(scheduler_trace) {
-            panic!("Sumeragi v2 scheduler lost the selected progress owner");
-        }
+        let checked_transition = check_production_scheduler_transition(scheduler_trace)
+            .expect("Sumeragi v2 scheduler lost the selected progress owner");
+        let _authorized_transition = checked_transition.into_projection();
         (selected, next)
     }
 }

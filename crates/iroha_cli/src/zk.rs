@@ -2252,6 +2252,7 @@ mod tests {
         for label in [
             "halo2/ipa/orchard",
             "groth16/bls12-377",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints",
             "unknown/privacy/backend",
         ] {

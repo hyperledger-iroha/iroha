@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_SCRIPT="${SCRIPT_DIR}/check_mcp_rollout.sh"
+SOURCE_CONFIG="${SCRIPT_DIR}/config.toml"
 export OFFLINE_ASSET_DEFINITION_ID="6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 
 cleanup_paths=()
@@ -25,6 +26,7 @@ make_fake_repo() {
     "${root}/mockbin" \
     "${root}/state"
   cp "$SOURCE_SCRIPT" "${root}/configs/soranexus/taira/check_mcp_rollout.real.sh"
+  cp "$SOURCE_CONFIG" "${root}/configs/soranexus/taira/config.toml"
   cat >"${root}/configs/soranexus/taira/check_mcp_rollout.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -168,18 +170,20 @@ PY
 import sys
 
 output_path = None
+chain_id = "fc56984b-2be7-431d-840e-21514d1883f0"
 args = sys.argv[1:]
 for index, value in enumerate(args):
     if value == "--output-config" and index + 1 < len(args):
         output_path = args[index + 1]
-        break
+    elif value == "--chain-id" and index + 1 < len(args):
+        chain_id = args[index + 1]
 
 if output_path is None:
     raise SystemExit("missing --output-config")
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
-        'chain = "fc56984b-2be7-431d-840e-21514d1883f0"\n'
+        f'chain = "{chain_id}"\n'
         '\n'
         '[account]\n'
         'domain = "universal"\n'
@@ -454,7 +458,7 @@ elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$pa
   status="202"
   body=''
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"tools/list"'* ]]; then
-  body='{"result":{"tools":[{"name":"iroha.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.time.now","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
+  body='{"result":{"tools":[{"name":"iroha.health","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
 elif [[ "$method" == "GET" && "$url" == https://taira.sora.org/v1/offline/readiness\?asset_definition_id=* ]]; then
   body="$(cat "${MOCK_STATE_DIR:?}/offline-readiness.json")"
   if [[ "$scenario" == "offline_not_ready" ]]; then
@@ -505,6 +509,14 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/stat
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
+elif [[ "$method" == "GET" && "$url" == */v1/time/now ]]; then
+  if [[ "$scenario" == "time_unhealthy" ]]; then
+    body='{"now":1785168000000,"offset_ms":0,"confidence_ms":0,"sample_count":0,"peer_count":3,"enforcement_mode":"reject","fallback":true,"health":{"healthy":false,"min_samples_ok":false,"offset_ok":true,"confidence_ok":true}}'
+  elif [[ "$scenario" == "time_warn_enforcement" ]]; then
+    body='{"now":1785168000000,"offset_ms":1,"confidence_ms":2,"sample_count":3,"peer_count":3,"enforcement_mode":"warn","fallback":false,"health":{"healthy":true,"min_samples_ok":true,"offset_ok":true,"confidence_ok":true}}'
+  else
+    body='{"now":1785168000000,"offset_ms":1,"confidence_ms":2,"sample_count":3,"peer_count":3,"enforcement_mode":"reject","fallback":false,"health":{"healthy":true,"min_samples_ok":true,"offset_ok":true,"confidence_ok":true}}'
+  fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/registry" ]]; then
   body='{"version":1,"lanes":[]}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/zk/proofs/count" ]]; then
@@ -747,6 +759,8 @@ run_case offline_asset_mismatch 'offline readiness gate failed: asset_definition
 run_case offline_scale_mismatch 'offline readiness gate failed: asset_scale is not exact Digital Shekel scale 2'
 run_case offline_release_mismatch 'offline readiness gate failed: live release identity does not match the external operator-reviewed identity'
 run_case offline_verifier_mismatch 'offline readiness gate failed: live release identity does not match the external operator-reviewed identity'
+run_case time_unhealthy '/v1/time/now is not release-ready: sample_count must be a positive integer'
+run_case time_warn_enforcement '/v1/time/now is not release-ready: fail-closed time enforcement is not active'
 run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
 run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
 run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not exactly match release commit 490dacc287f00d490dacc287f00d490dacc287f0' '' '490dacc'
@@ -766,10 +780,56 @@ run_case fleet_release_changes_between_samples 'live release identity does not m
 run_case fleet_stale_offline_progress 'validator fleet offline readiness did not advance a common evaluated block'
 run_invalid_canary_identity_case \
   archived-chain \
-  'write canary config must target the public Sumeragi-v2 Taira chain'
+  'write canary config must target the expected Taira chain'
 run_invalid_canary_identity_case \
   wrong-discriminant \
   'write canary config must use Taira chain discriminant 369'
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+archived_chain_id="809574f5-fee7-5e69-bfcf-52451e42d50f"
+"${root}/scripts/taira_bootstrap_canary.py" \
+  --chain-id "$archived_chain_id" \
+  --output-config "${root}/archived-canary.toml"
+if ! PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="failed_asset_then_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
+    POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --expected-chain-id "$archived_chain_id" \
+      --write-config "${root}/archived-canary.toml" \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/archived-chain-override-output.log" 2>&1; then
+  echo "explicit archived-chain override case unexpectedly failed" >&2
+  sed -n '1,200p' "${root}/archived-chain-override-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'Taira MCP rollout checks passed.' \
+  "${root}/archived-chain-override-output.log"
+test -f "${root}/state/faucet_seen"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --expected-chain-id not-a-uuid \
+      --skip-write-canary \
+      >"${root}/invalid-chain-id-output.log" 2>&1; then
+  echo "invalid expected chain ID case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/invalid-chain-id-output.log" >&2 || true
+  exit 1
+fi
+grep -q -- '--expected-chain-id must be one canonical UUID' \
+  "${root}/invalid-chain-id-output.log"
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

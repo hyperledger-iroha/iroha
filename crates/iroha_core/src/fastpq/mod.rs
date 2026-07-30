@@ -913,6 +913,8 @@ fn attach_transcript_metadata(
     if transcripts.is_empty() {
         return Ok(());
     }
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let encoded = to_bytes(&transcripts)?;
     batch
         .metadata

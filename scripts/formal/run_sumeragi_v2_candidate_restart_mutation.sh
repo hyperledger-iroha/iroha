@@ -113,6 +113,9 @@ run_mutant identity-payload "$IDENTITY_MODULE" \
   candidate_identity_changed_payload_bug.cfg ChangedPayloadNotCoalesced
 run_mutant identity-evidence "$IDENTITY_MODULE" \
   candidate_identity_changed_evidence_bug.cfg ChangedEvidenceNotCoalesced
+run_mutant identity-causal-origin "$IDENTITY_MODULE" \
+  candidate_identity_changed_causal_origin_bug.cfg \
+  ChangedCausalOriginNotCoalesced
 run_mutant identity-work "$IDENTITY_MODULE" \
   candidate_identity_changed_work_bug.cfg ChangedWorkNotCoalesced
 run_mutant identity-body "$IDENTITY_MODULE" \

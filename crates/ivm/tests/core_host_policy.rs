@@ -5,7 +5,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use iroha_data_model::{
     nexus as model,
-    nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
+    nexus::{
+        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
+        DataSpaceId, LaneId,
+    },
     prelude::Quantity,
 };
 use ivm::{
@@ -27,6 +30,22 @@ fn axt_gas(payload_len: usize) -> u64 {
 
 fn axt_commit_gas(touches: usize, proofs: usize, handles: usize) -> u64 {
     axt_gas(touches.saturating_add(proofs).saturating_add(handles))
+}
+
+#[test]
+fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
+    let snapshot = AxtPolicySnapshot {
+        version: 1,
+        entries: Vec::new(),
+    };
+
+    assert!(matches!(
+        CoreHost::new().with_axt_policy_snapshot(&snapshot),
+        Err(AxtPolicySnapshotValidationError::VersionMismatch {
+            expected: 0,
+            actual: 1,
+        })
+    ));
 }
 
 fn use_handle_gas(
@@ -195,7 +214,9 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
     let dsid = DataSpaceId::new(7);
     let manifest_root = [0x11; 32];
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 1);
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
 
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
@@ -270,7 +291,9 @@ fn core_host_rejects_duplicate_touch() {
     let mut vm = IVM::new(1_000_000);
     let dsid = DataSpaceId::new(8);
     let snapshot = make_policy_snapshot(dsid, [0x12; 32], LaneId::new(0), 1, 1, 1);
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
 
     let descriptor = make_descriptor(dsid);
     let desc_ptr = store_tlv(
@@ -314,7 +337,9 @@ fn core_host_rejects_zero_manifest_root_ds_proof() {
     let mut vm = IVM::new(1_000_000);
     let dsid = DataSpaceId::new(9);
     let snapshot = make_policy_snapshot(dsid, [0; 32], LaneId::new(0), 1, 1, 2);
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
 
     let descriptor = make_descriptor(dsid);
     let desc_ptr = store_tlv(
@@ -546,7 +571,9 @@ fn run_policy_snapshot_case(
         .iter()
         .find(|entry| entry.dsid == dsid)
         .map(|entry| entry.policy);
-    let mut host = CoreHost::new().with_axt_policy_snapshot(snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(snapshot)
+        .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
 
     let desc_ptr = store_tlv(
@@ -821,7 +848,9 @@ fn core_host_enforces_policy_snapshot() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
 
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
@@ -910,7 +939,9 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
     let dsid = DataSpaceId::new(22);
     let manifest_root = [0xAB; 32];
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 4);
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
 
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
@@ -983,7 +1014,8 @@ fn core_host_rejects_proof_within_skew_without_verifier() {
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 5);
     let mut host = CoreHost::new()
         .with_axt_timing(NonZeroU64::new(1).expect("slot length"), 1)
-        .with_axt_policy_snapshot(&snapshot);
+        .and_then(|host| host.with_axt_policy_snapshot(&snapshot))
+        .expect("canonical policy snapshot");
 
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
@@ -1025,7 +1057,9 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
     let dsid = DataSpaceId::new(24);
     let manifest_root = [0xAD; 32];
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 0);
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
 
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
@@ -1097,7 +1131,8 @@ fn exercise_fixture_handle(
     let max_clock_skew_ms = handle.max_clock_skew_ms.map(u64::from).unwrap_or(0);
     let mut host = CoreHost::new()
         .with_axt_timing(slot_length_ms, max_clock_skew_ms)
-        .with_axt_policy_snapshot(snapshot);
+        .and_then(|host| host.with_axt_policy_snapshot(snapshot))
+        .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
 
     let desc_ptr = store_tlv(
@@ -1175,6 +1210,7 @@ fn core_host_enforces_fixture_snapshot_fields() {
 
         use axt::AxtPolicy;
         let dsid = base_intent.asset_dsid;
+        axt::validate_descriptor(&descriptor).expect("fixture descriptor must be canonical");
         let binding = axt::compute_binding(&descriptor).expect("binding");
         assert_eq!(
             base_handle
@@ -1205,7 +1241,8 @@ fn core_host_enforces_fixture_snapshot_fields() {
             &snapshot,
             NonZeroU64::new(1).expect("non-zero slot length"),
             max_clock_skew_ms,
-        );
+        )
+        .expect("canonical policy snapshot");
         policy
             .allow_handle(&usage)
             .expect("policy should allow fixture handle");
@@ -1214,10 +1251,11 @@ fn core_host_enforces_fixture_snapshot_fields() {
             .expect("state should accept fixture handle");
     }
 
-    assert!(matches!(
-        exercise_fixture_handle(&descriptor, &snapshot, &base_handle, &base_intent),
-        Ok(gas) if gas > 0
-    ));
+    let base_result = exercise_fixture_handle(&descriptor, &snapshot, &base_handle, &base_intent);
+    assert!(
+        matches!(&base_result, Ok(gas) if *gas > 0),
+        "fixture handle must be accepted, got {base_result:?}"
+    );
 
     let mut wrong_lane = base_handle.clone();
     wrong_lane.target_lane = LaneId::new(policy_entry.policy.target_lane.as_u32() + 1);
@@ -1268,7 +1306,9 @@ fn core_host_caches_fail_closed_ds_proof_per_slot() {
     let descriptor = make_descriptor(dsid);
     let manifest_root = [0xAB; 32];
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(4), 1, 1, 10);
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
 
     let desc_ptr = store_tlv(
@@ -1328,6 +1368,17 @@ fn core_host_caches_fail_closed_ds_proof_per_slot() {
         "cached manifest root should match policy"
     );
     assert!(host.axt_recorded_proof_payload(dsid).is_none());
+
+    let host = host
+        .with_axt_timing(
+            std::num::NonZeroU64::new(2).expect("non-zero slot length"),
+            1,
+        )
+        .expect("cached canonical policy snapshot");
+    assert!(
+        host.axt_cached_proof_status(dsid).is_none(),
+        "timing changes must invalidate proof decisions made under the old window"
+    );
 }
 
 #[test]
@@ -1336,7 +1387,9 @@ fn core_host_caches_rejected_proof_per_slot() {
     let descriptor = make_descriptor(dsid);
     let manifest_root = [0xCD; 32];
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(4), 1, 1, 8);
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
 
     let desc_ptr = store_tlv(
@@ -1443,7 +1496,9 @@ fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
         entries,
     };
 
-    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new()
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
 
     let desc_ptr = store_tlv(

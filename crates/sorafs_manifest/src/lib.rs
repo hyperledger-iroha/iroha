@@ -495,7 +495,8 @@ pub use validation::{
     MAX_MANIFEST_ALIAS_CLAIMS, MAX_MANIFEST_ALIAS_PROOF_BYTES, MAX_MANIFEST_COUNCIL_SIGNATURES,
     MAX_MANIFEST_ENCODED_BYTES, MAX_MANIFEST_METADATA_BYTES, MAX_MANIFEST_METADATA_ENTRIES,
     MAX_MANIFEST_ROOT_CID_BYTES, ManifestDecodeError, ManifestValidationError,
-    PinPolicyConstraints, decode_manifest_v1_canonical, validate_chunker_handle, validate_manifest,
+    PinPolicyConstraints, decode_manifest_v1_base64_canonical, decode_manifest_v1_canonical,
+    encode_manifest_v1_base64_canonical, validate_chunker_handle, validate_manifest,
     validate_manifest_root_cid, validate_pin_policy, validate_registered_chunker_profile,
 };
 
@@ -545,8 +546,14 @@ pub struct ManifestV1 {
     pub chunk_digest_sha3_256: [u8; 32],
     /// Merkle root of the Proof-of-Retrievability tree for this exact payload.
     pub por_root: [u8; 32],
+    /// Total bytes in the exact unchunked payload represented by the DAG.
     pub content_length: u64,
+    /// BLAKE3-256 of the entire canonical CARv2 archive.
+    ///
+    /// The digest covers the pragma, CARv2 header, embedded CARv1 payload, and
+    /// MultihashIndexSorted index. It is never the raw payload digest.
     pub car_digest: [u8; 32],
+    /// Complete canonical CARv2 archive length in bytes.
     pub car_size: u64,
     pub pin_policy: PinPolicy,
     pub governance: GovernanceProofs,
@@ -643,18 +650,24 @@ impl ManifestBuilder {
         self
     }
 
+    /// Set the exact unchunked payload length represented by the DAG.
     #[must_use]
     pub fn content_length(mut self, len: u64) -> Self {
         self.content_length = Some(len);
         self
     }
 
+    /// Set the BLAKE3-256 digest of the entire canonical CARv2 archive.
+    ///
+    /// This commits the pragma, CARv2 header, embedded CARv1 payload, and
+    /// MultihashIndexSorted index. Callers must not pass the raw payload digest.
     #[must_use]
     pub fn car_digest(mut self, digest: [u8; 32]) -> Self {
         self.car_digest = Some(digest);
         self
     }
 
+    /// Set the complete canonical CARv2 archive length in bytes.
     #[must_use]
     pub fn car_size(mut self, size: u64) -> Self {
         self.car_size = Some(size);
@@ -1048,6 +1061,28 @@ mod tests {
         assert_ne!(
             manifest.digest().expect("original digest"),
             substituted.digest().expect("substituted digest")
+        );
+    }
+
+    #[test]
+    fn digest_binds_the_complete_car_archive_commitments() {
+        let manifest = sample_manifest();
+        let mut substituted_digest = manifest.clone();
+        substituted_digest.car_digest[0] ^= 1;
+        assert_ne!(
+            manifest.digest().expect("original digest"),
+            substituted_digest
+                .digest()
+                .expect("substituted CAR archive digest")
+        );
+
+        let mut substituted_size = manifest.clone();
+        substituted_size.car_size = substituted_size.car_size.saturating_add(1);
+        assert_ne!(
+            manifest.digest().expect("original digest"),
+            substituted_size
+                .digest()
+                .expect("substituted CAR archive size")
         );
     }
 

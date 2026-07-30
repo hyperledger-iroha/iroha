@@ -19,18 +19,25 @@ def test_hedging_plan_uses_the_current_bridge_abi() -> None:
     plan = read("docs/source/sorafs_hedging_plan.md")
     bridge = read("crates/connect_norito_bridge/src/lib.rs")
     header = read("crates/connect_norito_bridge/include/connect_norito_bridge.h")
+    privacy = read("crates/iroha_data_model/src/privacy.rs")
 
     source_match = re.search(
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*(\d+)",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*"
+        r"PRIVACY_BRIDGE_ABI_VERSION_V1",
         bridge,
+    )
+    canonical_match = re.search(
+        r"PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*(\d+)",
+        privacy,
     )
     header_match = re.search(
         r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+(\d+)",
         header,
     )
     assert source_match is not None
+    assert canonical_match is not None
     assert header_match is not None
-    assert source_match.group(1) == header_match.group(1) == "21"
+    assert canonical_match.group(1) == header_match.group(1) == "21"
     assert "bridge source ABI is now 12" not in plan
     assert "sole first-release ABI, version 21" in plan
 

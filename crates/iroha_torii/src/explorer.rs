@@ -2367,7 +2367,7 @@ mod tests {
         )
         .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
         .sign(ALICE_KEYPAIR.private_key());
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let dto = transaction_summary_dto(&tx, 5, &result);
         assert_eq!(dto.block, 5);
         assert_eq!(dto.authority, ALICE_ID.to_string());
@@ -2395,7 +2395,7 @@ mod tests {
             .set_nonce(NonZeroU32::new(7).expect("nonce"));
         let tx = builder.sign(ALICE_KEYPAIR.private_key());
         let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
-        let result = TransactionResult(Err(rejection));
+        let result = TransactionResult::new(Err(rejection));
         let dto = transaction_detail_dto(&tx, 12, &result);
         assert_eq!(dto.block, 12);
         assert_eq!(dto.status, "Rejected");
@@ -2450,7 +2450,7 @@ mod tests {
                 ),
             }),
         ));
-        let result = TransactionResult(Err(rejection));
+        let result = TransactionResult::new(Err(rejection));
         let dto = transaction_detail_dto(&tx, 21, &result);
 
         let message = dto
@@ -2491,7 +2491,7 @@ mod tests {
             ),
         }))
         .sign(ALICE_KEYPAIR.private_key());
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let dto = transaction_detail_dto(&tx, 9, &result);
 
         assert_eq!(dto.executable, "ContractCall");
@@ -2872,7 +2872,7 @@ mod tests {
         )
         .with_instructions(core::iter::once(instruction.clone()))
         .sign(ALICE_KEYPAIR.private_key());
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let dto = instruction_dto_with_kind(&tx, 7, &result, &instruction, kind, 0);
         assert_eq!(dto.kind, "AddSignatory");
     }
@@ -3017,7 +3017,7 @@ mod tests {
         )
         .with_instructions(core::iter::once(instruction.clone()))
         .sign(ALICE_KEYPAIR.private_key());
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let dto = instruction_dto_with_kind(
             &tx,
             5,

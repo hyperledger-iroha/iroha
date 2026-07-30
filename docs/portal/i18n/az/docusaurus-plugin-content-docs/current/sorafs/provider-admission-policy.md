@@ -41,7 +41,7 @@ izlənilə bilən mühəndislik vəzifələri.
 ## Qəbul İş axını
 
 1. **Təklifin yaradılması**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` əlavə edin
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …` əlavə edin
      `ProviderAdmissionProposalV1` + attestasiya paketi istehsal edir.
    - Təsdiqləmə: tələb olunan sahələri təmin edin, pay > 0, `profile_id`-də kanonik chunker sapı.
 2. **İdarəetmə təsdiqi**
@@ -70,7 +70,7 @@ Avtomatlaşdırmaya uyğunluq üçün `--council-signature-file` ilə `--council
 
 ### CLI Referansı
 
-Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` vasitəsilə yerinə yetirin.
+Hər əmri `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …` vasitəsilə yerinə yetirin.
 
 - `proposal`
   - Tələb olunan bayraqlar: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -117,7 +117,7 @@ Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provid
 1. `provider-admission proposal` və `provider-admission sign` ilə davamçı təklif/reklam cütünü yaradın, `--retention-epoch` artırın və tələb olunduqda pay/son nöqtələri yeniləyin.
 2. İcra etmək  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provid
 #### Təcili ləğv
 1. Təhlükəli zərfi müəyyən edin və geri götürün:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

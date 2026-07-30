@@ -2,7 +2,6 @@ package org.hyperledger.iroha.android.offline;
 
 /** Stable application profile identifiers carried by IPM1. */
 public enum IrohaPeerPayloadProfile {
-  OFFLINE_NOTE(1, 1),
   KAGEMUSHA_RECURSIVE_SPEND(2, 0x0102);
 
   private final int code;

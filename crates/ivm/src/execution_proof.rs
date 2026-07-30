@@ -74,7 +74,7 @@ impl ExecutionProof {
     /// through the canonical encoder keeps gas preparation coupled to the
     /// schema instead of duplicating a numeric ceiling that can drift.
     pub(crate) fn encoded_len_v1() -> Result<usize, norito::Error> {
-        norito::to_bytes(&Self::default()).map(|bytes| bytes.len())
+        norito::encode_canonical(&Self::default()).map(|bytes| bytes.len())
     }
 }
 
@@ -116,13 +116,23 @@ mod tests {
 
         let expected = ExecutionProof::encoded_len_v1().expect("fixed proof schema encodes");
         assert_eq!(
-            norito::to_bytes(&empty).expect("encode empty").len(),
+            norito::encode_canonical(&empty)
+                .expect("encode canonical empty proof")
+                .len(),
             expected
         );
         assert_eq!(
-            norito::to_bytes(&populated)
-                .expect("encode populated")
+            norito::encode_canonical(&populated)
+                .expect("encode canonical populated proof")
                 .len(),
+            expected
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            ExecutionProof::encoded_len_v1().expect("canonical length ignores ambient layout"),
             expected
         );
     }

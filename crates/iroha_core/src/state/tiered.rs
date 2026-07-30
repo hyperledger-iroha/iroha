@@ -2800,12 +2800,13 @@ mod measured_bytes_impls {
         state::{
             AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord,
             DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
-            FrontierCheckpoint, GovernanceLockRecord, GovernanceLocksForReferendum,
-            GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
-            GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
-            GovernanceReferendumStatus, GovernanceSlashEntry, GovernanceSlashLedger,
-            GovernanceStage, GovernanceStageApproval, GovernanceStageApprovals,
-            GovernanceStageFailure, GovernanceStageRecord, ZkAssetState, ZkAssetVerifierBinding,
+            FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
+            GovernanceLocksForReferendum, GovernanceParliamentSnapshot, GovernancePipeline,
+            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
+            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceSlashEntry,
+            GovernanceSlashLedger, GovernanceStage, GovernanceStageApproval,
+            GovernanceStageApprovals, GovernanceStageFailure, GovernanceStageRecord, ZkAssetState,
+            ZkAssetVerifierBinding,
         },
     };
 
@@ -4146,6 +4147,18 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.expiry_height.measured_bytes_extra());
             total = total.saturating_add(self.direction.measured_bytes_extra());
             total = total.saturating_add(self.duration_blocks.measured_bytes_extra());
+            total = total.saturating_add(self.custody.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceLockCustody {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceLockCustody>();
+            total = total.saturating_add(self.escrowed.measured_bytes_extra());
+            total = total.saturating_add(self.asset_definition_id.measured_bytes_extra());
+            total = total.saturating_add(self.bond_escrow_account.measured_bytes_extra());
+            total = total.saturating_add(self.slash_receiver_account.measured_bytes_extra());
             total
         }
     }

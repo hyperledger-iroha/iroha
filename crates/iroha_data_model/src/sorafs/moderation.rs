@@ -1084,7 +1084,7 @@ impl ModerationReproBodyV1 {
     pub fn computed_manifest_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut body = self.clone();
         body.manifest_digest = [0; 32];
-        let encoded = norito::to_bytes(&body)?;
+        let encoded = norito::encode_canonical(&body)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_REPRO_BODY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -1792,7 +1792,7 @@ impl ModerationTrustPolicyBodyV1 {
     pub fn computed_policy_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut body = self.clone();
         body.policy_digest = [0; 32];
-        let encoded = norito::to_bytes(&body)?;
+        let encoded = norito::encode_canonical(&body)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_TRUST_POLICY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -2060,7 +2060,7 @@ impl ModerationSignedScreeningBodyV1 {
     pub fn computed_evidence_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut body = self.clone();
         body.evidence_digest = [0; 32];
-        let encoded = norito::to_bytes(&body)?;
+        let encoded = norito::encode_canonical(&body)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_SIGNED_RESULT_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -2091,7 +2091,7 @@ impl ModerationReproBodyV1 {
     /// Returns [`norito::Error`] when the canonical reproducibility body cannot
     /// be encoded.
     pub fn computed_screening_policy_digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_SCREENING_POLICY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -2487,7 +2487,7 @@ impl ModerationCommitteeAggregateV1 {
     pub fn computed_aggregate_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut aggregate = self.clone();
         aggregate.aggregate_digest = [0; 32];
-        let encoded = norito::to_bytes(&aggregate)?;
+        let encoded = norito::encode_canonical(&aggregate)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_COMMITTEE_AGGREGATE_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -2514,7 +2514,7 @@ impl ModerationProvenanceEntryV1 {
     pub fn computed_entry_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut entry = self.clone();
         entry.entry_digest = [0; 32];
-        let encoded = norito::to_bytes(&entry)?;
+        let encoded = norito::encode_canonical(&entry)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_PROVENANCE_ENTRY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -3287,6 +3287,13 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
 
     use super::*;
+
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout moderation value")
+    }
 
     /// Named mutation applied to a reproducibility body by validation tests.
     type ReproBodyTextMutation = (&'static str, fn(&mut ModerationReproBodyV1));
@@ -4840,6 +4847,79 @@ mod tests {
     }
 
     #[test]
+    fn moderation_identity_digests_ignore_ambient_norito_layout() {
+        let body = sample_body();
+        let manifest = sign_manifest(body.clone(), &["manifest-governance"]);
+        let governance = checked_random_keypair();
+        let runner = checked_random_keypair();
+        let policy = sample_trust_policy(&manifest, &[&governance], &[&runner], 1);
+        let anchors = fixture_trust_anchors(&[&governance]);
+        let result = sample_signed_result(
+            &manifest,
+            &policy,
+            &runner,
+            4_000,
+            "cid:canonical-subject",
+            TRUST_FIXTURE_NOW,
+        );
+        let aggregate = ModerationCommitteeAggregateV1::aggregate_authenticated(
+            &manifest,
+            &policy,
+            &anchors,
+            1,
+            std::slice::from_ref(&result),
+            TRUST_FIXTURE_NOW + 1,
+        )
+        .expect("aggregate fixture");
+        let mut log = ModerationProvenanceLogV1::new([0xA8; 16]).expect("new log");
+        log.append(
+            ModerationProvenancePayloadV1::SignedScreeningResult(result.clone()),
+            TRUST_FIXTURE_NOW + 1,
+        )
+        .expect("append result");
+        let entry = log.entries.first().expect("one provenance entry");
+        let expected = (
+            body.computed_manifest_digest().expect("manifest digest"),
+            body.computed_screening_policy_digest()
+                .expect("screening-policy digest"),
+            policy.body.computed_policy_digest().expect("policy digest"),
+            result
+                .body
+                .computed_evidence_digest()
+                .expect("evidence digest"),
+            aggregate
+                .computed_aggregate_digest()
+                .expect("aggregate digest"),
+            entry.computed_entry_digest().expect("entry digest"),
+        );
+        let canonical = norito::encode_canonical(&body).expect("canonical body");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&body).expect("ambient-layout body"),
+            canonical
+        );
+        assert_eq!(
+            (
+                body.computed_manifest_digest().expect("manifest digest"),
+                body.computed_screening_policy_digest()
+                    .expect("screening-policy digest"),
+                policy.body.computed_policy_digest().expect("policy digest"),
+                result
+                    .body
+                    .computed_evidence_digest()
+                    .expect("evidence digest"),
+                aggregate
+                    .computed_aggregate_digest()
+                    .expect("aggregate digest"),
+                entry.computed_entry_digest().expect("entry digest"),
+            ),
+            expected
+        );
+    }
+
+    #[test]
     fn authenticated_committee_rejects_subject_split_and_insufficient_quorum() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
         let governance = checked_random_keypair();
@@ -4942,10 +5022,15 @@ mod tests {
         .expect("append committee aggregate");
         log.validate_chain().expect("valid provenance chain");
 
-        let bytes = norito::to_bytes(&log).expect("encode provenance");
+        let bytes = norito::encode_canonical(&log).expect("encode provenance");
         let decoded: ModerationProvenanceLogV1 =
-            norito::decode_from_bytes(&bytes).expect("decode provenance");
+            norito::decode_canonical(&bytes).expect("decode provenance");
         assert_eq!(decoded, log);
+        let alternate = encode_with_alternate_norito_layout(&log);
+        assert!(matches!(
+            norito::decode_canonical::<ModerationProvenanceLogV1>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
 
         let mut predecessor_tamper = log.clone();
         predecessor_tamper.entries[1].previous_entry_digest = [0xFF; 32];

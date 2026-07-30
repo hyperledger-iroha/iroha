@@ -145,7 +145,12 @@ pub fn chunk_fetch_plan_from_json(value: &Value) -> Result<ChunkFetchPlanV1, Fet
     })
 }
 
-/// Extracts an expected payload digest from a manifest JSON report, if present.
+/// Extracts an explicit expected payload digest from a JSON report, if present.
+///
+/// V1 reports must carry the canonical whole-payload digest in the top-level
+/// `payload_digest_hex` field. `manifest.car_digest_hex` commits the complete
+/// CARv2 archive and is deliberately never accepted as a payload-digest
+/// fallback.
 ///
 /// # Errors
 ///
@@ -154,13 +159,10 @@ pub fn chunk_fetch_plan_from_json(value: &Value) -> Result<ChunkFetchPlanV1, Fet
 pub fn expected_payload_digest_from_json(
     value: &Value,
 ) -> Result<Option<[u8; 32]>, FetchPlanError> {
-    let (field, raw) = if let Some(raw) = value.get("payload_digest_hex") {
-        ("payload_digest_hex", raw)
-    } else if let Some(raw) = manifest_field(value, "car_digest_hex")? {
-        ("manifest.car_digest_hex", raw)
-    } else {
+    let Some(raw) = value.get("payload_digest_hex") else {
         return Ok(None);
     };
+    let field = "payload_digest_hex";
 
     let hex = raw
         .as_str()
@@ -623,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn expected_payload_metadata_uses_manifest_fallback() {
+    fn expected_payload_digest_never_uses_manifest_car_digest_fallback() {
         let value = norito::json!({
             "manifest": {
                 "car_digest_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -631,16 +633,30 @@ mod tests {
             }
         });
 
-        let digest = expected_payload_digest_from_json(&value)
-            .expect("parse fallback digest")
-            .expect("fallback digest");
         assert_eq!(
-            digest_to_hex(&digest),
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            expected_payload_digest_from_json(&value).expect("parse explicit payload digest"),
+            None
         );
         assert_eq!(
             expected_payload_len_from_json(&value).expect("parse fallback length"),
             Some(128)
+        );
+    }
+
+    #[test]
+    fn expected_payload_digest_uses_only_the_explicit_top_level_field() {
+        let value = norito::json!({
+            "payload_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "manifest": {
+                "car_digest_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+        });
+
+        assert_eq!(
+            expected_payload_digest_from_json(&value)
+                .expect("parse explicit payload digest")
+                .expect("explicit payload digest"),
+            [0xaa; 32]
         );
     }
 
@@ -682,17 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn expected_payload_metadata_rejects_malformed_manifest_fallback() {
-        let digest = norito::json!({ "manifest": { "car_digest_hex": false } });
-        let digest_err = expected_payload_digest_from_json(&digest).unwrap_err();
-        assert!(matches!(
-            digest_err,
-            FetchPlanError::InvalidExpectedPayloadField {
-                field: "manifest.car_digest_hex",
-                ..
-            }
-        ));
-
+    fn expected_payload_len_rejects_malformed_manifest_fallback() {
         let length = norito::json!({ "manifest": { "content_length": "128" } });
         let length_err = expected_payload_len_from_json(&length).unwrap_err();
         assert!(matches!(
@@ -705,20 +711,17 @@ mod tests {
     }
 
     #[test]
-    fn expected_payload_metadata_rejects_non_object_manifest() {
+    fn payload_digest_ignores_nonobject_manifest_but_length_rejects_it() {
         for value in [
             norito::json!({ "manifest": null }),
             norito::json!({ "manifest": "invalid" }),
             norito::json!({ "manifest": [] }),
         ] {
-            let digest_err = expected_payload_digest_from_json(&value).unwrap_err();
-            assert!(matches!(
-                digest_err,
-                FetchPlanError::InvalidExpectedPayloadField {
-                    field: "manifest",
-                    ..
-                }
-            ));
+            assert_eq!(
+                expected_payload_digest_from_json(&value)
+                    .expect("manifest shape is irrelevant to explicit payload digest"),
+                None
+            );
 
             let length_err = expected_payload_len_from_json(&value).unwrap_err();
             assert!(matches!(

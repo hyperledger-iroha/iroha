@@ -142,14 +142,20 @@ impl NoritoSerialize for NumericSpec {
     }
 }
 
-// Bridge Norito slice-based decoding for Numeric to the codec decoder so that
-// containers (Vec/Option) of Numeric can be decoded in data-model queries.
+// Bridge Norito slice-based decoding for Numeric through the same helper used
+// by its codec implementation. Decoding the helper directly preserves the
+// exact prefix length when Numeric is embedded in a larger packed record.
 impl<'a> norito::core::DecodeFromSlice<'a> for Numeric {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut s: &'a [u8] = bytes;
-        let value = <Self as norito::codec::DecodeAll>::decode_all(&mut s)
-            .map_err(|e| norito::core::Error::Message(format!("codec decode error: {e}")))?;
-        let used = bytes.len() - s.len();
+        let (helper, used) =
+            <scale_::NumericScaleHelper as norito::core::DecodeFromSlice>::decode_from_slice(
+                bytes,
+            )?;
+        let value = Self::try_new_raw(helper.mantissa, helper.scale)
+            .map_err(|error| norito::core::Error::Message(format!("invalid numeric: {error}")))?;
+        value
+            .validate_decimal()
+            .map_err(|error| norito::core::Error::Message(format!("invalid numeric: {error}")))?;
         Ok((value, used))
     }
 }
@@ -187,16 +193,23 @@ impl JsonDeserialize for NumericSpec {
         while let Some(key) = visitor.next_key()? {
             match key {
                 json::KeyRef::Borrowed("scale") => {
+                    if scale.is_some() {
+                        return Err(json::Error::duplicate_field("scale"));
+                    }
                     let value = visitor.parse_value::<Option<u32>>()?;
                     scale = Some(value);
                 }
                 json::KeyRef::Owned(ref key) if key == "scale" => {
+                    if scale.is_some() {
+                        return Err(json::Error::duplicate_field("scale"));
+                    }
                     let value = visitor.parse_value::<Option<u32>>()?;
                     scale = Some(value);
                 }
                 _ => visitor.skip_value()?,
             }
         }
+        visitor.finish()?;
         NumericSpec::try_from_scale(scale.unwrap_or(None)).map_err(|error| {
             json::Error::InvalidField {
                 field: "scale".into(),
@@ -3068,6 +3081,21 @@ mod tests {
     }
 
     #[test]
+    fn numeric_decode_from_slice_reports_the_exact_prefix_length() {
+        let expected: Numeric = "1.25".parse().expect("numeric");
+        let canonical = expected.encode();
+        let mut followed_by_next_field = canonical.clone();
+        followed_by_next_field.extend_from_slice(b"next-field");
+
+        let (decoded, used) =
+            <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(&followed_by_next_field)
+                .expect("decode numeric prefix");
+
+        assert_eq!(decoded, expected);
+        assert_eq!(used, canonical.len());
+    }
+
+    #[test]
     fn check_json_roundtrip() {
         let num1 = Numeric::new(1002, 2);
 
@@ -3102,6 +3130,13 @@ mod tests {
             let reencoded = norito::json::to_json(&decoded).expect("re-serialize spec");
             assert_eq!(reencoded, json);
         }
+
+        let duplicate = norito::json::from_json::<NumericSpec>(r#"{"scale":1,"scale":2}"#)
+            .expect_err("duplicate numeric-spec scale must fail closed");
+        assert!(matches!(
+            duplicate,
+            norito::json::Error::DuplicateField { ref field } if field == "scale"
+        ));
     }
 
     #[test]
@@ -4359,6 +4394,13 @@ mod tests {
         let (decoded, used) =
             <Quantity as norito::core::DecodeFromSlice>::decode_from_slice(&encoded)
                 .expect("decode quantity");
+        assert_eq!(decoded, value);
+        assert_eq!(used, encoded.len());
+        let mut followed_by_next_field = encoded.clone();
+        followed_by_next_field.extend_from_slice(b"next-field");
+        let (decoded, used) =
+            <Quantity as norito::core::DecodeFromSlice>::decode_from_slice(&followed_by_next_field)
+                .expect("decode quantity prefix");
         assert_eq!(decoded, value);
         assert_eq!(used, encoded.len());
         let json = norito::json::to_json(&value).expect("json");

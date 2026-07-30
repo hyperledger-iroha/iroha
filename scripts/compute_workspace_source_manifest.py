@@ -17,19 +17,53 @@ content-and-executable-mode identity.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import stat
 import struct
 import subprocess
 import sys
-from typing import Iterable
+from typing import BinaryIO, Iterable, Iterator
 
 
 _DOMAIN = b"iroha-workspace-source-manifest-v2\0"
+_PATH_LIST_DOMAIN = b"iroha-workspace-source-path-list-v1\0"
+_SOURCE_SEAL_DOMAIN = b"iroha-workspace-source-seal-v1\0"
 _WORKSPACE_LOCKFILE = "Cargo.lock"
+_MAX_PATH_LIST_BYTES = 64 * 1024 * 1024
+_MAX_PATH_COUNT = 1_000_000
+_MAX_PATH_BYTES = 1024 * 1024
+_MAX_SOURCE_SEAL_BYTES = 16 * 1024 * 1024 * 1024
+_MAX_SOURCE_FILE_BYTES = 8 * 1024 * 1024 * 1024
+_MAX_SYMLINK_TARGET_BYTES = 1024 * 1024
+_COPY_CHUNK_BYTES = 1024 * 1024
+_SEALED_CONTEXT_FILES = frozenset(
+    {
+        b"Dockerfile",
+        b"context-control.sha256",
+        b"scripts/compute_workspace_source_manifest.py",
+        b"scripts/taira_image_smoke.sh",
+        b"source-archive.sha256",
+        b"source-path-list.sha256",
+        b"taira-workspace-source-paths-v1.bin",
+        b"taira-workspace-source-v1.seal",
+        b"workspace-source-manifest.sha256",
+    }
+)
+_SEALED_CONTEXT_DIRECTORIES = frozenset({b"scripts"})
+_STABLE_FILE_FIELDS = (
+    "st_dev",
+    "st_ino",
+    "st_mode",
+    "st_nlink",
+    "st_size",
+    "st_mtime_ns",
+    "st_ctime_ns",
+)
 _ACTIVE_GIT_OPERATION_PATHS = (
     ("merge", "MERGE_HEAD"),
     ("cherry-pick", "CHERRY_PICK_HEAD"),
@@ -52,6 +86,14 @@ class ActiveGitOperationError(RuntimeError):
 
 class DirtyReleaseSourceError(RuntimeError):
     """A production release source is not one clean committed Git tree."""
+
+
+class SourcePathListError(RuntimeError):
+    """A detached source path list is malformed or unsafe."""
+
+
+class SourceSealError(RuntimeError):
+    """A sealed detached source archive is malformed, unsafe, or inconsistent."""
 
 
 def _git_path(root: Path, name: str) -> Path:
@@ -167,6 +209,72 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validate_sha256(value: str, label: str) -> str:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise SourceSealError(f"{label} must be exactly 64 lowercase hexadecimal characters")
+    return value
+
+
+def _stable_metadata_changed(before: os.stat_result, after: os.stat_result) -> bool:
+    return any(
+        getattr(before, field) != getattr(after, field)
+        for field in _STABLE_FILE_FIELDS
+    )
+
+
+@contextmanager
+def _stable_regular_reader(
+    path: Path,
+    *,
+    maximum_size: int,
+    label: str,
+) -> Iterator[tuple[BinaryIO, os.stat_result]]:
+    """Open one bounded regular file without following or accepting hard links."""
+
+    before = path.lstat()
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size > maximum_size
+    ):
+        raise SourceSealError(
+            f"{label} must be one bounded, singly linked regular file"
+        )
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    stream = os.fdopen(descriptor, "rb")
+    try:
+        opened = os.fstat(stream.fileno())
+        if (
+            (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or _stable_metadata_changed(before, opened)
+        ):
+            raise SourceSealError(f"{label} changed before it was opened")
+        yield stream, before
+        after = os.fstat(stream.fileno())
+        if _stable_metadata_changed(before, after):
+            raise SourceSealError(f"{label} changed while it was read")
+    finally:
+        stream.close()
+
+
+def _stable_file_sha256(
+    path: Path,
+    *,
+    maximum_size: int,
+    label: str,
+) -> str:
+    digest = hashlib.sha256()
+    with _stable_regular_reader(
+        path, maximum_size=maximum_size, label=label
+    ) as (stream, _):
+        while chunk := stream.read(_COPY_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def release_source_identity(root: Path) -> dict[str, str | int]:
     """Return the exact clean committed source identity for a release run."""
 
@@ -218,6 +326,926 @@ def _frame(hasher: "hashlib._Hash", payload: bytes) -> None:
     hasher.update(payload)
 
 
+def _validate_source_path_bytes(raw: bytes) -> None:
+    if (
+        not raw
+        or len(raw) > _MAX_PATH_BYTES
+        or raw.startswith(b"/")
+        or b"\0" in raw
+        or any(component in (b"", b".", b"..") for component in raw.split(b"/"))
+        or raw.split(b"/", 1)[0] == b".git"
+    ):
+        raise SourcePathListError("source path list contains an unsafe path")
+
+
+def write_source_path_list(path: Path, paths: Iterable[str]) -> None:
+    """Create a fixed binary path list for a detached build context."""
+
+    encoded_paths = sorted({os.fsencode(value) for value in paths})
+    if not encoded_paths or len(encoded_paths) > _MAX_PATH_COUNT:
+        raise SourcePathListError("source path list count is outside its bound")
+    for raw in encoded_paths:
+        _validate_source_path_bytes(raw)
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(_PATH_LIST_DOMAIN)
+            stream.write(struct.pack(">Q", len(encoded_paths)))
+            for raw in encoded_paths:
+                stream.write(struct.pack(">Q", len(raw)))
+                stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        os.close(descriptor)
+
+
+def read_source_path_list(path: Path) -> list[str]:
+    """Read and validate a fixed path list without consulting Git metadata."""
+
+    before = path.lstat()
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size > _MAX_PATH_LIST_BYTES
+    ):
+        raise SourcePathListError(
+            "source path list must be one bounded, singly linked regular file"
+        )
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (
+            (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or _stable_metadata_changed(before, opened)
+        ):
+            raise SourcePathListError("source path list changed before open")
+        payload = stream.read(_MAX_PATH_LIST_BYTES + 1)
+        after = os.fstat(stream.fileno())
+    if len(payload) > _MAX_PATH_LIST_BYTES:
+        raise SourcePathListError("source path list exceeds its byte bound")
+    if _stable_metadata_changed(before, after):
+        raise SourcePathListError("source path list changed while it was read")
+    if not payload.startswith(_PATH_LIST_DOMAIN):
+        raise SourcePathListError("source path list has the wrong domain")
+
+    offset = len(_PATH_LIST_DOMAIN)
+
+    def take_u64() -> int:
+        nonlocal offset
+        end = offset + 8
+        if end > len(payload):
+            raise SourcePathListError("source path list is truncated")
+        value = struct.unpack(">Q", payload[offset:end])[0]
+        offset = end
+        return value
+
+    count = take_u64()
+    if count == 0 or count > _MAX_PATH_COUNT:
+        raise SourcePathListError("source path list count is outside its bound")
+    encoded_paths = []
+    for _ in range(count):
+        length = take_u64()
+        if length == 0 or length > _MAX_PATH_BYTES:
+            raise SourcePathListError("source path length is outside its bound")
+        end = offset + length
+        if end > len(payload):
+            raise SourcePathListError("source path list is truncated")
+        raw = payload[offset:end]
+        offset = end
+        _validate_source_path_bytes(raw)
+        encoded_paths.append(raw)
+    if offset != len(payload):
+        raise SourcePathListError("source path list has trailing bytes")
+    if encoded_paths != sorted(set(encoded_paths)):
+        raise SourcePathListError(
+            "source path list must be unique and raw-byte sorted"
+        )
+    return [os.fsdecode(raw) for raw in encoded_paths]
+
+
+def _validate_symlink_target(member: bytes, target: bytes) -> None:
+    if (
+        not target
+        or len(target) > _MAX_SYMLINK_TARGET_BYTES
+        or b"\0" in target
+        or target.startswith(b"/")
+    ):
+        raise SourceSealError("source seal contains an unsafe symlink target")
+    parent = member.rpartition(b"/")[0]
+    resolved = posixpath.normpath(posixpath.join(parent, target))
+    if (
+        resolved == b".."
+        or resolved.startswith(b"../")
+        or resolved == b".git"
+        or resolved.startswith(b".git/")
+        or resolved.startswith(b"/")
+    ):
+        raise SourceSealError("source seal contains an out-of-root symlink")
+
+
+def _open_root_directory(path: Path, label: str) -> tuple[int, os.stat_result]:
+    before = path.lstat()
+    if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+        raise SourceSealError(f"{label} must be a real directory")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    opened = os.fstat(descriptor)
+    if (
+        (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        or opened.st_mode != before.st_mode
+    ):
+        os.close(descriptor)
+        raise SourceSealError(f"{label} changed before it was opened")
+    return descriptor, before
+
+
+def _open_source_parent(root_descriptor: int, member: bytes) -> int | None:
+    descriptor = os.dup(root_descriptor)
+    try:
+        for component in member.split(b"/")[:-1]:
+            flags = os.O_RDONLY
+            if hasattr(os, "O_DIRECTORY"):
+                flags |= os.O_DIRECTORY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            try:
+                next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                os.close(descriptor)
+                return None
+            except OSError as error:
+                raise SourceSealError(
+                    "source member has a non-directory or symlink parent"
+                ) from error
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+
+
+def _inspect_source_members(
+    root: Path, paths: list[str]
+) -> list[tuple[bytes, bytes, int, int | bytes, os.stat_result | None]]:
+    """Freeze member types and metadata before writing a source seal."""
+
+    records: list[tuple[bytes, bytes, int, int | bytes, os.stat_result | None]] = []
+    root_descriptor, root_before = _open_root_directory(root, "source root")
+    try:
+        kinds: dict[bytes, bytes] = {}
+        for relative in paths:
+            member = os.fsencode(relative)
+            _validate_source_path_bytes(member)
+            for offset, value in enumerate(member.split(b"/")[:-1], start=1):
+                prefix = b"/".join(member.split(b"/")[:offset])
+                if kinds.get(prefix) not in (None, b"G"):
+                    raise SourceSealError(
+                        "source path is nested below a non-directory member"
+                    )
+            parent_descriptor = _open_source_parent(root_descriptor, member)
+            if parent_descriptor is None:
+                record = (member, b"D", 0, 0, None)
+                records.append(record)
+                kinds[member] = b"D"
+                continue
+            try:
+                leaf = member.rsplit(b"/", 1)[-1]
+                try:
+                    metadata = os.stat(
+                        leaf, dir_fd=parent_descriptor, follow_symlinks=False
+                    )
+                except FileNotFoundError:
+                    record = (member, b"D", 0, 0, None)
+                else:
+                    mode = stat.S_IMODE(metadata.st_mode)
+                    if stat.S_ISREG(metadata.st_mode):
+                        if metadata.st_nlink != 1:
+                            raise SourceSealError(
+                                "source seal rejects hard-linked regular files"
+                            )
+                        if metadata.st_size > _MAX_SOURCE_FILE_BYTES:
+                            raise SourceSealError(
+                                "source member exceeds its size bound"
+                            )
+                        record = (member, b"F", mode, metadata.st_size, metadata)
+                    elif stat.S_ISLNK(metadata.st_mode):
+                        target = os.readlink(leaf, dir_fd=parent_descriptor)
+                        if isinstance(target, str):
+                            target = os.fsencode(target)
+                        _validate_symlink_target(member, target)
+                        record = (member, b"L", mode, target, metadata)
+                    elif stat.S_ISDIR(metadata.st_mode):
+                        record = (member, b"G", mode, 0, metadata)
+                    else:
+                        raise SourceSealError(
+                            "source seal rejects device, FIFO, socket, and "
+                            "unsupported source members"
+                        )
+                records.append(record)
+                kinds[member] = record[1]
+            finally:
+                os.close(parent_descriptor)
+        root_after = os.fstat(root_descriptor)
+        if (
+            (root_after.st_dev, root_after.st_ino)
+            != (root_before.st_dev, root_before.st_ino)
+            or root_after.st_mode != root_before.st_mode
+        ):
+            raise SourceSealError("source root changed while it was inspected")
+    finally:
+        os.close(root_descriptor)
+    return records
+
+
+class _SealWriter:
+    def __init__(self, stream: BinaryIO):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+        self.bytes_written = 0
+
+    def write(self, payload: bytes) -> None:
+        self.bytes_written += len(payload)
+        if self.bytes_written > _MAX_SOURCE_SEAL_BYTES:
+            raise SourceSealError("source seal exceeds its byte bound")
+        self.stream.write(payload)
+        self.digest.update(payload)
+
+    def hexdigest(self) -> str:
+        return self.digest.hexdigest()
+
+
+def _write_source_file_payload(
+    root_descriptor: int,
+    record: tuple[bytes, bytes, int, int | bytes, os.stat_result | None],
+    writer: _SealWriter,
+    manifest: "hashlib._Hash",
+) -> None:
+    member, _, _, payload_size, expected_metadata = record
+    assert isinstance(payload_size, int)
+    assert expected_metadata is not None
+    parent_descriptor = _open_source_parent(root_descriptor, member)
+    if parent_descriptor is None:
+        raise SourceSealError("source file disappeared while sealing")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    leaf = member.rsplit(b"/", 1)[-1]
+    try:
+        descriptor = os.open(leaf, flags, dir_fd=parent_descriptor)
+        with os.fdopen(descriptor, "rb") as source:
+            opened = os.fstat(source.fileno())
+            if _stable_metadata_changed(expected_metadata, opened):
+                raise SourceSealError("source file changed before sealing")
+            remaining = payload_size
+            while remaining:
+                chunk = source.read(min(_COPY_CHUNK_BYTES, remaining))
+                if not chunk:
+                    raise SourceSealError("source file was truncated while sealing")
+                writer.write(chunk)
+                manifest.update(chunk)
+                remaining -= len(chunk)
+            if source.read(1):
+                raise SourceSealError("source file grew while sealing")
+            after = os.fstat(source.fileno())
+            if _stable_metadata_changed(expected_metadata, after):
+                raise SourceSealError("source file changed while sealing")
+    finally:
+        os.close(parent_descriptor)
+
+
+def _revalidate_non_file_source_member(
+    root_descriptor: int,
+    record: tuple[bytes, bytes, int, int | bytes, os.stat_result | None],
+) -> None:
+    member, kind, _, payload, expected_metadata = record
+    parent_descriptor = _open_source_parent(root_descriptor, member)
+    if kind == b"D":
+        if parent_descriptor is None:
+            return
+        try:
+            leaf = member.rsplit(b"/", 1)[-1]
+            try:
+                os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            raise SourceSealError("deleted source member appeared while sealing")
+        finally:
+            os.close(parent_descriptor)
+    if parent_descriptor is None or expected_metadata is None:
+        raise SourceSealError("source member disappeared while sealing")
+    try:
+        leaf = member.rsplit(b"/", 1)[-1]
+        metadata = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        if _stable_metadata_changed(expected_metadata, metadata):
+            raise SourceSealError("source member changed while sealing")
+        if kind == b"L":
+            target = os.readlink(leaf, dir_fd=parent_descriptor)
+            if isinstance(target, str):
+                target = os.fsencode(target)
+            if target != payload:
+                raise SourceSealError("source symlink changed while sealing")
+    finally:
+        os.close(parent_descriptor)
+
+
+def create_source_seal(
+    root: Path,
+    path_list: Path,
+    archive: Path,
+    expected_manifest: str,
+) -> str:
+    """Create a deterministic archive for exactly one frozen source closure."""
+
+    expected_manifest = _validate_sha256(
+        expected_manifest, "expected workspace manifest"
+    )
+    root = root.resolve()
+    initial_path_list_sha = _stable_file_sha256(
+        path_list,
+        maximum_size=_MAX_PATH_LIST_BYTES,
+        label="source path list",
+    )
+    paths = read_source_path_list(path_list)
+    records = _inspect_source_members(root, paths)
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(archive, flags, 0o600)
+    succeeded = False
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            writer = _SealWriter(stream)
+            manifest = hashlib.sha256(_DOMAIN)
+            writer.write(_SOURCE_SEAL_DOMAIN)
+            writer.write(struct.pack(">Q", len(records)))
+            root_descriptor, _ = _open_root_directory(root, "source root")
+            try:
+                for record in records:
+                    member, kind, mode, payload, _ = record
+                    writer.write(struct.pack(">Q", len(member)))
+                    writer.write(member)
+                    writer.write(kind)
+                    writer.write(struct.pack(">I", mode))
+                    payload_size = len(payload) if isinstance(payload, bytes) else payload
+                    writer.write(struct.pack(">Q", payload_size))
+
+                    _frame(manifest, member)
+                    if kind == b"D":
+                        manifest.update(b"D")
+                        _revalidate_non_file_source_member(root_descriptor, record)
+                    else:
+                        manifest.update(struct.pack(">I", mode))
+                        manifest.update(kind)
+                        if kind == b"F":
+                            manifest.update(struct.pack(">Q", payload_size))
+                            _write_source_file_payload(
+                                root_descriptor, record, writer, manifest
+                            )
+                        elif kind == b"L":
+                            assert isinstance(payload, bytes)
+                            writer.write(payload)
+                            _frame(manifest, payload)
+                            _revalidate_non_file_source_member(
+                                root_descriptor, record
+                            )
+                        elif kind == b"G":
+                            _revalidate_non_file_source_member(
+                                root_descriptor, record
+                            )
+                        else:
+                            raise AssertionError("unreachable source seal kind")
+            finally:
+                os.close(root_descriptor)
+            actual_manifest = manifest.hexdigest()
+            if actual_manifest != expected_manifest:
+                raise SourceSealError(
+                    "source changed after the workspace manifest was frozen"
+                )
+            stream.flush()
+            os.fsync(stream.fileno())
+            archive_sha = writer.hexdigest()
+        final_path_list_sha = _stable_file_sha256(
+            path_list,
+            maximum_size=_MAX_PATH_LIST_BYTES,
+            label="source path list",
+        )
+        if final_path_list_sha != initial_path_list_sha:
+            raise SourceSealError("source path list changed while sealing")
+        if read_source_path_list(path_list) != paths:
+            raise SourceSealError("source path list changed while sealing")
+        if (
+            _stable_file_sha256(
+                archive,
+                maximum_size=_MAX_SOURCE_SEAL_BYTES,
+                label="source seal",
+            )
+            != archive_sha
+        ):
+            raise SourceSealError("source seal changed after it was written")
+        succeeded = True
+        return archive_sha
+    finally:
+        if not succeeded:
+            try:
+                archive.unlink()
+            except FileNotFoundError:
+                pass
+
+
+class _SealReader:
+    def __init__(self, stream: BinaryIO):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+        self.bytes_read = 0
+
+    def read_exact(self, size: int) -> bytes:
+        if size < 0 or self.bytes_read + size > _MAX_SOURCE_SEAL_BYTES:
+            raise SourceSealError("source seal exceeds its byte bound")
+        payload = self.stream.read(size)
+        if len(payload) != size:
+            raise SourceSealError("source seal is truncated")
+        self.bytes_read += size
+        self.digest.update(payload)
+        return payload
+
+    def take_u64(self) -> int:
+        return struct.unpack(">Q", self.read_exact(8))[0]
+
+    def finish(self) -> str:
+        trailing = self.stream.read(1)
+        if trailing:
+            raise SourceSealError("source seal has trailing bytes")
+        return self.digest.hexdigest()
+
+
+def _write_all(descriptor: int, payload: bytes) -> None:
+    offset = 0
+    while offset < len(payload):
+        written = os.write(descriptor, payload[offset:])
+        if written <= 0:
+            raise SourceSealError("short write while extracting source seal")
+        offset += written
+
+
+class _DestinationExtractor:
+    def __init__(self, destination: Path):
+        self.destination = destination
+        self.root_descriptor, self.root_before = _open_root_directory(
+            destination, "source seal destination"
+        )
+        if os.listdir(self.root_descriptor):
+            os.close(self.root_descriptor)
+            raise SourceSealError("source seal destination must be empty")
+        self.directory_modes: dict[bytes, int] = {}
+
+    def close(self) -> None:
+        os.close(self.root_descriptor)
+
+    def _parent(self, member: bytes) -> tuple[int, bytes]:
+        descriptor = os.dup(self.root_descriptor)
+        prefix: list[bytes] = []
+        try:
+            components = member.split(b"/")
+            for component in components[:-1]:
+                prefix.append(component)
+                relative = b"/".join(prefix)
+                try:
+                    os.mkdir(component, 0o700, dir_fd=descriptor)
+                    self.directory_modes.setdefault(relative, 0o755)
+                except FileExistsError:
+                    pass
+                flags = os.O_RDONLY
+                if hasattr(os, "O_DIRECTORY"):
+                    flags |= os.O_DIRECTORY
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= os.O_NOFOLLOW
+                try:
+                    next_descriptor = os.open(
+                        component, flags, dir_fd=descriptor
+                    )
+                except OSError as error:
+                    raise SourceSealError(
+                        "source seal extraction encountered an unsafe parent"
+                    ) from error
+                os.close(descriptor)
+                descriptor = next_descriptor
+            return descriptor, components[-1]
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            raise
+
+    def begin_file(self, member: bytes) -> int:
+        parent, leaf = self._parent(member)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            return os.open(leaf, flags, 0o600, dir_fd=parent)
+        except OSError as error:
+            raise SourceSealError(
+                "source seal could not create a unique regular member"
+            ) from error
+        finally:
+            os.close(parent)
+
+    def create_symlink(self, member: bytes, target: bytes) -> None:
+        parent, leaf = self._parent(member)
+        try:
+            os.symlink(target, leaf, dir_fd=parent)
+        except OSError as error:
+            raise SourceSealError(
+                "source seal could not create a unique symlink member"
+            ) from error
+        finally:
+            os.close(parent)
+
+    def create_directory(self, member: bytes, mode: int) -> None:
+        parent, leaf = self._parent(member)
+        try:
+            try:
+                os.mkdir(leaf, 0o700, dir_fd=parent)
+            except FileExistsError:
+                flags = os.O_RDONLY
+                if hasattr(os, "O_DIRECTORY"):
+                    flags |= os.O_DIRECTORY
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= os.O_NOFOLLOW
+                descriptor = os.open(leaf, flags, dir_fd=parent)
+                os.close(descriptor)
+            self.directory_modes[member] = mode
+        except OSError as error:
+            raise SourceSealError(
+                "source seal could not create a directory member"
+            ) from error
+        finally:
+            os.close(parent)
+
+    def require_deleted(self, member: bytes) -> None:
+        parent, leaf = self._parent(member)
+        try:
+            try:
+                os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            raise SourceSealError("deleted source seal member exists")
+        finally:
+            os.close(parent)
+
+    def _open_directory(self, member: bytes) -> int:
+        descriptor = os.dup(self.root_descriptor)
+        try:
+            for component in member.split(b"/"):
+                flags = os.O_RDONLY
+                if hasattr(os, "O_DIRECTORY"):
+                    flags |= os.O_DIRECTORY
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= os.O_NOFOLLOW
+                next_descriptor = os.open(component, flags, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = next_descriptor
+            return descriptor
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            raise
+
+    def finish_directories(self) -> None:
+        for member, mode in sorted(
+            self.directory_modes.items(),
+            key=lambda item: (-item[0].count(b"/"), item[0]),
+        ):
+            descriptor = self._open_directory(member)
+            try:
+                os.fchmod(descriptor, mode)
+            finally:
+                os.close(descriptor)
+
+
+def _scan_source_seal(
+    stream: BinaryIO,
+    paths: list[str],
+    extractor: _DestinationExtractor | None = None,
+) -> tuple[str, str, dict[bytes, bytes]]:
+    reader = _SealReader(stream)
+    if reader.read_exact(len(_SOURCE_SEAL_DOMAIN)) != _SOURCE_SEAL_DOMAIN:
+        raise SourceSealError("source seal has the wrong domain")
+    count = reader.take_u64()
+    if count == 0 or count > _MAX_PATH_COUNT or count != len(paths):
+        raise SourceSealError("source seal member count does not match its path list")
+
+    expected_paths = [os.fsencode(path) for path in paths]
+    manifest = hashlib.sha256(_DOMAIN)
+    kinds: dict[bytes, bytes] = {}
+    for index, expected_member in enumerate(expected_paths):
+        path_size = reader.take_u64()
+        if path_size == 0 or path_size > _MAX_PATH_BYTES:
+            raise SourceSealError("source seal member path exceeds its bound")
+        member = reader.read_exact(path_size)
+        try:
+            _validate_source_path_bytes(member)
+        except SourcePathListError as error:
+            raise SourceSealError(
+                "source seal contains an unsafe path"
+            ) from error
+        if member != expected_member:
+            raise SourceSealError(
+                f"source seal member {index} is outside or out of order "
+                "for the frozen closure"
+            )
+        for offset, _ in enumerate(member.split(b"/")[:-1], start=1):
+            prefix = b"/".join(member.split(b"/")[:offset])
+            if kinds.get(prefix) not in (None, b"G"):
+                raise SourceSealError(
+                    "source seal member is nested below a non-directory member"
+                )
+
+        kind = reader.read_exact(1)
+        if kind not in (b"D", b"F", b"G", b"L"):
+            raise SourceSealError(
+                "source seal rejects hard link, device, FIFO, socket, and "
+                "unknown member types"
+            )
+        mode = struct.unpack(">I", reader.read_exact(4))[0]
+        payload_size = reader.take_u64()
+        if mode & ~0o7777:
+            raise SourceSealError("source seal member mode exceeds its bound")
+        if kind == b"D":
+            if mode != 0 or payload_size != 0:
+                raise SourceSealError("deleted source seal member is malformed")
+        elif kind == b"F":
+            if payload_size > _MAX_SOURCE_FILE_BYTES:
+                raise SourceSealError("source seal file exceeds its size bound")
+        elif payload_size != 0 and kind == b"G":
+            raise SourceSealError("source seal directory has a payload")
+        elif kind == b"L" and (
+            payload_size == 0 or payload_size > _MAX_SYMLINK_TARGET_BYTES
+        ):
+            raise SourceSealError("source seal symlink target exceeds its bound")
+
+        _frame(manifest, member)
+        if kind == b"D":
+            manifest.update(b"D")
+            if extractor is not None:
+                extractor.require_deleted(member)
+        else:
+            manifest.update(struct.pack(">I", mode))
+            manifest.update(kind)
+            if kind == b"F":
+                manifest.update(struct.pack(">Q", payload_size))
+                output_descriptor = (
+                    extractor.begin_file(member) if extractor is not None else None
+                )
+                try:
+                    remaining = payload_size
+                    while remaining:
+                        chunk = reader.read_exact(
+                            min(_COPY_CHUNK_BYTES, remaining)
+                        )
+                        manifest.update(chunk)
+                        if output_descriptor is not None:
+                            _write_all(output_descriptor, chunk)
+                        remaining -= len(chunk)
+                    if output_descriptor is not None:
+                        os.fchmod(output_descriptor, mode)
+                        os.fsync(output_descriptor)
+                finally:
+                    if output_descriptor is not None:
+                        os.close(output_descriptor)
+            elif kind == b"L":
+                target = reader.read_exact(payload_size)
+                _validate_symlink_target(member, target)
+                _frame(manifest, target)
+                if extractor is not None:
+                    extractor.create_symlink(member, target)
+            elif extractor is not None:
+                extractor.create_directory(member, mode)
+        kinds[member] = kind
+    return manifest.hexdigest(), reader.finish(), kinds
+
+
+def _audit_extracted_closure(
+    extractor: _DestinationExtractor, kinds: dict[bytes, bytes]
+) -> None:
+    allowed_directories: set[bytes] = {
+        member for member, kind in kinds.items() if kind == b"G"
+    }
+    for member in kinds:
+        components = member.split(b"/")
+        allowed_directories.update(
+            b"/".join(components[:count])
+            for count in range(1, len(components))
+        )
+    seen: set[bytes] = set()
+
+    def visit(descriptor: int, prefix: bytes) -> None:
+        entries = sorted(os.scandir(descriptor), key=lambda entry: os.fsencode(entry.name))
+        for entry in entries:
+            name = os.fsencode(entry.name)
+            member = name if not prefix else prefix + b"/" + name
+            metadata = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(metadata.st_mode):
+                if member not in allowed_directories:
+                    raise SourceSealError(
+                        "extracted source contains a directory outside the frozen closure"
+                    )
+                if kinds.get(member) == b"G":
+                    seen.add(member)
+                flags = os.O_RDONLY
+                if hasattr(os, "O_DIRECTORY"):
+                    flags |= os.O_DIRECTORY
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= os.O_NOFOLLOW
+                child = os.open(name, flags, dir_fd=descriptor)
+                try:
+                    visit(child, member)
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(metadata.st_mode):
+                if metadata.st_nlink != 1 or kinds.get(member) != b"F":
+                    raise SourceSealError(
+                        "extracted source contains an extra or hard-linked file"
+                    )
+                seen.add(member)
+            elif stat.S_ISLNK(metadata.st_mode):
+                if kinds.get(member) != b"L":
+                    raise SourceSealError(
+                        "extracted source contains an extra symlink"
+                    )
+                seen.add(member)
+            else:
+                raise SourceSealError(
+                    "extracted source contains a device, FIFO, socket, or "
+                    "unsupported member"
+                )
+
+    visit(extractor.root_descriptor, b"")
+    expected = {member for member, kind in kinds.items() if kind != b"D"}
+    if seen != expected:
+        raise SourceSealError("extracted source is missing a non-deleted member")
+
+
+def workspace_source_manifest_from_exact_path_list(
+    root: Path, path_list: Path
+) -> str:
+    """Audit an exact detached closure, then compute its canonical manifest."""
+
+    paths = read_source_path_list(path_list)
+    records = _inspect_source_members(root.resolve(), paths)
+    kinds = {member: kind for member, kind, _, _, _ in records}
+    extractor = _DestinationExtractor.__new__(_DestinationExtractor)
+    extractor.destination = root
+    extractor.root_descriptor, extractor.root_before = _open_root_directory(
+        root, "detached source root"
+    )
+    try:
+        _audit_extracted_closure(extractor, kinds)
+    finally:
+        extractor.close()
+    return _manifest_for_paths(root.resolve(), paths)
+
+
+def validate_sealed_context(root: Path) -> None:
+    """Require the unique minimal Taira BuildKit context inventory."""
+
+    root_descriptor, _ = _open_root_directory(root, "sealed build context")
+    files: set[bytes] = set()
+    directories: set[bytes] = set()
+
+    def visit(descriptor: int, prefix: bytes) -> None:
+        for entry in os.scandir(descriptor):
+            name = os.fsencode(entry.name)
+            member = name if not prefix else prefix + b"/" + name
+            metadata = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.add(member)
+                flags = os.O_RDONLY
+                if hasattr(os, "O_DIRECTORY"):
+                    flags |= os.O_DIRECTORY
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= os.O_NOFOLLOW
+                child = os.open(name, flags, dir_fd=descriptor)
+                try:
+                    visit(child, member)
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                files.add(member)
+            else:
+                raise SourceSealError(
+                    "sealed build context contains a symlink, hard link, "
+                    "device, FIFO, socket, or unsupported member"
+                )
+
+    try:
+        visit(root_descriptor, b"")
+    finally:
+        os.close(root_descriptor)
+    if files != _SEALED_CONTEXT_FILES or directories != _SEALED_CONTEXT_DIRECTORIES:
+        raise SourceSealError(
+            "sealed build context does not contain the exact minimal inventory"
+        )
+
+
+def extract_source_seal(
+    archive: Path,
+    path_list: Path,
+    destination: Path,
+    expected_manifest: str,
+    expected_archive_sha256: str,
+    expected_path_list_sha256: str,
+) -> str:
+    """Validate fully, then safely extract one sealed source closure."""
+
+    expected_manifest = _validate_sha256(
+        expected_manifest, "expected workspace manifest"
+    )
+    expected_archive_sha256 = _validate_sha256(
+        expected_archive_sha256, "expected source archive SHA-256"
+    )
+    expected_path_list_sha256 = _validate_sha256(
+        expected_path_list_sha256, "expected source path-list SHA-256"
+    )
+    if (
+        _stable_file_sha256(
+            path_list,
+            maximum_size=_MAX_PATH_LIST_BYTES,
+            label="source path list",
+        )
+        != expected_path_list_sha256
+    ):
+        raise SourceSealError("source path-list SHA-256 mismatch")
+    paths = read_source_path_list(path_list)
+
+    with _stable_regular_reader(
+        archive,
+        maximum_size=_MAX_SOURCE_SEAL_BYTES,
+        label="source seal",
+    ) as (stream, _):
+        manifest, archive_sha, first_kinds = _scan_source_seal(stream, paths)
+        if archive_sha != expected_archive_sha256:
+            raise SourceSealError("source archive SHA-256 mismatch")
+        if manifest != expected_manifest:
+            raise SourceSealError("source archive workspace manifest mismatch")
+
+        extractor = _DestinationExtractor(destination)
+        try:
+            stream.seek(0)
+            second_manifest, second_archive_sha, second_kinds = _scan_source_seal(
+                stream, paths, extractor
+            )
+            if (
+                second_manifest != expected_manifest
+                or second_archive_sha != expected_archive_sha256
+                or second_kinds != first_kinds
+            ):
+                raise SourceSealError("source seal changed during extraction")
+            extractor.finish_directories()
+            _audit_extracted_closure(extractor, second_kinds)
+        finally:
+            extractor.close()
+
+    if (
+        _stable_file_sha256(
+            path_list,
+            maximum_size=_MAX_PATH_LIST_BYTES,
+            label="source path list",
+        )
+        != expected_path_list_sha256
+        or read_source_path_list(path_list) != paths
+    ):
+        raise SourceSealError("source path list changed during extraction")
+    detached_manifest = workspace_source_manifest_from_exact_path_list(
+        destination, path_list
+    )
+    if detached_manifest != expected_manifest:
+        raise SourceSealError(
+            "extracted source does not match the frozen workspace manifest"
+        )
+    return detached_manifest
+
+
 def _manifest_for_paths(root: Path, paths: Iterable[str]) -> str:
     hasher = hashlib.sha256(_DOMAIN)
     for relative in sorted(set(paths), key=os.fsencode):
@@ -255,6 +1283,12 @@ def workspace_source_manifest(root: Path) -> str:
     return _manifest_for_paths(root, _git_source_paths(root))
 
 
+def workspace_source_manifest_from_path_list(root: Path, path_list: Path) -> str:
+    """Compute the canonical manifest in a detached context without `.git`."""
+
+    return _manifest_for_paths(root.resolve(), read_source_path_list(path_list))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -268,7 +1302,121 @@ def main() -> int:
         action="store_true",
         help="require one clean committed source and print its canonical identity",
     )
+    parser.add_argument(
+        "--write-path-list",
+        type=Path,
+        help="create a detached-build path list with O_EXCL and print its manifest",
+    )
+    parser.add_argument(
+        "--path-list",
+        type=Path,
+        help=(
+            "frozen detached-build path list; alone, compute its manifest, or "
+            "use it with one source-seal mode"
+        ),
+    )
+    parser.add_argument(
+        "--require-exact-closure",
+        action="store_true",
+        help="with --path-list, reject every extra or unsupported detached member",
+    )
+    parser.add_argument(
+        "--validate-sealed-context",
+        type=Path,
+        help="require the exact minimal Taira BuildKit context inventory",
+    )
+    parser.add_argument(
+        "--create-sealed-archive",
+        type=Path,
+        help="create one deterministic source seal with O_EXCL",
+    )
+    parser.add_argument(
+        "--extract-sealed-archive",
+        type=Path,
+        help="validate twice and safely extract one deterministic source seal",
+    )
+    parser.add_argument(
+        "--destination",
+        type=Path,
+        help="pre-existing empty, non-symlink source-seal extraction directory",
+    )
+    parser.add_argument(
+        "--expected-manifest",
+        help="required canonical workspace manifest for a source-seal operation",
+    )
+    parser.add_argument(
+        "--expected-archive-sha256",
+        help="required sealed archive checksum for extraction",
+    )
+    parser.add_argument(
+        "--expected-path-list-sha256",
+        help="required frozen path-list checksum for extraction",
+    )
     args = parser.parse_args()
+    seal_modes = sum(
+        value is not None
+        for value in (args.create_sealed_archive, args.extract_sealed_archive)
+    )
+    if seal_modes > 1:
+        parser.error("source-seal create and extract modes are mutually exclusive")
+    if args.release_identity_json and (
+        args.write_path_list is not None
+        or args.path_list is not None
+        or args.validate_sealed_context is not None
+        or seal_modes
+    ):
+        parser.error(
+            "--release-identity-json cannot be combined with path-list or "
+            "source-seal modes"
+        )
+    if args.write_path_list is not None and (
+        args.path_list is not None
+        or args.validate_sealed_context is not None
+        or args.require_exact_closure
+        or seal_modes
+    ):
+        parser.error("--write-path-list must be used by itself")
+    if args.validate_sealed_context is not None and (
+        args.path_list is not None
+        or args.require_exact_closure
+        or seal_modes
+    ):
+        parser.error("--validate-sealed-context must be used by itself")
+    if args.require_exact_closure and (
+        args.path_list is None or seal_modes
+    ):
+        parser.error(
+            "--require-exact-closure requires standalone --path-list mode"
+        )
+    if seal_modes and (args.path_list is None or args.expected_manifest is None):
+        parser.error(
+            "source-seal modes require --path-list and --expected-manifest"
+        )
+    if args.create_sealed_archive is not None and (
+        args.destination is not None
+        or args.expected_archive_sha256 is not None
+        or args.expected_path_list_sha256 is not None
+    ):
+        parser.error("source-seal creation does not accept extraction arguments")
+    if args.extract_sealed_archive is not None and (
+        args.destination is None
+        or args.expected_archive_sha256 is None
+        or args.expected_path_list_sha256 is None
+    ):
+        parser.error(
+            "source-seal extraction requires --destination, "
+            "--expected-archive-sha256, and --expected-path-list-sha256"
+        )
+    if seal_modes == 0 and any(
+        value is not None
+        for value in (
+            args.destination,
+            args.expected_manifest,
+            args.expected_archive_sha256,
+            args.expected_path_list_sha256,
+        )
+    ):
+        parser.error("source-seal control arguments require a source-seal mode")
     try:
         if args.release_identity_json:
             print(
@@ -278,11 +1426,53 @@ def main() -> int:
                     separators=(",", ":"),
                 )
             )
+        elif args.write_path_list is not None:
+            paths = _git_source_paths(args.root.resolve())
+            write_source_path_list(args.write_path_list, paths)
+            print(_manifest_for_paths(args.root.resolve(), paths))
+        elif args.validate_sealed_context is not None:
+            validate_sealed_context(args.validate_sealed_context)
+            print("sealed context inventory verified")
+        elif args.create_sealed_archive is not None:
+            print(
+                create_source_seal(
+                    args.root,
+                    args.path_list,
+                    args.create_sealed_archive,
+                    args.expected_manifest,
+                )
+            )
+        elif args.extract_sealed_archive is not None:
+            print(
+                extract_source_seal(
+                    args.extract_sealed_archive,
+                    args.path_list,
+                    args.destination,
+                    args.expected_manifest,
+                    args.expected_archive_sha256,
+                    args.expected_path_list_sha256,
+                )
+            )
+        elif args.path_list is not None:
+            if args.require_exact_closure:
+                print(
+                    workspace_source_manifest_from_exact_path_list(
+                        args.root, args.path_list
+                    )
+                )
+            else:
+                print(
+                    workspace_source_manifest_from_path_list(
+                        args.root, args.path_list
+                    )
+                )
         else:
             print(workspace_source_manifest(args.root))
     except (
         ActiveGitOperationError,
         DirtyReleaseSourceError,
+        SourcePathListError,
+        SourceSealError,
         UnmergedSourceError,
         OSError,
         subprocess.CalledProcessError,

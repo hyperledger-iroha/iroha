@@ -2,6 +2,7 @@
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
     asset::AssetDefinitionId,
+    events::data::prelude::AssetBatchTransferOutcome,
     nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
     prelude::Quantity,
     transaction::{
@@ -656,6 +657,10 @@ pub struct PipelineTransactionStatusResponse {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub trigger_completions: Vec<TriggerCompletionSummary>,
+    /// Durable correlated outcomes for a native independent transfer batch.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub batch_transfer_outcomes: Vec<AssetBatchTransferOutcome>,
     /// Read scope applied by Torii (`local`, `auto`, `global`).
     pub scope: String,
     /// Source used to resolve the status (`cache`, `queue`, `state`).
@@ -815,6 +820,7 @@ impl PipelineTransactionStatusResponse {
             summary,
             diagnostics,
             trigger_completions: Vec::new(),
+            batch_transfer_outcomes: Vec::new(),
             scope,
             resolved_from,
         }

@@ -391,6 +391,9 @@ mod asset {
             #[has_origin(metadata_changed => &metadata_changed.target)]
             /// Metadata entry was removed.
             MetadataRemoved(AssetMetadataChanged),
+            #[has_origin(outcome => &outcome.asset)]
+            /// One ordered leg outcome from a native batch-transfer receipt.
+            BatchTransferOutcome(AssetBatchTransferOutcome),
         }
     }
 
@@ -439,6 +442,81 @@ mod asset {
         pub struct AssetChanged {
             pub asset: AssetId,
             pub amount: Quantity,
+        }
+
+        /// Stable rejection classification for one independently settled batch leg.
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+        )]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(tag = "code", content = "value"))]
+        #[repr(u8)]
+        pub enum AssetBatchTransferRejectionCode {
+            /// The source balance cannot cover the requested quantity.
+            InsufficientFunds,
+            /// The destination balance would exceed its configured holding limit.
+            HoldingLimitExceeded,
+            /// Outgoing transfers are frozen for the source account.
+            Frozen,
+            /// The source account is blacklisted for the asset.
+            Blacklisted,
+            /// Another deterministic business policy rejected the leg.
+            PolicyRejected,
+        }
+
+        /// Final status for one native batch-transfer leg.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+        pub enum AssetBatchTransferLegStatus {
+            /// The leg changed balances and committed.
+            Applied,
+            /// The leg made no state change.
+            Rejected(AssetBatchTransferRejection),
+        }
+
+        /// Stable rejection detail for one independent batch leg.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct AssetBatchTransferRejection {
+            /// Stable machine-readable rejection code.
+            pub code: AssetBatchTransferRejectionCode,
+            /// Deterministic human-readable detail.
+            pub message: String,
+        }
+
+        /// Consensus-bound receipt row for one ordered native batch-transfer leg.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct AssetBatchTransferOutcome {
+            /// Zero-based position within the batch instruction.
+            pub leg_index: u32,
+            /// Caller-selected leg correlation identifier.
+            pub leg_id: String,
+            /// Source asset whose balance was evaluated.
+            pub asset: AssetId,
+            /// Destination account.
+            pub destination: AccountId,
+            /// Requested amount.
+            pub amount: Quantity,
+            /// Final leg status.
+            pub status: AssetBatchTransferLegStatus,
         }
 
         /// [`Self`] represents updated total asset quantity.
@@ -2613,9 +2691,11 @@ pub mod prelude {
             AccountRoleChanged,
         },
         asset::{
-            AssetChanged, AssetDefinitionEvent, AssetDefinitionEventSet,
-            AssetDefinitionMintabilityChanged, AssetDefinitionOwnerChanged,
-            AssetDefinitionTotalQuantityChanged, AssetEvent, AssetEventSet, AssetMetadataChanged,
+            AssetBatchTransferLegStatus, AssetBatchTransferOutcome, AssetBatchTransferRejection,
+            AssetBatchTransferRejectionCode, AssetChanged, AssetDefinitionEvent,
+            AssetDefinitionEventSet, AssetDefinitionMintabilityChanged,
+            AssetDefinitionOwnerChanged, AssetDefinitionTotalQuantityChanged, AssetEvent,
+            AssetEventSet, AssetMetadataChanged,
         },
         bridge::{BridgeEvent, BridgeEventSet},
         confidential::{

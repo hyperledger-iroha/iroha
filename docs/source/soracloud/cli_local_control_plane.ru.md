@@ -6,8 +6,8 @@ direction: ltr
 source: docs/source/soracloud/cli_local_control_plane.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 567b63e9b61afaecfa5d85aa60f0348c856557e171559885ffaba45168ce61dc
-source_last_modified: "2026-03-26T06:12:11.480025+00:00"
+source_hash: 9ec2570795693d363c1adaae5509b118f7921ad8c3afa8e5b26ef04f51b27e4d
+source_last_modified: "2026-07-30T05:41:30.891423+00:00"
 translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---

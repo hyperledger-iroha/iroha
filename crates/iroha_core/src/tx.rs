@@ -556,7 +556,7 @@ fn json_object_string(
 fn decode_private_kaigi_fee_binding(
     proof_bytes: &[u8],
 ) -> Result<PrivateKaigiFeeBinding, TransactionRejectionReason> {
-    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes).map_err(|_| {
+    let envelope: OpenVerifyEnvelope = norito::decode_canonical(proof_bytes).map_err(|_| {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
         ))
@@ -634,14 +634,13 @@ fn decode_private_kaigi_fee_binding(
 fn canonical_private_kaigi_fee_transfer_proof(
     proof_bytes: &[u8],
 ) -> Result<Vec<u8>, TransactionRejectionReason> {
-    let mut envelope: OpenVerifyEnvelope =
-        norito::decode_from_bytes(proof_bytes).map_err(|_| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
-            ))
-        })?;
+    let mut envelope: OpenVerifyEnvelope = norito::decode_canonical(proof_bytes).map_err(|_| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
+        ))
+    })?;
     envelope.aux.clear();
-    norito::to_bytes(&envelope).map_err(|err| {
+    norito::encode_canonical(&envelope).map_err(|err| {
         TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
             "failed to canonicalize private Kaigi fee spend proof: {err}"
         )))
@@ -8058,7 +8057,7 @@ pub mod tests {
             proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
             aux: aux.to_vec(),
         };
-        let proof_bytes = norito::to_bytes(&envelope).expect("encode fee envelope");
+        let proof_bytes = norito::encode_canonical(&envelope).expect("encode fee envelope");
 
         let binding =
             super::decode_private_kaigi_fee_binding(&proof_bytes).expect("binding decodes");
@@ -8070,7 +8069,7 @@ pub mod tests {
         let canonical = super::canonical_private_kaigi_fee_transfer_proof(&proof_bytes)
             .expect("canonicalize fee proof");
         let decoded: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&canonical).expect("decode canonical envelope");
+            norito::decode_canonical(&canonical).expect("decode canonical envelope");
         assert_eq!(decoded.backend, envelope.backend);
         assert_eq!(decoded.circuit_id, envelope.circuit_id);
         assert_eq!(decoded.vk_hash, envelope.vk_hash);
@@ -8093,6 +8092,48 @@ pub mod tests {
     }
 
     #[test]
+    fn private_kaigi_fee_binding_rejects_alternate_layout_outer() {
+        let aux = br#"{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"5"}"#;
+        let envelope = OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+            vk_hash: [0x42; 32],
+            public_inputs:
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
+                    .to_vec(),
+            proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
+            aux: aux.to_vec(),
+        };
+        let canonical = norito::encode_canonical(&envelope).expect("encode canonical fee envelope");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope).expect("encode alternate-layout fee envelope")
+        };
+        assert_ne!(alternate, canonical);
+        norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate)
+            .expect("ordinary Norito accepts the advertised layout");
+
+        for err in [
+            super::decode_private_kaigi_fee_binding(&alternate)
+                .expect_err("alternate-layout fee binding must fail closed"),
+            super::canonical_private_kaigi_fee_transfer_proof(&alternate)
+                .expect_err("alternate-layout fee proof must not be normalized"),
+        ] {
+            match err {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("must use OpenVerifyEnvelope payload"),
+                        "unexpected semantic classification: {msg}"
+                    );
+                }
+                other => panic!("unexpected error classification: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn private_kaigi_fee_binding_rejects_negative_amount() {
         let aux = br#"{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"-1"}"#;
         let envelope = OpenVerifyEnvelope {
@@ -8105,7 +8146,8 @@ pub mod tests {
             proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
             aux: aux.to_vec(),
         };
-        let proof_bytes = norito::to_bytes(&envelope).expect("encode negative fee envelope");
+        let proof_bytes =
+            norito::encode_canonical(&envelope).expect("encode negative fee envelope");
 
         let err = super::decode_private_kaigi_fee_binding(&proof_bytes)
             .expect_err("negative private Kaigi fee amount must fail at the nominal boundary");
@@ -8136,7 +8178,7 @@ pub mod tests {
                 aux: aux.into_bytes(),
             };
             let proof_bytes =
-                norito::to_bytes(&envelope).expect("encode noncanonical fee envelope");
+                norito::encode_canonical(&envelope).expect("encode noncanonical fee envelope");
 
             let err = super::decode_private_kaigi_fee_binding(&proof_bytes)
                 .expect_err("noncanonical private Kaigi fee text must fail closed");
@@ -13561,9 +13603,8 @@ pub mod tests {
             };
             let kura = crate::kura::Kura::blank_kura_for_testing();
             let query_handle = crate::query::store::LiveQueryStore::start_test();
-            let chain: ChainId = "chain".parse().unwrap();
-            let mut state = State::new_for_testing(world, kura, query_handle);
-            state.chain_id = chain;
+            let state =
+                State::new_with_chain_for_testing(world, kura, query_handle, CHAIN_ID.clone());
             let mut sandbox = Self {
                 state,
                 transactions: vec![],

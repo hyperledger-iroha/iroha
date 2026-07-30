@@ -46,6 +46,7 @@ use sorafs_manifest::{
 };
 use thiserror::Error;
 
+pub mod bundle_archive;
 pub mod chunker_registry;
 mod chunker_registry_data;
 pub mod fetch_plan;

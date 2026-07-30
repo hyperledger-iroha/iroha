@@ -2,20 +2,39 @@
 //!
 //! This crate is the single policy implementation used by the native IVM and
 //! browser WebAssembly. It deliberately depends on the stable `ivm_abi`
-//! surface, not on the VM runtime, caches, proof systems, or host integrations.
+//! surface and canonical primitive codecs, not on the VM runtime, caches,
+//! proof systems, or host integrations.
 
-use std::{error::Error as StdError, fmt};
+use std::{error::Error as StdError, fmt, fmt::Write as _};
 
 use iroha_crypto::Hash;
-use iroha_data_model::smart_contract::manifest::{ContractManifest, StateDescriptor};
+use iroha_data_model::{
+    account::AccountId,
+    asset::id::{AssetDefinitionId, AssetId},
+    domain::DomainId,
+    name::Name,
+    nexus::DataSpaceId,
+    nft::NftId,
+    prelude::{DecimalValueV1, IntValueV1, Json, QuantityValueV1},
+    smart_contract::manifest::{ContractManifest, StateDescriptor},
+    soracloud::{SoracloudHostRequestEnvelopeV1, SoracloudHostResponseEnvelopeV1},
+};
 use ivm_abi::{
     SyscallPolicy, VMError,
+    axt::{
+        AssetHandle, AxtDescriptor, ProofBlob, validate_asset_handle, validate_descriptor,
+        validate_proof_blob,
+    },
+    codec::decode_canonical_norito,
     metadata::{
         EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
-        EmbeddedStateType, HEADER_SIZE, ParsedLiteralSection, ParsedProgramMetadata,
-        ProgramMetadata, contract_code_hash, mode,
+        EmbeddedStateType, HEADER_SIZE, MAX_EMBEDDED_STATE_TYPE_DEPTH_V1, ParsedLiteralSection,
+        ParsedProgramMetadata, ProgramMetadata, contract_code_hash, mode,
     },
 };
+#[cfg(test)]
+use norito::NoritoSerialize;
+use norito::codec::{Decode, Encode};
 
 mod policy;
 
@@ -105,7 +124,7 @@ impl StdError for ContractArtifactError {}
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    let parsed = parse_contract_metadata(artifact)?;
+    let mut parsed = parse_contract_metadata(artifact)?;
     let contract_interface = validate_contract_envelope(artifact, &parsed)?;
     let code = artifact.get(parsed.code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
@@ -113,11 +132,15 @@ pub fn verify_contract_artifact(
     let decoded = decode_instruction_stream(code)?;
     policy::validate_contract_interface(
         &parsed.metadata,
-        &contract_interface,
+        contract_interface,
         &decoded,
         policy::ValidationProfile::Production,
     )?;
     validate_literal_table(artifact, &parsed, &decoded)?;
+    let contract_interface = parsed
+        .contract_interface
+        .take()
+        .expect("validated contract envelope retains its CNTR interface");
 
     Ok(verified_from_parts(artifact, parsed, contract_interface))
 }
@@ -203,10 +226,10 @@ fn parse_contract_metadata(
     })
 }
 
-fn validate_contract_envelope(
+fn validate_contract_envelope<'a>(
     artifact: &[u8],
-    parsed: &ParsedProgramMetadata,
-) -> Result<EmbeddedContractInterfaceV1, ContractArtifactError> {
+    parsed: &'a ParsedProgramMetadata,
+) -> Result<&'a EmbeddedContractInterfaceV1, ContractArtifactError> {
     let metadata = &parsed.metadata;
     if metadata.version_major != 1 || metadata.version_minor != 1 {
         return Err(ContractArtifactError::invalid(format!(
@@ -242,7 +265,7 @@ fn validate_contract_envelope(
     }
     let contract_interface = parsed
         .contract_interface
-        .clone()
+        .as_ref()
         .ok_or_else(|| ContractArtifactError::invalid("missing required CNTR section"))?;
     let policy = match metadata.abi_version {
         1 => SyscallPolicy::AbiV1,
@@ -456,6 +479,7 @@ fn decode_literal_table(
                 {
                     return Err(VMError::InvalidMetadata);
                 }
+                validate_literal_payload(tlv.type_id, tlv.payload)?;
                 entries.push(DecodedLiteral::Pointer);
             }
             LiteralKindV1::I64 => {
@@ -465,6 +489,75 @@ fn decode_literal_table(
         }
     }
     Ok(entries)
+}
+
+fn decode_canonical_literal_payload<T>(payload: &[u8]) -> Result<T, VMError>
+where
+    T: Decode + Encode,
+{
+    decode_canonical_norito(payload).map_err(|_| VMError::InvalidMetadata)
+}
+
+fn validate_literal_payload(
+    type_id: ivm_abi::pointer_abi::PointerType,
+    payload: &[u8],
+) -> Result<(), VMError> {
+    use ivm_abi::pointer_abi::PointerType;
+
+    // A literal pointer's nominal type is part of the authenticated artifact
+    // contract. Validate every compiler-structured payload at admission rather
+    // than deferring malformed frames to whichever syscall first consumes
+    // them. Blob and NoritoBytes deliberately remain opaque byte containers.
+    //
+    // Keep codec details behind the same deterministic metadata failure used
+    // for every malformed literal-table binding.
+    match type_id {
+        PointerType::AccountId => decode_canonical_literal_payload::<AccountId>(payload).map(drop),
+        PointerType::AssetDefinitionId => {
+            decode_canonical_literal_payload::<AssetDefinitionId>(payload).map(drop)
+        }
+        PointerType::Name => decode_canonical_literal_payload::<Name>(payload).map(drop),
+        PointerType::Json => decode_canonical_literal_payload::<Json>(payload).map(drop),
+        PointerType::NftId => decode_canonical_literal_payload::<NftId>(payload).map(drop),
+        PointerType::Blob | PointerType::NoritoBytes => Ok(()),
+        PointerType::AssetId => decode_canonical_literal_payload::<AssetId>(payload).map(drop),
+        PointerType::DomainId => decode_canonical_literal_payload::<DomainId>(payload).map(drop),
+        PointerType::DataSpaceId => {
+            decode_canonical_literal_payload::<DataSpaceId>(payload).map(drop)
+        }
+        PointerType::AxtDescriptor => {
+            let descriptor = decode_canonical_literal_payload::<AxtDescriptor>(payload)?;
+            validate_descriptor(&descriptor).map_err(|_| VMError::InvalidMetadata)
+        }
+        PointerType::AssetHandle => {
+            let handle = decode_canonical_literal_payload::<AssetHandle>(payload)?;
+            validate_asset_handle(&handle).map_err(|_| VMError::InvalidMetadata)
+        }
+        PointerType::ProofBlob => {
+            let proof = decode_canonical_literal_payload::<ProofBlob>(payload)?;
+            validate_proof_blob(&proof).map_err(|_| VMError::InvalidMetadata)
+        }
+        PointerType::SoracloudRequest => {
+            let request =
+                decode_canonical_literal_payload::<SoracloudHostRequestEnvelopeV1>(payload)?;
+            request.validate().map_err(|_| VMError::InvalidMetadata)
+        }
+        PointerType::SoracloudResponse => {
+            let response =
+                decode_canonical_literal_payload::<SoracloudHostResponseEnvelopeV1>(payload)?;
+            response.validate().map_err(|_| VMError::InvalidMetadata)
+        }
+        PointerType::Int => IntValueV1::decode_frame(payload)
+            .map(drop)
+            .map_err(|_| VMError::InvalidMetadata),
+        PointerType::Decimal => DecimalValueV1::decode_frame(payload)
+            .map(drop)
+            .map_err(|_| VMError::InvalidMetadata),
+        PointerType::Quantity => QuantityValueV1::decode_frame(payload)
+            .map(drop)
+            .map_err(|_| VMError::InvalidMetadata),
+    }
+    .map_err(|_| VMError::InvalidMetadata)
 }
 
 fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDescriptor> {
@@ -478,54 +571,126 @@ fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDe
 }
 
 fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
-    match ty {
-        EmbeddedStateType::Int => "int".to_owned(),
-        EmbeddedStateType::Decimal => "decimal".to_owned(),
-        EmbeddedStateType::Quantity => "quantity".to_owned(),
-        EmbeddedStateType::Bool => "bool".to_owned(),
-        EmbeddedStateType::String => "string".to_owned(),
-        EmbeddedStateType::Bytes => "bytes".to_owned(),
-        EmbeddedStateType::DataSpaceId => "DataSpaceId".to_owned(),
-        EmbeddedStateType::AccountId => "AccountId".to_owned(),
-        EmbeddedStateType::AssetDefinitionId => "AssetDefinitionId".to_owned(),
-        EmbeddedStateType::AssetId => "AssetId".to_owned(),
-        EmbeddedStateType::NftId => "NftId".to_owned(),
-        EmbeddedStateType::DomainId => "DomainId".to_owned(),
-        EmbeddedStateType::Name => "Name".to_owned(),
-        EmbeddedStateType::Json => "Json".to_owned(),
-        EmbeddedStateType::Tuple(items) => format!(
-            "({})",
-            items
-                .iter()
-                .map(manifest_state_type_name)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        EmbeddedStateType::Struct { name, fields } => format!(
-            "{name}{{{}}}",
-            fields
-                .iter()
-                .map(|field| format!("{}: {}", field.name, manifest_state_type_name(&field.ty)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        EmbeddedStateType::StateMap { key, value } => format!(
-            "StateMap<{}, {}>",
-            manifest_state_type_name(key),
-            manifest_state_type_name(value)
-        ),
-        EmbeddedStateType::Option(value) => {
-            format!("Option<{}>", manifest_state_type_name(value))
-        }
-        EmbeddedStateType::Result { ok, err } => format!(
-            "Result<{}, {}>",
-            manifest_state_type_name(ok),
-            manifest_state_type_name(err)
-        ),
-        EmbeddedStateType::List { element, capacity } => {
-            format!("List<{}, {capacity}>", manifest_state_type_name(element))
+    enum Fragment<'a> {
+        Type {
+            ty: &'a EmbeddedStateType,
+            depth: usize,
+        },
+        Text(&'a str),
+        Capacity(u8),
+    }
+
+    let mut output = String::new();
+    let mut pending = vec![Fragment::Type { ty, depth: 1 }];
+    while let Some(fragment) = pending.pop() {
+        match fragment {
+            Fragment::Text(text) => output.push_str(text),
+            Fragment::Capacity(capacity) => {
+                write!(&mut output, "{capacity}").expect("writing to a String cannot fail");
+            }
+            Fragment::Type { ty, depth } => {
+                assert!(
+                    depth <= MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
+                    "validated embedded state type exceeds the V1 nesting limit"
+                );
+                let child_depth = depth
+                    .checked_add(1)
+                    .expect("validated embedded state type depth cannot overflow");
+                match ty {
+                    EmbeddedStateType::Int => output.push_str("int"),
+                    EmbeddedStateType::Decimal => output.push_str("decimal"),
+                    EmbeddedStateType::Quantity => output.push_str("quantity"),
+                    EmbeddedStateType::Bool => output.push_str("bool"),
+                    EmbeddedStateType::String => output.push_str("string"),
+                    EmbeddedStateType::Bytes => output.push_str("bytes"),
+                    EmbeddedStateType::DataSpaceId => output.push_str("DataSpaceId"),
+                    EmbeddedStateType::AccountId => output.push_str("AccountId"),
+                    EmbeddedStateType::AssetDefinitionId => {
+                        output.push_str("AssetDefinitionId");
+                    }
+                    EmbeddedStateType::AssetId => output.push_str("AssetId"),
+                    EmbeddedStateType::NftId => output.push_str("NftId"),
+                    EmbeddedStateType::DomainId => output.push_str("DomainId"),
+                    EmbeddedStateType::Name => output.push_str("Name"),
+                    EmbeddedStateType::Json => output.push_str("Json"),
+                    EmbeddedStateType::Tuple(items) => {
+                        output.push('(');
+                        pending.push(Fragment::Text(")"));
+                        for (index, item) in items.iter().enumerate().rev() {
+                            pending.push(Fragment::Type {
+                                ty: item,
+                                depth: child_depth,
+                            });
+                            if index != 0 {
+                                pending.push(Fragment::Text(", "));
+                            }
+                        }
+                    }
+                    EmbeddedStateType::Struct { name, fields } => {
+                        output.push_str(name);
+                        output.push('{');
+                        pending.push(Fragment::Text("}"));
+                        for (index, field) in fields.iter().enumerate().rev() {
+                            pending.push(Fragment::Type {
+                                ty: &field.ty,
+                                depth: child_depth,
+                            });
+                            pending.push(Fragment::Text(": "));
+                            pending.push(Fragment::Text(&field.name));
+                            if index != 0 {
+                                pending.push(Fragment::Text(", "));
+                            }
+                        }
+                    }
+                    EmbeddedStateType::StateMap { key, value } => {
+                        output.push_str("StateMap<");
+                        pending.push(Fragment::Text(">"));
+                        pending.push(Fragment::Type {
+                            ty: value,
+                            depth: child_depth,
+                        });
+                        pending.push(Fragment::Text(", "));
+                        pending.push(Fragment::Type {
+                            ty: key,
+                            depth: child_depth,
+                        });
+                    }
+                    EmbeddedStateType::Option(value) => {
+                        output.push_str("Option<");
+                        pending.push(Fragment::Text(">"));
+                        pending.push(Fragment::Type {
+                            ty: value,
+                            depth: child_depth,
+                        });
+                    }
+                    EmbeddedStateType::Result { ok, err } => {
+                        output.push_str("Result<");
+                        pending.push(Fragment::Text(">"));
+                        pending.push(Fragment::Type {
+                            ty: err,
+                            depth: child_depth,
+                        });
+                        pending.push(Fragment::Text(", "));
+                        pending.push(Fragment::Type {
+                            ty: ok,
+                            depth: child_depth,
+                        });
+                    }
+                    EmbeddedStateType::List { element, capacity } => {
+                        output.push_str("List<");
+                        pending.push(Fragment::Text(">"));
+                        pending.push(Fragment::Capacity(*capacity));
+                        pending.push(Fragment::Text(", "));
+                        pending.push(Fragment::Type {
+                            ty: element,
+                            depth: child_depth,
+                        });
+                    }
+                }
+            }
         }
     }
+    output
 }
 
 fn header_declares_contract_minor_one(artifact: &[u8]) -> bool {
@@ -559,6 +724,313 @@ pub fn verify_contract_artifact_json(artifact: &[u8]) -> String {
                 .expect("artifact error string must serialize");
             format!("{{\"ok\":false,\"error\":{encoded}}}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_data_model::{nexus::LaneId, smart_contract::manifest::EntryPointKind};
+    use ivm_abi::{
+        axt::{
+            AssetHandle, AxtDescriptor, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
+            ProofBlob,
+        },
+        metadata::EmbeddedStateFieldDescriptor,
+        pointer_abi::PointerType,
+    };
+
+    use super::*;
+
+    fn encoded(descriptor: &AxtDescriptor) -> Vec<u8> {
+        norito::to_bytes(descriptor).expect("encode canonical AXT descriptor")
+    }
+
+    fn contract_artifact_with_state_type(ty: EmbeddedStateType) -> Vec<u8> {
+        let entrypoint = EmbeddedEntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: EntryPointKind::Kotoage,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: Some("Execute".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        };
+        let interface = EmbeddedContractInterfaceV1 {
+            seiyaku_name: "DeepManifest".to_owned(),
+            compiler_fingerprint: "ivm-artifact-admission-tests".to_owned(),
+            abi_hash: ivm_abi::syscalls::compute_abi_hash(SyscallPolicy::AbiV1),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![entrypoint],
+            states: vec![EmbeddedStateDescriptor {
+                name: "deep_state".to_owned(),
+                ty,
+            }],
+            error_codes: Vec::new(),
+        };
+        let mut artifact = ProgramMetadata::default().encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        artifact.extend_from_slice(&ivm_abi::encoding::encode_halt().to_le_bytes());
+        artifact
+    }
+
+    #[test]
+    fn manifest_state_type_names_preserve_variant_spelling_and_order() {
+        let scalar_cases = [
+            (EmbeddedStateType::Int, "int"),
+            (EmbeddedStateType::Decimal, "decimal"),
+            (EmbeddedStateType::Quantity, "quantity"),
+            (EmbeddedStateType::Bool, "bool"),
+            (EmbeddedStateType::String, "string"),
+            (EmbeddedStateType::Bytes, "bytes"),
+            (EmbeddedStateType::DataSpaceId, "DataSpaceId"),
+            (EmbeddedStateType::AccountId, "AccountId"),
+            (EmbeddedStateType::AssetDefinitionId, "AssetDefinitionId"),
+            (EmbeddedStateType::AssetId, "AssetId"),
+            (EmbeddedStateType::NftId, "NftId"),
+            (EmbeddedStateType::DomainId, "DomainId"),
+            (EmbeddedStateType::Name, "Name"),
+            (EmbeddedStateType::Json, "Json"),
+        ];
+        for (ty, expected) in scalar_cases {
+            assert_eq!(manifest_state_type_name(&ty), expected);
+        }
+
+        let composite = EmbeddedStateType::Struct {
+            name: "Envelope".to_owned(),
+            fields: vec![
+                EmbeddedStateFieldDescriptor {
+                    name: "ordered_tuple".to_owned(),
+                    ty: EmbeddedStateType::Tuple(vec![
+                        EmbeddedStateType::Int,
+                        EmbeddedStateType::Decimal,
+                    ]),
+                },
+                EmbeddedStateFieldDescriptor {
+                    name: "ordered_map".to_owned(),
+                    ty: EmbeddedStateType::StateMap {
+                        key: Box::new(EmbeddedStateType::Name),
+                        value: Box::new(EmbeddedStateType::Result {
+                            ok: Box::new(EmbeddedStateType::Option(Box::new(
+                                EmbeddedStateType::Quantity,
+                            ))),
+                            err: Box::new(EmbeddedStateType::List {
+                                element: Box::new(EmbeddedStateType::Bytes),
+                                capacity: 64,
+                            }),
+                        }),
+                    },
+                },
+            ],
+        };
+        assert_eq!(
+            manifest_state_type_name(&composite),
+            "Envelope{ordered_tuple: (int, decimal), ordered_map: StateMap<Name, Result<Option<quantity>, List<bytes, 64>>>}"
+        );
+    }
+
+    #[test]
+    fn depth_255_state_admission_and_manifest_formatting_are_stack_safe() {
+        std::thread::Builder::new()
+            .name("artifact-admission-manifest-depth-boundary".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let wrappers = MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 - 1;
+                let ty = (0..wrappers).fold(EmbeddedStateType::Bool, |ty, _| {
+                    EmbeddedStateType::Option(Box::new(ty))
+                });
+                let artifact = contract_artifact_with_state_type(ty);
+                let verified = verify_contract_artifact(&artifact)
+                    .expect("the exact state-type nesting budget must pass admission");
+                let states = verified
+                    .manifest
+                    .states
+                    .as_deref()
+                    .expect("verified manifest retains its state descriptors");
+                assert_eq!(states.len(), 1);
+                assert_eq!(states[0].name, "deep_state");
+
+                let mut expected = "Option<".repeat(wrappers);
+                expected.push_str("bool");
+                expected.push_str(&">".repeat(wrappers));
+                assert_eq!(states[0].type_name, expected);
+                assert_eq!(verified.contract_interface.states.len(), 1);
+            })
+            .expect("spawn constrained-stack artifact admission test")
+            .join()
+            .expect("depth-255 admission and formatting must not overflow the native stack");
+    }
+
+    #[test]
+    fn axt_descriptor_literal_validation_matches_host_invariants() {
+        let dsid = DataSpaceId::new(7);
+        let other = DataSpaceId::new(11);
+        let touch = AxtTouchSpec {
+            dsid,
+            read: vec!["orders".to_owned()],
+            write: vec!["ledger".to_owned()],
+        };
+        let valid = AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![touch.clone()],
+        };
+        assert_eq!(
+            validate_literal_payload(PointerType::AxtDescriptor, &encoded(&valid)),
+            Ok(())
+        );
+
+        let invalid = [
+            AxtDescriptor {
+                dsids: Vec::new(),
+                touches: Vec::new(),
+            },
+            AxtDescriptor {
+                dsids: vec![dsid, dsid],
+                touches: Vec::new(),
+            },
+            AxtDescriptor {
+                dsids: vec![other],
+                touches: vec![touch.clone()],
+            },
+            AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![touch.clone(), touch],
+            },
+            AxtDescriptor {
+                dsids: vec![other, dsid],
+                touches: Vec::new(),
+            },
+            AxtDescriptor {
+                dsids: vec![dsid, other],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: vec![String::new()],
+                    write: Vec::new(),
+                }],
+            },
+        ];
+        for descriptor in invalid {
+            assert_eq!(
+                validate_literal_payload(PointerType::AxtDescriptor, &encoded(&descriptor)),
+                Err(VMError::InvalidMetadata),
+                "invalid descriptor must fail shared artifact admission: {descriptor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capability_literal_validation_rejects_context_free_faults() {
+        let valid_handle = AssetHandle {
+            scope: vec!["transfer".to_owned()],
+            subject: HandleSubject {
+                account: "subject".to_owned(),
+                origin_dsid: Some(DataSpaceId::new(7)),
+            },
+            budget: HandleBudget {
+                remaining: "1".parse().expect("canonical quantity"),
+                per_use: None,
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![1],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(0),
+            axt_binding: vec![1; 32],
+            manifest_view_root: vec![2; 32],
+            expiry_slot: 1,
+            max_clock_skew_ms: None,
+        };
+        let canonical_handle = encoded_value(&valid_handle);
+        assert_eq!(
+            validate_literal_payload(PointerType::AssetHandle, &canonical_handle),
+            Ok(())
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_handle = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            encoded_value(&valid_handle)
+        };
+        assert_ne!(alternate_handle, canonical_handle);
+        assert_eq!(
+            norito::decode_from_bytes::<AssetHandle>(&alternate_handle)
+                .expect("ordinary Norito accepts its advertised alternate layout"),
+            valid_handle
+        );
+        assert_eq!(
+            validate_literal_payload(PointerType::AssetHandle, &alternate_handle),
+            Err(VMError::InvalidMetadata)
+        );
+
+        let mut malformed_handle = valid_handle.clone();
+        malformed_handle.axt_binding.pop();
+        assert_eq!(
+            validate_literal_payload(PointerType::AssetHandle, &encoded_value(&malformed_handle)),
+            Err(VMError::InvalidMetadata)
+        );
+        let mut unusable_handle = valid_handle.clone();
+        unusable_handle.budget.per_use = Some("0".parse().expect("zero quantity"));
+        assert_eq!(
+            validate_literal_payload(PointerType::AssetHandle, &encoded_value(&unusable_handle)),
+            Err(VMError::InvalidMetadata)
+        );
+        let mut malformed_handle = valid_handle.clone();
+        malformed_handle.scope.push("transfer".to_owned());
+        assert_eq!(
+            validate_literal_payload(PointerType::AssetHandle, &encoded_value(&malformed_handle)),
+            Err(VMError::InvalidMetadata)
+        );
+        let mut unusable_handle = valid_handle.clone();
+        unusable_handle.subject.account.clear();
+        assert_eq!(
+            validate_literal_payload(PointerType::AssetHandle, &encoded_value(&unusable_handle)),
+            Err(VMError::InvalidMetadata)
+        );
+
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let ambient_before = encoded_value(&valid_handle);
+            assert_eq!(
+                validate_literal_payload(PointerType::AssetHandle, &canonical_handle),
+                Ok(())
+            );
+            assert_eq!(
+                encoded_value(&valid_handle),
+                ambient_before,
+                "admission must restore the caller's ambient Norito layout"
+            );
+        }
+
+        let valid_proof = ProofBlob {
+            payload: vec![1],
+            expiry_slot: None,
+        };
+        assert_eq!(
+            validate_literal_payload(PointerType::ProofBlob, &encoded_value(&valid_proof)),
+            Ok(())
+        );
+        let empty_proof = ProofBlob {
+            payload: Vec::new(),
+            expiry_slot: None,
+        };
+        assert_eq!(
+            validate_literal_payload(PointerType::ProofBlob, &encoded_value(&empty_proof)),
+            Err(VMError::InvalidMetadata)
+        );
+    }
+
+    fn encoded_value<T: NoritoSerialize>(value: &T) -> Vec<u8> {
+        norito::to_bytes(value).expect("encode canonical capability value")
     }
 }
 

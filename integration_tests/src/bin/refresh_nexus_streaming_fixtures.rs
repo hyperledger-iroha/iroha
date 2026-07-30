@@ -488,17 +488,17 @@ fn fill_signature(byte: u8) -> [u8; 64] {
 
 fn instruction_fixtures() -> Result<Vec<InstructionFixture<'static>>, Box<dyn Error>> {
     let asset_id = fixture_asset_id()?;
-    let burn_numeric = Quantity::from_str("4")?;
+    let burn_quantity = Quantity::from_str("4")?;
     let burn_fractional = Quantity::from_str("3.1415")?;
-    let mint_numeric = Quantity::from_str("4")?;
+    let mint_quantity = Quantity::from_str("4")?;
     let trigger_id = TriggerId::from_str("reconciliation_guard")?;
 
     Ok(vec![
         InstructionFixture {
             file_name: "burn_asset_quantity.json",
-            fixture_id: "burn-asset-numeric-v1",
-            description: "Canonical Norito encoding for a Burn::Asset numeric instruction burning 4 units.",
-            instruction: Burn::asset_quantity(burn_numeric, asset_id.clone()).into(),
+            fixture_id: "burn-asset-quantity-v1",
+            description: "Canonical Norito encoding for a Burn::Asset quantity instruction burning 4 units.",
+            instruction: Burn::asset_quantity(burn_quantity, asset_id.clone()).into(),
         },
         InstructionFixture {
             file_name: "burn_asset_fractional.json",
@@ -508,9 +508,9 @@ fn instruction_fixtures() -> Result<Vec<InstructionFixture<'static>>, Box<dyn Er
         },
         InstructionFixture {
             file_name: "mint_asset_quantity.json",
-            fixture_id: "mint-asset-numeric-v1",
-            description: "Canonical Norito encoding for a Mint::Asset numeric instruction minting 4 units.",
-            instruction: Mint::asset_quantity(mint_numeric, asset_id).into(),
+            fixture_id: "mint-asset-quantity-v1",
+            description: "Canonical Norito encoding for a Mint::Asset quantity instruction minting 4 units.",
+            instruction: Mint::asset_quantity(mint_quantity, asset_id).into(),
         },
         InstructionFixture {
             file_name: "burn_trigger_repetitions.json",

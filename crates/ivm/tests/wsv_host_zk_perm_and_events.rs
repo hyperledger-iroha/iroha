@@ -1,419 +1,185 @@
 use std::collections::HashMap;
 
 use iroha_crypto::{Hash, PublicKey};
-use iroha_data_model::proof::VerifyingKeyId;
+use iroha_data_model::{
+    isi::{InstructionBox, zk as dm_zk},
+    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+};
 use iroha_primitives::numeric::Quantity;
 use ivm::{
-    IVM, IVMHost, Memory, PointerType,
+    IVM, IVMHost, PointerType, VMError,
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, PermissionToken,
+        WsvHost, ZkAssetMode, ZkPolicyConfig,
     },
     syscalls,
 };
-mod common;
+use ivm_abi::codec::encode_canonical_norito;
 
-fn json_value<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> norito::json::Value {
-    norito::json::to_value(value).expect("serialize json value")
-}
-
-fn json_object<const N: usize>(
-    pairs: [(&'static str, norito::json::Value); N],
-) -> norito::json::Value {
-    norito::json::object(pairs).expect("serialize json object")
-}
-
-fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
-    let payload = PointerType::from_u16(type_id)
-        .map(|pty| common::payload_for_type(pty, payload))
-        .unwrap_or_else(|| payload.to_vec());
-    let mut out = Vec::with_capacity(7 + payload.len() + 32);
-    out.extend_from_slice(&type_id.to_be_bytes());
+fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+    out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
     out.push(1);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload.as_ref());
-    let h: [u8; 32] = Hash::new(payload).into();
-    out.extend_from_slice(&h);
+    out.extend_from_slice(payload);
+    let hash: [u8; 32] = Hash::new(payload).into();
+    out.extend_from_slice(&hash);
     out
 }
 
-fn verify_gas(payload_len: usize) -> u64 {
-    64_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
-}
-
-fn mutation_gas(payload_len: usize) -> u64 {
-    16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
-}
-
-fn json_payload_len(value: &norito::json::Value) -> usize {
-    let bytes = norito::json::to_vec(value).expect("serialize json envelope");
-    common::payload_for_type(PointerType::Json, &bytes).len()
-}
-
-fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
-    let public_key: PublicKey = public_key.parse().unwrap();
+fn account(public_key: &str) -> AccountId {
+    let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }
 
-fn canonical_account(account: AccountId) -> AccountId {
-    let value = norito::json::to_value(&account).expect("serialize account");
-    let literal = value.as_str().expect("account literal");
-    AccountId::parse_encoded(literal)
-        .expect("canonical I105 account id must parse")
-        .into_account_id()
+fn setup_asset(name: &str) -> (AccountId, AssetDefinitionId, MockWorldStateView) {
+    let caller = account("ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774");
+    let domain = DomainId::try_new("domain", "universal").expect("domain id");
+    let asset = AssetDefinitionId::new(domain.clone(), name.parse().expect("asset name"));
+    let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(caller.clone());
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(&caller, domain));
+    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    assert!(wsv.register_asset_definition(&caller, asset.clone(), Mintable::Infinitely));
+    (caller, asset, wsv)
 }
 
-fn execute_json_instruction(vm: &mut IVM, env: norito::json::Value, offset: u64, label: &str) {
-    let bytes = norito::json::to_vec(&env).expect("serialize envelope");
-    let tlv = make_tlv(PointerType::Json as u16, &bytes);
-    vm.memory
-        .preload_input(offset, &tlv)
-        .expect("preload json envelope");
-    vm.set_register(10, Memory::INPUT_START + offset);
-
-    let program = common::assemble_ledger_write_contract_syscalls(&[
-        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
-    ]);
-    vm.load_program(&program).expect("load program");
-    vm.run().expect(label);
-}
-
-fn build_open_verify_envelope_bytes() -> Vec<u8> {
-    let env = iroha_data_model::zk::OpenVerifyEnvelope::new(
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        ivm::host::LABEL_TRANSFER,
-        [0u8; 32],
-        vec![1, 2, 3],
-        vec![4, 5, 6],
-    );
-    norito::to_bytes(&env).expect("encode env")
+fn boxed_payload(instruction: impl Into<InstructionBox>) -> Vec<u8> {
+    encode_canonical_norito(&instruction.into()).expect("canonical InstructionBox")
 }
 
 #[test]
-fn zk_register_shield_permissions_and_events() {
-    // Setup caller and WSV with an asset definition and balance
-    let alice = canonical_account(account(
-        "wonderland",
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+fn direct_zk_register_and_shield_setup_emit_events() {
+    let (caller, asset, mut wsv) = setup_asset("rose");
+    wsv.grant_permission(&caller, PermissionToken::MintAsset(asset.clone()));
+    assert!(wsv.mint(
+        &caller,
+        caller.clone(),
+        asset.clone(),
+        Quantity::from(10_u64)
     ));
-    let mut wsv = MockWorldStateView::new();
-    wsv.add_account_unchecked(alice.clone());
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
-    wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-    assert!(wsv.register_domain(&alice, domain));
-    wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    // Seed asset def and balance
-    assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
-    // Mint to alice using direct WSV primitive for setup
-    wsv.grant_permission(&alice, PermissionToken::MintAsset(ad.clone()));
-    assert!(wsv.mint(&alice, alice.clone(), ad.clone(), Quantity::from(10_u64)));
-
-    // Grant ZK-related permissions
-    wsv.grant_permission(&alice, PermissionToken::RegisterZkAsset(ad.clone()));
-    wsv.grant_permission(&alice, PermissionToken::Shield(ad.clone()));
-    wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
-
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(host);
-
-    // 1) Register ZK asset policy via the JSON envelope path exercised by Torii/Core.
-    let register_payload = json_object([
-        ("asset", json_value(&ad.to_string())),
-        ("mode", json_value("Hybrid")),
-        ("allow_shield", json_value(&true)),
-        ("allow_unshield", json_value(&true)),
-        ("vk_transfer", json_value(&Option::<VerifyingKeyId>::None)),
-        ("vk_unshield", json_value(&Option::<VerifyingKeyId>::None)),
-        ("vk_shield", json_value(&Option::<VerifyingKeyId>::None)),
-    ]);
-    let register_env = json_object([
-        ("type", json_value("zk.RegisterZkAsset")),
-        ("payload", register_payload),
-    ]);
-    execute_json_instruction(&mut vm, register_env, 0, "register zk asset");
-
-    // 2) Shield 3 units: build Shield instruction and execute
-    let note_commitment: norito::json::Value =
-        norito::json::Value::Array((0..32).map(|_| norito::json::Value::from(7u64)).collect());
-    let zero_bytes = |len: usize| {
-        norito::json::Value::Array((0..len).map(|_| norito::json::Value::from(0u64)).collect())
-    };
-    let enc_payload = json_object([
-        (
-            "version",
-            json_value(&iroha_data_model::confidential::CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1),
-        ),
-        ("ephemeral_pubkey", zero_bytes(32)),
-        ("nonce", zero_bytes(24)),
-        ("ciphertext", json_value(&"")),
-    ]);
-    let shield_payload = json_object([
-        ("asset", json_value(&ad.to_string())),
-        ("from", json_value(&alice)),
-        ("amount", json_value(&Quantity::from(3u64))),
-        ("note_commitment", note_commitment.clone()),
-        ("enc_payload", enc_payload),
-    ]);
-    let shield_env = json_object([
-        ("type", json_value("zk.Shield")),
-        ("payload", shield_payload),
-    ]);
-    execute_json_instruction(&mut vm, shield_env, 64, "shield");
-
-    // Inspect events and state via host downcast
-    let host_any = vm.host_mut_any().unwrap();
-    let host = host_any.downcast_mut::<WsvHost>().unwrap();
-    let events = host.wsv.drain_zk_events();
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, ivm::mock_wsv::ZkEvent::ZkPolicyUpdated { .. }))
-    );
-    assert!(events.iter().any(
-        |e| matches!(e, ivm::mock_wsv::ZkEvent::CommitmentAdded { asset, .. } if asset == &ad)
-    ));
-}
-
-#[test]
-fn unshield_requires_verify_even_with_permission() {
-    let alice = canonical_account(account(
-        "wonderland",
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
-    ));
-    let mut wsv = MockWorldStateView::new();
-    wsv.add_account_unchecked(alice.clone());
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
-    wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-    assert!(wsv.register_domain(&alice, domain));
-    wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "gold".parse().unwrap(),
-    );
-    assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
-    // Grant permissions including Unshield
-    wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(host);
-
-    // Build Unshield instruction envelope and attempt without prior ZK_VERIFY_UNSHIELD
-    use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
-    let proof = ProofBox::new("halo2/ipa".into(), vec![0x01]);
-    let vk_ref = VerifyingKeyId::new("halo2/ipa", "unshield_vk");
-    let attach = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_ref);
-    let attach_val = norito::json::to_value(&attach).expect("attach to json");
-    let inputs_val: norito::json::Value =
-        norito::json::Value::Array(vec![norito::json::Value::Array(
-            (0..32).map(|_| norito::json::Value::from(1u64)).collect(),
-        )]);
-    let unshield_env = json_object([
-        ("type", json_value("zk.Unshield")),
-        (
-            "payload",
-            json_object([
-                ("asset", json_value(&ad.to_string())),
-                ("to", json_value(&alice)),
-                ("public_amount", json_value(&Quantity::from(1u64))),
-                ("inputs", inputs_val),
-                ("proof", attach_val),
-                ("root_hint", norito::json::Value::Null),
-            ]),
-        ),
-    ]);
-    let tlv = make_tlv(
-        PointerType::Json as u16,
-        &norito::json::to_vec(&unshield_env).unwrap(),
-    );
-    vm.memory.preload_input(0, &tlv).expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    let prog = common::assemble_ledger_write_contract_syscalls(&[
-        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
-    ]);
-    vm.load_program(&prog).unwrap();
-    // Expect PermissionDenied due to missing verify
-    let res = vm.run();
-    assert!(
-        matches!(&res, Err(ivm::VMError::PermissionDenied)),
-        "missing verify latch must deny an otherwise valid instruction: {res:?}"
-    );
-}
-
-#[test]
-fn zk_transfer_requires_matching_vk_reference() {
-    let alice = canonical_account(account(
-        "wonderland",
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
-    ));
-    let mut wsv = MockWorldStateView::new();
-    wsv.add_account_unchecked(alice.clone());
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
-    wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-    assert!(wsv.register_domain(&alice, domain));
-    wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "lily".parse().unwrap(),
-    );
-    assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
-    let vk_transfer = VerifyingKeyId::new("halo2/ipa", "vk_transfer_ref");
-    let vk_other = VerifyingKeyId::new("halo2/ipa", "vk_other_ref");
-    wsv.insert_verifying_key(vk_transfer.clone(), vec![7u8; 4]);
-    wsv.insert_verifying_key(vk_other.clone(), vec![9u8; 4]);
-    wsv.grant_permission(&alice, PermissionToken::RegisterZkAsset(ad.clone()));
     assert!(wsv.register_zk_asset(
-        ad.clone(),
-        ivm::mock_wsv::ZkPolicyConfig {
-            mode: ivm::mock_wsv::ZkAssetMode::Hybrid,
+        asset.clone(),
+        ZkPolicyConfig {
+            mode: ZkAssetMode::Hybrid,
             allow_shield: true,
             allow_unshield: true,
-            vk_transfer: Some(vk_transfer.clone()),
+            vk_transfer: None,
+            vk_unshield: None,
+            vk_shield: None,
+        }
+    ));
+    assert!(wsv.shield(&caller, &asset, Quantity::from(3_u64), [7; 32]));
+
+    let events = wsv.drain_zk_events();
+    assert!(events.iter().any(
+        |event| matches!(event, ivm::mock_wsv::ZkEvent::ZkPolicyUpdated { asset: id, .. } if id == &asset)
+    ));
+    assert!(events.iter().any(
+        |event| matches!(event, ivm::mock_wsv::ZkEvent::CommitmentAdded { asset: id, .. } if id == &asset)
+    ));
+}
+
+#[test]
+fn canonical_unshield_requires_verify_even_with_permission() {
+    let (caller, asset, mut wsv) = setup_asset("gold");
+    wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
+    let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let mut vm = IVM::new(u64::MAX);
+
+    let instruction = dm_zk::Unshield::new(
+        asset,
+        caller,
+        Quantity::from(1_u64),
+        vec![[1; 32]],
+        ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![0x01]),
+            VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
+        ),
+        None,
+    );
+    let payload = boxed_payload(instruction);
+    let pointer = vm
+        .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+        .expect("allocate instruction");
+    vm.set_register(10, pointer);
+    vm.set_register(11, syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD);
+
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+        Err(VMError::PermissionDenied)
+    );
+}
+
+#[test]
+fn zk_transfer_uses_direct_wsv_api_and_is_never_authorized_by_a0_tags() {
+    let (caller, asset, mut wsv) = setup_asset("lily");
+    let expected_vk = VerifyingKeyId::new("halo2/ipa", "vk_transfer_ref");
+    let other_vk = VerifyingKeyId::new("halo2/ipa", "vk_other_ref");
+    wsv.insert_verifying_key(expected_vk.clone(), vec![7; 4]);
+    wsv.insert_verifying_key(other_vk.clone(), vec![9; 4]);
+    assert!(wsv.register_zk_asset(
+        asset.clone(),
+        ZkPolicyConfig {
+            mode: ZkAssetMode::Hybrid,
+            allow_shield: true,
+            allow_unshield: true,
+            vk_transfer: Some(expected_vk.clone()),
             vk_unshield: None,
             vk_shield: None,
         }
     ));
 
-    let mut host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let matching_proof = ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        ProofBox::new("halo2/ipa".into(), vec![0xAA]),
+        expected_vk,
+    );
+    let other_proof = ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        ProofBox::new("halo2/ipa".into(), vec![0xBB]),
+        other_vk,
+    );
+    assert!(!wsv.zk_transfer(&asset, &[[1; 32]], &[[2; 32]], &other_proof));
+    assert!(wsv.zk_transfer(&asset, &[[1; 32]], &[[2; 32]], &matching_proof));
+
+    let mut host = WsvHost::new_with_subject(wsv, caller, HashMap::new());
     let mut vm = IVM::new(u64::MAX);
-
-    let proof_ref = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xAA]),
-        vk_transfer.clone(),
+    let verify = iroha_data_model::zk::OpenVerifyEnvelope::new(
+        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        ivm::host::LABEL_TRANSFER,
+        [0; 32],
+        vec![1, 2, 3],
+        vec![4, 5, 6],
     );
-    let proof_other = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xBB]),
-        vk_other.clone(),
-    );
-    let proof_missing = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xCC]),
-        VerifyingKeyId::new("halo2/ipa", "missing_vk_ref"),
-    );
-    let proof_json_ref = norito::json::to_value(&proof_ref).expect("proof to json");
-    let proof_json_other = norito::json::to_value(&proof_other).expect("proof to json");
-    let proof_json_missing = norito::json::to_value(&proof_missing).expect("proof to json");
-
-    let mk_inputs = |seed: u64| {
-        norito::json::Value::Array(vec![norito::json::Value::Array(
-            (0..32)
-                .map(|i| norito::json::Value::from(seed + i as u64))
-                .collect(),
-        )])
-    };
-    let outputs_val = norito::json::Value::Array(vec![
-        norito::json::Value::Array((0..32).map(|_| norito::json::Value::from(5u64)).collect()),
-        norito::json::Value::Array((0..32).map(|_| norito::json::Value::from(6u64)).collect()),
-    ]);
-    let mk_payload = |proof: norito::json::Value, seed: u64| {
-        json_object([
-            ("asset", json_value(&ad.to_string())),
-            ("inputs", mk_inputs(seed)),
-            ("outputs", outputs_val.clone()),
-            ("proof", proof),
-            ("root_hint", norito::json::Value::Null),
-        ])
-    };
-    let transfer_env_ref = json_object([
-        ("type", json_value("zk.ZkTransfer")),
-        ("payload", mk_payload(proof_json_ref.clone(), 0)),
-    ]);
-    let transfer_env_other = json_object([
-        ("type", json_value("zk.ZkTransfer")),
-        ("payload", mk_payload(proof_json_other.clone(), 32)),
-    ]);
-    let transfer_env_missing = json_object([
-        ("type", json_value("zk.ZkTransfer")),
-        ("payload", mk_payload(proof_json_missing.clone(), 64)),
-    ]);
-    // Without verify latch, execution fails
-    let tlv = make_tlv(
-        PointerType::Json as u16,
-        &norito::json::to_vec(&transfer_env_ref).unwrap(),
-    );
-    let ptr = vm.alloc_input_tlv(&tlv).unwrap();
-    vm.set_register(10, ptr);
-    let err = host
-        .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-        .expect_err("latch missing");
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
-
-    // Verify transfer envelope to arm latch
-    let env_bytes = build_open_verify_envelope_bytes();
-    let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
-    let ptr_env = vm.alloc_input_tlv(&tlv_env).unwrap();
-    let env_offset = ptr_env - Memory::INPUT_START;
-    vm.set_register(10, ptr_env);
-    let gas = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
-        .expect("verify");
-    assert_eq!(gas, verify_gas(env_bytes.len()));
+    let verify_payload = encode_canonical_norito(&verify).expect("canonical verify envelope");
+    let pointer = vm
+        .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &verify_payload))
+        .expect("allocate verify envelope");
+    vm.set_register(10, pointer);
+    host.syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
+        .expect("arm transfer latch");
     assert_eq!((vm.register(10), vm.register(11)), (1, 0));
 
-    // With matching vk_ref transfer succeeds
-    let tlv = make_tlv(
-        PointerType::Json as u16,
-        &norito::json::to_vec(&transfer_env_ref).unwrap(),
-    );
-    let ptr = vm.alloc_input_tlv(&tlv).unwrap();
-    vm.set_register(10, ptr);
-    let gas = host
-        .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-        .expect("transfer with matching vk");
-    assert_eq!(gas, mutation_gas(json_payload_len(&transfer_env_ref)));
-
-    // Re-arm latch
-    let env_bytes = build_open_verify_envelope_bytes();
-    let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
-    vm.memory
-        .preload_input(env_offset, &tlv_env)
-        .expect("preload verify env");
-    vm.set_register(10, ptr_env);
-    let gas = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
-        .expect("verify");
-    assert_eq!(gas, verify_gas(env_bytes.len()));
-    assert_eq!((vm.register(10), vm.register(11)), (1, 0));
-
-    // Mismatched vk_ref is rejected
-    let tlv = make_tlv(
-        PointerType::Json as u16,
-        &norito::json::to_vec(&transfer_env_other).unwrap(),
-    );
-    let ptr = vm.alloc_input_tlv(&tlv).unwrap();
-    vm.set_register(10, ptr);
-    let err = host
-        .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-        .expect_err("vk mismatch must fail");
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
-
-    // Re-arm latch again and reject proofs missing any verifying key material
-    let env_bytes = build_open_verify_envelope_bytes();
-    let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
-    vm.memory
-        .preload_input(env_offset, &tlv_env)
-        .expect("preload verify env");
-    vm.set_register(10, ptr_env);
-    let gas = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
-        .expect("verify");
-    assert_eq!(gas, verify_gas(env_bytes.len()));
-    assert_eq!(vm.register(10), 1);
-
-    let tlv = make_tlv(
-        PointerType::Json as u16,
-        &norito::json::to_vec(&transfer_env_missing).unwrap(),
-    );
-    let ptr = vm.alloc_input_tlv(&tlv).unwrap();
-    vm.set_register(10, ptr);
-    let err = host
-        .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-        .expect_err("missing verifying key must fail");
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
+    let transfer =
+        dm_zk::ZkTransfer::new(asset, vec![[3; 32]], vec![[4; 32]], matching_proof, None);
+    let payload = boxed_payload(transfer);
+    let pointer = vm
+        .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+        .expect("allocate transfer instruction");
+    vm.set_register(10, pointer);
+    for tag in [
+        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
+        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
+        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+    ] {
+        vm.set_register(11, tag);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+            Err(VMError::PermissionDenied),
+            "tag {tag} must not authorize ZkTransfer"
+        );
+    }
 }

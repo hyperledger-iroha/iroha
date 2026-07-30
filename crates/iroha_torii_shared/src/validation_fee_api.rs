@@ -11,6 +11,7 @@ use iroha_data_model::{
         ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     },
     isi::governance::VotingMode,
+    prelude::Quantity,
     validation_fee::{
         VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, ValidationFeeChargingMode,
         ValidationFeeParliamentAuthorizationV1, ValidationFeePlainElectorateRulesV1,
@@ -32,6 +33,8 @@ pub const VALIDATION_FEE_POLICY_PROOF_RESPONSE_SCHEMA_NAME: &str =
 /// Stable public JSON schema name for a locally verified policy projection.
 pub const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME: &str =
     "iroha.validation_fee.verified_policy_projection.v1";
+const VALIDATION_FEE_PLAIN_BALLOT_AMOUNT_V1: u64 = 150;
+const VALIDATION_FEE_PLAIN_BALLOT_DURATION_BLOCKS_V1: u64 = 3_600;
 /// Current validation-fee proposal read/draft layout.
 pub const VALIDATION_FEE_PROPOSAL_API_VERSION_V1: u16 = 1;
 /// Maximum number of consecutive finality proofs, including the trusted checkpoint proof.
@@ -353,6 +356,15 @@ fn verified_parliament_proposal(
         return Err(format!(
             "validation-fee PLAIN electorate rules are invalid: {reason}"
         ));
+    }
+    if plain_electorate_rules.ballot_amount != Quantity::from(VALIDATION_FEE_PLAIN_BALLOT_AMOUNT_V1)
+        || plain_electorate_rules.ballot_duration_blocks
+            != VALIDATION_FEE_PLAIN_BALLOT_DURATION_BLOCKS_V1
+    {
+        return Err(
+            "verified validation-fee policy requires the exact 150-XOR, 3,600-block PLAIN ballot contract"
+                .to_owned(),
+        );
     }
     let referendum_span = authorization
         .referendum_window
@@ -1228,11 +1240,20 @@ mod tests {
         ValidationFeeGovernanceWindowV1, ValidationFeePlainElectorateEligibilityRuleV1,
     };
 
+    fn fixture_account(seed: u8) -> AccountId {
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("derive deterministic validation-fee fixture account");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
     fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
         ValidationFeePlainElectorateRulesV1 {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
                 .parse()
                 .expect("canonical voting asset"),
+            bond_escrow_account: fixture_account(1),
+            slash_receiver_account: fixture_account(2),
             ballot_amount: 150_u64.into(),
             ballot_duration_blocks: 3_600,
             citizenship_amount: 10_000_u64.into(),
@@ -1392,6 +1413,32 @@ mod tests {
             verified_parliament_proposal("ValidationFeePolicyV1", &authorization, &wrong_duration)
                 .is_err(),
             "the inclusive referendum span must match the proposal-bound duration"
+        );
+
+        let mut non_release_amount = rules.clone();
+        non_release_amount.ballot_amount = 149_u64.into();
+        let matching_non_release_amount = parliament_authorization(&non_release_amount);
+        assert!(
+            verified_parliament_proposal(
+                "ValidationFeePolicyV1",
+                &matching_non_release_amount,
+                &non_release_amount,
+            )
+            .is_err(),
+            "the verified runtime boundary must require the exact 150-XOR ballot"
+        );
+
+        let mut non_release_duration = rules.clone();
+        non_release_duration.ballot_duration_blocks = 3_599;
+        let matching_non_release_duration = parliament_authorization(&non_release_duration);
+        assert!(
+            verified_parliament_proposal(
+                "ValidationFeePolicyV1",
+                &matching_non_release_duration,
+                &non_release_duration,
+            )
+            .is_err(),
+            "the verified runtime boundary must require the exact 3,600-block window"
         );
 
         let mut oversized_authorization = authorization;

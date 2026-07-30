@@ -76,6 +76,20 @@ impl SparseMatrix {
         self.columns
     }
 
+    pub(super) fn entry_count(&self) -> usize {
+        self.coefficients.len()
+    }
+
+    pub(super) fn canonical_entries(&self) -> impl Iterator<Item = (usize, usize, Scalar)> + '_ {
+        self.row_offsets
+            .windows(2)
+            .enumerate()
+            .flat_map(move |(row, bounds)| {
+                (bounds[0]..bounds[1])
+                    .map(move |index| (row, self.column_indices[index], self.coefficients[index]))
+            })
+    }
+
     pub(super) fn multiply(&self, vector: &[Scalar]) -> Result<Vec<Scalar>, R1csError> {
         if vector.len() != self.columns {
             return Err(R1csError::InvalidDimension);
@@ -303,6 +317,14 @@ mod tests {
         assert!(SparseMatrix::new(1, 1, &[(1, 0, s(1))]).is_err());
         assert!(SparseMatrix::new(1, 2, &[(0, 1, s(1)), (0, 0, s(1))]).is_err());
         assert!(SparseMatrix::new(1, 1, &[(0, 0, s(1)), (0, 0, s(2))]).is_err());
+    }
+
+    #[test]
+    fn sparse_matrix_exposes_the_complete_canonical_entry_order() {
+        let entries = [(0, 1, s(3)), (1, 0, s(4)), (1, 2, s(5))];
+        let matrix = SparseMatrix::new(2, 3, &entries).expect("canonical matrix");
+        assert_eq!(matrix.entry_count(), entries.len());
+        assert_eq!(matrix.canonical_entries().collect::<Vec<_>>(), entries);
     }
 
     #[test]

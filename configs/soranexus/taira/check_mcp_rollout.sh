@@ -35,6 +35,7 @@ VALIDATOR_PROGRESS_SAMPLES="${VALIDATOR_PROGRESS_SAMPLES:-3}"
 VALIDATOR_PROGRESS_DELAY_SECONDS="${VALIDATOR_PROGRESS_DELAY_SECONDS:-2}"
 VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-10}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
+EXPECTED_TAIRA_CHAIN_ID=""
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
 SKIP_LOCAL=0
@@ -65,6 +66,7 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
                             [--curl-connect-timeout-seconds N]
                             [--curl-max-time-seconds N]
+                            [--expected-chain-id UUID]
                             [--expected-git-sha 7_TO_40_HEX_SHA] [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
@@ -132,6 +134,12 @@ revision. Both onboarding and faucet helpers wait for their `202 QUEUED`
 receipts to reach `Applied` or `Committed` through the canonical pipeline
 status route. Use `--skip-write-canary` only for read-only validation.
 
+The expected chain ID defaults to the `chain` value in the adjacent canonical
+`config.toml`. Use `--expected-chain-id` only for an operator-confirmed
+deployment of another chain, such as a deliberately restored archived testnet.
+The selected ID is enforced for both canary config preparation and signer
+account derivation.
+
 When `--iroha-bin` is omitted, the script first reuses a repo-local
 `bin/iroha`, `target/debug/iroha`, or `target/release/iroha` if present, and
 otherwise falls back to `cargo run -p iroha_cli --bin iroha -- ...`.
@@ -178,6 +186,35 @@ should_skip_canary_faucet() {
       exit 1
       ;;
   esac
+}
+
+canonical_taira_chain_id() {
+  python3 - "${SCRIPT_DIR}/config.toml" <<'PY'
+import pathlib
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError as error:
+        raise SystemExit(
+            "python3 must provide tomllib (Python 3.11+) or tomli to load the canonical Taira config"
+        ) from error
+
+path = pathlib.Path(sys.argv[1])
+try:
+    with path.open("rb") as handle:
+        config = tomllib.load(handle)
+except (OSError, tomllib.TOMLDecodeError) as error:
+    raise SystemExit(f"canonical Taira config is unavailable or invalid: {error}") from error
+
+chain = config.get("chain")
+if not isinstance(chain, str) or not chain:
+    raise SystemExit("canonical Taira config is missing a top-level `chain` value")
+print(chain)
+PY
 }
 
 while [[ $# -gt 0 ]]; do
@@ -299,6 +336,14 @@ while [[ $# -gt 0 ]]; do
       EXPECTED_TAIRA_GIT_SHA="$2"
       shift 2
       ;;
+    --expected-chain-id)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --expected-chain-id" >&2
+        exit 1
+      }
+      EXPECTED_TAIRA_CHAIN_ID="$2"
+      shift 2
+      ;;
     --iroha-bin)
       [[ $# -ge 2 ]] || {
         echo "missing value for --iroha-bin" >&2
@@ -346,6 +391,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$EXPECTED_TAIRA_CHAIN_ID" ]]; then
+  EXPECTED_TAIRA_CHAIN_ID="$(canonical_taira_chain_id)"
+fi
+if [[ ! "$EXPECTED_TAIRA_CHAIN_ID" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+  echo "--expected-chain-id must be one canonical UUID" >&2
+  exit 1
+fi
+EXPECTED_TAIRA_CHAIN_ID="$(printf '%s' "$EXPECTED_TAIRA_CHAIN_ID" | tr 'A-F' 'a-f')"
 
 if [[ $SKIP_LOCAL -eq 1 && $SKIP_PUBLIC -eq 1 ]]; then
   echo "nothing to check: both local and public checks were skipped" >&2
@@ -475,9 +529,8 @@ JSONRPC_TOOLS_LIST='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 JSONRPC_INITIALIZE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"taira-rollout-smoke","version":"1"}}}'
 JSONRPC_INITIALIZED='{"jsonrpc":"2.0","method":"notifications/initialized"}'
 REQUIRED_TOOL_NAMES=(
-  "iroha.status"
+  "iroha.health"
   "iroha.sumeragi.status"
-  "iroha.time.now"
   "iroha.musubi.search"
   "iroha.musubi.release.get"
   "iroha.musubi.instructions.yank_release"
@@ -954,6 +1007,64 @@ if actual_code != expected_code:
     )
 PY
   fi
+}
+
+check_time_snapshot() {
+  local label="$1"
+  local url="$2"
+
+  echo "==> ${label}: GET ${url}"
+  http_request GET "$url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "${label}: public node wall-clock route failed with HTTP ${last_status}; expected 200" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    exit 1
+  fi
+  python3 - "$label" "$last_body" <<'PY'
+import json
+import sys
+
+label, body_path = sys.argv[1:]
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member {key!r}")
+        result[key] = value
+    return result
+
+try:
+    with open(body_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+except (OSError, ValueError, json.JSONDecodeError) as error:
+    raise SystemExit(f"{label}: /v1/time/now returned invalid JSON: {error}") from error
+
+def fail(message):
+    raise SystemExit(f"{label}: /v1/time/now is not release-ready: {message}")
+
+if not isinstance(payload, dict):
+    fail("response is not an object")
+for field in ("now", "sample_count", "peer_count"):
+    value = payload.get(field)
+    if type(value) is not int or value <= 0:
+        fail(f"{field} must be a positive integer")
+for field in ("offset_ms", "confidence_ms"):
+    value = payload.get(field)
+    if type(value) is not int or (field == "confidence_ms" and value < 0):
+        fail(f"{field} must be an integer with the canonical range")
+if payload.get("enforcement_mode") != "reject":
+    fail("fail-closed time enforcement is not active")
+if payload.get("fallback") is not False:
+    fail("local-clock fallback is active")
+health = payload.get("health")
+if not isinstance(health, dict):
+    fail("health is not an object")
+for field in ("healthy", "min_samples_ok", "offset_ok", "confidence_ok"):
+    if health.get(field) is not True:
+        fail(f"health.{field} is not true")
+PY
 }
 
 check_status_snapshot() {
@@ -1959,6 +2070,7 @@ check_route_parity() {
   root_url="$(normalize_root_url "$root_url")"
   check_route_status "$label" GET "${root_url}/v1/sccp/capabilities" "200" \
     "SCCP capability discovery route"
+  check_time_snapshot "$label" "${root_url}/v1/time/now"
   check_route_status "$label" GET "${root_url}/v1/sccp/registry" "200" \
     "SCCP typed registry discovery route"
   check_route_status "$label" GET "${root_url}/v1/zk/proofs/count" "200" \
@@ -2107,7 +2219,7 @@ build_write_canary_config() {
   local time_to_live_ms="$4"
   local status_timeout_ms="$5"
 
-  python3 - "$source_config" "$target_torii_url" "$output_config" "$time_to_live_ms" "$status_timeout_ms" <<'PY'
+  python3 - "$source_config" "$target_torii_url" "$output_config" "$time_to_live_ms" "$status_timeout_ms" "$EXPECTED_TAIRA_CHAIN_ID" <<'PY'
 import sys
 
 try:
@@ -2120,11 +2232,17 @@ except ModuleNotFoundError:
             "python3 must provide tomllib (Python 3.11+) or tomli to load the canary config"
         ) from error
 
-source_path, target_torii_url, output_path, time_to_live_ms, status_timeout_ms = sys.argv[1:]
+(
+    source_path,
+    target_torii_url,
+    output_path,
+    time_to_live_ms,
+    status_timeout_ms,
+    expected_chain_id,
+) = sys.argv[1:]
 with open(source_path, "rb") as handle:
     source = tomllib.load(handle)
 
-PUBLIC_TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 chain = source.get("chain")
 account = source.get("account") or {}
 public_key = account.get("public_key")
@@ -2139,10 +2257,10 @@ status_timeout_ms = int(status_timeout_ms)
 
 if not isinstance(chain, str) or not chain:
     raise SystemExit("write canary config is missing a top-level `chain` value")
-if chain != PUBLIC_TAIRA_CHAIN_ID:
+if chain != expected_chain_id:
     raise SystemExit(
-        "write canary config must target the public Sumeragi-v2 Taira chain "
-        f"`{PUBLIC_TAIRA_CHAIN_ID}`"
+        "write canary config must target the expected Taira chain "
+        f"`{expected_chain_id}`"
     )
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
@@ -2267,6 +2385,7 @@ ensure_write_canary_config() {
     "${REPO_ROOT}/scripts/taira_bootstrap_canary.py"
     --torii-root "$target_url"
     --output-config "$WRITE_CONFIG"
+    --chain-id "$EXPECTED_TAIRA_CHAIN_ID"
     --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"
     --time-to-live-ms "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
     --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
@@ -2293,7 +2412,7 @@ resolve_canary_account_id() {
   while IFS= read -r line; do
     values+=("$line")
   done < <(
-    python3 - "$config_path" <<'PY'
+    python3 - "$config_path" "$EXPECTED_TAIRA_CHAIN_ID" <<'PY'
 import sys
 
 try:
@@ -2301,11 +2420,10 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-PUBLIC_TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
-
 with open(sys.argv[1], "rb") as handle:
     source = tomllib.load(handle)
 
+expected_chain_id = sys.argv[2]
 account = source.get("account") or {}
 public_key = account.get("public_key")
 chain = source.get("chain")
@@ -2313,10 +2431,10 @@ chain_discriminant = account.get("chain_discriminant")
 
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
-if chain != PUBLIC_TAIRA_CHAIN_ID:
+if chain != expected_chain_id:
     raise SystemExit(
-        "write canary config must target the public Sumeragi-v2 Taira chain "
-        f"`{PUBLIC_TAIRA_CHAIN_ID}`"
+        "write canary config must target the expected Taira chain "
+        f"`{expected_chain_id}`"
     )
 if chain_discriminant is None:
     chain_discriminant = 369

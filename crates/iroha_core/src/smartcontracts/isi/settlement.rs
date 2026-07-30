@@ -3,10 +3,13 @@
 use std::collections::BTreeSet;
 
 use iroha_data_model::{
-    asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
+    asset::{AssetBalancePolicy, AssetBalanceScope, AssetId, AssetValue},
     events::data::prelude::{ConfigurationEvent, ParameterChanged},
     isi::{
-        error::{InstructionEvaluationError, InstructionExecutionError, InvalidParameterError},
+        error::{
+            AssetTransferAdmissionError, InstructionEvaluationError, InstructionExecutionError,
+            InvalidParameterError,
+        },
         settlement::{
             DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource, PvpIsi,
             SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder,
@@ -14,7 +17,6 @@ use iroha_data_model::{
         },
     },
     prelude::*,
-    query::error::FindError,
 };
 use iroha_executor_data_model::permission::settlement::{
     CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
@@ -26,9 +28,10 @@ use iroha_primitives::{
 
 use super::*;
 use crate::smartcontracts::isi::asset::isi::{
-    assert_numeric_spec_with, execute_native_fx_numeric_asset_pair,
-    validate_native_fx_numeric_asset_pair,
+    apply_resolved_numeric_asset_transfer_delta, assert_numeric_spec_with,
+    execute_native_fx_numeric_asset_pair, validate_native_fx_numeric_asset_pair,
 };
+#[cfg(test)]
 use crate::smartcontracts::isi::error::MathError;
 #[cfg(feature = "telemetry")]
 use crate::sumeragi::status::SettlementOutcomeKind;
@@ -75,6 +78,9 @@ fn settlement_failure_reason(err: &Error) -> &'static str {
         InstructionExecutionError::Find(_) => "missing_entity",
         InstructionExecutionError::Math(_) => "math_error",
         InstructionExecutionError::Evaluate(InstructionEvaluationError::Type(_)) => "type_error",
+        InstructionExecutionError::AssetTransferAdmission(
+            AssetTransferAdmissionError::HoldingLimitExceeded(_),
+        ) => "holding_limit_exceeded",
         _ => "other",
     }
 }
@@ -405,62 +411,98 @@ fn apply_settlement_leg(
     stx: &mut StateTransaction<'_, '_>,
     leg: &SettlementLeg,
     spec: NumericSpec,
-) -> Result<(), Error> {
+) -> Result<AppliedSettlementLeg, Error> {
     assert_numeric_spec_with(leg.quantity().as_numeric(), spec)?;
-    let (withdraw, deposit) = resolve_settlement_leg_asset_ids(stx, leg)?;
-    withdraw_numeric_asset_exact(stx, &withdraw, leg.quantity())?;
-    deposit_numeric_asset_exact(stx, &deposit, leg.quantity())?;
-    Ok(())
+    let (source, destination) = resolve_settlement_leg_asset_ids(stx, leg)?;
+    let before = capture_settlement_assets(stx, &source, &destination);
+    let external_event_len = stx.world.external_event_buf.len();
+    let internal_event_len = stx.world.internal_event_buf.len();
+    apply_resolved_numeric_asset_transfer_delta(stx, &source, &destination, leg.quantity())?;
+    let after = capture_settlement_assets(stx, &source, &destination);
+    Ok(AppliedSettlementLeg {
+        before,
+        after,
+        external_event_len,
+        internal_event_len,
+    })
 }
 
 fn rollback_settlement_leg(
     stx: &mut StateTransaction<'_, '_>,
-    leg: &SettlementLeg,
+    applied: &AppliedSettlementLeg,
 ) -> Result<(), Error> {
-    let (source, destination) = resolve_settlement_leg_asset_ids(stx, leg)?;
-    withdraw_numeric_asset_exact(stx, &destination, leg.quantity())?;
-    deposit_numeric_asset_exact(stx, &source, leg.quantity())?;
-    Ok(())
-}
-
-fn withdraw_numeric_asset_exact(
-    stx: &mut StateTransaction<'_, '_>,
-    id: &AssetId,
-    amount: &Quantity,
-) -> Result<(), Error> {
-    let asset = stx
-        .world
-        .assets
-        .get_mut(id)
-        .ok_or_else(|| FindError::Asset(id.clone().into()))?;
-    let quantity: &mut Quantity = &mut *asset;
-    let candidate = quantity
-        .checked_sub(amount)
-        .map_err(|_| MathError::NotEnoughQuantity)?;
-    *quantity = candidate;
-    if (**asset).is_zero() {
-        assert!(stx.world.remove_asset_and_metadata(id).is_some());
+    // This is a narrowly scoped compensating write, not a forward credit. Verify that no
+    // intervening balance mutation occurred, then restore the exact pre-leg entries without
+    // reapplying policies that may now reject the source's original balance.
+    for expected in &applied.after {
+        let current = stx.world.assets.get(&expected.id).cloned();
+        if current != expected.balance {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "settlement rollback balance changed unexpectedly for {}",
+                    expected.id
+                )
+                .into(),
+            ));
+        }
     }
+
+    for snapshot in &applied.before {
+        if let Some(balance) = snapshot.balance.clone() {
+            stx.world.assets.insert(snapshot.id.clone(), balance);
+            stx.world.track_asset_holder(&snapshot.id);
+            stx.world.refresh_nonzero_asset_holder(&snapshot.id);
+        } else {
+            let _ = stx.world.remove_asset_and_metadata(&snapshot.id);
+        }
+        if let Some(metadata) = snapshot.metadata.clone() {
+            stx.world
+                .asset_metadata
+                .insert(snapshot.id.clone(), metadata);
+        } else {
+            stx.world.asset_metadata.remove(snapshot.id.clone());
+        }
+    }
+
+    stx.world
+        .external_event_buf
+        .truncate(applied.external_event_len);
+    stx.world
+        .internal_event_buf
+        .truncate(applied.internal_event_len);
     Ok(())
 }
 
-fn deposit_numeric_asset_exact(
-    stx: &mut StateTransaction<'_, '_>,
-    id: &AssetId,
-    amount: &Quantity,
-) -> Result<(), Error> {
-    let is_nonzero = {
-        let dst = stx.world.asset_or_insert_exact(id, Quantity::zero())?;
-        let quantity: &mut Quantity = &mut *dst;
-        *quantity = quantity
-            .checked_add(amount)
-            .map_err(|_| MathError::Overflow)?;
-        !quantity.is_zero()
+#[derive(Clone, Debug)]
+struct SettlementAssetSnapshot {
+    id: AssetId,
+    balance: Option<AssetValue>,
+    metadata: Option<Metadata>,
+}
+
+#[derive(Clone, Debug)]
+struct AppliedSettlementLeg {
+    before: Vec<SettlementAssetSnapshot>,
+    after: Vec<SettlementAssetSnapshot>,
+    external_event_len: usize,
+    internal_event_len: usize,
+}
+
+fn capture_settlement_assets(
+    stx: &StateTransaction<'_, '_>,
+    source: &AssetId,
+    destination: &AssetId,
+) -> Vec<SettlementAssetSnapshot> {
+    let capture = |id: &AssetId| SettlementAssetSnapshot {
+        id: id.clone(),
+        balance: stx.world.assets.get(id).cloned(),
+        metadata: stx.world.asset_metadata.get(id).cloned(),
     };
-    if is_nonzero {
-        stx.world.track_nonzero_asset_holder(id);
+    let mut snapshots = vec![capture(source)];
+    if source != destination {
+        snapshots.push(capture(destination));
     }
-    Ok(())
+    snapshots
 }
 
 fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (AssetId, AssetId) {
@@ -556,15 +598,16 @@ fn execute_settlement_pair(
 
     let mut outcome = SettlementPairOutcome::default();
 
-    if let Err(err) = apply_settlement_leg(stx, first.0, first.1) {
-        return Err(SettlementPairError::new(outcome, err));
-    }
+    let first_applied = match apply_settlement_leg(stx, first.0, first.1) {
+        Ok(applied) => applied,
+        Err(err) => return Err(SettlementPairError::new(outcome, err)),
+    };
     outcome.first_committed = true;
 
     if let Err(err) = apply_settlement_leg(stx, second.0, second.1) {
         match plan.atomicity() {
             SettlementAtomicity::AllOrNothing | SettlementAtomicity::CommitSecondLeg => {
-                if let Err(rollback_err) = rollback_settlement_leg(stx, first.0) {
+                if let Err(rollback_err) = rollback_settlement_leg(stx, &first_applied) {
                     log_atomicity_warning("first", &rollback_err);
                 } else {
                     outcome.first_committed = false;
@@ -1317,7 +1360,7 @@ mod tests {
         block::BlockHeader,
         common::Owned,
         domain::{Domain, DomainId},
-        isi::error::InstructionEvaluationError,
+        isi::{SetAssetHoldingLimit, error::InstructionEvaluationError},
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata},
         sns::{NameControllerV1, NameRecordV1},
@@ -1363,6 +1406,36 @@ mod tests {
 
     fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
         settlement_state_with_balances(Quantity::from(10u32), Quantity::from(1_000u32))
+    }
+
+    fn set_test_holding_limit(
+        stx: &mut StateTransaction<'_, '_>,
+        account_id: &AccountId,
+        asset_definition_id: &AssetDefinitionId,
+        limit: Quantity,
+    ) {
+        SetAssetHoldingLimit::new(account_id.clone(), asset_definition_id.clone(), Some(limit))
+            .execute(&ALICE_ID, stx)
+            .expect("asset owner should set the test holding limit");
+    }
+
+    fn asset_balance_or_zero(stx: &StateTransaction<'_, '_>, id: &AssetId) -> Quantity {
+        stx.world
+            .assets
+            .get(id)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
+    }
+
+    fn assert_holding_limit_error(error: &InstructionExecutionError) {
+        assert!(
+            matches!(
+                error,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
+                )
+            ),
+            "expected typed holding-limit error, got {error:?}"
+        );
     }
 
     fn fx_corridor_state(
@@ -2753,6 +2826,168 @@ mod tests {
     }
 
     #[test]
+    fn dvp_holding_limit_rejects_first_leg_without_mutation() {
+        let (state, delivery_def_id, payment_def_id) = settlement_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        set_test_holding_limit(&mut stx, &BOB_ID, &delivery_def_id, Quantity::zero());
+
+        let alice_delivery = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
+        let bob_delivery = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
+        let bob_payment = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
+        let alice_payment = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
+        let external_events_before = stx.world.external_event_buf.len();
+        let internal_events_before = stx.world.internal_event_buf.len();
+        let settlement_id: SettlementId = "dvp_holding_first".parse().unwrap();
+
+        let error = DvpIsi {
+            settlement_id: settlement_id.clone(),
+            delivery_leg: SettlementLeg::new(
+                delivery_def_id,
+                Quantity::from(5_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            payment_leg: SettlementLeg::new(
+                payment_def_id,
+                Quantity::from(100_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            plan: SettlementPlan::new(
+                SettlementExecutionOrder::DeliveryThenPayment,
+                SettlementAtomicity::AllOrNothing,
+            ),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("first destination holding limit must reject DvP");
+        assert_holding_limit_error(&error);
+
+        assert_eq!(
+            asset_balance_or_zero(&stx, &alice_delivery),
+            Quantity::from(10_u32)
+        );
+        assert_eq!(asset_balance_or_zero(&stx, &bob_delivery), Quantity::zero());
+        assert_eq!(
+            asset_balance_or_zero(&stx, &bob_payment),
+            Quantity::from(1_000_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &alice_payment),
+            Quantity::zero()
+        );
+        assert_eq!(stx.world.external_event_buf.len(), external_events_before);
+        assert_eq!(stx.world.internal_event_buf.len(), internal_events_before);
+
+        let ledger = stx
+            .world
+            .settlement_ledgers
+            .get(&settlement_id)
+            .expect("failed DvP should be recorded");
+        let entry = ledger.entries.last().expect("settlement entry");
+        let SettlementOutcomeRecord::Failure(failure) = &entry.outcome else {
+            panic!("expected holding-limit failure");
+        };
+        assert_eq!(failure.reason, "holding_limit_exceeded");
+        assert!(entry.legs.iter().all(|leg| !leg.committed));
+    }
+
+    #[test]
+    fn dvp_holding_limit_rolls_back_first_leg_for_atomic_plans() {
+        for atomicity in [
+            SettlementAtomicity::AllOrNothing,
+            SettlementAtomicity::CommitSecondLeg,
+        ] {
+            let (state, delivery_def_id, payment_def_id) = settlement_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            set_test_holding_limit(&mut stx, &ALICE_ID, &delivery_def_id, Quantity::zero());
+            set_test_holding_limit(&mut stx, &ALICE_ID, &payment_def_id, Quantity::zero());
+
+            let alice_delivery = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
+            let bob_delivery = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
+            let bob_payment = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
+            let alice_payment = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
+            let mut delivery_metadata = Metadata::default();
+            delivery_metadata.insert(
+                "settlement_note".parse().expect("metadata key"),
+                Json::new("restore on rollback".to_owned()),
+            );
+            stx.world
+                .asset_metadata
+                .insert(alice_delivery.clone(), delivery_metadata.clone());
+            let external_events_before = stx.world.external_event_buf.len();
+            let internal_events_before = stx.world.internal_event_buf.len();
+            let settlement_id: SettlementId = "dvp_holding_second".parse().unwrap();
+
+            let error = DvpIsi {
+                settlement_id: settlement_id.clone(),
+                delivery_leg: SettlementLeg::new(
+                    delivery_def_id.clone(),
+                    Quantity::from(10_u32),
+                    ALICE_ID.clone(),
+                    BOB_ID.clone(),
+                ),
+                payment_leg: SettlementLeg::new(
+                    payment_def_id,
+                    Quantity::from(100_u32),
+                    BOB_ID.clone(),
+                    ALICE_ID.clone(),
+                ),
+                plan: SettlementPlan::new(SettlementExecutionOrder::DeliveryThenPayment, atomicity),
+                metadata: Metadata::default(),
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("second destination holding limit must reject DvP");
+            assert_holding_limit_error(&error);
+
+            assert_eq!(
+                asset_balance_or_zero(&stx, &alice_delivery),
+                Quantity::from(10_u32),
+                "rollback must restore a source even when its current limit is lower"
+            );
+            assert_eq!(
+                stx.world.asset_metadata.get(&alice_delivery),
+                Some(&delivery_metadata),
+                "rollback must restore metadata removed by a full-balance debit"
+            );
+            assert_eq!(asset_balance_or_zero(&stx, &bob_delivery), Quantity::zero());
+            assert_eq!(
+                asset_balance_or_zero(&stx, &bob_payment),
+                Quantity::from(1_000_u32)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &alice_payment),
+                Quantity::zero()
+            );
+            assert_eq!(stx.world.external_event_buf.len(), external_events_before);
+            assert_eq!(stx.world.internal_event_buf.len(), internal_events_before);
+            assert!(
+                stx.world
+                    .asset_definition_assets
+                    .get(&delivery_def_id)
+                    .is_some_and(|assets| !assets.contains(&bob_delivery)),
+                "rollback must remove the created destination from holder indexes"
+            );
+
+            let ledger = stx
+                .world
+                .settlement_ledgers
+                .get(&settlement_id)
+                .expect("failed DvP should be recorded");
+            let entry = ledger.entries.last().expect("settlement entry");
+            let SettlementOutcomeRecord::Failure(failure) = &entry.outcome else {
+                panic!("expected holding-limit failure");
+            };
+            assert_eq!(failure.reason, "holding_limit_exceeded");
+            assert!(entry.legs.iter().all(|leg| !leg.committed));
+        }
+    }
+
+    #[test]
     fn dvp_failure_preserves_balances() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -3046,6 +3281,145 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (SettlementLegRole::Primary, false),
+                (SettlementLegRole::Counter, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn pvp_holding_limit_rejects_first_leg_without_mutation() {
+        let (state, primary_def_id, counter_def_id) = settlement_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        set_test_holding_limit(&mut stx, &BOB_ID, &primary_def_id, Quantity::zero());
+
+        let alice_primary = AssetId::new(primary_def_id.clone(), ALICE_ID.clone());
+        let bob_primary = AssetId::new(primary_def_id.clone(), BOB_ID.clone());
+        let bob_counter = AssetId::new(counter_def_id.clone(), BOB_ID.clone());
+        let alice_counter = AssetId::new(counter_def_id.clone(), ALICE_ID.clone());
+        let settlement_id: SettlementId = "pvp_holding_first".parse().unwrap();
+
+        let error = PvpIsi {
+            settlement_id: settlement_id.clone(),
+            primary_leg: SettlementLeg::new(
+                primary_def_id,
+                Quantity::from(5_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            counter_leg: SettlementLeg::new(
+                counter_def_id,
+                Quantity::from(100_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            plan: SettlementPlan::default(),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("first destination holding limit must reject PvP");
+        assert_holding_limit_error(&error);
+
+        assert_eq!(
+            asset_balance_or_zero(&stx, &alice_primary),
+            Quantity::from(10_u32)
+        );
+        assert_eq!(asset_balance_or_zero(&stx, &bob_primary), Quantity::zero());
+        assert_eq!(
+            asset_balance_or_zero(&stx, &bob_counter),
+            Quantity::from(1_000_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &alice_counter),
+            Quantity::zero()
+        );
+        let ledger = stx
+            .world
+            .settlement_ledgers
+            .get(&settlement_id)
+            .expect("failed PvP should be recorded");
+        let entry = ledger.entries.last().expect("settlement entry");
+        let SettlementOutcomeRecord::Failure(failure) = &entry.outcome else {
+            panic!("expected holding-limit failure");
+        };
+        assert_eq!(failure.reason, "holding_limit_exceeded");
+        assert!(entry.legs.iter().all(|leg| !leg.committed));
+    }
+
+    #[test]
+    fn pvp_commit_first_keeps_first_leg_on_second_holding_limit_failure() {
+        let (state, primary_def_id, counter_def_id) = settlement_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        set_test_holding_limit(&mut stx, &ALICE_ID, &counter_def_id, Quantity::zero());
+
+        let alice_primary = AssetId::new(primary_def_id.clone(), ALICE_ID.clone());
+        let bob_primary = AssetId::new(primary_def_id.clone(), BOB_ID.clone());
+        let bob_counter = AssetId::new(counter_def_id.clone(), BOB_ID.clone());
+        let alice_counter = AssetId::new(counter_def_id.clone(), ALICE_ID.clone());
+        let settlement_id: SettlementId = "pvp_holding_commit_first".parse().unwrap();
+
+        let error = PvpIsi {
+            settlement_id: settlement_id.clone(),
+            primary_leg: SettlementLeg::new(
+                primary_def_id,
+                Quantity::from(5_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            counter_leg: SettlementLeg::new(
+                counter_def_id,
+                Quantity::from(100_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            plan: SettlementPlan::new(
+                SettlementExecutionOrder::DeliveryThenPayment,
+                SettlementAtomicity::CommitFirstLeg,
+            ),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("second destination holding limit must reject PvP");
+        assert_holding_limit_error(&error);
+
+        assert_eq!(
+            asset_balance_or_zero(&stx, &alice_primary),
+            Quantity::from(5_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &bob_primary),
+            Quantity::from(5_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &bob_counter),
+            Quantity::from(1_000_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &alice_counter),
+            Quantity::zero()
+        );
+
+        let ledger = stx
+            .world
+            .settlement_ledgers
+            .get(&settlement_id)
+            .expect("failed PvP should be recorded");
+        let entry = ledger.entries.last().expect("settlement entry");
+        let SettlementOutcomeRecord::Failure(failure) = &entry.outcome else {
+            panic!("expected holding-limit failure");
+        };
+        assert_eq!(failure.reason, "holding_limit_exceeded");
+        assert_eq!(
+            entry
+                .legs
+                .iter()
+                .map(|leg| (leg.role, leg.committed))
+                .collect::<Vec<_>>(),
+            vec![
+                (SettlementLegRole::Primary, true),
                 (SettlementLegRole::Counter, false)
             ]
         );

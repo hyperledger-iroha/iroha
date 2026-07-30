@@ -92,6 +92,15 @@ pub(crate) enum V2TransportError {
     UnsolicitedResponse(HashOf<wire::CertifiedBodyRequest>),
     /// The two exact-request indexes disagree for an internally owned request.
     InconsistentRequestIndex(HashOf<wire::CertifiedBodyRequest>),
+    /// Another fully authenticated response already owns this request family.
+    ConflictingCertifiedBodyResponseClaim {
+        /// Outstanding request whose one volatile response slot is occupied.
+        request: HashOf<wire::CertifiedBodyRequest>,
+        /// Exact response already owning the slot.
+        claimed: HashOf<wire::CertifiedBodyResponse>,
+        /// Different authenticated response which attempted to replace it.
+        incoming: HashOf<wire::CertifiedBodyResponse>,
+    },
     /// The exact commit-certificate request is already outstanding.
     DuplicateCommitCertificateRequest(HashOf<wire::CommitCertificateRequest>),
     /// Another signed request already occupies this exact context/requester slot.
@@ -152,6 +161,14 @@ impl fmt::Display for V2TransportError {
             Self::InconsistentRequestIndex(hash) => write!(
                 f,
                 "certified-body request {hash} has inconsistent exact ownership indexes"
+            ),
+            Self::ConflictingCertifiedBodyResponseClaim {
+                request,
+                claimed,
+                incoming,
+            } => write!(
+                f,
+                "certified-body response {incoming} conflicts with claimed response {claimed} for request {request}"
             ),
             Self::DuplicateCommitCertificateRequest(hash) => write!(
                 f,
@@ -415,6 +432,21 @@ pub(crate) struct OutstandingCertifiedBodyRequests {
     capacity: usize,
     requests: BTreeMap<HashOf<wire::CertifiedBodyRequest>, AuthenticatedCertifiedBodyRequest>,
     identities: BTreeMap<RequestIdentity, HashOf<wire::CertifiedBodyRequest>>,
+    /// At most one fully authenticated physical response occurrence per
+    /// outstanding request. This map shares `requests` capacity rather than
+    /// introducing another environment-controlled bound.
+    response_claims:
+        BTreeMap<HashOf<wire::CertifiedBodyRequest>, HashOf<wire::CertifiedBodyResponse>>,
+}
+
+/// Result of acquiring the one volatile response occurrence for an exact
+/// outstanding certified-body request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CertifiedBodyResponseClaimDisposition {
+    /// This response acquired the request's previously empty occurrence slot.
+    Acquired,
+    /// The exact same authenticated response already owns the slot.
+    Coalesced,
 }
 
 /// Preflighted insertion into both exact certified-request indexes.
@@ -455,6 +487,7 @@ impl OutstandingCertifiedBodyRequests {
             capacity,
             requests: BTreeMap::new(),
             identities: BTreeMap::new(),
+            response_claims: BTreeMap::new(),
         })
     }
 
@@ -477,6 +510,12 @@ impl OutstandingCertifiedBodyRequests {
     #[cfg(test)]
     pub(crate) fn hashes(&self) -> BTreeSet<HashOf<wire::CertifiedBodyRequest>> {
         self.requests.keys().copied().collect()
+    }
+
+    /// Number of volatile authenticated response occurrences currently claimed.
+    #[cfg(test)]
+    pub(crate) fn response_claim_count(&self) -> usize {
+        self.response_claims.len()
     }
 
     /// Validate one registration without changing either bounded index.
@@ -548,6 +587,7 @@ impl OutstandingCertifiedBodyRequests {
     pub(crate) fn commit_retirement(&mut self, plan: CertifiedBodyRequestRetirementPlan) {
         self.requests.remove(&plan.request_hash);
         self.identities.remove(&plan.identity);
+        self.response_claims.remove(&plan.request_hash);
     }
 
     /// Register an authenticated request without eviction.
@@ -600,7 +640,11 @@ impl OutstandingCertifiedBodyRequests {
     /// # Errors
     ///
     /// Returns an error for unsolicited/replayed responses, malformed bodies
-    /// or manifests, uncertified/spoofed responders, and invalid signatures.
+    /// or manifests, out-of-roster/spoofed responders, and invalid signatures.
+    /// A frozen-roster historical archive peer does not have to be a signer of
+    /// the old request QC: the verified QC authenticates the exact subject,
+    /// while the response signature authenticates the peer serving the
+    /// hash-bound canonical body.
     /// The outstanding request is retained on both success and error until the
     /// serialized executor explicitly completes or cancels it.
     pub(crate) fn authenticate_response(
@@ -621,14 +665,6 @@ impl OutstandingCertifiedBodyRequests {
             claimed_responder,
             authenticated_responder,
         )?;
-        if request
-            .certificate
-            .signers
-            .binary_search(&response.responder)
-            .is_err()
-        {
-            return Err(wire::ValidationError::ResponderNotCertified.into());
-        }
         response.validate_against(context, request, authenticated_responder)?;
         verify_signature(
             TransportSignatureKind::CertifiedBodyResponse,
@@ -644,6 +680,43 @@ impl OutstandingCertifiedBodyRequests {
             ));
         }
         Ok(AuthenticatedCertifiedBodyResponse { response })
+    }
+
+    /// Claim the one physical response occurrence for a fully authenticated
+    /// outstanding request.
+    ///
+    /// The caller must first perform [`Self::authenticate_response`] and its
+    /// local pending-fetch lookup. Exact retransmission coalesces. A different
+    /// responder or body cannot replace the acquired occurrence while the
+    /// request remains outstanding. Reconstructing this tracker after restart
+    /// deliberately restores requests but no volatile claims.
+    pub(crate) fn claim_authenticated_response(
+        &mut self,
+        authenticated: &AuthenticatedCertifiedBodyResponse,
+    ) -> Result<CertifiedBodyResponseClaimDisposition, V2TransportError> {
+        let response = authenticated.response();
+        let request_hash = response.request_hash;
+        if !self.requests.contains_key(&request_hash) {
+            return Err(V2TransportError::UnsolicitedResponse(request_hash));
+        }
+        debug_assert!(self.response_claims.len() <= self.requests.len());
+        let incoming = HashOf::new(response);
+        match self.response_claims.get(&request_hash).copied() {
+            Some(claimed) if claimed == incoming => {
+                Ok(CertifiedBodyResponseClaimDisposition::Coalesced)
+            }
+            Some(claimed) => Err(V2TransportError::ConflictingCertifiedBodyResponseClaim {
+                request: request_hash,
+                claimed,
+                incoming,
+            }),
+            None => {
+                self.response_claims.insert(request_hash, incoming);
+                debug_assert!(self.response_claims.len() <= self.requests.len());
+                debug_assert!(self.response_claims.len() <= self.capacity);
+                Ok(CertifiedBodyResponseClaimDisposition::Acquired)
+            }
+        }
     }
 }
 
@@ -1301,32 +1374,148 @@ mod tests {
         ));
         assert!(tracker.contains(request_hash));
 
-        let uncertified = fixture.signed_response(&request, 3);
-        let uncertified_sender = Fixture::peer(&fixture.validators[3]);
+        let archive_response = fixture.signed_response(&request, 3);
+        let archive_sender = Fixture::peer(&fixture.validators[3]);
+        let authenticated_archive = tracker
+            .authenticate_response(&fixture.context, archive_response.clone(), &archive_sender)
+            .expect("frozen-roster archive need not have signed the old QC");
+        assert_eq!(authenticated_archive.response(), &archive_response);
+        let mut outside_roster = archive_response;
+        outside_roster.responder =
+            u32::try_from(fixture.context.roster.len()).expect("small fixture roster");
+        outside_roster.signature = Signature::new(
+            fixture.validators[3].private_key(),
+            &outside_roster.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
         assert!(matches!(
-            tracker.authenticate_response(&fixture.context, uncertified, &uncertified_sender),
+            tracker.authenticate_response(&fixture.context, outside_roster, &archive_sender,),
             Err(V2TransportError::Wire(
-                wire::ValidationError::ResponderNotCertified
+                wire::ValidationError::SignerOutOfRange
             ))
         ));
         assert!(tracker.contains(request_hash));
+        assert!(
+            tracker.response_claims.is_empty(),
+            "authentication alone cannot pin the occurrence slot"
+        );
 
         let admitted = tracker
             .authenticate_response(&fixture.context, valid.clone(), &valid_sender)
             .expect("valid certified response");
         assert_eq!(admitted.response(), &valid);
+        assert_eq!(
+            tracker
+                .claim_authenticated_response(&admitted)
+                .expect("first authenticated response acquires its request slot"),
+            CertifiedBodyResponseClaimDisposition::Acquired
+        );
         assert!(tracker.contains(request_hash));
-        let _ = tracker
+        let duplicate = tracker
             .authenticate_response(&fixture.context, valid.clone(), &valid_sender)
             .expect("authentication remains retryable before executor completion");
+        assert_eq!(
+            tracker
+                .claim_authenticated_response(&duplicate)
+                .expect("exact response retry coalesces"),
+            CertifiedBodyResponseClaimDisposition::Coalesced
+        );
+        let competing = fixture.signed_response(&request, 1);
+        let competing = tracker
+            .authenticate_response(
+                &fixture.context,
+                competing,
+                &Fixture::peer(&fixture.validators[1]),
+            )
+            .expect("second certified responder authenticates before claim arbitration");
+        assert!(matches!(
+            tracker.claim_authenticated_response(&competing),
+            Err(V2TransportError::ConflictingCertifiedBodyResponseClaim {
+                request,
+                ..
+            }) if request == request_hash
+        ));
+        assert_eq!(tracker.response_claims.len(), 1);
 
         assert!(tracker.complete(request_hash));
         assert!(tracker.is_empty());
+        assert!(tracker.response_claims.is_empty());
         assert!(!tracker.complete(request_hash));
         assert_eq!(
             tracker.authenticate_response(&fixture.context, valid, &valid_sender),
             Err(V2TransportError::UnsolicitedResponse(request_hash))
         );
+    }
+
+    #[test]
+    fn response_claim_is_bounded_by_request_and_reopens_only_after_restart() {
+        let fixture = Fixture::new();
+        let request = fixture.signed_request();
+        let request_hash = HashOf::new(&request);
+        let authenticated_request = fixture
+            .authenticate_request(request.clone())
+            .expect("authenticate restart request");
+        let first_response = fixture.signed_response(&request, 0);
+        let first_sender = Fixture::peer(&fixture.validators[0]);
+        let mut first =
+            OutstandingCertifiedBodyRequests::new(1).expect("one shared request/claim slot");
+        first
+            .register(authenticated_request.clone())
+            .expect("register restart request");
+        let first_authenticated = first
+            .authenticate_response(&fixture.context, first_response, &first_sender)
+            .expect("authenticate first response");
+        assert_eq!(
+            first
+                .claim_authenticated_response(&first_authenticated)
+                .expect("acquire first response occurrence"),
+            CertifiedBodyResponseClaimDisposition::Acquired
+        );
+        assert_eq!(first.len(), 1);
+        assert_eq!(first.response_claims.len(), 1);
+
+        let competing_response = fixture.signed_response(&request, 1);
+        let competing_sender = Fixture::peer(&fixture.validators[1]);
+        let competing_authenticated = first
+            .authenticate_response(
+                &fixture.context,
+                competing_response.clone(),
+                &competing_sender,
+            )
+            .expect("authenticate competing response");
+        assert!(matches!(
+            first.claim_authenticated_response(&competing_authenticated),
+            Err(V2TransportError::ConflictingCertifiedBodyResponseClaim {
+                request,
+                ..
+            }) if request == request_hash
+        ));
+
+        // Same-height recovery reconstructs the outstanding logical request,
+        // but the unconsumed physical response occurrence is intentionally
+        // volatile. A different certified responder may acquire it anew.
+        let mut restarted =
+            OutstandingCertifiedBodyRequests::new(1).expect("one restarted request/claim slot");
+        restarted
+            .register(authenticated_request)
+            .expect("restore outstanding request without its volatile claim");
+        assert!(restarted.response_claims.is_empty());
+        let after_restart = restarted
+            .authenticate_response(&fixture.context, competing_response, &competing_sender)
+            .expect("authenticate response after restart");
+        assert_eq!(
+            restarted
+                .claim_authenticated_response(&after_restart)
+                .expect("response can reclaim the shared request slot after restart"),
+            CertifiedBodyResponseClaimDisposition::Acquired
+        );
+        assert!(restarted.complete(request_hash));
+        assert!(restarted.response_claims.is_empty());
+        assert!(matches!(
+            restarted.claim_authenticated_response(&after_restart),
+            Err(V2TransportError::UnsolicitedResponse(hash)) if hash == request_hash
+        ));
     }
 
     #[test]

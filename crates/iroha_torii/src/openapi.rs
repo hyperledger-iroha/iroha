@@ -18,6 +18,7 @@ use iroha_torii_shared::{
     uri,
 };
 use norito::json::{Map, Value};
+use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 
 use crate::utils;
 
@@ -5472,6 +5473,62 @@ fn canonical_request_auth_header_parameters() -> Vec<Value> {
     ]
 }
 
+fn evidence_request_parameters(mut parameters: Vec<Value>) -> Vec<Value> {
+    parameters.extend(canonical_request_auth_header_parameters());
+    parameters
+}
+
+fn evidence_opaque_token_schema() -> Value {
+    let max_length = EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1 as u64;
+    norito::json!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": max_length,
+        "pattern": "^[!-~]+$"
+    })
+}
+
+fn evidence_secret_header_param(name: &str, description: &str) -> Value {
+    let Value::Object(mut parameter) = string_header_param(name, description, true) else {
+        unreachable!("string header parameter helper always returns an object");
+    };
+    parameter.insert("schema".into(), evidence_opaque_token_schema());
+    Value::Object(parameter)
+}
+
+fn with_evidence_success_response_headers<const N: usize>(
+    mut methods: Map,
+    method: &str,
+    success_status: &str,
+    headers: [(&str, &str, Value); N],
+) -> Map {
+    let headers = headers
+        .into_iter()
+        .map(|(name, description, schema)| {
+            (
+                name.to_owned(),
+                norito::json!({
+                    "description": description,
+                    "required": true,
+                    "schema": schema
+                }),
+            )
+        })
+        .collect();
+    let response = methods
+        .get_mut(method)
+        .and_then(Value::as_object_mut)
+        .and_then(|operation| operation.get_mut("responses"))
+        .and_then(Value::as_object_mut)
+        .and_then(|responses| responses.get_mut(success_status))
+        .and_then(Value::as_object_mut)
+        .unwrap_or_else(|| {
+            panic!("evidence {method} operation must contain a {success_status} success response")
+        });
+    response.insert("headers".into(), Value::Object(headers));
+    methods
+}
+
 fn hedging_billing_private_response_headers() -> Map {
     let mut headers = Map::new();
     headers.insert(
@@ -7046,44 +7103,76 @@ fn sorafs_paths() -> Map {
     );
     paths.insert(
         "/v1/evidence/session/challenge".to_owned(),
-        Value::Object(json_post_operation_with_success_status(
-            "SoraFS",
-            "Issue a case-bound WebAuthn challenge.",
-            "Require X-Iroha canonical account authentication, resolve the exact finalized moderation case and evidence digest, and authorize only a current assigned juror or the explicit sorafs_evidence_auditor/sorafs_legal_reviewer role. The single-use challenge is returned only in the sensitive X-SoraFS-Evidence-Challenge response header, expires within the configured session ceiling, and is never persisted or logged in plaintext.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(with_evidence_success_response_headers(
+            json_post_operation_with_success_status(
+                "SoraFS",
+                "Issue a case-bound WebAuthn challenge.",
+                "Require X-Iroha canonical account authentication, resolve the exact finalized moderation case and evidence digest, and authorize only a current assigned juror or the explicit sorafs_evidence_auditor/sorafs_legal_reviewer role. The single-use challenge is returned only in the sensitive X-SoraFS-Evidence-Challenge response header, expires within the configured session ceiling, and is never persisted or logged in plaintext.",
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                evidence_request_parameters(Vec::new()),
+                "201",
+            ),
+            "post",
             "201",
+            [(
+                "X-SoraFS-Evidence-Challenge",
+                "Single-use printable-ASCII challenge required by the session endpoint. Never persist or log this value.",
+                evidence_opaque_token_schema(),
+            )],
         )),
     );
     paths.insert(
         "/v1/evidence/session".to_owned(),
-        Value::Object(json_post_operation_with_success_status(
-            "SoraFS",
-            "Create an attested evidence-viewer session.",
-            "Consume one case-bound WebAuthn challenge from the sensitive X-SoraFS-Evidence-Challenge header and a canonical assertion from the bounded JSON body, prevent assertion/challenge replay, recheck finalized authorization, and issue a rotating grant with a hard session lifetime of at most 15 minutes. The grant is returned only in the sensitive X-SoraFS-Evidence-Grant header. The JSON response contains canonical Norito payload-free session and signed receipt envelopes and is private/no-store.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![string_header_param(
-                "X-SoraFS-Evidence-Challenge",
-                "Single-use opaque challenge returned by the challenge endpoint. Never persist or log this value.",
-                true,
-            )],
+        Value::Object(with_evidence_success_response_headers(
+            json_post_operation_with_success_status(
+                "SoraFS",
+                "Create an attested evidence-viewer session.",
+                "Consume one case-bound WebAuthn challenge from the sensitive X-SoraFS-Evidence-Challenge header and a canonical assertion from the bounded JSON body, prevent assertion/challenge replay, recheck finalized authorization, and issue a rotating grant with a hard session lifetime of at most 15 minutes. The grant is returned only in the sensitive X-SoraFS-Evidence-Grant header. The JSON response contains canonical Norito payload-free session and signed receipt envelopes and is private/no-store.",
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                evidence_request_parameters(vec![evidence_secret_header_param(
+                    "X-SoraFS-Evidence-Challenge",
+                    "Single-use opaque challenge returned by the challenge endpoint. Never persist or log this value.",
+                )]),
+                "201",
+            ),
+            "post",
             "201",
+            [(
+                "X-SoraFS-Evidence-Grant",
+                "Current printable-ASCII rotating session grant required by authenticated evidence operations. Never persist or log this value.",
+                evidence_opaque_token_schema(),
+            )],
         )),
     );
     paths.insert(
         "/v1/evidence/manifest/{session_id_hex}".to_owned(),
-        Value::Object(json_get_operation(
-            "SoraFS",
-            "Read a case-bound evidence manifest.",
-            "Authenticate the canonical account and current rotating grant, recheck the finalized juror assignment or explicit auditor/legal role, append a signed hash-chained manifest-access receipt, and return the canonical Norito payload-free manifest with visible per-session watermark metadata. Successful access rotates the grant in X-SoraFS-Evidence-Grant.",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_path_param("session_id_hex", "16-byte evidence-viewer session id."),
-                string_query_param("idempotency_key_hex", "Required non-zero lowercase 32-byte idempotency key."),
-                string_header_param("X-SoraFS-Evidence-Grant", "Current opaque rotating session grant. Never persist or log this value.", true),
-            ],
+        Value::Object(with_evidence_success_response_headers(
+            json_get_operation(
+                "SoraFS",
+                "Read a case-bound evidence manifest.",
+                "Authenticate the canonical account and current rotating grant, recheck the finalized juror assignment or explicit auditor/legal role, append a signed hash-chained manifest-access receipt, and return the canonical Norito payload-free manifest with visible per-session watermark metadata. Successful access rotates the grant in X-SoraFS-Evidence-Grant.",
+                "#/components/schemas/JsonValue",
+                evidence_request_parameters(vec![
+                    string_path_param("session_id_hex", "16-byte evidence-viewer session id."),
+                    required_query_parameter(canonical_nonzero_digest_query_param(
+                        "idempotency_key_hex",
+                        "Required exact lowercase non-zero 32-byte idempotency key.",
+                    )),
+                    evidence_secret_header_param(
+                        "X-SoraFS-Evidence-Grant",
+                        "Current opaque rotating session grant. Never persist or log this value.",
+                    ),
+                ]),
+            ),
+            "get",
+            "200",
+            [(
+                "X-SoraFS-Evidence-Grant",
+                "Rotated printable-ASCII session grant required by the next authenticated evidence operation. Never persist or log this value.",
+                evidence_opaque_token_schema(),
+            )],
         )),
     );
     paths.insert(
@@ -7092,20 +7181,32 @@ fn sorafs_paths() -> Map {
     );
     paths.insert(
         "/v1/evidence/log/{session_id_hex}".to_owned(),
-        Value::Object(json_post_operation_with_success_status(
-            "SoraFS",
-            "Append a signed evidence-viewer interaction.",
-            "Authenticate the canonical account and current rotating grant, recheck finalized authorization, and append a payload-free signed hash-chained event for view, seek, pause, annotation, screenshot-attempt, download-attempt, or attestation-failure metadata. Successful access rotates the grant; raw evidence, response bodies, URLs, assertions, and bearer secrets are never accepted.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_path_param("session_id_hex", "16-byte evidence-viewer session id."),
-                string_header_param("X-SoraFS-Evidence-Grant", "Current opaque rotating session grant. Never persist or log this value.", true),
-            ],
+        Value::Object(with_evidence_success_response_headers(
+            json_post_operation_with_success_status(
+                "SoraFS",
+                "Append a signed evidence-viewer interaction.",
+                "Authenticate the canonical account and current rotating grant, recheck finalized authorization, and append a payload-free signed hash-chained event for view, seek, pause, annotation, screenshot-attempt, download-attempt, or attestation-failure metadata. Successful access rotates the grant; raw evidence, response bodies, URLs, assertions, and bearer secrets are never accepted.",
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                evidence_request_parameters(vec![
+                    string_path_param("session_id_hex", "16-byte evidence-viewer session id."),
+                    evidence_secret_header_param(
+                        "X-SoraFS-Evidence-Grant",
+                        "Current opaque rotating session grant. Never persist or log this value.",
+                    ),
+                ]),
+                "202",
+            ),
+            "post",
             "202",
+            [(
+                "X-SoraFS-Evidence-Grant",
+                "Rotated printable-ASCII session grant required by the next authenticated evidence operation. Never persist or log this value.",
+                evidence_opaque_token_schema(),
+            )],
         )),
     );
-    let mut evidence_audit_parameters = vec![
+    let evidence_audit_parameters = evidence_request_parameters(vec![
         required_query_parameter(canonical_nonzero_digest_query_param(
             "expected_checkpoint_digest_hex",
             "Required exact lowercase non-zero checkpoint digest obtained from the signed checkpoint_anchor returned by /v1/evidence/status or the preceding audit page. A changed checkpoint returns 409 and requires an explicit restart.",
@@ -7128,8 +7229,7 @@ fn sorafs_paths() -> Map {
             1,
             Some(256),
         )),
-    ];
-    evidence_audit_parameters.extend(canonical_request_auth_header_parameters());
+    ]);
     let mut evidence_audit_operation = json_get_operation(
         "SoraFS",
         "Read signed evidence access receipts.",
@@ -7194,7 +7294,7 @@ fn sorafs_paths() -> Map {
         "Read evidence-viewer durable status.",
         "Return bounded payload-free counters and the exact retained Ed25519-signed checkpoint anchor, including its checkpoint digest, receipt count, receipt-chain head, governed signer handle/public key, and signature. A consumer must retain this anchor and supply its checkpoint digest to /v1/evidence/audit. X-Iroha canonical authentication and the explicit evidence-auditor or legal-reviewer role are required.",
         "#/components/schemas/SorafsEvidenceAuditStatusV1",
-        canonical_request_auth_header_parameters(),
+        evidence_request_parameters(Vec::new()),
     );
     let evidence_status_responses = evidence_status_operation
         .get_mut("get")
@@ -7234,7 +7334,7 @@ fn sorafs_paths() -> Map {
             "Require the explicit sorafs_legal_reviewer role and an exact finalized legal authorization, then durably record a payload-free legal hold and Ed25519-signed hash-chained receipt. Legal holds always take precedence over erasure.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            evidence_request_parameters(Vec::new()),
             "201",
         )),
     );
@@ -7246,7 +7346,10 @@ fn sorafs_paths() -> Map {
             "Require the explicit legal-reviewer role and exact finalized legal authorization, then atomically release one active hold and append a signed payload-free receipt.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("hold_id_hex", "16-byte legal-hold id.")],
+            evidence_request_parameters(vec![string_path_param(
+                "hold_id_hex",
+                "16-byte legal-hold id.",
+            )]),
         )),
     );
     let mut evidence_retention = json_get_operation(
@@ -7254,11 +7357,11 @@ fn sorafs_paths() -> Map {
         "Read evidence retention candidates.",
         "Return a bounded deterministic due-erasure projection excluding active legal holds and completed erasures. The explicit legal-reviewer role is required.",
         "#/components/schemas/JsonValue",
-        vec![integer_query_param(
+        evidence_request_parameters(vec![integer_query_param(
             "limit",
             "Candidate limit, from 1 through 256.",
             Some("uint64"),
-        )],
+        )]),
     );
     if let Some(Value::Object(post)) = json_post_operation(
         "SoraFS",
@@ -7266,7 +7369,7 @@ fn sorafs_paths() -> Map {
         "Require the explicit legal-reviewer role and exact finalized legal authorization, then record the retain-until boundary, active legal-hold precedence, and a signed payload-free receipt.",
         "#/components/schemas/JsonValue",
         "#/components/schemas/JsonValue",
-        Vec::new(),
+        evidence_request_parameters(Vec::new()),
     )
     .remove("post")
     {
@@ -7284,7 +7387,7 @@ fn sorafs_paths() -> Map {
             "Require the explicit legal-reviewer role and exact finalized legal authorization. Active legal hold precedence is checked and signed before denial; otherwise the injected KMS/erasure boundary must report a definite irreversible commit before the service appends the signed erasure receipt and revokes all matching sessions.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            evidence_request_parameters(Vec::new()),
         )),
     );
     paths.insert(
@@ -9587,20 +9690,31 @@ fn evidence_segment_operation() -> Map {
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![
+        Value::Array(evidence_request_parameters(vec![
             string_path_param("session_id_hex", "16-byte evidence-viewer session id."),
-            integer_query_param("start", "Inclusive plaintext byte offset.", Some("uint64")),
-            integer_query_param("end", "Exclusive plaintext byte offset.", Some("uint64")),
-            string_query_param(
+            required_query_parameter(bounded_integer_query_param(
+                "start",
+                "Required inclusive plaintext byte offset.",
+                Some("uint64"),
+                0,
+                None,
+            )),
+            required_query_parameter(bounded_integer_query_param(
+                "end",
+                "Required exclusive plaintext byte offset; must be greater than start.",
+                Some("uint64"),
+                1,
+                None,
+            )),
+            required_query_parameter(canonical_nonzero_digest_query_param(
                 "idempotency_key_hex",
-                "Required non-zero lowercase 32-byte idempotency key.",
-            ),
-            string_header_param(
+                "Required exact lowercase non-zero 32-byte idempotency key.",
+            )),
+            evidence_secret_header_param(
                 "X-SoraFS-Evidence-Grant",
                 "Current opaque rotating session grant. Never persist or log this value.",
-                true,
             ),
-        ]),
+        ])),
     );
     let mut responses = Map::new();
     responses.insert(
@@ -9610,7 +9724,28 @@ fn evidence_segment_operation() -> Map {
     operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("get".into(), Value::Object(operation));
-    methods
+    with_evidence_success_response_headers(
+        methods,
+        "get",
+        "206",
+        [
+            (
+                "X-SoraFS-Evidence-Grant",
+                "Rotated printable-ASCII session grant required by the next authenticated evidence operation. Never persist or log this value.",
+                evidence_opaque_token_schema(),
+            ),
+            (
+                "X-SoraFS-Evidence-Receipt-Digest",
+                "Lowercase digest of the non-zero signed receipt committed before releasing this range.",
+                schema_ref("SorafsEvidenceNonzeroHex32V1"),
+            ),
+            (
+                "X-SoraFS-Evidence-Watermark-Digest",
+                "Lowercase non-zero digest of the visible per-session watermark applied to this range.",
+                schema_ref("SorafsEvidenceNonzeroHex32V1"),
+            ),
+        ],
+    )
 }
 
 fn norito_binary_response(description: &str, type_name: &str) -> Value {
@@ -14862,14 +14997,21 @@ fn validation_fee_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "voting_asset_id", "ballot_amount", "ballot_duration_blocks",
-                "citizenship_amount", "max_members", "conviction_step_blocks",
-                "max_conviction", "min_turnout", "approval_threshold_numerator",
+                "voting_asset_id", "bond_escrow_account", "slash_receiver_account",
+                "ballot_amount", "ballot_duration_blocks", "citizenship_amount",
+                "max_members", "conviction_step_blocks", "max_conviction",
+                "min_turnout", "approval_threshold_numerator",
                 "approval_threshold_denominator", "eligibility_rule"
             ],
             "additionalProperties": false,
             "properties": {
                 "voting_asset_id": { "type": "string", "minLength": 1 },
+                "bond_escrow_account": {
+                    "type": "string", "minLength": 1, "maxLength": 4096
+                },
+                "slash_receiver_account": {
+                    "type": "string", "minLength": 1, "maxLength": 4096
+                },
                 "ballot_amount": {
                     "type": "string", "pattern": "^[1-9][0-9]*$"
                 },
@@ -25753,7 +25895,7 @@ fn openapi_schemas() -> Map {
         "TimeNowResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["now", "offset_ms", "confidence_ms", "sample_count", "peer_count", "fallback", "health"],
+            "required": ["now", "offset_ms", "confidence_ms", "sample_count", "peer_count", "enforcement_mode", "fallback", "health"],
             "additionalProperties": false,
             "properties": {
                 "now": {
@@ -25780,6 +25922,11 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64",
                     "description": "Number of peers with recent samples."
+                },
+                "enforcement_mode": {
+                    "type": "string",
+                    "enum": ["warn", "reject"],
+                    "description": "Configured admission behavior while network time is unhealthy."
                 },
                 "fallback": {
                     "type": "boolean",
@@ -25866,7 +26013,7 @@ fn openapi_schemas() -> Map {
         "TimeStatusResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["peers", "samples_used", "offset_ms", "confidence_ms", "fallback", "health", "samples", "rtt", "note"],
+            "required": ["peers", "samples_used", "offset_ms", "confidence_ms", "enforcement_mode", "fallback", "health", "samples", "rtt", "note"],
             "additionalProperties": false,
             "properties": {
                 "peers": {
@@ -25888,6 +26035,11 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64",
                     "description": "Confidence interval (±ms) reported by the network time service."
+                },
+                "enforcement_mode": {
+                    "type": "string",
+                    "enum": ["warn", "reject"],
+                    "description": "Configured admission behavior while network time is unhealthy."
                 },
                 "fallback": {
                     "type": "boolean",
@@ -28441,10 +28593,9 @@ fn privacy_capability_schemas(schemas: &mut Map) {
         "iroha-ivm-private-note-stark-v1",
         "pq-masp-stark-v0",
     ];
-    const PROOF_SYSTEM_LABELS: [&str; 10] = [
+    const PROOF_SYSTEM_LABELS: [&str; 9] = [
         "stark-fri-sha256-goldilocks",
-        "stark-fri-poseidon2-goldilocks",
-        "zk-ams-transparent-stark-poseidon2-goldilocks-mlsags-ristretto255-sha3-512",
+        "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
         "anonymous-pgc-p256",
         "iroha-verange-p256",
         "vega-neutron-nova-spartan-hyrax-t256",
@@ -28455,7 +28606,7 @@ fn privacy_capability_schemas(schemas: &mut Map) {
     ];
     const ENGINE_LABELS: [&str; 9] = [
         "native-goldilocks-stark-fri",
-        "native-zk-ams-transparent-stark-mlsags-ristretto255",
+        "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
         "native-anonymous-pgc-p256",
         "native-verange-p256",
         "native-vega",
@@ -29542,6 +29693,36 @@ mod tests {
     #[test]
     fn validation_fee_openapi_exposes_complete_frozen_plain_electorate() {
         let schemas = openapi_schemas();
+        let rules = schemas
+            .get("ValidationFeePlainElectorateRulesV1")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate rules schema");
+        let required_rules = rules
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("validation-fee frozen electorate required rules");
+        let rule_properties = rules
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate rule properties");
+        for custody_field in ["bond_escrow_account", "slash_receiver_account"] {
+            assert!(
+                required_rules
+                    .iter()
+                    .any(|field| field.as_str() == Some(custody_field)),
+                "{custody_field} must be required by the frozen electorate contract"
+            );
+            assert_eq!(
+                rule_properties
+                    .get(custody_field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("type"))
+                    .and_then(Value::as_str),
+                Some("string"),
+                "{custody_field} must be exposed as a canonical account-id string"
+            );
+        }
+
         let record = schemas
             .get("ValidationFeeProposalRecordV1")
             .and_then(Value::as_object)
@@ -29800,6 +29981,353 @@ mod tests {
         ] {
             assert!(schemas.contains_key(schema), "missing `{schema}` schema");
         }
+    }
+
+    #[test]
+    fn evidence_openapi_matches_authenticated_protocol_contract() {
+        use iroha_torii_shared::route_catalog::AuthenticationPolicy;
+
+        fn method_name(method: CatalogHttpMethod) -> &'static str {
+            match method {
+                CatalogHttpMethod::Get => "get",
+                CatalogHttpMethod::Post => "post",
+                CatalogHttpMethod::Put => "put",
+                CatalogHttpMethod::Patch => "patch",
+                CatalogHttpMethod::Delete => "delete",
+                CatalogHttpMethod::Any => {
+                    panic!("ANY protocol gateways cannot enter the evidence OpenAPI contract")
+                }
+            }
+        }
+
+        fn assert_opaque_token_schema(schema: &Map, context: &str) {
+            assert_eq!(
+                schema.get("type").and_then(Value::as_str),
+                Some("string"),
+                "{context} type"
+            );
+            assert_eq!(
+                schema.get("minLength").and_then(Value::as_u64),
+                Some(1),
+                "{context} minimum length"
+            );
+            assert_eq!(
+                schema.get("maxLength").and_then(Value::as_u64),
+                Some(EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1 as u64),
+                "{context} maximum length"
+            );
+            assert_eq!(
+                schema.get("pattern").and_then(Value::as_str),
+                Some("^[!-~]+$"),
+                "{context} printable-ASCII pattern"
+            );
+        }
+
+        fn assert_nonzero_digest_schema(schema: &Map, context: &str) {
+            assert_eq!(
+                schema.get("type").and_then(Value::as_str),
+                Some("string"),
+                "{context} type"
+            );
+            assert_eq!(
+                schema.get("minLength").and_then(Value::as_u64),
+                Some(64),
+                "{context} minimum length"
+            );
+            assert_eq!(
+                schema.get("maxLength").and_then(Value::as_u64),
+                Some(64),
+                "{context} maximum length"
+            );
+            assert_eq!(
+                schema.get("pattern").and_then(Value::as_str),
+                Some("^(?!0{64}$)[0-9a-f]{64}$"),
+                "{context} canonical non-zero digest pattern"
+            );
+        }
+
+        let document = generate_spec();
+        let evidence_routes = RouteCatalog::new(CATALOGED_ROUTES)
+            .project(
+                CatalogProjection::OpenApi,
+                crate::router::builder::compiled_route_features(),
+            )
+            .into_iter()
+            .filter(|route| route.path().starts_with("/v1/evidence/"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            evidence_routes.len(),
+            12,
+            "the evidence protocol must expose exactly twelve authenticated operations"
+        );
+
+        let expected_auth_headers = BTreeSet::from([
+            ("X-Iroha-Account".to_owned(), false),
+            ("X-Iroha-Signature".to_owned(), false),
+            ("X-Iroha-Timestamp-Ms".to_owned(), false),
+            ("X-Iroha-Nonce".to_owned(), false),
+            ("X-Iroha-Witness".to_owned(), false),
+        ]);
+
+        for route in evidence_routes {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} {} catalog authentication policy",
+                method_name(route.method()),
+                route.path()
+            );
+            let method = method_name(route.method());
+            let operation = openapi_operation(&document, route.path(), method);
+            let auth_headers = operation_header_requirements(operation)
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("X-Iroha-"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                auth_headers,
+                expected_auth_headers,
+                "{method} {} canonical authentication headers",
+                route.path()
+            );
+
+            let expected_secret_headers: BTreeSet<&str> = match (route.path(), method) {
+                ("/v1/evidence/session", "post") => BTreeSet::from(["X-SoraFS-Evidence-Challenge"]),
+                ("/v1/evidence/manifest/{session_id_hex}", "get")
+                | ("/v1/evidence/segment/{session_id_hex}", "get")
+                | ("/v1/evidence/log/{session_id_hex}", "post") => {
+                    BTreeSet::from(["X-SoraFS-Evidence-Grant"])
+                }
+                _ => BTreeSet::new(),
+            };
+            let parameters = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("{method} {} parameters", route.path()));
+            let actual_secret_headers = parameters
+                .iter()
+                .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+                .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+                .filter(|name| name.starts_with("X-SoraFS-Evidence-"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                actual_secret_headers,
+                expected_secret_headers,
+                "{method} {} evidence request headers",
+                route.path()
+            );
+            for name in expected_secret_headers {
+                let parameter = parameters
+                    .iter()
+                    .find(|parameter| {
+                        parameter.get("name").and_then(Value::as_str) == Some(name)
+                            && parameter.get("in").and_then(Value::as_str) == Some("header")
+                    })
+                    .unwrap_or_else(|| panic!("{method} {} {name} request header", route.path()));
+                assert_eq!(
+                    parameter.get("required").and_then(Value::as_bool),
+                    Some(true),
+                    "{method} {} {name} request requirement",
+                    route.path()
+                );
+                assert_opaque_token_schema(
+                    parameter
+                        .get("schema")
+                        .and_then(Value::as_object)
+                        .unwrap_or_else(|| {
+                            panic!("{method} {} {name} request schema", route.path())
+                        }),
+                    &format!("{method} {} {name} request", route.path()),
+                );
+            }
+
+            let (success_status, expected_response_headers): (&str, BTreeSet<&str>) =
+                match (route.path(), method) {
+                    ("/v1/evidence/session/challenge", "post") => {
+                        ("201", BTreeSet::from(["X-SoraFS-Evidence-Challenge"]))
+                    }
+                    ("/v1/evidence/session", "post") => {
+                        ("201", BTreeSet::from(["X-SoraFS-Evidence-Grant"]))
+                    }
+                    ("/v1/evidence/manifest/{session_id_hex}", "get") => {
+                        ("200", BTreeSet::from(["X-SoraFS-Evidence-Grant"]))
+                    }
+                    ("/v1/evidence/segment/{session_id_hex}", "get") => (
+                        "206",
+                        BTreeSet::from([
+                            "X-SoraFS-Evidence-Grant",
+                            "X-SoraFS-Evidence-Receipt-Digest",
+                            "X-SoraFS-Evidence-Watermark-Digest",
+                        ]),
+                    ),
+                    ("/v1/evidence/log/{session_id_hex}", "post") => {
+                        ("202", BTreeSet::from(["X-SoraFS-Evidence-Grant"]))
+                    }
+                    ("/v1/evidence/legal-hold", "post") => ("201", BTreeSet::new()),
+                    _ => ("200", BTreeSet::new()),
+                };
+            let success_response = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get(success_status))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{method} {} {success_status} success response",
+                        route.path()
+                    )
+                });
+            let response_headers = success_response.get("headers").and_then(Value::as_object);
+            let actual_response_headers = response_headers
+                .into_iter()
+                .flat_map(|headers| headers.keys())
+                .map(String::as_str)
+                .filter(|name| name.starts_with("X-SoraFS-Evidence-"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                actual_response_headers,
+                expected_response_headers,
+                "{method} {} evidence success response headers",
+                route.path()
+            );
+            for name in expected_response_headers {
+                let header = response_headers
+                    .and_then(|headers| headers.get(name))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{method} {} {success_status} {name} response header",
+                            route.path()
+                        )
+                    });
+                assert_eq!(
+                    header.get("required").and_then(Value::as_bool),
+                    Some(true),
+                    "{method} {} {name} response requirement",
+                    route.path()
+                );
+                let schema = header
+                    .get("schema")
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("{method} {} {name} response schema", route.path()));
+                match name {
+                    "X-SoraFS-Evidence-Challenge" | "X-SoraFS-Evidence-Grant" => {
+                        assert_opaque_token_schema(
+                            schema,
+                            &format!("{method} {} {name} response", route.path()),
+                        );
+                    }
+                    "X-SoraFS-Evidence-Receipt-Digest" => {
+                        assert_eq!(
+                            schema.get("$ref").and_then(Value::as_str),
+                            Some("#/components/schemas/SorafsEvidenceNonzeroHex32V1")
+                        );
+                    }
+                    "X-SoraFS-Evidence-Watermark-Digest" => {
+                        assert_eq!(
+                            schema.get("$ref").and_then(Value::as_str),
+                            Some("#/components/schemas/SorafsEvidenceNonzeroHex32V1")
+                        );
+                    }
+                    _ => panic!("unexpected evidence response header {name}"),
+                }
+            }
+        }
+
+        let manifest =
+            openapi_operation(&document, "/v1/evidence/manifest/{session_id_hex}", "get");
+        let manifest_queries = manifest
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("evidence manifest parameters")
+            .iter()
+            .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query"))
+            .collect::<Vec<_>>();
+        assert_eq!(manifest_queries.len(), 1);
+        let idempotency_key = manifest_queries[0];
+        assert_eq!(
+            idempotency_key.get("name").and_then(Value::as_str),
+            Some("idempotency_key_hex")
+        );
+        assert_eq!(
+            idempotency_key.get("required").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_nonzero_digest_schema(
+            idempotency_key
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("evidence manifest idempotency key schema"),
+            "evidence manifest idempotency key",
+        );
+
+        let segment = openapi_operation(&document, "/v1/evidence/segment/{session_id_hex}", "get");
+        let segment_queries = segment
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("evidence segment parameters")
+            .iter()
+            .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            segment_queries
+                .iter()
+                .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["start", "end", "idempotency_key_hex"])
+        );
+        let segment_query = |name: &str| {
+            segment_queries
+                .iter()
+                .copied()
+                .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
+                .unwrap_or_else(|| panic!("evidence segment {name} query"))
+        };
+        for name in ["start", "end", "idempotency_key_hex"] {
+            assert_eq!(
+                segment_query(name).get("required").and_then(Value::as_bool),
+                Some(true),
+                "evidence segment {name} requirement"
+            );
+        }
+        let start_schema = segment_query("start")
+            .get("schema")
+            .and_then(Value::as_object)
+            .expect("evidence segment start schema");
+        assert_eq!(
+            start_schema.get("type").and_then(Value::as_str),
+            Some("integer")
+        );
+        assert_eq!(
+            start_schema.get("format").and_then(Value::as_str),
+            Some("uint64")
+        );
+        assert_eq!(start_schema.get("minimum").and_then(Value::as_u64), Some(0));
+        let end = segment_query("end");
+        let end_schema = end
+            .get("schema")
+            .and_then(Value::as_object)
+            .expect("evidence segment end schema");
+        assert_eq!(
+            end_schema.get("type").and_then(Value::as_str),
+            Some("integer")
+        );
+        assert_eq!(
+            end_schema.get("format").and_then(Value::as_str),
+            Some("uint64")
+        );
+        assert_eq!(end_schema.get("minimum").and_then(Value::as_u64), Some(1));
+        assert!(
+            end.get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| description.contains("greater than start"))
+        );
+        assert_nonzero_digest_schema(
+            segment_query("idempotency_key_hex")
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("evidence segment idempotency key schema"),
+            "evidence segment idempotency key",
+        );
     }
 
     #[test]

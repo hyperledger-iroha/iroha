@@ -39,6 +39,7 @@ const UNSUPPORTED_PROTOCOL_ATTACHMENT_BACKENDS: &[&str] = &[
     "verange",
     "zk-ams",
     "zk-x509",
+    "sis-hints-anoncred-pq-v0",
     "sis-with-hints",
     "pq-masp-stark-fri",
 ];

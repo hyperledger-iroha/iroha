@@ -10,8 +10,6 @@ workspace = true
 
 [dependencies]
 iroha_core = { path = "../iroha_core", features = ["zk-stark"] }
+iroha_crypto = { workspace = true, features = ["std", "rand"] }
 iroha_data_model = { workspace = true, features = ["json"] }
 norito = { workspace = true }
-
-[dev-dependencies]
-iroha_crypto = { workspace = true, features = ["std", "rand"] }

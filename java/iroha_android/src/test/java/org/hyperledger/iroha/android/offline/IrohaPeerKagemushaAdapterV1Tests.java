@@ -10,9 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import org.hyperledger.iroha.norito.CRC64;
-import org.hyperledger.iroha.norito.NoritoHeader;
-import org.hyperledger.iroha.norito.SchemaHash;
 import org.junit.Test;
 
 public final class IrohaPeerKagemushaAdapterV1Tests {
@@ -42,7 +39,7 @@ public final class IrohaPeerKagemushaAdapterV1Tests {
     assertEquals(12_447, wrapped.encode().length);
 
     final IrohaPeerWireLimitsV1 tooSmall =
-        new IrohaPeerWireLimitsV1(32 * 1024, archive.length - 1, archive.length - 1);
+        new IrohaPeerWireLimitsV1(32 * 1024, archive.length - 1);
     assertThrows(
         IllegalArgumentException.class,
         () -> IrohaPeerKagemushaAdapterV1.wrap(
@@ -70,35 +67,5 @@ public final class IrohaPeerKagemushaAdapterV1Tests {
       current = current.getParent();
     }
     throw new AssertionError("portable offer fixture is missing");
-  }
-
-  @Test
-  public void rejectsUnexpectedProfileBeforeTypedDecode() {
-    final IrohaPeerWireMessageV1 offline =
-        new IrohaPeerWireMessageV1(
-            new IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                IrohaPeerPayloadKind.PAYMENT,
-                1,
-                new byte[] {1}));
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> IrohaPeerKagemushaAdapterV1.decode(offline));
-  }
-
-  private static byte[] archive(final String schema) {
-    final byte[] payload = {0x51};
-    final NoritoHeader header =
-        new NoritoHeader(
-            SchemaHash.hash16(schema),
-            payload.length,
-            CRC64.compute(payload),
-            NoritoHeader.COMPACT_LEN,
-            NoritoHeader.COMPRESSION_NONE);
-    final int padding = schema.endsWith("KagemushaReceiverAcknowledgementV2") ? 0 : 8;
-    final byte[] archive = new byte[NoritoHeader.HEADER_LENGTH + padding + payload.length];
-    System.arraycopy(header.encode(), 0, archive, 0, NoritoHeader.HEADER_LENGTH);
-    System.arraycopy(payload, 0, archive, NoritoHeader.HEADER_LENGTH + padding, payload.length);
-    return archive;
   }
 }

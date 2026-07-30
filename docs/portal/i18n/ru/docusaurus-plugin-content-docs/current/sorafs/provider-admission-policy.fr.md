@@ -39,7 +39,7 @@ translation_last_reviewed: 2026-02-07
 | Аттестация конечной точки | Объявлено, что конечная точка связана с соглашением о сертификате mTLS или QUIC. | Определите полезную нагрузку Norito `EndpointAttestationV1` и хранилище по конечной точке в пакете доступа. |
 
 ## Порядок поступления1. **Создание предложения**
-   - CLI: дополнительный `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: дополнительный `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      производитель `ProviderAdmissionProposalV1` + пакет аттестации.
    - Проверка: s'assurer des champs requis, ставка > 0, дескриптор canonique chunker в `profile_id`.
 2. **Одобрение управления**
@@ -66,7 +66,7 @@ translation_last_reviewed: 2026-02-07
 
 ### Справка по интерфейсу командной строки
 
-Выполните команду команды через `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+Выполните команду команды через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Требуемые флаги: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     И18НИ00000063Х, И18НИ00000064Х, И18НИ00000065Х,
     `--jurisdiction-code=<ISO3166-1>` и еще больше `--endpoint=<kind:host>`.
@@ -111,7 +111,7 @@ translation_last_reviewed: 2026-02-07
 1. Создайте пару успешных предложений/объявлений с `provider-admission proposal` и `provider-admission sign`, а также дополните их `--retention-epoch` и добавьте к ним ставку/конечные точки, если они есть.
 2. Экзекутес
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -129,7 +129,7 @@ translation_last_reviewed: 2026-02-07
 #### Срочный отзыв
 1. Идентификация скомпрометированного конверта и его отзыва:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

@@ -180,7 +180,7 @@ impl ModerationLedgerPolicyV1 {
     ///
     /// Returns a Norito encoding error if canonical serialization fails.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -337,7 +337,7 @@ impl ModerationPoPRegistrySnapshotV1 {
     ///
     /// Returns an error when Norito cannot encode the snapshot.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -510,7 +510,7 @@ impl ModerationAppealIntakeV1 {
     ///
     /// Returns an error when Norito cannot encode the intake.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -1785,7 +1785,7 @@ pub fn sorafs_repair_action_digest_v1<T: norito::core::NoritoSerialize>(
     authority: &AccountId,
     action: &T,
 ) -> Result<[u8; 32], norito::Error> {
-    let bytes = norito::to_bytes(action)?;
+    let bytes = norito::encode_canonical(action)?;
     let authority = authority.to_string();
     let mut hasher = blake3::Hasher::new();
     hasher.update(REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1);
@@ -2201,19 +2201,36 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout repair-ledger value")
+    }
+
     fn assert_canonical_norito_round_trip<T>(value: &T)
     where
         T: core::fmt::Debug + PartialEq + norito::core::NoritoSerialize,
         for<'de> T: norito::core::NoritoDeserialize<'de>,
     {
-        let encoded = norito::to_bytes(value).expect("encode canonical repair-ledger value");
+        let encoded =
+            norito::encode_canonical(value).expect("encode canonical repair-ledger value");
         let decoded: T =
-            norito::decode_from_bytes(&encoded).expect("decode canonical repair-ledger value");
+            norito::decode_canonical(&encoded).expect("decode canonical repair-ledger value");
         assert_eq!(&decoded, value);
         assert_eq!(
-            norito::to_bytes(&decoded).expect("re-encode canonical repair-ledger value"),
+            norito::encode_canonical(&decoded).expect("re-encode canonical repair-ledger value"),
             encoded
         );
+        let alternate = encode_with_alternate_norito_layout(value);
+        assert_ne!(alternate, encoded);
+        let alternate_decoded: T = norito::decode_from_bytes(&alternate)
+            .expect("alternate-layout repair-ledger value remains structurally decodable");
+        assert_eq!(&alternate_decoded, value);
+        assert!(matches!(
+            norito::decode_canonical::<T>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
     }
 
     fn policy() -> ModerationLedgerPolicyV1 {
@@ -2304,9 +2321,48 @@ mod tests {
 
         let case = case_spec();
         case.validate().unwrap();
-        let encoded = norito::to_bytes(&case).unwrap();
-        let decoded: ModerationCaseSpecV1 = norito::decode_from_bytes(&encoded).unwrap();
-        assert_eq!(decoded, case);
+        assert_canonical_norito_round_trip(&case);
+    }
+
+    #[test]
+    fn ledger_identity_digests_ignore_ambient_norito_layout() {
+        let policy = policy();
+        let snapshot = ModerationPoPRegistrySnapshotV1 {
+            issuer_policy_digest: [0x11; 32],
+            commitment_root: [0x22; 32],
+            commitment_tree_version: 7,
+            revocation_root: [0x33; 32],
+            revocation_list_version: 8,
+            registry_audit_sequence: 9,
+            registry_audit_head: [0x44; 32],
+            captured_at_unix_ms: 10,
+        };
+        let intake = appeal_intake();
+        let authority = account(12);
+        let action = "canonical-repair-action".to_owned();
+        let expected = (
+            policy.digest().expect("policy digest"),
+            snapshot.digest().expect("snapshot digest"),
+            intake.digest().expect("appeal-intake digest"),
+            sorafs_repair_action_digest_v1(&authority, &action).expect("repair action digest"),
+        );
+        let canonical = norito::encode_canonical(&action).expect("canonical repair action");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&action).expect("ambient-layout repair action"),
+            canonical
+        );
+        assert_eq!(
+            (
+                policy.digest().expect("policy digest"),
+                snapshot.digest().expect("snapshot digest"),
+                intake.digest().expect("appeal-intake digest"),
+                sorafs_repair_action_digest_v1(&authority, &action).expect("repair action digest"),
+            ),
+            expected
+        );
     }
 
     #[cfg(feature = "json")]
@@ -2779,7 +2835,7 @@ mod tests {
             task_id,
             source_identity,
             ticket_id: "REP-1".to_owned(),
-            canonical_report: norito::to_bytes(&"canonical-report").unwrap(),
+            canonical_report: norito::encode_canonical(&"canonical-report").unwrap(),
             manifest_digest: [0x11; 32],
             provider_id: [0x22; 32],
             submitted_by: owner.clone(),
@@ -2802,8 +2858,8 @@ mod tests {
             }],
             updated_at_unix_ms: 1_000,
         };
-        let encoded = norito::to_bytes(&task).unwrap();
-        let decoded: RepairLedgerTaskV1 = norito::decode_from_bytes(&encoded).unwrap();
+        let encoded = norito::encode_canonical(&task).unwrap();
+        let decoded: RepairLedgerTaskV1 = norito::decode_canonical(&encoded).unwrap();
         assert_eq!(decoded, task);
 
         let finalized_cursor = RepairFinalizedCursorV1 {

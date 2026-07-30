@@ -33,6 +33,9 @@
 
 //!
 //! Helpers
+//! - [`encode_canonical`], [`decode_canonical`], and
+//!   [`decode_canonical_with_limits`] provide exact uncompressed V1 boundaries
+//!   with payload-derived decode budgets and byte-for-byte re-encoding checks.
 //! - `norito::core::frame_bare_with_header_flags<T>(payload, flags)` prefixes a
 //!   headerless (“bare”) payload with a Norito header that exactly matches the
 //!   supplied layout flags. `norito::codec::encode_with_header_flags(value)`
@@ -771,13 +774,46 @@ pub mod codec {
     ///
     /// Unlike [`Decode::decode`], this avoids copying when the caller already
     /// has the full payload in memory. The type's [`core::DecodeFromSlice`]
-    /// implementation must prove that all bytes are consumed.
+    /// implementation must prove that all bytes are consumed. Payload-derived
+    /// resource limits are always active, so an encoded sequence length cannot
+    /// request more elements or allocation than the complete input can justify.
     pub fn decode_exact_from_slice<T>(bytes: &[u8]) -> Result<T, Error>
     where
         T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
     {
         core::reset_decode_state();
         let _reset = DecodeResetGuard;
+        crate::with_decode_limits(crate::canonical_decode_limits(bytes.len()), || {
+            decode_exact_from_slice_under_active_limits(bytes)
+        })
+    }
+
+    /// Bare decode from an exact slice under additional schema-specific limits.
+    ///
+    /// The caller-provided limits compose with the payload-derived defaults by
+    /// taking the stricter bound in every dimension. This lets protocol
+    /// boundaries constrain their exact maximum vector counts without losing
+    /// the generic allocation-bomb protection.
+    pub fn decode_exact_from_slice_with_limits<T>(
+        bytes: &[u8],
+        limits: crate::DecodeLimits,
+    ) -> Result<T, Error>
+    where
+        T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
+    {
+        core::reset_decode_state();
+        let _reset = DecodeResetGuard;
+        crate::with_decode_limits(crate::canonical_decode_limits(bytes.len()), || {
+            crate::with_decode_limits(limits, || {
+                decode_exact_from_slice_under_active_limits(bytes)
+            })
+        })
+    }
+
+    fn decode_exact_from_slice_under_active_limits<T>(bytes: &[u8]) -> Result<T, Error>
+    where
+        T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
+    {
         let (value, used) = core::decode_field_canonical_from_slice::<T>(bytes)?;
         if used != bytes.len() {
             return Err(Error::LengthMismatch);
@@ -1418,6 +1454,14 @@ pub mod json {
             Some(out)
         }
 
+        /// One owned native JSON value.
+        ///
+        /// Parsing and parse-error cleanup are iterative, but the public
+        /// derived `Clone`, `Debug`, equality, and ordinary owner drop surfaces
+        /// remain recursive. Callers handling adversarial values near
+        /// [`super::MAX_JSON_VALUE_NESTING_DEPTH`] on a constrained stack must
+        /// consume or dismantle them with an iterative walker or enforce their
+        /// own shallower depth guard.
         #[derive(Debug, Clone, PartialEq)]
         pub enum Value {
             Null,
@@ -2206,59 +2250,120 @@ pub mod json {
     // Native variants for Value
     fn write_value_to_string(v: &Value, out: &mut String, pretty: bool, depth: usize) {
         use native::Value as V;
-        match v {
-            V::Null => out.push_str("null"),
-            V::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            V::Number(n) => match n {
-                native::Number::I64(x) => out.push_str(&x.to_string()),
-                native::Number::U64(x) => out.push_str(&x.to_string()),
-                native::Number::F64(x) => write_f64_json(*x, out),
+
+        enum Task<'a> {
+            Value(&'a Value, usize),
+            Array {
+                values: &'a [Value],
+                index: usize,
+                depth: usize,
             },
-            V::String(s) => write_json_string(s, out),
-            V::Array(a) => {
-                out.push('[');
-                let mut first = true;
-                for elem in a {
-                    if !first {
-                        out.push(',');
-                    }
-                    if pretty {
-                        out.push('\n');
-                        out.push_str(&"  ".repeat(depth + 1));
-                    }
-                    write_value_to_string(elem, out, pretty, depth + 1);
-                    first = false;
-                }
-                if pretty && !a.is_empty() {
-                    out.push('\n');
-                    out.push_str(&"  ".repeat(depth));
-                }
-                out.push(']');
+            Object {
+                entries: std::collections::btree_map::Iter<'a, String, Value>,
+                first: bool,
+                depth: usize,
+            },
+        }
+
+        fn write_line_indent(out: &mut String, depth: usize) {
+            out.push('\n');
+            for _ in 0..depth {
+                out.push_str("  ");
             }
-            V::Object(m) => {
-                out.push('{');
-                let mut first = true;
-                for (k, v) in m.iter() {
+        }
+
+        let mut tasks = vec![Task::Value(v, depth)];
+        while let Some(task) = tasks.pop() {
+            match task {
+                Task::Value(value, depth) => match value {
+                    V::Null => out.push_str("null"),
+                    V::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+                    V::Number(value) => match value {
+                        native::Number::I64(value) => out.push_str(&value.to_string()),
+                        native::Number::U64(value) => out.push_str(&value.to_string()),
+                        native::Number::F64(value) => write_f64_json(*value, out),
+                    },
+                    V::String(value) => write_json_string(value, out),
+                    V::Array(values) => {
+                        out.push('[');
+                        if values.is_empty() {
+                            out.push(']');
+                        } else {
+                            tasks.push(Task::Array {
+                                values,
+                                index: 0,
+                                depth,
+                            });
+                        }
+                    }
+                    V::Object(values) => {
+                        out.push('{');
+                        if values.is_empty() {
+                            out.push('}');
+                        } else {
+                            tasks.push(Task::Object {
+                                entries: values.iter(),
+                                first: true,
+                                depth,
+                            });
+                        }
+                    }
+                },
+                Task::Array {
+                    values,
+                    index,
+                    depth,
+                } => {
+                    let Some(value) = values.get(index) else {
+                        if pretty {
+                            write_line_indent(out, depth);
+                        }
+                        out.push(']');
+                        continue;
+                    };
+                    if index != 0 {
+                        out.push(',');
+                    }
+                    if pretty {
+                        write_line_indent(out, depth + 1);
+                    }
+                    tasks.push(Task::Array {
+                        values,
+                        index: index + 1,
+                        depth,
+                    });
+                    tasks.push(Task::Value(value, depth + 1));
+                }
+                Task::Object {
+                    mut entries,
+                    first,
+                    depth,
+                } => {
+                    let Some((key, value)) = entries.next() else {
+                        if pretty {
+                            write_line_indent(out, depth);
+                        }
+                        out.push('}');
+                        continue;
+                    };
                     if !first {
                         out.push(',');
                     }
                     if pretty {
-                        out.push('\n');
-                        out.push_str(&"  ".repeat(depth + 1));
+                        write_line_indent(out, depth + 1);
                     }
-                    write_json_string(k, out);
+                    write_json_string(key, out);
                     out.push(':');
                     if pretty {
                         out.push(' ');
                     }
-                    write_value_to_string(v, out, pretty, depth + 1);
-                    first = false;
+                    tasks.push(Task::Object {
+                        entries,
+                        first: false,
+                        depth,
+                    });
+                    tasks.push(Task::Value(value, depth + 1));
                 }
-                if pretty && !m.is_empty() {
-                    out.push('\n');
-                    out.push_str(&"  ".repeat(depth));
-                }
-                out.push('}');
             }
         }
     }
@@ -2304,7 +2409,9 @@ pub mod json {
 
     /// Convert a native JSON `Value` into `T` using `JsonDeserialize`.
     pub fn from_value<T: JsonDeserialize>(v: Value) -> Result<T, Error> {
-        T::json_from_value(&v)
+        let result = T::json_from_value(&v);
+        drop_json_values_iteratively(vec![v]);
+        result
     }
 
     /// Convert `value` into a native JSON `Value` using `JsonSerialize`.
@@ -2316,16 +2423,49 @@ pub mod json {
     /// Convenience: parse a JSON `Value` from `&str` using Norito's parser.
     pub fn parse_value(s: &str) -> Result<Value, Error> {
         let mut parser = super::json::Parser::new(s);
-        let value = parse_value_internal(&mut parser, 1)?;
+        let mut value = IterativeValueDropGuard::new(parse_value_internal(&mut parser, 1)?);
         parser.skip_ws();
         if !parser.eof() {
             let (byte, line, col) = parser.pos_meta(parser.position());
             return Err(Error::TrailingCharacters { byte, line, col });
         }
-        Ok(value)
+        Ok(value.take())
     }
 
-    fn parse_value_internal(p: &mut super::json::Parser<'_>, depth: usize) -> Result<Value, Error> {
+    /// Validate one complete JSON document without constructing an owned
+    /// recursive [`Value`] tree.
+    ///
+    /// This uses the same bounded grammar as [`parse_value`], including strict
+    /// number, escape, surrogate, duplicate-key, and trailing-byte checks.
+    pub fn validate_json(s: &str) -> Result<(), Error> {
+        validate_json_at_depth(s, 1)
+    }
+
+    /// Validate one complete JSON document whose root will be embedded at
+    /// `root_depth` in a larger document.
+    ///
+    /// The root of a standalone document has depth 1. Callers that splice a
+    /// validated fragment into an already-open object or array pass the
+    /// fragment's eventual root depth so the global V1 nesting limit remains
+    /// enforceable without allocating the enclosing document.
+    #[doc(hidden)]
+    pub fn validate_json_at_depth(s: &str, root_depth: usize) -> Result<(), Error> {
+        if root_depth == 0 {
+            return Err(Error::Message(
+                "JSON root depth must be at least 1".to_owned(),
+            ));
+        }
+        let mut parser = Parser::new(s);
+        parser.skip_value_at_depth(root_depth)?;
+        parser.skip_ws();
+        if !parser.eof() {
+            let (byte, line, col) = parser.pos_meta(parser.position());
+            return Err(Error::TrailingCharacters { byte, line, col });
+        }
+        Ok(())
+    }
+
+    fn ensure_json_value_depth(depth: usize) -> Result<(), Error> {
         if depth > MAX_JSON_VALUE_NESTING_DEPTH {
             return Err(Error::NestingDepthExceeded {
                 depth,
@@ -2333,108 +2473,244 @@ pub mod json {
                 context: "JSON value",
             });
         }
-        p.skip_ws();
-        match p.peek() {
-            Some(b'"') => Ok(Value::String(p.parse_string()?)),
-            Some(b'n') => {
-                p.parse_null()?;
-                Ok(Value::Null)
-            }
-            Some(b't') | Some(b'f') => Ok(Value::Bool(p.parse_bool()?)),
-            Some(b'[') => {
-                let arr = parse_array_internal(p, depth)?;
-                Ok(Value::Array(arr))
-            }
-            Some(b'{') => {
-                let map = parse_object_internal(p, depth)?;
-                Ok(Value::Object(map))
-            }
-            Some(b'-') | Some(b'0'..=b'9') => parse_number_value(p),
-            Some(_) => Err(p.err_unexpected_char()),
-            None => {
-                let (byte, line, col) = p.pos_meta(p.position());
-                Err(Error::UnexpectedEof { byte, line, col })
+        Ok(())
+    }
+
+    fn drop_json_values_iteratively(mut pending: Vec<Value>) {
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Array(mut values) => pending.append(&mut values),
+                Value::Object(values) => pending.extend(values.into_values()),
+                Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
             }
         }
     }
 
-    fn parse_array_internal(
-        p: &mut super::json::Parser<'_>,
-        depth: usize,
-    ) -> Result<Vec<Value>, Error> {
-        if p.bump() != Some(b'[') {
-            let (byte, line, col) = p.pos_meta(p.position());
-            return Err(Error::ExpectedArrayStart { byte, line, col });
+    struct IterativeValueDropGuard(Option<Value>);
+
+    impl IterativeValueDropGuard {
+        fn new(value: Value) -> Self {
+            Self(Some(value))
         }
-        let mut arr = Vec::new();
-        p.skip_ws();
-        if let Some(b']') = p.peek() {
-            p.bump();
-            return Ok(arr);
+
+        fn take(&mut self) -> Value {
+            self.0.take().expect("iterative JSON value guard is empty")
         }
-        loop {
-            let value = parse_value_internal(p, depth.saturating_add(1))?;
-            arr.push(value);
-            p.skip_ws();
-            match p.peek() {
-                Some(b',') => {
-                    p.bump();
-                    p.skip_ws();
-                }
-                Some(b']') => {
-                    p.bump();
-                    break;
-                }
-                _ => {
-                    let (byte, line, col) = p.pos_meta(p.position());
-                    return Err(Error::ExpectedCommaOrArrayEnd { byte, line, col });
-                }
-            }
-        }
-        Ok(arr)
     }
 
-    fn parse_object_internal(p: &mut super::json::Parser<'_>, depth: usize) -> Result<Map, Error> {
-        if p.bump() != Some(b'{') {
-            let (byte, line, col) = p.pos_meta(p.position());
-            return Err(Error::ExpectedObjectStart { byte, line, col });
+    impl Drop for IterativeValueDropGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.0.take() {
+                drop_json_values_iteratively(vec![value]);
+            }
         }
-        let mut map = Map::new();
+    }
+
+    enum ValueParseFrame {
+        Array {
+            values: Vec<Value>,
+            child_depth: usize,
+        },
+        Object {
+            values: Map,
+            key: Option<String>,
+            child_depth: usize,
+        },
+    }
+
+    impl ValueParseFrame {
+        fn append_values_to(self, pending: &mut Vec<Value>) {
+            match self {
+                Self::Array { mut values, .. } => pending.append(&mut values),
+                Self::Object { values, .. } => pending.extend(values.into_values()),
+            }
+        }
+
+        fn finish(self) -> Value {
+            match self {
+                Self::Array { values, .. } => Value::Array(values),
+                Self::Object { values, .. } => Value::Object(values),
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct ValueParseState {
+        frames: Vec<ValueParseFrame>,
+        completed: Option<Value>,
+    }
+
+    impl ValueParseState {
+        fn take_completed(&mut self) -> Value {
+            self.completed
+                .take()
+                .expect("iterative JSON parser has no completed value")
+        }
+    }
+
+    impl Drop for ValueParseState {
+        fn drop(&mut self) {
+            let mut pending = Vec::new();
+            if let Some(value) = self.completed.take() {
+                pending.push(value);
+            }
+            for frame in self.frames.drain(..) {
+                frame.append_values_to(&mut pending);
+            }
+            drop_json_values_iteratively(pending);
+        }
+    }
+
+    fn parse_object_key(p: &mut Parser<'_>) -> Result<String, Error> {
+        let key = p.parse_string()?;
         p.skip_ws();
-        if let Some(b'}') = p.peek() {
+        if p.peek() == Some(b':') {
             p.bump();
-            return Ok(map);
+            Ok(key)
+        } else {
+            let (byte, line, col) = p.pos_meta(p.position());
+            Err(Error::ExpectedColon { byte, line, col })
         }
-        loop {
-            let key = p.parse_string()?;
+    }
+
+    fn parse_value_internal(p: &mut Parser<'_>, depth: usize) -> Result<Value, Error> {
+        enum AttachAction {
+            ParseNext(usize),
+            Close,
+        }
+
+        let mut state = ValueParseState::default();
+        let mut next_depth = depth;
+        'parse: loop {
+            ensure_json_value_depth(next_depth)?;
             p.skip_ws();
-            if p.peek() == Some(b':') {
-                p.bump();
-            } else {
-                let (byte, line, col) = p.pos_meta(p.position());
-                return Err(Error::ExpectedColon { byte, line, col });
-            }
-            let value = parse_value_internal(p, depth.saturating_add(1))?;
-            if map.insert(key.clone(), value).is_some() {
-                return Err(Error::duplicate_field(key));
-            }
-            p.skip_ws();
-            match p.peek() {
-                Some(b',') => {
+            state.completed = match p.peek() {
+                Some(b'"') => Some(Value::String(p.parse_string()?)),
+                Some(b'n') => {
+                    p.parse_null()?;
+                    Some(Value::Null)
+                }
+                Some(b't') | Some(b'f') => Some(Value::Bool(p.parse_bool()?)),
+                Some(b'[') => {
                     p.bump();
                     p.skip_ws();
+                    if p.peek() == Some(b']') {
+                        p.bump();
+                        Some(Value::Array(Vec::new()))
+                    } else {
+                        let child_depth = next_depth.saturating_add(1);
+                        state.frames.push(ValueParseFrame::Array {
+                            values: Vec::new(),
+                            child_depth,
+                        });
+                        next_depth = child_depth;
+                        continue 'parse;
+                    }
                 }
-                Some(b'}') => {
+                Some(b'{') => {
                     p.bump();
-                    break;
+                    p.skip_ws();
+                    if p.peek() == Some(b'}') {
+                        p.bump();
+                        Some(Value::Object(Map::new()))
+                    } else {
+                        let key = parse_object_key(p)?;
+                        let child_depth = next_depth.saturating_add(1);
+                        state.frames.push(ValueParseFrame::Object {
+                            values: Map::new(),
+                            key: Some(key),
+                            child_depth,
+                        });
+                        next_depth = child_depth;
+                        continue 'parse;
+                    }
                 }
-                _ => {
+                Some(b'-') | Some(b'0'..=b'9') => Some(parse_number_value(p)?),
+                Some(_) => return Err(p.err_unexpected_char()),
+                None => {
                     let (byte, line, col) = p.pos_meta(p.position());
-                    return Err(Error::ExpectedCommaOrObjectEnd { byte, line, col });
+                    return Err(Error::UnexpectedEof { byte, line, col });
+                }
+            };
+
+            loop {
+                let mut completed = IterativeValueDropGuard::new(state.take_completed());
+                if state.frames.is_empty() {
+                    return Ok(completed.take());
+                }
+                let action = match state
+                    .frames
+                    .last_mut()
+                    .expect("non-empty iterative JSON frame stack")
+                {
+                    ValueParseFrame::Array {
+                        values,
+                        child_depth,
+                    } => {
+                        values.push(completed.take());
+                        p.skip_ws();
+                        match p.peek() {
+                            Some(b',') => {
+                                p.bump();
+                                p.skip_ws();
+                                AttachAction::ParseNext(*child_depth)
+                            }
+                            Some(b']') => {
+                                p.bump();
+                                AttachAction::Close
+                            }
+                            _ => {
+                                let (byte, line, col) = p.pos_meta(p.position());
+                                return Err(Error::ExpectedCommaOrArrayEnd { byte, line, col });
+                            }
+                        }
+                    }
+                    ValueParseFrame::Object {
+                        values,
+                        key: pending_key,
+                        child_depth,
+                    } => {
+                        let key = pending_key
+                            .take()
+                            .expect("iterative JSON object frame has no pending key");
+                        if values.contains_key(&key) {
+                            return Err(Error::duplicate_field(key));
+                        }
+                        values.insert(key, completed.take());
+                        p.skip_ws();
+                        match p.peek() {
+                            Some(b',') => {
+                                p.bump();
+                                p.skip_ws();
+                                *pending_key = Some(parse_object_key(p)?);
+                                AttachAction::ParseNext(*child_depth)
+                            }
+                            Some(b'}') => {
+                                p.bump();
+                                AttachAction::Close
+                            }
+                            _ => {
+                                let (byte, line, col) = p.pos_meta(p.position());
+                                return Err(Error::ExpectedCommaOrObjectEnd { byte, line, col });
+                            }
+                        }
+                    }
+                };
+                match action {
+                    AttachAction::ParseNext(depth) => {
+                        next_depth = depth;
+                        continue 'parse;
+                    }
+                    AttachAction::Close => {
+                        let frame = state
+                            .frames
+                            .pop()
+                            .expect("iterative JSON frame stack became empty");
+                        state.completed = Some(frame.finish());
+                    }
                 }
             }
         }
-        Ok(map)
     }
 
     fn parse_number_value(p: &mut super::json::Parser<'_>) -> Result<Value, Error> {
@@ -2600,21 +2876,202 @@ pub mod json {
                 "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1),
                 "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
             );
-            parse_value(&at_limit).expect("JSON nesting at the limit must decode");
+            let value = parse_value(&at_limit).expect("JSON nesting at the limit must decode");
+            drop_json_values_iteratively(vec![value]);
 
             let over_limit = format!(
                 "{}null{}",
                 "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
                 "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH)
             );
+            match parse_value(&over_limit) {
+                Err(Error::NestingDepthExceeded {
+                    depth,
+                    limit: MAX_JSON_VALUE_NESTING_DEPTH,
+                    context: "JSON value",
+                }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1 => {}
+                Ok(value) => {
+                    drop_json_values_iteratively(vec![value]);
+                    panic!("owned parser accepted over-limit nesting");
+                }
+                Err(error) => panic!("owned parser returned wrong over-limit error: {error}"),
+            }
             assert!(matches!(
-                parse_value(&over_limit),
+                validate_json(&over_limit),
                 Err(Error::NestingDepthExceeded {
                     depth,
                     limit: MAX_JSON_VALUE_NESTING_DEPTH,
                     context: "JSON value",
                 }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
             ));
+        }
+
+        #[test]
+        fn strict_validator_accounts_for_an_enclosing_document_depth() {
+            let root_depth = 4;
+            let wrappers = MAX_JSON_VALUE_NESTING_DEPTH - root_depth;
+            let at_limit = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+            validate_json_at_depth(&at_limit, root_depth)
+                .expect("fragment at the enclosing-document depth boundary must pass");
+
+            let over_limit = format!("[{at_limit}]");
+            assert!(matches!(
+                validate_json_at_depth(&over_limit, root_depth),
+                Err(Error::NestingDepthExceeded {
+                    depth,
+                    limit: MAX_JSON_VALUE_NESTING_DEPTH,
+                    context: "JSON value",
+                }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
+            ));
+            assert_eq!(
+                validate_json_at_depth("null", 0)
+                    .expect_err("zero is not a valid JSON root depth")
+                    .to_string(),
+                "JSON root depth must be at least 1"
+            );
+        }
+
+        #[test]
+        fn strict_validator_matches_owned_parser_for_edge_grammar() {
+            for valid in [
+                "null",
+                "-0",
+                "-0.0",
+                "1.25e-3",
+                r#""\uD834\uDD1E""#,
+                r#"{"a":1,"b":[true,false,null]}"#,
+            ] {
+                validate_json(valid).unwrap_or_else(|error| {
+                    panic!("validator rejected valid JSON {valid:?}: {error}")
+                });
+                let value = parse_value(valid).unwrap_or_else(|error| {
+                    panic!("owned parser rejected valid JSON {valid:?}: {error}")
+                });
+                drop_json_values_iteratively(vec![value]);
+            }
+
+            for invalid in [
+                "01",
+                "1.",
+                "1e",
+                r#""\q""#,
+                r#""\u12xz""#,
+                r#""\uD834""#,
+                r#""\uDD1E""#,
+                r#"{"a":1,"a":2}"#,
+                r#"{"a":1,"\u0061":2}"#,
+                "[1,]",
+                r#"{"a":1,}"#,
+                "true false",
+            ] {
+                assert!(
+                    validate_json(invalid).is_err(),
+                    "validator accepted invalid JSON {invalid:?}"
+                );
+                assert!(
+                    parse_value(invalid).is_err(),
+                    "owned parser accepted invalid JSON {invalid:?}"
+                );
+            }
+
+            for invalid in [r#""\uDD1E""#, r#"{"a":1,"a":}"#] {
+                let validator_error =
+                    validate_json(invalid).expect_err("validator must reject diagnostic fixture");
+                let parser_error =
+                    parse_value(invalid).expect_err("owned parser must reject diagnostic fixture");
+                assert_eq!(
+                    validator_error.to_string(),
+                    parser_error.to_string(),
+                    "validator/parser diagnostic drift for {invalid:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn iterative_parser_and_error_cleanup_fit_a_128k_stack() {
+            let worker = std::thread::Builder::new()
+                .name("norito-json-iterative-boundary".into())
+                .stack_size(128 * 1024)
+                .spawn(|| -> Result<(), String> {
+                    let wrappers = crate::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
+                    let at_255 = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+                    validate_json(&at_255).map_err(|error| error.to_string())?;
+                    let value = parse_value(&at_255).map_err(|error| error.to_string())?;
+                    let mut cursor = &value;
+                    for _ in 0..wrappers {
+                        let Value::Array(items) = cursor else {
+                            return Err("boundary JSON stopped being an array".to_owned());
+                        };
+                        if items.len() != 1 {
+                            return Err("boundary JSON array is not unary".to_owned());
+                        }
+                        cursor = &items[0];
+                    }
+                    if !cursor.is_null() {
+                        return Err("boundary JSON leaf is not null".to_owned());
+                    }
+                    let rendered = to_json(&value).map_err(|error| error.to_string())?;
+                    if rendered != at_255 {
+                        return Err("iterative JSON writer changed the boundary value".to_owned());
+                    }
+                    drop_json_values_iteratively(vec![value]);
+
+                    let value = from_json::<Value>(&at_255).map_err(|error| error.to_string())?;
+                    let raw = from_value::<RawValue>(value).map_err(|error| error.to_string())?;
+                    if raw.get() != at_255 {
+                        return Err("owned Value conversion changed boundary JSON".to_owned());
+                    }
+
+                    let trailing = format!("{at_255} null");
+                    match from_json::<Value>(&trailing) {
+                        Err(Error::TrailingCharacters { .. }) => {}
+                        Ok(value) => {
+                            drop_json_values_iteratively(vec![value]);
+                            return Err(
+                                "typed Value parser accepted trailing characters".to_owned()
+                            );
+                        }
+                        Err(error) => {
+                            return Err(format!(
+                                "typed Value parser returned the wrong trailing error: {error}"
+                            ));
+                        }
+                    }
+
+                    let invalid_256th_wrapper = format!("[{at_255},]");
+                    if validate_json(&invalid_256th_wrapper).is_ok() {
+                        return Err("validator accepted a trailing comma".to_owned());
+                    }
+                    if let Ok(value) = parse_value(&invalid_256th_wrapper) {
+                        drop_json_values_iteratively(vec![value]);
+                        return Err("owned parser accepted a trailing comma".to_owned());
+                    }
+
+                    let over_limit = format!(
+                        "{}null{}",
+                        "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
+                        "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH)
+                    );
+                    match parse_value(&over_limit) {
+                        Err(Error::NestingDepthExceeded { .. }) => {}
+                        Ok(value) => {
+                            drop_json_values_iteratively(vec![value]);
+                            return Err("owned parser accepted over-limit nesting".to_owned());
+                        }
+                        Err(error) => {
+                            return Err(format!(
+                                "owned parser returned the wrong over-limit error: {error}"
+                            ));
+                        }
+                    }
+                    Ok(())
+                })
+                .map_err(|error| error.to_string())
+                .expect("spawn 128KiB JSON parser test");
+            worker
+                .join()
+                .expect("128KiB JSON parser thread")
+                .expect("iterative JSON parser boundary");
         }
 
         #[test]
@@ -4053,34 +4510,101 @@ pub mod json {
                 match b {
                     b'"' => break,
                     b'\\' => {
-                        // Skip escape or \uXXXX
                         let esc = self.bump().ok_or_else(|| {
                             let (byte, line, col) = self.pos_meta(self.i);
                             Error::EofEscape { byte, line, col }
                         })?;
-                        if esc == b'u' {
-                            // Skip 4 hex digits
-                            for _ in 0..4 {
-                                let _ = self.bump().ok_or_else(|| {
-                                    let (byte, line, col) = self.pos_meta(self.i);
-                                    Error::EofHex { byte, line, col }
-                                })?;
-                            }
-                            // If this was a high surrogate, also skip a required low surrogate
-                            // We conservatively try to detect a following "\u" and skip its 4 hex digits.
-                            if let Some(rest) = self.s.get(self.i..)
-                                && rest.len() >= 6
-                                && rest[0] == b'\\'
-                                && rest[1] == b'u'
-                            {
-                                // We don't validate ranges here; parsing will do that when needed.
-                                self.i += 2; // skip \\u
+                        match esc {
+                            b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {}
+                            b'u' => {
+                                let mut hi = 0u32;
                                 for _ in 0..4 {
-                                    let _ = self.bump().ok_or_else(|| {
+                                    let hex = self.bump().ok_or_else(|| {
                                         let (byte, line, col) = self.pos_meta(self.i);
                                         Error::EofHex { byte, line, col }
                                     })?;
+                                    hi = (hi << 4)
+                                        | match hex {
+                                            b'0'..=b'9' => u32::from(hex - b'0'),
+                                            b'a'..=b'f' => u32::from(hex - b'a' + 10),
+                                            b'A'..=b'F' => u32::from(hex - b'A' + 10),
+                                            _ => {
+                                                let (byte, line, col) =
+                                                    self.pos_meta(self.i.saturating_sub(1));
+                                                return Err(Error::InvalidHex { byte, line, col });
+                                            }
+                                        };
                                 }
+                                if (0xD800..=0xDBFF).contains(&hi) {
+                                    if self.peek() != Some(b'\\') {
+                                        let (byte, line, col) = self.pos_meta(self.i);
+                                        return Err(Error::WithPos {
+                                            msg: "expected low surrogate",
+                                            byte,
+                                            line,
+                                            col,
+                                        });
+                                    }
+                                    self.bump();
+                                    if self.bump() != Some(b'u') {
+                                        let (byte, line, col) = self.pos_meta(self.i);
+                                        return Err(Error::WithPos {
+                                            msg: "expected \\u for low surrogate",
+                                            byte,
+                                            line,
+                                            col,
+                                        });
+                                    }
+                                    let mut lo = 0u32;
+                                    for _ in 0..4 {
+                                        let hex = self.bump().ok_or_else(|| {
+                                            let (byte, line, col) = self.pos_meta(self.i);
+                                            Error::EofHex { byte, line, col }
+                                        })?;
+                                        lo = (lo << 4)
+                                            | match hex {
+                                                b'0'..=b'9' => u32::from(hex - b'0'),
+                                                b'a'..=b'f' => u32::from(hex - b'a' + 10),
+                                                b'A'..=b'F' => u32::from(hex - b'A' + 10),
+                                                _ => {
+                                                    let (byte, line, col) =
+                                                        self.pos_meta(self.i.saturating_sub(1));
+                                                    return Err(Error::InvalidHex {
+                                                        byte,
+                                                        line,
+                                                        col,
+                                                    });
+                                                }
+                                            };
+                                    }
+                                    if !(0xDC00..=0xDFFF).contains(&lo) {
+                                        let (byte, line, col) =
+                                            self.pos_meta(self.i.saturating_sub(1));
+                                        return Err(Error::WithPos {
+                                            msg: "invalid low surrogate",
+                                            byte,
+                                            line,
+                                            col,
+                                        });
+                                    }
+                                } else if (0xDC00..=0xDFFF).contains(&hi) {
+                                    let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
+                                    return Err(Error::WithPos {
+                                        msg: "unexpected low surrogate",
+                                        byte,
+                                        line,
+                                        col,
+                                    });
+                                }
+                            }
+                            _ => {
+                                let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
+                                return Err(Error::WithPos {
+                                    msg: "bad escape",
+                                    byte,
+                                    line,
+                                    col,
+                                });
                             }
                         }
                     }
@@ -4094,121 +4618,166 @@ pub mod json {
             Ok(())
         }
 
-        /// Skip over the next JSON value (object, array, string, number, true/false/null).
-        pub fn skip_value(&mut self) -> Result<(), Error> {
+        fn skip_object_key(&mut self) -> Result<String, Error> {
+            let key = self.parse_string()?;
             self.skip_ws();
-            match self.peek() {
-                Some(b'{') => {
-                    self.bump();
-                    self.skip_ws();
-                    if matches!(self.peek(), Some(b'}')) {
+            if self.peek() == Some(b':') {
+                self.bump();
+                Ok(key)
+            } else {
+                let (byte, line, col) = self.pos_meta(self.i);
+                Err(Error::ExpectedColon { byte, line, col })
+            }
+        }
+
+        /// Skip over the next exact JSON value without constructing an owned
+        /// recursive [`Value`] tree.
+        ///
+        /// The walk is iterative and enforces the same structural depth,
+        /// number, string, surrogate, and duplicate-key rules as
+        /// [`parse_value`].
+        pub fn skip_value(&mut self) -> Result<(), Error> {
+            self.skip_value_at_depth(1)
+        }
+
+        /// Skip an exact JSON value that will appear at `root_depth` in its
+        /// enclosing document.
+        #[doc(hidden)]
+        pub fn skip_value_at_depth(&mut self, root_depth: usize) -> Result<(), Error> {
+            if root_depth == 0 {
+                return Err(Error::Message(
+                    "JSON root depth must be at least 1".to_owned(),
+                ));
+            }
+            enum Frame {
+                Array {
+                    child_depth: usize,
+                },
+                Object {
+                    keys: std::collections::BTreeSet<String>,
+                    pending_key: Option<String>,
+                    child_depth: usize,
+                },
+            }
+
+            enum Action {
+                ParseNext(usize),
+                Close,
+            }
+
+            let mut frames = Vec::<Frame>::new();
+            let mut next_depth = root_depth;
+            'parse: loop {
+                ensure_json_value_depth(next_depth)?;
+                self.skip_ws();
+                match self.peek() {
+                    Some(b'{') => {
                         self.bump();
-                        return Ok(());
-                    }
-                    loop {
-                        self.skip_string()?; // key
                         self.skip_ws();
-                        self.expect(b':')?;
-                        self.skip_value()?; // value
-                        self.skip_ws();
-                        match self.peek() {
-                            Some(b',') => {
-                                self.bump();
-                                self.skip_ws();
-                                continue;
-                            }
-                            Some(b'}') => {
-                                self.bump();
-                                break;
-                            }
-                            _ => {
-                                let (byte, line, col) = self.pos_meta(self.i);
-                                return Err(Error::ExpectedCommaOrObjectEnd { byte, line, col });
-                            }
+                        if self.peek() == Some(b'}') {
+                            self.bump();
+                        } else {
+                            let pending_key = Some(self.skip_object_key()?);
+                            let child_depth = next_depth.saturating_add(1);
+                            frames.push(Frame::Object {
+                                keys: std::collections::BTreeSet::new(),
+                                pending_key,
+                                child_depth,
+                            });
+                            next_depth = child_depth;
+                            continue 'parse;
                         }
                     }
-                    Ok(())
-                }
-                Some(b'[') => {
-                    self.bump();
-                    self.skip_ws();
-                    if matches!(self.peek(), Some(b']')) {
+                    Some(b'[') => {
                         self.bump();
-                        return Ok(());
-                    }
-                    loop {
-                        self.skip_value()?;
                         self.skip_ws();
-                        match self.peek() {
+                        if self.peek() == Some(b']') {
+                            self.bump();
+                        } else {
+                            let child_depth = next_depth.saturating_add(1);
+                            frames.push(Frame::Array { child_depth });
+                            next_depth = child_depth;
+                            continue 'parse;
+                        }
+                    }
+                    Some(b'"') => self.skip_string()?,
+                    Some(b't') | Some(b'f') => {
+                        self.parse_bool()?;
+                    }
+                    Some(b'n') => self.parse_null()?,
+                    Some(b'-') | Some(b'0'..=b'9') => {
+                        parse_number_value(self)?;
+                    }
+                    Some(_) => return Err(self.err_unexpected_char()),
+                    None => {
+                        let (byte, line, col) = self.pos_meta(self.i);
+                        return Err(Error::UnexpectedEof { byte, line, col });
+                    }
+                }
+
+                loop {
+                    let Some(frame) = frames.last_mut() else {
+                        return Ok(());
+                    };
+                    self.skip_ws();
+                    let action = match frame {
+                        Frame::Array { child_depth } => match self.peek() {
                             Some(b',') => {
                                 self.bump();
                                 self.skip_ws();
-                                continue;
+                                Action::ParseNext(*child_depth)
                             }
                             Some(b']') => {
                                 self.bump();
-                                break;
+                                Action::Close
                             }
                             _ => {
                                 let (byte, line, col) = self.pos_meta(self.i);
                                 return Err(Error::ExpectedCommaOrArrayEnd { byte, line, col });
                             }
+                        },
+                        Frame::Object {
+                            keys,
+                            pending_key,
+                            child_depth,
+                        } => {
+                            let key = pending_key
+                                .take()
+                                .expect("iterative JSON object frame has no pending key");
+                            if !keys.insert(key.clone()) {
+                                return Err(Error::duplicate_field(key));
+                            }
+                            match self.peek() {
+                                Some(b',') => {
+                                    self.bump();
+                                    self.skip_ws();
+                                    *pending_key = Some(self.skip_object_key()?);
+                                    Action::ParseNext(*child_depth)
+                                }
+                                Some(b'}') => {
+                                    self.bump();
+                                    Action::Close
+                                }
+                                _ => {
+                                    let (byte, line, col) = self.pos_meta(self.i);
+                                    return Err(Error::ExpectedCommaOrObjectEnd {
+                                        byte,
+                                        line,
+                                        col,
+                                    });
+                                }
+                            }
+                        }
+                    };
+                    match action {
+                        Action::ParseNext(depth) => {
+                            next_depth = depth;
+                            continue 'parse;
+                        }
+                        Action::Close => {
+                            frames.pop();
                         }
                     }
-                    Ok(())
-                }
-                Some(b'"') => self.skip_string(),
-                Some(b't') | Some(b'f') => {
-                    let _ = self.parse_bool()?;
-                    Ok(())
-                }
-                Some(b'n') => self.parse_null(),
-                Some(b'-') | Some(b'0'..=b'9') => {
-                    // Skip a simple number: optional '-' then digits, optional fraction/exponent (best-effort)
-                    if self.peek() == Some(b'-') {
-                        self.bump();
-                    }
-                    let mut saw = false;
-                    while let Some(b'0'..=b'9') = self.peek() {
-                        self.bump();
-                        saw = true;
-                    }
-                    if !saw {
-                        let (byte, line, col) = self.pos_meta(self.i);
-                        return Err(Error::ExpectedDigits { byte, line, col });
-                    }
-                    if self.peek() == Some(b'.') {
-                        self.bump();
-                        let mut at_least_one = false;
-                        while let Some(b'0'..=b'9') = self.peek() {
-                            self.bump();
-                            at_least_one = true;
-                        }
-                        if !at_least_one {
-                            let (byte, line, col) = self.pos_meta(self.i);
-                            return Err(Error::ExpectedFracDigits { byte, line, col });
-                        }
-                    }
-                    if let Some(b'e' | b'E') = self.peek() {
-                        self.bump();
-                        if let Some(b'+' | b'-') = self.peek() {
-                            self.bump();
-                        }
-                        let mut at_least_one = false;
-                        while let Some(b'0'..=b'9') = self.peek() {
-                            self.bump();
-                            at_least_one = true;
-                        }
-                        if !at_least_one {
-                            let (byte, line, col) = self.pos_meta(self.i);
-                            return Err(Error::ExpectedExpDigits { byte, line, col });
-                        }
-                    }
-                    Ok(())
-                }
-                _ => {
-                    let (byte, line, col) = self.pos_meta(self.i);
-                    Err(Error::UnexpectedValue { byte, line, col })
                 }
             }
         }
@@ -4444,6 +5013,14 @@ pub mod json {
         /// Parse `Self` from the parser.
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error>;
 
+        /// Drop a value constructed before a top-level parse error is known.
+        ///
+        /// Most deserialized types use ordinary drop. Recursive native JSON
+        /// values override this hook so malformed trailing input cannot turn
+        /// otherwise bounded parsing into recursive error cleanup.
+        #[doc(hidden)]
+        fn json_drop_after_error(self) {}
+
         /// Convert a pre-parsed [`Value`] into `Self`.
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             json_from_value_via_string::<Self>(value)
@@ -4469,6 +5046,7 @@ pub mod json {
         parser.skip_ws();
         if !parser.eof() {
             let (byte, line, col) = parser.pos_meta(parser.position());
+            result.json_drop_after_error();
             return Err(Error::TrailingCharacters { byte, line, col });
         }
         Ok(result)
@@ -5061,6 +5639,10 @@ pub mod json {
     impl JsonDeserialize for Value {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             parse_value_internal(p, 1)
+        }
+
+        fn json_drop_after_error(self) {
+            drop_json_values_iteratively(vec![self]);
         }
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
@@ -8185,6 +8767,7 @@ pub mod json {
         p.skip_ws();
         if !p.eof() {
             let (byte, line, col) = pos_from_offset(s, p.position());
+            v.json_drop_after_error();
             return Err(Error::TrailingCharacters { byte, line, col });
         }
         Ok(v)
@@ -8204,6 +8787,7 @@ pub mod json {
         w.skip_ws();
         if w.raw_pos() < s.len() {
             let (byte, line, col) = pos_from_offset(s, w.raw_pos());
+            value.json_drop_after_error();
             return Err(Error::TrailingCharacters { byte, line, col });
         }
         Ok(value)
@@ -9579,6 +10163,35 @@ pub mod prelude {
     };
 }
 
+/// Encode a value with the canonical V1 layout and no compression.
+///
+/// The result is independent of ambient layout guards.
+pub fn encode_canonical<T>(value: &T) -> Result<Vec<u8>, Error>
+where
+    T: NoritoSerialize,
+{
+    let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+    core::to_bytes(value)
+}
+
+/// Return conservative decode limits derived from one complete Norito frame.
+///
+/// Packed boolean sequences may carry eight logical elements per encoded byte,
+/// so sequence and cumulative element budgets use an eightfold allowance.
+/// Allocation receives a wider multiplier plus a fixed 64 KiB floor for small
+/// structural values. Saturating arithmetic keeps malformed length inputs
+/// fail-closed.
+#[must_use]
+pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
+    DecodeLimits::new(
+        payload_len.saturating_mul(8),
+        payload_len,
+        payload_len.saturating_mul(8),
+        payload_len.saturating_mul(32).saturating_add(64 * 1024),
+        core::MAX_OWNED_VALUE_DECODE_DEPTH,
+    )
+}
+
 /// Decode an object from Norito-encoded bytes (compressed or not),
 /// scoping decode layout flags to this call.
 pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
@@ -9614,6 +10227,153 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     with_decode_limits(limits, || decode_from_bytes(bytes))
+}
+
+/// Decode one exact canonical V1 frame under payload-derived resource limits.
+///
+/// In addition to ordinary validation, this rejects compression, alternate
+/// layout flags, and any byte representation that does not exactly match
+/// [`encode_canonical`].
+pub fn decode_canonical<T>(bytes: &[u8]) -> Result<T, Error>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    decode_canonical_with_limits(bytes, canonical_decode_limits(bytes.len()))
+}
+
+/// Decode one exact canonical V1 frame under default and schema-specific limits.
+///
+/// Nested Norito limit scopes compose by taking the stricter value in every
+/// dimension, so the payload-derived default remains active when `limits` is
+/// looser.
+pub fn decode_canonical_with_limits<T>(bytes: &[u8], limits: DecodeLimits) -> Result<T, Error>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    let defaults = canonical_decode_limits(bytes.len());
+    with_decode_limits(defaults, || {
+        let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+        let _payload_context = core::PayloadCtxGuard::enter(bytes);
+        let value = match decode_from_bytes_with_limits(bytes, limits) {
+            Ok(value) => value,
+            Err(Error::DecodeFlagsMismatch { .. }) => {
+                return Err(Error::NonCanonicalEncoding);
+            }
+            Err(Error::UnsupportedCompression { found, .. })
+                if found == Compression::Zstd as u8 =>
+            {
+                return Err(Error::NonCanonicalEncoding);
+            }
+            Err(error) => return Err(error),
+        };
+        let canonical = encode_canonical(&value)?;
+        if canonical.as_slice() != bytes {
+            return Err(Error::NonCanonicalEncoding);
+        }
+        Ok(value)
+    })
+}
+
+#[cfg(test)]
+mod canonical_codec_tests {
+    use super::*;
+
+    #[test]
+    fn generic_canonical_decode_rejects_forged_sequence_length() {
+        const FORGED_LENGTH: u64 = 1 << 40;
+        let bare = FORGED_LENGTH.to_le_bytes();
+        let frame =
+            core::frame_bare_with_header_flags::<Vec<u64>>(&bare, core::default_encode_flags())
+                .expect("frame forged vector with a valid checksum");
+
+        assert!(matches!(
+            decode_canonical::<Vec<u64>>(&frame),
+            Err(Error::SequenceLengthExceeded { .. }) | Err(Error::TotalElementsExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn schema_limits_tighten_the_payload_derived_default() {
+        let value = vec![1_u64, 2, 3, 4];
+        let frame = encode_canonical(&value).expect("encode canonical vector");
+        let limits = DecodeLimits::new(3, frame.len(), 3, frame.len() * 32, 16);
+        assert!(matches!(
+            decode_canonical_with_limits::<Vec<u64>>(&frame, limits),
+            Err(Error::SequenceLengthExceeded {
+                length: 4,
+                limit: 3
+            }) | Err(Error::TotalElementsExceeded {
+                attempted: 4,
+                limit: 3
+            })
+        ));
+    }
+
+    #[test]
+    fn canonical_decode_restores_ambient_flags_and_payload_context() {
+        let value = vec!["first".to_owned(), "second".to_owned()];
+        let canonical = encode_canonical(&value).expect("encode canonical fixture");
+        let alternate_flags = core::default_encode_flags() ^ core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = core::DecodeFlagsGuard::enter(alternate_flags);
+            core::to_bytes(&value).expect("encode alternate fixture")
+        };
+        assert_ne!(alternate, canonical);
+
+        let _ambient = core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_payload = b"ambient outer payload";
+        let _ambient_payload = core::PayloadCtxGuard::enter(ambient_payload);
+        let payload_context_before = core::payload_ctx();
+        let encoding_before = core::to_bytes(&value).expect("encode ambient fixture");
+        assert_eq!(
+            decode_canonical::<Vec<String>>(&canonical).expect("decode canonical fixture"),
+            value
+        );
+        assert!(matches!(
+            decode_canonical::<Vec<String>>(&alternate),
+            Err(Error::NonCanonicalEncoding)
+        ));
+        assert_eq!(core::payload_ctx(), payload_context_before);
+        assert_eq!(
+            core::to_bytes(&vec!["first".to_owned(), "second".to_owned()])
+                .expect("encode after canonical decode"),
+            encoding_before
+        );
+    }
+
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    #[test]
+    fn canonical_decode_classifies_valid_compression_as_noncanonical() {
+        let value = vec!["compressed".to_owned(); 64];
+        let compressed = to_compressed_bytes(&value, Some(CompressionConfig::default()))
+            .expect("encode compressed fixture");
+
+        assert!(matches!(
+            decode_canonical::<Vec<String>>(&compressed),
+            Err(Error::NonCanonicalEncoding)
+        ));
+    }
+
+    #[test]
+    fn canonical_decode_preserves_schema_and_malformed_errors() {
+        let wrong_schema = encode_canonical(&42_u64).expect("encode wrong-schema fixture");
+        assert!(matches!(
+            decode_canonical::<Vec<u64>>(&wrong_schema),
+            Err(Error::SchemaMismatch)
+        ));
+
+        let mut bad_checksum = encode_canonical(&vec![42_u64]).expect("encode checksum fixture");
+        let last = bad_checksum
+            .last_mut()
+            .expect("canonical frame has a payload byte");
+        *last ^= 0x80;
+        assert!(matches!(
+            decode_canonical::<Vec<u64>>(&bad_checksum),
+            Err(Error::ChecksumMismatch)
+        ));
+    }
 }
 
 /// Convenience helper identical to `decode_from_bytes`.

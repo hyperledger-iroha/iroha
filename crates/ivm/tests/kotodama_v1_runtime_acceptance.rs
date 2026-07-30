@@ -150,6 +150,40 @@ seiyaku CallAwareRuntime {
 }
 
 #[test]
+fn mixed_value_and_divergent_tails_execute_both_paths_without_unit_fallthrough() {
+    let source = r#"
+seiyaku MixedTailRuntime {
+  fn via_if(bool flag) -> int {
+    if flag { 7 } else { return 9; }
+  }
+
+  fn via_if_let(Option<int> value) -> int {
+    if let Option::some(item) = value { item } else { return 0; }
+  }
+
+  fn via_match(Option<int> value) -> int {
+    match value {
+      Option::some(item) => item,
+      Option::none => { return 0; },
+    }
+  }
+
+  view fn run() -> int {
+    via_if(true)
+      + via_if(false)
+      + via_if_let(Option::some(4))
+      + via_if_let(Option::none)
+      + via_match(Option::some(5))
+      + via_match(Option::none)
+  }
+}
+"#;
+
+    let vm = compile_and_run(source);
+    assert_eq!(common::decode_i64_register(&vm, 10), 25);
+}
+
+#[test]
 fn state_map_get_distinguishes_absent_present_zero_and_removal() {
     let source = r#"
 seiyaku StateMapOptionAcceptance {

@@ -61,7 +61,7 @@ Sidebar_label: Хаartия еестра chunker
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - تنفيذ العلاقات العامة، والتركيبات المشتركة، والاقتراحات، وتجاهل التصميم و

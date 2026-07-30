@@ -192,12 +192,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::zk::RegisterZkAsset",
   "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
     "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool",
-  "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment":
-    "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment",
-  "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment":
-    "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment",
-  "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment":
-    "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment",
   "zk::ScheduleConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   "zk::CancelConfidentialPolicyTransition":
@@ -208,8 +202,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::zk::ZkTransfer",
   "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
     "iroha_data_model::isi::zk::AssetHiddenZkTransfer",
-  "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer":
-    "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer",
   "iroha_data_model::isi::zk::Unshield":
     "iroha_data_model::isi::zk::Unshield",
   "iroha_data_model::isi::zk::CreateElection":
@@ -1670,7 +1662,7 @@ export function verifyBlockProofs(proofs) {
  * @param {object} envelope
  * @returns {Buffer}
  */
-export function noritoEncodePrivacyProofEnvelope(envelope) {
+export function noritoEncodeOpenVerifyEnvelope(envelope) {
   const payload = encodeOpenVerifyEnvelopePayload(envelope, "OpenVerifyEnvelope");
   return frameNoritoPayload(payload, OPEN_VERIFY_ENVELOPE_SCHEMA_HASH, 0);
 }
@@ -1681,7 +1673,7 @@ export function noritoEncodePrivacyProofEnvelope(envelope) {
  * @param {ArrayBufferView | ArrayBuffer | Buffer | string} bytes
  * @returns {object}
  */
-export function noritoDecodePrivacyProofEnvelope(bytes) {
+export function noritoDecodeOpenVerifyEnvelope(bytes) {
   let buffer;
   if (typeof bytes === "string") {
     const trimmed = bytes.trim();
@@ -2024,15 +2016,11 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return decodeKaigiInstructionPayload(wireId, payload);
     case "iroha_data_model::isi::zk::RegisterZkAsset":
     case "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
-    case "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment":
-    case "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment":
-    case "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment":
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
     case "iroha_data_model::isi::zk::Shield":
     case "iroha_data_model::isi::zk::ZkTransfer":
     case "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
-    case "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer":
     case "iroha_data_model::isi::zk::Unshield":
     case "iroha_data_model::isi::zk::CreateElection":
     case "iroha_data_model::isi::zk::SubmitBallot":
@@ -3172,155 +3160,6 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment": {
-      const fields = decodeStructFields(payload, "zk.RegisterZkAceIdentityCommitment", [
-        "asset",
-        "identity_commitment",
-        "policy_hash",
-        "allowed_accounts",
-        "action_class",
-        "domain_tag",
-        "verifier_key",
-      ]);
-      return {
-        zk: {
-          RegisterZkAceIdentityCommitment: {
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.RegisterZkAceIdentityCommitment.asset",
-            ),
-            identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.identity_commitment,
-                32,
-                "zk.RegisterZkAceIdentityCommitment.identity_commitment",
-              ),
-            ),
-            policy_hash: Array.from(
-              decodeFixedBytesValue(
-                fields.policy_hash,
-                32,
-                "zk.RegisterZkAceIdentityCommitment.policy_hash",
-              ),
-            ),
-            allowed_accounts: decodeNoritoVec(
-              fields.allowed_accounts,
-              (entry, index) =>
-                decodeAccountIdValue(
-                  entry,
-                  `zk.RegisterZkAceIdentityCommitment.allowed_accounts[${index}]`,
-                ),
-              "zk.RegisterZkAceIdentityCommitment.allowed_accounts",
-            ),
-            action_class: decodeStringValue(
-              fields.action_class,
-              "zk.RegisterZkAceIdentityCommitment.action_class",
-            ),
-            domain_tag: decodeStringValue(
-              fields.domain_tag,
-              "zk.RegisterZkAceIdentityCommitment.domain_tag",
-            ),
-            verifier_key: decodeVerifyingKeyIdValue(
-              fields.verifier_key,
-              "zk.RegisterZkAceIdentityCommitment.verifier_key",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment": {
-      const fields = decodeStructFields(payload, "zk.RotateZkAceIdentityCommitment", [
-        "asset",
-        "old_identity_commitment",
-        "new_identity_commitment",
-        "policy_hash",
-        "allowed_accounts",
-        "action_class",
-        "domain_tag",
-        "verifier_key",
-      ]);
-      return {
-        zk: {
-          RotateZkAceIdentityCommitment: {
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.RotateZkAceIdentityCommitment.asset",
-            ),
-            old_identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.old_identity_commitment,
-                32,
-                "zk.RotateZkAceIdentityCommitment.old_identity_commitment",
-              ),
-            ),
-            new_identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.new_identity_commitment,
-                32,
-                "zk.RotateZkAceIdentityCommitment.new_identity_commitment",
-              ),
-            ),
-            policy_hash: Array.from(
-              decodeFixedBytesValue(
-                fields.policy_hash,
-                32,
-                "zk.RotateZkAceIdentityCommitment.policy_hash",
-              ),
-            ),
-            allowed_accounts: decodeNoritoVec(
-              fields.allowed_accounts,
-              (entry, index) =>
-                decodeAccountIdValue(
-                  entry,
-                  `zk.RotateZkAceIdentityCommitment.allowed_accounts[${index}]`,
-                ),
-              "zk.RotateZkAceIdentityCommitment.allowed_accounts",
-            ),
-            action_class: decodeStringValue(
-              fields.action_class,
-              "zk.RotateZkAceIdentityCommitment.action_class",
-            ),
-            domain_tag: decodeStringValue(
-              fields.domain_tag,
-              "zk.RotateZkAceIdentityCommitment.domain_tag",
-            ),
-            verifier_key: decodeVerifyingKeyIdValue(
-              fields.verifier_key,
-              "zk.RotateZkAceIdentityCommitment.verifier_key",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment": {
-      const fields = decodeStructFields(payload, "zk.RevokeZkAceIdentityCommitment", [
-        "asset",
-        "identity_commitment",
-        "reason_hash",
-      ]);
-      return {
-        zk: {
-          RevokeZkAceIdentityCommitment: {
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.RevokeZkAceIdentityCommitment.asset",
-            ),
-            identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.identity_commitment,
-                32,
-                "zk.RevokeZkAceIdentityCommitment.identity_commitment",
-              ),
-            ),
-            reason_hash: decodeOptionValue(
-              fields.reason_hash,
-              (entry, context) => Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.RevokeZkAceIdentityCommitment.reason_hash",
-            ),
-          },
-        },
-      };
-    }
     case "zk::ScheduleConfidentialPolicyTransition": {
       const fields = decodeStructFields(payload, "zk.ScheduleConfidentialPolicyTransition", [
         "asset",
@@ -3497,79 +3336,6 @@ function decodeZkInstructionPayload(wireId, payload) {
               (entry, context) =>
                 Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
               "zk.AssetHiddenZkTransfer.root_hint",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer": {
-      const fields = decodeStructFields(payload, "zk.SubmitZkAceAuthorizedTransfer", [
-        "from",
-        "to",
-        "asset",
-        "amount",
-        "identity_commitment",
-        "tx_digest",
-        "chain_id",
-        "domain_tag",
-        "action_class",
-        "replay_nullifier",
-        "policy_hash",
-        "proof",
-      ]);
-      return {
-        zk: {
-          SubmitZkAceAuthorizedTransfer: {
-            from: decodeAccountIdValue(fields.from, "zk.SubmitZkAceAuthorizedTransfer.from"),
-            to: decodeAccountIdValue(fields.to, "zk.SubmitZkAceAuthorizedTransfer.to"),
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.SubmitZkAceAuthorizedTransfer.asset",
-            ),
-            amount: decodeQuantityValue(
-              fields.amount,
-              "zk.SubmitZkAceAuthorizedTransfer.amount",
-            ),
-            identity_commitment: Array.from(
-              decodeFixedBytesValue(
-                fields.identity_commitment,
-                32,
-                "zk.SubmitZkAceAuthorizedTransfer.identity_commitment",
-              ),
-            ),
-            tx_digest: Array.from(
-              decodeFixedBytesValue(
-                fields.tx_digest,
-                32,
-                "zk.SubmitZkAceAuthorizedTransfer.tx_digest",
-              ),
-            ),
-            chain_id: decodeStringValue(fields.chain_id, "zk.SubmitZkAceAuthorizedTransfer.chain_id"),
-            domain_tag: decodeStringValue(
-              fields.domain_tag,
-              "zk.SubmitZkAceAuthorizedTransfer.domain_tag",
-            ),
-            action_class: decodeStringValue(
-              fields.action_class,
-              "zk.SubmitZkAceAuthorizedTransfer.action_class",
-            ),
-            replay_nullifier: Array.from(
-              decodeFixedBytesValue(
-                fields.replay_nullifier,
-                32,
-                "zk.SubmitZkAceAuthorizedTransfer.replay_nullifier",
-              ),
-            ),
-            policy_hash: Array.from(
-              decodeFixedBytesValue(
-                fields.policy_hash,
-                32,
-                "zk.SubmitZkAceAuthorizedTransfer.policy_hash",
-              ),
-            ),
-            proof: decodeProofAttachmentValue(
-              fields.proof,
-              "zk.SubmitZkAceAuthorizedTransfer.proof",
             ),
           },
         },
@@ -5486,15 +5252,11 @@ function encodeZkInstruction(instruction) {
   const entries = [
     ["RegisterZkAsset", "iroha_data_model::isi::zk::RegisterZkAsset", encodeRegisterZkAssetPayload],
     ["RegisterAssetHiddenZkPool", "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool", encodeRegisterAssetHiddenZkPoolPayload],
-    ["RegisterZkAceIdentityCommitment", "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment", encodeRegisterZkAceIdentityCommitmentPayload],
-    ["RotateZkAceIdentityCommitment", "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment", encodeRotateZkAceIdentityCommitmentPayload],
-    ["RevokeZkAceIdentityCommitment", "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment", encodeRevokeZkAceIdentityCommitmentPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
     ["Shield", "iroha_data_model::isi::zk::Shield", encodeShieldPayload],
     ["ZkTransfer", "iroha_data_model::isi::zk::ZkTransfer", encodeZkTransferPayload],
     ["AssetHiddenZkTransfer", "iroha_data_model::isi::zk::AssetHiddenZkTransfer", encodeAssetHiddenZkTransferPayload],
-    ["SubmitZkAceAuthorizedTransfer", "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer", encodeSubmitZkAceAuthorizedTransferPayload],
     ["Unshield", "iroha_data_model::isi::zk::Unshield", encodeUnshieldPayload],
     ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
     ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
@@ -5528,49 +5290,6 @@ function encodeRegisterAssetHiddenZkPoolPayload(value) {
     [encodeAssetDefinitionIdValue(value.storage_asset, "zk.RegisterAssetHiddenZkPool.storage_asset")],
     [encodeFixedBytesValue(value.asset_set_root, 32, "zk.RegisterAssetHiddenZkPool.asset_set_root")],
     [encodeVerifyingKeyIdValue(value.vk_transfer, "zk.RegisterAssetHiddenZkPool.vk_transfer")],
-  ]);
-}
-
-function encodeRegisterZkAceIdentityCommitmentPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.RegisterZkAceIdentityCommitment.asset")],
-    [encodeFixedBytesValue(value.identity_commitment, 32, "zk.RegisterZkAceIdentityCommitment.identity_commitment")],
-    [encodeFixedBytesValue(value.policy_hash, 32, "zk.RegisterZkAceIdentityCommitment.policy_hash")],
-    [encodeNoritoVec(value.allowed_accounts ?? [], (entry, index) =>
-      encodeAccountIdValue(entry, `zk.RegisterZkAceIdentityCommitment.allowed_accounts[${index}]`),
-    )],
-    [encodeNoritoStringValue(assertNonEmptyString(value.action_class, "zk.RegisterZkAceIdentityCommitment.action_class"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.domain_tag, "zk.RegisterZkAceIdentityCommitment.domain_tag"))],
-    [encodeVerifyingKeyIdValue(value.verifier_key, "zk.RegisterZkAceIdentityCommitment.verifier_key")],
-  ]);
-}
-
-function encodeRotateZkAceIdentityCommitmentPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.RotateZkAceIdentityCommitment.asset")],
-    [encodeFixedBytesValue(value.old_identity_commitment, 32, "zk.RotateZkAceIdentityCommitment.old_identity_commitment")],
-    [encodeFixedBytesValue(value.new_identity_commitment, 32, "zk.RotateZkAceIdentityCommitment.new_identity_commitment")],
-    [encodeFixedBytesValue(value.policy_hash, 32, "zk.RotateZkAceIdentityCommitment.policy_hash")],
-    [encodeNoritoVec(value.allowed_accounts ?? [], (entry, index) =>
-      encodeAccountIdValue(entry, `zk.RotateZkAceIdentityCommitment.allowed_accounts[${index}]`),
-    )],
-    [encodeNoritoStringValue(assertNonEmptyString(value.action_class, "zk.RotateZkAceIdentityCommitment.action_class"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.domain_tag, "zk.RotateZkAceIdentityCommitment.domain_tag"))],
-    [encodeVerifyingKeyIdValue(value.verifier_key, "zk.RotateZkAceIdentityCommitment.verifier_key")],
-  ]);
-}
-
-function encodeRevokeZkAceIdentityCommitmentPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.RevokeZkAceIdentityCommitment.asset")],
-    [encodeFixedBytesValue(value.identity_commitment, 32, "zk.RevokeZkAceIdentityCommitment.identity_commitment")],
-    [
-      encodeOptionValue(
-        value.reason_hash,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.RevokeZkAceIdentityCommitment.reason_hash",
-      ),
-    ],
   ]);
 }
 
@@ -5638,23 +5357,6 @@ function encodeAssetHiddenZkTransferPayload(value) {
         "zk.AssetHiddenZkTransfer.root_hint",
       ),
     ],
-  ]);
-}
-
-function encodeSubmitZkAceAuthorizedTransferPayload(value) {
-  return encodeStructValue([
-    [encodeAccountIdValue(value.from, "zk.SubmitZkAceAuthorizedTransfer.from")],
-    [encodeAccountIdValue(value.to, "zk.SubmitZkAceAuthorizedTransfer.to")],
-    [encodeAssetDefinitionIdValue(value.asset, "zk.SubmitZkAceAuthorizedTransfer.asset")],
-    [encodeQuantityValue(value.amount, "zk.SubmitZkAceAuthorizedTransfer.amount")],
-    [encodeFixedBytesValue(value.identity_commitment, 32, "zk.SubmitZkAceAuthorizedTransfer.identity_commitment")],
-    [encodeFixedBytesValue(value.tx_digest, 32, "zk.SubmitZkAceAuthorizedTransfer.tx_digest")],
-    [encodeNoritoStringValue(assertNonEmptyString(value.chain_id, "zk.SubmitZkAceAuthorizedTransfer.chain_id"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.domain_tag, "zk.SubmitZkAceAuthorizedTransfer.domain_tag"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.action_class, "zk.SubmitZkAceAuthorizedTransfer.action_class"))],
-    [encodeFixedBytesValue(value.replay_nullifier, 32, "zk.SubmitZkAceAuthorizedTransfer.replay_nullifier")],
-    [encodeFixedBytesValue(value.policy_hash, 32, "zk.SubmitZkAceAuthorizedTransfer.policy_hash")],
-    [encodeProofAttachmentValue(value.proof, "zk.SubmitZkAceAuthorizedTransfer.proof")],
   ]);
 }
 
@@ -7074,109 +6776,14 @@ function decodeVerifyingKeyBoxValue(payload, context) {
 }
 
 function encodeBackendTagValue(value, context) {
-  const normalized = assertNonEmptyString(value, context)
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-  switch (normalized) {
-    case "halo2ipapasta":
-    case "halo2pasta":
-    case "halo2ipa":
-    case "pasta":
+  const backend = assertExactNonEmptyString(value, context);
+  switch (backend) {
+    case "halo2-ipa-pasta":
       return encodeEnumTagValue(0);
-    case "halo2bn254":
-      return encodeEnumTagValue(1);
-    case "groth16":
-      return encodeEnumTagValue(2);
     case "stark":
-    case "starkfri":
-    case "starkfrisha256goldilocks":
-    case "starkfriposeidon2goldilocks":
-    case "starkfrisha256goldilocksv1":
-      return encodeEnumTagValue(3);
-    case "unsupported":
-      return encodeEnumTagValue(4);
-    case "halo2ipaorchard":
-    case "halo2pastaactionbundle":
-    case "orchard":
-    case "zcashorchard":
-      return encodeEnumTagValue(5);
-    case "groth16bls12377":
-    case "groth16bls12377decaf377":
-    case "bls12377":
-    case "decaf377":
-    case "masp":
-    case "penumbra":
-    case "penumbramasp":
-    case "halo2ipapenumbra":
-    case "halo2ipamasp":
-      return encodeEnumTagValue(6);
-    case "fcmppluspluscurvetree":
-    case "fcmppluspluscurvetreesbulletproofs":
-    case "fcmp":
-    case "monero":
-    case "monerofcmp":
-    case "monerofcmpplusplus":
-    case "curvetree":
-    case "halo2ipamonero":
-    case "halo2ipacurvetree":
-      return encodeEnumTagValue(7);
-    case "latticepcssis":
-    case "latticepcszk":
-    case "jindo":
-    case "jindolatticepcszk":
-    case "jindolatticepcszkv0":
-    case "jindolatticepcssis":
-      return encodeEnumTagValue(8);
-    case "starkfrimiden":
-    case "midenstark":
-    case "starkvmnotetransaction":
-      return encodeEnumTagValue(9);
-    case "aztecplonkishprivatekernel":
-    case "aztecprivatekernel":
-    case "plonkishprivatekernelrollup":
-      return encodeEnumTagValue(10);
-    case "pqmaspstarkfri":
-    case "pqmaspstark":
-    case "starkfripqmaspstarkfri":
-    case "postquantummasp":
-      return encodeEnumTagValue(11);
-    case "anonymouspgc":
-    case "anonymouspgckoutofn":
-    case "anonymouspgckoutofnv1":
-      return encodeEnumTagValue(12);
-    case "verange":
-    case "verangetransparentrange":
-    case "verangetransparentrangev1":
-      return encodeEnumTagValue(13);
-    case "zkat":
-    case "zkatpolicyprivateauthenticator":
-    case "zkatpolicyprivateauthv1":
-      return encodeEnumTagValue(14);
-    case "recursiveanonymousadmission":
-    case "recursiveanonymousadmissionv0":
-    case "zkamsrecursiveadmission":
-    case "zkamsrecursiveadmissionv0":
-      return encodeEnumTagValue(15);
-    case "vegaexistingcredentialzk":
-    case "vegaexistingcredentialzkv0":
-      return encodeEnumTagValue(16);
-    case "silentthresholdanoncred":
-    case "silentthresholdanoncredv0":
-    case "silentthresholdanonymouscredential":
-    case "thresholdanonymouscredentials":
-      return encodeEnumTagValue(17);
-    case "zkx509":
-    case "zkvmx509identity":
-    case "zkx509onchainidentity":
-    case "zkx509onchainidentityv0":
-      return encodeEnumTagValue(18);
-    case "siswithhints":
-    case "sishints":
-    case "sishintsanoncredpqv0":
-    case "latticeanonymouscredentials":
-      return encodeEnumTagValue(19);
+      return encodeEnumTagValue(1);
     default:
-      throw new Error(`${context} uses unsupported backend tag ${value}`);
+      throw new Error(`${context} uses unknown or non-canonical backend label ${backend}`);
   }
 }
 
@@ -7186,45 +6793,9 @@ function decodeBackendTagValue(payload, context) {
   reader.assertEof();
   switch (tag) {
     case 0:
-      return "Halo2IpaPasta";
+      return "halo2-ipa-pasta";
     case 1:
-      return "Halo2Bn254";
-    case 2:
-      return "Groth16";
-    case 3:
-      return "Stark";
-    case 4:
-      return "Unsupported";
-    case 5:
-      return "Halo2IpaOrchard";
-    case 6:
-      return "Groth16Bls12377";
-    case 7:
-      return "FcmpPlusPlusCurveTree";
-    case 8:
-      return "LatticePcsSis";
-    case 9:
-      return "MidenStark";
-    case 10:
-      return "AztecPlonkishPrivateKernel";
-    case 11:
-      return "PqMaspStarkFri";
-    case 12:
-      return "AnonymousPgc";
-    case 13:
-      return "VeRange";
-    case 14:
-      return "ZkAt";
-    case 15:
-      return "RecursiveAnonymousAdmission";
-    case 16:
-      return "VegaExistingCredentialZk";
-    case 17:
-      return "SilentThresholdAnoncred";
-    case 18:
-      return "ZkX509";
-    case 19:
-      return "SisWithHints";
+      return "stark";
     default:
       throw new Error(`${context} uses unsupported backend tag ${tag}`);
   }
@@ -7367,9 +6938,23 @@ function encodeOpenVerifyEnvelopePayload(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  assertOnlyObjectKeys(
+    value,
+    ["backend", "circuit_id", "vk_hash", "public_inputs", "proof_bytes", "aux"],
+    context,
+  );
+  const circuitId = assertExactNonEmptyString(
+    value.circuit_id,
+    `${context}.circuit_id`,
+  );
+  if (circuitId.trim() !== circuitId) {
+    throw new TypeError(
+      `${context}.circuit_id must not contain surrounding whitespace`,
+    );
+  }
   return encodeStructValue([
     [encodeBackendTagValue(value.backend, `${context}.backend`)],
-    [encodeNoritoStringValue(assertNonEmptyString(value.circuit_id, `${context}.circuit_id`))],
+    [encodeNoritoStringValue(circuitId)],
     [encodeFixedBytesValue(value.vk_hash, 32, `${context}.vk_hash`)],
     [encodeByteVecValue(value.public_inputs, `${context}.public_inputs`)],
     [encodeByteVecValue(value.proof_bytes, `${context}.proof_bytes`)],

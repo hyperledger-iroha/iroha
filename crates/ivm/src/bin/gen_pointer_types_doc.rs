@@ -3,9 +3,13 @@
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --write
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --check
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
+use std::path::{Path, PathBuf};
+
+mod support;
+
+use support::{
+    EXPECTED_DOC_LOCALES, GeneratedOutput, exact_locale_child_paths, parse_generation_mode,
+    sync_generated_outputs,
 };
 
 const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";
@@ -14,26 +18,15 @@ const POINTER_TYPE_GOLDEN_BEGIN: &str = "    // BEGIN GENERATED ABI V1 POINTER T
 const POINTER_TYPE_GOLDEN_END: &str = "    // END GENERATED ABI V1 POINTER TYPE IDS";
 
 fn localized_pointer_doc_paths(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
+    localized_pointer_doc_paths_for(workspace_root, EXPECTED_DOC_LOCALES)
+}
+
+fn localized_pointer_doc_paths_for(
+    workspace_root: &Path,
+    expected_locales: &[&str],
+) -> Result<Vec<PathBuf>, String> {
     let localized_root = workspace_root.join("docs/i18n/root");
-    let entries = fs::read_dir(&localized_root)
-        .map_err(|error| format!("read {}: {error}", localized_root.display()))?;
-    let mut paths = Vec::new();
-    for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("read entry in {}: {error}", localized_root.display()))?;
-        let path = entry.path().join("ivm.md");
-        if path.is_file() {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    if paths.is_empty() {
-        return Err(format!(
-            "no localized pointer documents found under {}",
-            localized_root.display()
-        ));
-    }
-    Ok(paths)
+    exact_locale_child_paths(&localized_root, "ivm.md", expected_locales)
 }
 
 fn render_generated_block(
@@ -102,44 +95,30 @@ fn render_pointer_type_golden_block(types: &[ivm::PointerType]) -> Result<String
     Ok(rendered)
 }
 
-fn process(
-    path: &Path,
+fn prepare_generated_block_outputs(
+    paths: &[PathBuf],
     begin_marker: &str,
     end_marker: &str,
     expected_block: &str,
-    write: bool,
-    check: bool,
-) {
-    let text =
-        fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let rendered = render_generated_block(&text, begin_marker, end_marker, expected_block)
-        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    if check {
-        assert_eq!(
-            text,
-            rendered,
-            "{} out of date; run: cargo run --locked -p ivm --bin gen_pointer_types_doc -- --write",
-            path.display()
-        );
-    }
-    if write && text != rendered {
-        fs::write(path, rendered)
-            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-        eprintln!("updated: {}", path.display());
-    }
+) -> Result<Vec<GeneratedOutput>, String> {
+    paths
+        .iter()
+        .map(|path| {
+            GeneratedOutput::render(path, |text| {
+                render_generated_block(text, begin_marker, end_marker, expected_block)
+            })
+        })
+        .collect()
 }
 
 fn main() {
-    let mut write = false;
-    let mut check = false;
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--write" => write = true,
-            "--check" => check = true,
-            _ => {}
+    let mode = match parse_generation_mode(std::env::args().skip(1)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
         }
-    }
-
+    };
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let path_pointer = PathBuf::from(manifest_dir).join("docs/pointer_abi.md");
     let workspace_root = PathBuf::from(manifest_dir)
@@ -157,26 +136,27 @@ fn main() {
     let expected_pointer_type_golden = render_pointer_type_golden_block(ivm::PointerType::all())
         .unwrap_or_else(|error| panic!("render pointer type golden: {error}"));
 
-    if !write && !check {
-        eprintln!("usage: --write or --check");
-        return;
-    }
-
-    process(&path_pointer, BEGIN, END, &expected_block, write, check);
-    process(&path_ivm_md, BEGIN, END, &expected_block, write, check);
     let localized_paths = localized_pointer_doc_paths(&workspace_root)
         .unwrap_or_else(|error| panic!("discover localized pointer documents: {error}"));
-    for path in localized_paths {
-        process(&path, BEGIN, END, &expected_block, write, check);
-    }
-    process(
-        &path_pointer_type_golden,
-        POINTER_TYPE_GOLDEN_BEGIN,
-        POINTER_TYPE_GOLDEN_END,
-        &expected_pointer_type_golden,
-        write,
-        check,
+    let mut document_paths = vec![path_pointer, path_ivm_md];
+    document_paths.extend(localized_paths);
+    let mut outputs = prepare_generated_block_outputs(&document_paths, BEGIN, END, &expected_block)
+        .unwrap_or_else(|error| panic!("render pointer documents: {error}"));
+    outputs.extend(
+        prepare_generated_block_outputs(
+            &[path_pointer_type_golden],
+            POINTER_TYPE_GOLDEN_BEGIN,
+            POINTER_TYPE_GOLDEN_END,
+            &expected_pointer_type_golden,
+        )
+        .unwrap_or_else(|error| panic!("render pointer type golden: {error}")),
     );
+    let regenerate_command = "cargo run --locked -p ivm --bin gen_pointer_types_doc -- --write";
+    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+        .unwrap_or_else(|error| panic!("{error}"));
+    for path in updated {
+        eprintln!("updated: {}", path.display());
+    }
 }
 
 #[cfg(test)]
@@ -188,7 +168,8 @@ mod tests {
 
     use super::{
         BEGIN, END, POINTER_TYPE_GOLDEN_BEGIN, POINTER_TYPE_GOLDEN_END,
-        localized_pointer_doc_paths, render_generated_block, render_pointer_type_golden_block,
+        localized_pointer_doc_paths_for, prepare_generated_block_outputs, render_generated_block,
+        render_pointer_type_golden_block,
     };
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -208,6 +189,20 @@ mod tests {
             render_generated_block(&rendered, BEGIN, END, &expected_block)
                 .expect("idempotent replacement"),
             rendered
+        );
+        assert!(render_generated_block("no markers", BEGIN, END, &expected_block).is_err());
+        assert!(
+            render_generated_block(&format!("{END}\n{BEGIN}"), BEGIN, END, &expected_block)
+                .is_err()
+        );
+        assert!(
+            render_generated_block(
+                &format!("{BEGIN}\none\n{END}\n{BEGIN}\ntwo\n{END}"),
+                BEGIN,
+                END,
+                &expected_block,
+            )
+            .is_err()
         );
     }
 
@@ -258,15 +253,41 @@ mod tests {
             fs::create_dir_all(&locale_root).expect("create locale directory");
             fs::write(locale_root.join("ivm.md"), "test").expect("write localized document");
         }
-        fs::create_dir_all(localized_root.join("missing")).expect("create unrelated locale");
-
-        let paths = localized_pointer_doc_paths(&root).expect("discover localized documents");
+        let paths = localized_pointer_doc_paths_for(&root, &["am", "zh-hant"])
+            .expect("discover localized documents");
         assert_eq!(
             paths,
             [
                 localized_root.join("am/ivm.md"),
                 localized_root.join("zh-hant/ivm.md"),
             ]
+        );
+
+        fs::remove_dir_all(root).expect("remove temporary directory");
+    }
+
+    #[test]
+    fn late_localized_marker_failure_does_not_publish_earlier_document() {
+        let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "ivm-pointer-doc-late-failure-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create test directory");
+        let first = root.join("first.md");
+        let second = root.join("second.md");
+        fs::write(&first, format!("{BEGIN}\nstale\n{END}\n")).expect("write first document");
+        fs::write(&second, "missing markers\n").expect("write malformed later document");
+        let before = fs::read(&first).expect("snapshot first document");
+        let expected = format!("{BEGIN}\ncurrent\n{END}");
+
+        assert!(
+            prepare_generated_block_outputs(&[first.clone(), second], BEGIN, END, &expected)
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&first).expect("read first after late failure"),
+            before
         );
 
         fs::remove_dir_all(root).expect("remove temporary directory");

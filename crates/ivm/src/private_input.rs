@@ -39,7 +39,7 @@ pub(crate) struct ValidatedPrivateInput {
 }
 
 fn canonical_record_bytes(record: &PrivateInputRecordV1) -> Result<Vec<u8>, VMError> {
-    norito::to_bytes(record).map_err(|_| VMError::NoritoInvalid)
+    norito::encode_canonical(record).map_err(|_| VMError::NoritoInvalid)
 }
 
 /// Encode a canonical integer private-input record.
@@ -140,10 +140,7 @@ pub(crate) fn decode_record(
         return Err(VMError::NoritoInvalid);
     }
     let record: PrivateInputRecordV1 =
-        norito::decode_from_bytes(raw).map_err(|_| VMError::NoritoInvalid)?;
-    if canonical_record_bytes(&record)? != raw {
-        return Err(VMError::NoritoInvalid);
-    }
+        norito::decode_canonical(raw).map_err(|_| VMError::NoritoInvalid)?;
     if record.kind != expected {
         return Err(VMError::NoritoInvalid);
     }
@@ -282,6 +279,36 @@ mod tests {
     fn wrong_kind_fails_before_an_envelope_is_returned() {
         let raw = encode_record(&decimal_record("1.5".parse().unwrap()).unwrap()).unwrap();
         assert!(decode_record(&raw, PrivateInputKindV1::Int).is_err());
+    }
+
+    #[test]
+    fn private_input_boundary_is_canonical_and_ambient_independent() {
+        let record = quantity_record(Quantity::from(17_u32)).expect("valid quantity record");
+        let canonical = encode_record(&record).expect("encode canonical private input");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&record).expect("encode alternate-layout private input")
+        };
+        assert_ne!(
+            alternate, canonical,
+            "fixture must exercise a non-canonical outer layout"
+        );
+        assert_eq!(
+            decode_record(&alternate, PrivateInputKindV1::Quantity),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            encode_record(&record).expect("encode under alternate ambient layout"),
+            canonical
+        );
+        assert!(
+            decode_record(&canonical, PrivateInputKindV1::Quantity).is_ok(),
+            "canonical admission must ignore the caller's ambient layout"
+        );
     }
 
     #[test]

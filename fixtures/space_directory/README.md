@@ -66,8 +66,8 @@ upcoming integration tests once the Space Directory contract lands.
 
 ## Notes
 
-- All numeric allowances use decimal strings so they can be losslessly parsed
-  into `Numeric`.
+- All quantity allowances use decimal strings so they can be losslessly parsed
+  into `Quantity`.
 - UAIDs follow the `uaid:<hex>` format (`Hash` serialization). Generate new
   UAIDs with a deterministic blake2b helper:
 

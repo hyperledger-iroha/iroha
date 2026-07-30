@@ -533,7 +533,6 @@ fn validate_finalized_provider_payload(
         ));
     }
     if plan.content_length != authorization.content_length()
-        || plan.payload_digest.as_bytes() != &manifest.car_digest
         || compute_chunk_plan_digest_sha3(&plan.chunks) != authorization.chunk_digest_sha3_256()
         || u32::try_from(plan.chunk_profile.min_size).ok() != Some(manifest.chunking.min_size)
         || u32::try_from(plan.chunk_profile.target_size).ok() != Some(manifest.chunking.target_size)
@@ -1132,13 +1131,7 @@ where
     }
     let maximum_bytes = usize::try_from(max_bytes)
         .map_err(|_| "checkpoint byte limit does not fit memory address space".to_owned())?;
-    let limits = norito::DecodeLimits::new(
-        max_sequence_elements.max(1),
-        maximum_bytes,
-        maximum_bytes.saturating_mul(2),
-        maximum_bytes.saturating_mul(4),
-        64,
-    );
+    let limits = local_checkpoint_decode_limits(bytes.len(), maximum_bytes, max_sequence_elements)?;
     let checkpoint: T = norito::decode_from_bytes_with_limits(bytes, limits)
         .map_err(|err| format!("bounded checkpoint decode failed: {err}"))?;
     let canonical = norito::to_bytes(&checkpoint)
@@ -1147,6 +1140,34 @@ where
         return Err("checkpoint is not the exact canonical Norito encoding".to_owned());
     }
     Ok(checkpoint)
+}
+
+fn local_checkpoint_decode_limits(
+    encoded_len: usize,
+    maximum_bytes: usize,
+    max_sequence_elements: usize,
+) -> Result<norito::DecodeLimits, String> {
+    if encoded_len == 0 {
+        return Err("checkpoint must not be empty".to_owned());
+    }
+    if maximum_bytes == 0 || encoded_len > maximum_bytes {
+        return Err("checkpoint byte length exceeds its configured bound".to_owned());
+    }
+
+    let wire_limits = norito::canonical_decode_limits(encoded_len);
+    Ok(norito::DecodeLimits::new(
+        max_sequence_elements
+            .max(1)
+            .min(wire_limits.max_sequence_elements()),
+        wire_limits.max_field_bytes(),
+        maximum_bytes
+            .saturating_mul(2)
+            .min(wire_limits.max_total_elements()),
+        maximum_bytes
+            .saturating_mul(4)
+            .min(wire_limits.max_total_allocated_bytes()),
+        64.min(wire_limits.max_nesting_depth()),
+    ))
 }
 
 fn read_reputation_trust_policy_file(path: &Path) -> io::Result<Vec<u8>> {
@@ -15892,7 +15913,7 @@ mod tests {
     };
     use iroha_telemetry::metrics::global_or_default;
     use norito::to_bytes;
-    use sorafs_car::{CarBuildPlan, compute_chunk_plan_digest_sha3};
+    use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
     use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::{
         DagCodecId, ManifestBuilder, PinPolicy, REPUTATION_PROVIDER_INPUT_VERSION_V1,
@@ -16385,7 +16406,7 @@ mod tests {
             .expect("one retained terminal");
         node.acknowledge_por_reputation_terminal(work.sequence, work.work_digest)
             .expect("checkpoint acknowledgement before external append");
-        assert!(node.por.checkpoint().replay_archive_receipt.is_none());
+        assert!(node.por.checkpoint().replay_archive_receipt().is_none());
         drop(node);
 
         let mut live_ahead = StartupPorReplayArchive::exact(binding);
@@ -16405,8 +16426,8 @@ mod tests {
         )
         .expect("reconcile an exact acknowledged first-append crash window");
         let reconciled = reopened.por.checkpoint();
-        assert!(reconciled.finalized.is_empty());
-        assert_eq!(reconciled.replay_archive_receipt, Some(current_head));
+        assert!(reconciled.has_no_finalized_challenges());
+        assert_eq!(reconciled.replay_archive_receipt(), Some(current_head));
         drop(reopened);
 
         let mut persisted = StartupPorReplayArchive::exact(binding);
@@ -16419,7 +16440,7 @@ mod tests {
         )
         .expect("reopen from the reconciled local checkpoint without another lookup");
         assert_eq!(
-            reopened_again.por.checkpoint().replay_archive_receipt,
+            reopened_again.por.checkpoint().replay_archive_receipt(),
             Some(current_head)
         );
     }
@@ -16483,12 +16504,31 @@ mod tests {
     }
 
     fn manifest_builder_for_plan(payload: &[u8], plan: &CarBuildPlan) -> ManifestBuilder {
+        let car_stats = CarWriter::new(plan, payload)
+            .expect("prepare canonical fixture CAR")
+            .write_to(std::io::sink())
+            .expect("compute canonical fixture CAR");
         ManifestBuilder::new()
+            .root_cid(
+                car_stats
+                    .root_cids
+                    .first()
+                    .cloned()
+                    .expect("fixture CAR root"),
+            )
+            .dag_codec(DagCodecId(car_stats.dag_codec))
+            .chunking_from_profile(
+                plan.chunk_profile,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .por_root(
                 sorafs_car::compute_por_root(payload, plan)
                     .expect("derive canonical fixture PoR root"),
             )
+            .content_length(plan.content_length)
+            .car_digest(*car_stats.car_archive_digest.as_bytes())
+            .car_size(car_stats.car_size)
     }
 
     fn storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
@@ -16679,20 +16719,11 @@ mod tests {
 
         let payload = format!("finalized-provider-ingest-{seed}").into_bytes();
         let plan = CarBuildPlan::single_file(&payload).expect("provider-ingest CAR plan");
-        let root_cid = sorafs_manifest::canonical_manifest_root_cid([seed.wrapping_add(3); 32]);
         let manifest = manifest_builder_for_plan(&payload, &plan)
-            .root_cid(root_cid.clone())
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(*plan.payload_digest.as_bytes())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("provider-ingest manifest");
+        let root_cid = manifest.root_cid.clone();
         let manifest_digest: [u8; 32] = manifest.digest().expect("manifest digest").into();
         let manifest_root_cid =
             ManifestRootCid::try_from_slice(&manifest.root_cid).expect("canonical manifest CID");
@@ -18167,7 +18198,7 @@ mod tests {
         let publisher: Arc<dyn FencedTransparencyPublisherV1> = provider.clone();
         let head_reader: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = provider.clone();
         deps.with_governance_dag_signer(Arc::new(TestGovernanceDagSigner::new()))
-            .with_governance_dag_checkpoint_store(Arc::clone(&provider.governance_checkpoint_store))
+            .with_governance_dag_checkpoint_store(provider.governance_checkpoint_store.clone())
             .with_fenced_transparency_publisher(publisher)
             .with_fenced_transparency_head_reader(head_reader)
     }
@@ -18475,6 +18506,20 @@ mod tests {
             decode_local_checkpoint_canonical::<Vec<u64>>(&oversized_sequence, 4_096, 2).is_err(),
             "declared sequence length must fail before allocation beyond the configured bound"
         );
+    }
+
+    #[test]
+    fn local_checkpoint_decode_limits_follow_actual_wire_size() {
+        let limits = local_checkpoint_decode_limits(64, 4_096, usize::MAX)
+            .expect("derive bounded checkpoint limits");
+        assert_eq!(limits.max_sequence_elements(), 64 * 8);
+        assert_eq!(limits.max_field_bytes(), 64);
+        assert_eq!(limits.max_total_elements(), 64 * 8);
+        assert_eq!(limits.max_total_allocated_bytes(), 4_096 * 4);
+        assert_eq!(limits.max_nesting_depth(), 64);
+
+        assert!(local_checkpoint_decode_limits(0, 4_096, 1).is_err());
+        assert!(local_checkpoint_decode_limits(4_097, 4_096, 1).is_err());
     }
 
     #[test]
@@ -21560,15 +21605,6 @@ mod tests {
         let payload = b"digest-lookup-fixture";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -25322,15 +25358,6 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x11; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(policy)
             .build()
             .expect("manifest");
@@ -26187,15 +26214,6 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = 1_700_000_000;
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x33; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(policy)
             .build()
             .expect("manifest");
@@ -26365,15 +26383,6 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x22; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(policy)
             .build()
             .expect("manifest");
@@ -26419,28 +26428,12 @@ mod tests {
         policy.retention_epoch = retention_epoch;
 
         let manifest_a = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x33; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
+            .add_metadata("test.fixture_id", "gc-shared-a")
             .pin_policy(policy.clone())
             .build()
             .expect("manifest a");
         let manifest_b = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x44; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
+            .add_metadata("test.fixture_id", "gc-shared-b")
             .pin_policy(policy)
             .build()
             .expect("manifest b");
@@ -26952,15 +26945,6 @@ mod tests {
         let payload = b"node handle storage fetch test";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -26984,15 +26968,6 @@ mod tests {
         let payload = b"SoraFS node handle PoR sampling payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xBB; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -27070,15 +27045,6 @@ mod tests {
         let payload = vec![0xEE; 128 * 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let manifest = manifest_builder_for_plan(&payload, &plan)
-            .root_cid(vec![0xDD; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(&payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -27231,7 +27197,7 @@ mod tests {
     }
 
     fn build_manifest_with_retention(
-        cid: Vec<u8>,
+        fixture_id: Vec<u8>,
         retention_epoch: u64,
         payload: &[u8],
         handle: &NodeHandle,
@@ -27240,15 +27206,7 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(cid)
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
+            .add_metadata("test.fixture_id", hex::encode(fixture_id))
             .pin_policy(policy)
             .build()
             .expect("manifest");
@@ -27324,17 +27282,9 @@ mod tests {
 
         let payload = b"finalized-native-repair-corrupt-chunk";
         let plan = CarBuildPlan::single_file(payload).expect("chunk plan");
-        let build_manifest = |root_cid: Vec<u8>| {
+        let build_manifest = |fixture_id: Vec<u8>| {
             manifest_builder_for_plan(payload, &plan)
-                .root_cid(root_cid)
-                .dag_codec(DagCodecId(0x71))
-                .chunking_from_profile(
-                    sorafs_chunker::ChunkProfile::DEFAULT,
-                    sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-                )
-                .content_length(plan.content_length)
-                .car_digest(blake3::hash(payload).into())
-                .car_size(plan.content_length)
+                .add_metadata("test.fixture_id", hex::encode(fixture_id))
                 .pin_policy(PinPolicy::default())
                 .build()
                 .expect("manifest")
@@ -27560,15 +27510,6 @@ mod tests {
         let payload = b"disabled storage payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xCC; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");

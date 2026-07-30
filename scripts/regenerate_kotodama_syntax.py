@@ -29,6 +29,7 @@ POLICY_FORMAT = "iroha.kotodama.v1.policy"
 POLICY_SCHEMA = 1
 
 SEMANTIC_PATH = Path("crates/kotodama_lang/src/semantic.rs")
+IVM_ABI_ACCESS_HINTS_PATH = Path("crates/ivm_abi/src/access_hints.rs")
 GRAMMAR_DOC_PATH = Path("docs/source/kotodama_grammar.md")
 TEXTMATE_PATH = Path(
     "tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json"
@@ -65,6 +66,7 @@ CSHARP_MANIFEST_PATH = Path(
 
 GENERATED_TARGETS = (
     SEMANTIC_PATH,
+    IVM_ABI_ACCESS_HINTS_PATH,
     GRAMMAR_DOC_PATH,
     TEXTMATE_PATH,
     *JAVASCRIPT_PATHS,
@@ -88,6 +90,14 @@ SEMANTIC_MARKERS = (
     "// BEGIN GENERATED: kotodama-v1-semantic-policy",
     "// END GENERATED: kotodama-v1-semantic-policy",
 )
+IVM_ABI_ACCESS_HINT_MARKERS = (
+    "// BEGIN GENERATED: kotodama-v1-dynamic-access-policy",
+    "// END GENERATED: kotodama-v1-dynamic-access-policy",
+)
+TYPESCRIPT_DYNAMIC_ACCESS_MARKERS = (
+    "// BEGIN GENERATED: kotodama-v1-dynamic-access-policy",
+    "// END GENERATED: kotodama-v1-dynamic-access-policy",
+)
 SOURCE_DOC_MARKERS = (
     "<!-- BEGIN GENERATED: kotodama-v1-source-policy -->",
     "<!-- END GENERATED: kotodama-v1-source-policy -->",
@@ -106,6 +116,33 @@ EXPECTED_NUMERIC_ABI = {
     "decimal": ("Decimal", 0x0012),
     "quantity": ("Quantity", 0x0010),
 }
+EXPECTED_DECLARATION_RESERVED_EXTRAS = (
+    "AxtDescriptor",
+    "AssetHandle",
+    "ProofBlob",
+    "SoracloudRequest",
+    "SoracloudResponse",
+    "state_map_get",
+    "__kotodama_list_len",
+    "__kotodama_list_get",
+    "__kotodama_list_try_set",
+    "__kotodama_list_try_push",
+    "__kotodama_list_pop",
+    "__kotodama_list_contains",
+    "__kotodama_list_take",
+    "__kotodama_list_enumerate",
+    "__kotodama_decimal_div_round",
+    "__kotodama_quantity_div_round",
+    "__kotodama_quantity_ratio_round",
+    "__kotodama_decimal_to_int_trunc",
+    "__kotodama_decimal_to_int_round",
+    "is_some",
+    "is_none",
+    "is_ok",
+    "is_err",
+    "unwrap_or",
+    "unwrap_err_or",
+)
 HEX_128 = re.compile(r"^[0-9a-f]{32}$")
 POINTER_ID = re.compile(r"^0x[0-9a-f]{4}$")
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -128,11 +165,26 @@ class NumericSchema:
 
 
 @dataclass(frozen=True)
+class DynamicAccessHintPolicy:
+    """Exact first-release bounded dynamic-access policy."""
+
+    state_map_key_types: tuple[str, ...]
+    bound_kinds: tuple[str, ...]
+    max_keys: int
+    base_prefix: str
+    base_identifier: str
+    base_reserved_prefixes: tuple[str, ...]
+    requires_declared_state_map: bool
+    scheduler_authoritative: bool
+
+
+@dataclass(frozen=True)
 class Policy:
     """Strictly validated, timestamp-free Kotodama V1 policy."""
 
     lexical_grammar: Path
     active_source_types: tuple[str, ...]
+    dynamic_access_hints: DynamicAccessHintPolicy
     retired_numeric_type_spellings: tuple[str, ...]
     ordinary_value_identifiers: tuple[str, ...]
     declaration_reserved_extras: tuple[str, ...]
@@ -224,6 +276,7 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
             "schema",
             "lexical_grammar",
             "active_source_types",
+            "dynamic_access_hints",
             "retired_numeric_type_spellings",
             "ordinary_value_identifiers",
             "declaration_reserved_extras",
@@ -243,6 +296,51 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
         raise GenerationError(f"policy schema must be {POLICY_SCHEMA}")
 
     active_types = _string_list(raw["active_source_types"], "active_source_types")
+    dynamic_access_raw = raw["dynamic_access_hints"]
+    if not isinstance(dynamic_access_raw, dict):
+        raise GenerationError("dynamic_access_hints must be an object")
+    _strict_keys(
+        dynamic_access_raw,
+        {
+            "state_map_key_types",
+            "bound_kinds",
+            "max_keys",
+            "base_prefix",
+            "base_identifier",
+            "base_reserved_prefixes",
+            "requires_declared_state_map",
+            "scheduler_authoritative",
+        },
+        "dynamic_access_hints",
+    )
+    dynamic_access_key_types = _string_list(
+        dynamic_access_raw["state_map_key_types"],
+        "dynamic_access_hints.state_map_key_types",
+    )
+    dynamic_access_bound_kinds = _string_list(
+        dynamic_access_raw["bound_kinds"],
+        "dynamic_access_hints.bound_kinds",
+    )
+    dynamic_access_reserved_prefixes = _string_list(
+        dynamic_access_raw["base_reserved_prefixes"],
+        "dynamic_access_hints.base_reserved_prefixes",
+    )
+    for field in ("base_prefix", "base_identifier"):
+        if (
+            not isinstance(dynamic_access_raw[field], str)
+            or not dynamic_access_raw[field]
+        ):
+            raise GenerationError(
+                f"dynamic_access_hints.{field} must be a non-empty string"
+            )
+    if (
+        type(dynamic_access_raw["max_keys"]) is not int
+        or dynamic_access_raw["max_keys"] <= 0
+    ):
+        raise GenerationError("dynamic_access_hints.max_keys must be a positive integer")
+    for field in ("requires_declared_state_map", "scheduler_authoritative"):
+        if type(dynamic_access_raw[field]) is not bool:
+            raise GenerationError(f"dynamic_access_hints.{field} must be boolean")
     retired_types = _string_list(
         raw["retired_numeric_type_spellings"], "retired_numeric_type_spellings"
     )
@@ -251,6 +349,12 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
     )
     for context, values in [
         ("active_source_types", active_types),
+        ("dynamic_access_hints.state_map_key_types", dynamic_access_key_types),
+        ("dynamic_access_hints.bound_kinds", dynamic_access_bound_kinds),
+        (
+            "dynamic_access_hints.base_reserved_prefixes",
+            dynamic_access_reserved_prefixes,
+        ),
         ("retired_numeric_type_spellings", retired_types),
         ("ordinary_value_identifiers", ordinary_identifiers),
         (
@@ -333,6 +437,20 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
     policy = Policy(
         lexical_grammar=_relative_path(raw["lexical_grammar"], "lexical_grammar"),
         active_source_types=active_types,
+        dynamic_access_hints=DynamicAccessHintPolicy(
+            state_map_key_types=dynamic_access_key_types,
+            bound_kinds=dynamic_access_bound_kinds,
+            max_keys=dynamic_access_raw["max_keys"],
+            base_prefix=dynamic_access_raw["base_prefix"],
+            base_identifier=dynamic_access_raw["base_identifier"],
+            base_reserved_prefixes=dynamic_access_reserved_prefixes,
+            requires_declared_state_map=dynamic_access_raw[
+                "requires_declared_state_map"
+            ],
+            scheduler_authoritative=dynamic_access_raw[
+                "scheduler_authoritative"
+            ],
+        ),
         retired_numeric_type_spellings=retired_types,
         ordinary_value_identifiers=ordinary_identifiers,
         declaration_reserved_extras=_string_list(
@@ -359,6 +477,55 @@ def load_policy(root: Path, relative_path: Path = DEFAULT_POLICY) -> Policy:
 
 
 def _validate_final_v1_policy(policy: Policy) -> None:
+    dynamic_access = policy.dynamic_access_hints
+    expected_key_types = (
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "DataSpaceId",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "NftId",
+        "DomainId",
+        "Name",
+    )
+    if dynamic_access.state_map_key_types != expected_key_types:
+        raise GenerationError(
+            "dynamic_access_hints.state_map_key_types must use the exact V1 order"
+        )
+    if any(name not in policy.active_source_types for name in expected_key_types):
+        raise GenerationError(
+            "dynamic_access_hints.state_map_key_types must be active source types"
+        )
+    if dynamic_access.bound_kinds != ("range", "take"):
+        raise GenerationError(
+            "dynamic_access_hints.bound_kinds must be ordered range, take"
+        )
+    if dynamic_access.max_keys != 64:
+        raise GenerationError("dynamic_access_hints.max_keys must be 64")
+    if (
+        dynamic_access.base_prefix != "state:"
+        or dynamic_access.base_identifier != "state_declaration_identifier"
+        or dynamic_access.base_reserved_prefixes != ("__kotodama_link_",)
+        or not dynamic_access.requires_declared_state_map
+    ):
+        raise GenerationError(
+            "dynamic_access_hints must require one direct declared StateMap "
+            "base named by a canonical state declaration identifier under state:"
+        )
+    if dynamic_access.scheduler_authoritative:
+        raise GenerationError(
+            "dynamic_access_hints must remain advisory in the first release"
+        )
+    if policy.declaration_reserved_extras != EXPECTED_DECLARATION_RESERVED_EXTRAS:
+        raise GenerationError(
+            "declaration_reserved_extras must exactly cover the compiler-owned "
+            "V1 declaration vocabulary"
+        )
     schema_sources = tuple(schema.source_type for schema in policy.numeric_schemas)
     if schema_sources != ("int", "decimal", "quantity"):
         raise GenerationError("numeric_schemas must be ordered int, decimal, quantity")
@@ -486,7 +653,12 @@ def _replace_generated(
 
 
 def _rust_array(name: str, values: Sequence[str], doc: str) -> str:
-    if name == "V1_SUM_PATHS":
+    if name in {
+        "V1_SUM_PATHS",
+        "V1_DYNAMIC_ACCESS_BOUND_KINDS",
+        "DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1",
+        "DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1",
+    }:
         quoted = ", ".join(json.dumps(value, ensure_ascii=False) for value in values)
         return f"/// {doc}\npub const {name}: &[&str] = &[{quoted}];"
     rows = "\n".join(
@@ -496,11 +668,51 @@ def _rust_array(name: str, values: Sequence[str], doc: str) -> str:
 
 
 def render_semantic_policy(policy: Policy) -> str:
+    dynamic_access = policy.dynamic_access_hints
     sections = [
         _rust_array(
             "V1_SOURCE_TYPE_NAMES",
             policy.active_source_types,
             "Canonical source-level type spellings offered by language tooling.",
+        ),
+        _rust_array(
+            "V1_DECLARATION_RESERVED_EXTRA_NAMES",
+            policy.declaration_reserved_extras,
+            "Compiler-owned non-keyword names forbidden for source declarations.",
+        ),
+        _rust_array(
+            "V1_STATE_MAP_KEY_TYPE_NAMES",
+            dynamic_access.state_map_key_types,
+            "Exact canonical scalar types permitted as durable StateMap keys.",
+        ),
+        _rust_array(
+            "V1_DYNAMIC_ACCESS_BOUND_KINDS",
+            dynamic_access.bound_kinds,
+            "Canonical bounded StateMap scan provenance in manifest order.",
+        ),
+        (
+            "/// Maximum keys advertised by one bounded dynamic-access hint.\n"
+            f"pub const V1_DYNAMIC_ACCESS_MAX_KEYS: u32 = {dynamic_access.max_keys};"
+        ),
+        (
+            "/// Canonical prefix for a direct durable StateMap hint base.\n"
+            "pub const V1_DYNAMIC_ACCESS_BASE_PREFIX: &str = "
+            f"{json.dumps(dynamic_access.base_prefix)};"
+        ),
+        (
+            "/// Canonical validation policy for the StateMap base identifier.\n"
+            "pub const V1_DYNAMIC_ACCESS_BASE_IDENTIFIER_POLICY: &str = "
+            f"{json.dumps(dynamic_access.base_identifier)};"
+        ),
+        (
+            "/// Dynamic hints may refer only to a directly declared top-level StateMap.\n"
+            "pub const V1_DYNAMIC_ACCESS_REQUIRES_DECLARED_STATE_MAP: bool = "
+            f"{str(dynamic_access.requires_declared_state_map).lower()};"
+        ),
+        (
+            "/// Dynamic hints are advisory and never scheduler-authoritative in V1.\n"
+            "pub const V1_DYNAMIC_ACCESS_SCHEDULER_AUTHORITATIVE: bool = "
+            f"{str(dynamic_access.scheduler_authoritative).lower()};"
         ),
         (
             "/// Retired pre-release numeric type spellings that remain reserved in V1.\n"
@@ -534,6 +746,49 @@ def render_semantic_policy(policy: Policy) -> str:
     return "\n".join(sections)
 
 
+def render_ivm_abi_access_hint_policy(
+    policy: Policy, grammar: LexicalGrammar
+) -> str:
+    dynamic_access = policy.dynamic_access_hints
+    reserved_state_identifiers = (
+        *(spelling for spelling, _ in grammar.keywords if spelling.isascii()),
+        *_declaration_names(policy),
+    )
+    if len(set(reserved_state_identifiers)) != len(reserved_state_identifiers):
+        raise GenerationError(
+            "dynamic-access reserved state identifiers contain duplicates"
+        )
+    return "\n".join(
+        [
+            (
+                "/// Maximum number of keys a single V1 dynamic-access hint may cover.\n"
+                "pub const DYNAMIC_ACCESS_HINT_MAX_KEYS_V1: u32 = "
+                f"{dynamic_access.max_keys};"
+            ),
+            _rust_array(
+                "DYNAMIC_ACCESS_HINT_KEY_TYPES_V1",
+                dynamic_access.state_map_key_types,
+                "Exact Kotodama V1 `StateMap` key-type vocabulary, in ABI descriptor order.",
+            ),
+            _rust_array(
+                "DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1",
+                dynamic_access.bound_kinds,
+                "Exact V1 sources of a statically proven dynamic-access bound.",
+            ),
+            _rust_array(
+                "DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1",
+                reserved_state_identifiers,
+                "Exact keywords and compiler-reserved state declaration names.",
+            ),
+            _rust_array(
+                "DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1",
+                dynamic_access.base_reserved_prefixes,
+                "Exact compiler-owned prefixes forbidden for state declarations.",
+            ),
+        ]
+    )
+
+
 def _markdown_code(value: str) -> str:
     escaped = value.replace("|", "\\|")
     return f"`{escaped}`"
@@ -555,6 +810,7 @@ def render_operator_docs(grammar: LexicalGrammar) -> str:
 
 
 def render_source_policy_docs(policy: Policy) -> str:
+    dynamic_access = policy.dynamic_access_hints
     active = ", ".join(_markdown_code(value) for value in policy.active_source_types)
     retired = ", ".join(
         _markdown_code(value) for value in policy.retired_numeric_type_spellings
@@ -566,6 +822,12 @@ def render_source_policy_docs(policy: Policy) -> str:
         f"{_markdown_code(value)} (remove the suffix)"
         for value in policy.numeric_suffix_fixits
     )
+    dynamic_key_types = ", ".join(
+        _markdown_code(value) for value in dynamic_access.state_map_key_types
+    )
+    dynamic_bound_kinds = ", ".join(
+        _markdown_code(value) for value in dynamic_access.bound_kinds
+    )
     lines = [
         "| Source policy | Canonical V1 values |",
         "| --- | --- |",
@@ -573,6 +835,17 @@ def render_source_policy_docs(policy: Policy) -> str:
         f"| Reserved retired numeric type spellings | {retired} |",
         f"| Ordinary value/function identifier examples | {ordinary} |",
         f"| Retired literal suffixes with safe fix-its | {suffixes} |",
+        f"| Durable `StateMap` key types (ordered) | {dynamic_key_types} |",
+        f"| Dynamic-access bound kinds (ordered) | {dynamic_bound_kinds} |",
+        f"| Dynamic-access key bound | `1..={dynamic_access.max_keys}` |",
+        (
+            "| Dynamic-access base | One direct declared top-level `StateMap`, encoded as "
+            f"`{dynamic_access.base_prefix}<{dynamic_access.base_identifier}>` |"
+        ),
+        (
+            "| Dynamic-access scheduler semantics | Advisory only; never authorization "
+            "or scheduler-authoritative evidence |"
+        ),
         "",
         "| Source type | Rust nominal type | Pointer ID | Schema name | Schema hash |",
         "| --- | --- | --- | --- | --- |",
@@ -761,6 +1034,33 @@ def _typescript_policy(policy: Policy) -> str:
     return "\n".join(lines)
 
 
+def _typescript_dynamic_access_policy(policy: Policy) -> str:
+    dynamic_access = policy.dynamic_access_hints
+    key_rows = "\n".join(
+        f"  {json.dumps(value)}," for value in dynamic_access.state_map_key_types
+    )
+    bound_rows = "\n".join(
+        f"  {json.dumps(value)}," for value in dynamic_access.bound_kinds
+    )
+    return "\n".join(
+        [
+            "export const KOTODAMA_V1_STATE_MAP_KEY_TYPES: readonly [",
+            key_rows,
+            "];",
+            "export const KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS: readonly [",
+            bound_rows,
+            "];",
+            "export const KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS: "
+            f"{dynamic_access.max_keys};",
+            "",
+            "export type ContractStateMapKeyTypeName =",
+            "  (typeof KOTODAMA_V1_STATE_MAP_KEY_TYPES)[number];",
+            "export type ContractDynamicAccessBoundKind =",
+            "  (typeof KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS)[number];",
+        ]
+    )
+
+
 def _python_policy(policy: Policy) -> str:
     lines = [
         "NUMERIC_V1_SCHEMAS: Mapping[str, NumericV1Schema] = MappingProxyType(",
@@ -936,6 +1236,7 @@ def _quoted_rows(values: Sequence[str], indentation: str) -> str:
 
 def _javascript_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
             "/** Canonical Kotodama V1 lexical keywords generated from `grammar/v1.lex`. */",
@@ -953,9 +1254,29 @@ def _javascript_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str
             _quoted_rows(policy.retired_numeric_type_spellings, "  "),
             "]);",
             "",
+            "/** Exact scalar source types accepted as durable `StateMap` keys in V1. */",
+            "export const KOTODAMA_V1_STATE_MAP_KEY_TYPES = Object.freeze([",
+            _quoted_rows(dynamic_access.state_map_key_types, "  "),
+            "]);",
+            "",
+            "/** Exact dynamic-access bound policies emitted by the V1 compiler. */",
+            "export const KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS = Object.freeze([",
+            _quoted_rows(dynamic_access.bound_kinds, "  "),
+            "]);",
+            "",
+            "/** Maximum number of keys one V1 dynamic-access hint may project. */",
+            "export const KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS = "
+            f"{dynamic_access.max_keys};",
+            "",
             "const KEYWORD_SET = new Set(KOTODAMA_V1_KEYWORDS);",
             "const DECLARATION_RESERVED_SET = new Set(KOTODAMA_V1_DECLARATION_RESERVED);",
             "const RETIRED_TYPE_SET = new Set(KOTODAMA_V1_RETIRED_TYPE_NAMES);",
+            "const KOTODAMA_V1_STATE_MAP_KEY_TYPE_SET = new Set(",
+            "  KOTODAMA_V1_STATE_MAP_KEY_TYPES,",
+            ");",
+            "const KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KIND_SET = new Set(",
+            "  KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS,",
+            ");",
         ]
     )
 
@@ -967,6 +1288,7 @@ def _python_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         )
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    dynamic_access = policy.dynamic_access_hints
     return "\n\n".join(
         [
             frozen("_KOTODAMA_RESERVED_IDENTIFIERS", keywords),
@@ -978,6 +1300,22 @@ def _python_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
                 "_KOTODAMA_RETIRED_NUMERIC_TYPE_NAMES",
                 policy.retired_numeric_type_spellings,
             ),
+            "\n".join(
+                [
+                    "_KOTODAMA_V1_STATE_MAP_KEY_TYPES = (",
+                    _quoted_rows(dynamic_access.state_map_key_types, "    "),
+                    ")",
+                ]
+            ),
+            "\n".join(
+                [
+                    "_KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS = (",
+                    _quoted_rows(dynamic_access.bound_kinds, "    "),
+                    ")",
+                ]
+            ),
+            "_KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS = "
+            f"{dynamic_access.max_keys}",
         ]
     )
 
@@ -989,11 +1327,16 @@ def _kotlin_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         )
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
             kotlin_set("reservedIdentifiers", keywords),
             kotlin_set("reservedDeclarationNames", _declaration_names(policy)),
             kotlin_set("retiredNumericTypeNames", policy.retired_numeric_type_spellings),
+            kotlin_set("stateMapKeyTypeNames", dynamic_access.state_map_key_types),
+            kotlin_set("dynamicAccessBoundKinds", dynamic_access.bound_kinds),
+            "    private val maxDynamicAccessKeys = "
+            f"BigInteger.valueOf({dynamic_access.max_keys})",
         ]
     )
 
@@ -1007,11 +1350,16 @@ def _java_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         return f"  private static final Set<String> {name} =\n      set(\n{rows});"
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
             java_set("RESERVED_IDENTIFIERS", keywords),
             java_set("RESERVED_DECLARATION_NAMES", _declaration_names(policy)),
             java_set("RETIRED_NUMERIC_TYPE_NAMES", policy.retired_numeric_type_spellings),
+            java_set("STATE_MAP_KEY_TYPE_NAMES", dynamic_access.state_map_key_types),
+            java_set("DYNAMIC_ACCESS_BOUND_KINDS", dynamic_access.bound_kinds),
+            "  private static final BigInteger MAX_DYNAMIC_ACCESS_KEYS = "
+            f"BigInteger.valueOf({dynamic_access.max_keys});",
         ]
     )
 
@@ -1023,11 +1371,16 @@ def _swift_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         )
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
             swift_set("reservedIdentifiers", keywords),
             swift_set("reservedDeclarationIdentifiers", _declaration_names(policy)),
             swift_set("retiredNumericTypeNames", policy.retired_numeric_type_spellings),
+            swift_set("stateMapKeyTypeNames", dynamic_access.state_map_key_types),
+            swift_set("dynamicAccessBoundKinds", dynamic_access.bound_kinds),
+            "    private static let maximumDynamicAccessKeys: UInt32 = "
+            f"{dynamic_access.max_keys}",
         ]
     )
 
@@ -1044,11 +1397,15 @@ def _csharp_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
         )
 
     keywords = tuple(spelling for spelling, _ in grammar.keywords)
+    dynamic_access = policy.dynamic_access_hints
     return "\n".join(
         [
             csharp_set("Keywords", keywords),
             csharp_set("ReservedDeclarationNames", _declaration_names(policy)),
             csharp_set("RetiredNumericTypeNames", policy.retired_numeric_type_spellings),
+            csharp_set("StateMapKeyTypeNames", dynamic_access.state_map_key_types),
+            csharp_set("DynamicAccessBoundKinds", dynamic_access.bound_kinds),
+            f"    private const uint MaxDynamicAccessKeys = {dynamic_access.max_keys};",
         ]
     )
 
@@ -1118,6 +1475,14 @@ def render_outputs(root: Path, policy: Policy) -> dict[Path, str]:
         path=path,
     )
 
+    path = IVM_ABI_ACCESS_HINTS_PATH
+    outputs[path] = _replace_generated(
+        _read_text(root / path),
+        *IVM_ABI_ACCESS_HINT_MARKERS,
+        render_ivm_abi_access_hint_policy(policy, grammar),
+        path=path,
+    )
+
     path = GRAMMAR_DOC_PATH
     docs = _read_text(root / path)
     docs = _replace_generated(
@@ -1141,8 +1506,14 @@ def render_outputs(root: Path, policy: Policy) -> dict[Path, str]:
         )
 
     path = TYPESCRIPT_PATH
-    outputs[path] = _replace_sdk(
+    typescript = _replace_sdk(
         _read_text(root / path), "typescript", _typescript_policy(policy), path
+    )
+    outputs[path] = _replace_generated(
+        typescript,
+        *TYPESCRIPT_DYNAMIC_ACCESS_MARKERS,
+        _typescript_dynamic_access_policy(policy),
+        path=path,
     )
     path = PYTHON_PATH
     outputs[path] = _replace_sdk(

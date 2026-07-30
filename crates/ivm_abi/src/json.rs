@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 use norito::{Decode, Encode};
 
 use crate::state_value::{
-    MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, StateValueKindV1, StateValueNodeV1,
-    StateValueSchemaV1,
+    MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, StateValueKindV1,
+    StateValueNodeV1, StateValueSchemaV1,
 };
 
 /// Maximum number of construction nodes accepted by the V1 JSON builder.
@@ -63,64 +63,56 @@ impl JsonConstructionSchemaV1 {
     }
 
     fn analyze(&self) -> Option<JsonConstructionAnalysisV1> {
-        fn analyze_node(
-            nodes: &[JsonConstructionNodeV1],
-            index: &mut usize,
-            depth: usize,
-        ) -> Option<JsonConstructionAnalysisV1> {
+        if self.nodes.is_empty() || self.nodes.len() > MAX_JSON_CONSTRUCTION_NODES_V1 {
+            return None;
+        }
+
+        let mut pending_depths = vec![1_usize];
+        let mut analysis = JsonConstructionAnalysisV1 {
+            nodes: 0,
+            words: 0,
+            depth: 0,
+        };
+        for node in &self.nodes {
+            let depth = pending_depths.pop()?;
             if depth > MAX_JSON_CONSTRUCTION_NODES_V1 {
                 return None;
             }
-            let node = nodes.get(*index)?;
-            *index = index.checked_add(1)?;
-            let mut analysis = JsonConstructionAnalysisV1 {
-                nodes: 1,
-                words: 0,
-                depth,
-            };
-            let mut merge = |child: JsonConstructionAnalysisV1| -> Option<()> {
-                analysis.nodes = analysis.nodes.checked_add(child.nodes)?;
-                analysis.words = analysis.words.checked_add(child.words)?;
-                analysis.depth = analysis.depth.max(child.depth);
-                Some(())
-            };
-            match node {
+            analysis.nodes = analysis.nodes.checked_add(1)?;
+            analysis.depth = analysis.depth.max(depth);
+            let child_count = match node {
                 JsonConstructionNodeV1::Object { keys } => {
                     if keys.len() > MAX_JSON_LITERAL_ITEMS_V1
                         || keys.iter().collect::<BTreeSet<_>>().len() != keys.len()
                     {
                         return None;
                     }
-                    for _ in keys {
-                        merge(analyze_node(nodes, index, depth.checked_add(1)?)?)?;
-                    }
+                    keys.len()
                 }
                 JsonConstructionNodeV1::Array { arity } => {
                     if usize::from(*arity) > MAX_JSON_LITERAL_ITEMS_V1 {
                         return None;
                     }
-                    for _ in 0..*arity {
-                        merge(analyze_node(nodes, index, depth.checked_add(1)?)?)?;
-                    }
+                    usize::from(*arity)
                 }
                 JsonConstructionNodeV1::Value { schema } => {
                     if !json_value_schema_is_supported(schema) {
                         return None;
                     }
-                    analysis.words = schema.word_count()?;
+                    analysis.words = analysis.words.checked_add(schema.word_count()?)?;
+                    0
                 }
+            };
+            if child_count != 0 {
+                let child_depth = depth.checked_add(1)?;
+                pending_depths.extend(std::iter::repeat_n(child_depth, child_count));
             }
-            (analysis.nodes <= MAX_JSON_CONSTRUCTION_NODES_V1
-                && analysis.words <= MAX_STATE_VALUE_WORDS)
-                .then_some(analysis)
         }
 
-        if self.nodes.is_empty() || self.nodes.len() > MAX_JSON_CONSTRUCTION_NODES_V1 {
-            return None;
-        }
-        let mut index = 0;
-        let analysis = analyze_node(&self.nodes, &mut index, 1)?;
-        (index == self.nodes.len()).then_some(analysis)
+        (pending_depths.is_empty()
+            && analysis.nodes <= MAX_JSON_CONSTRUCTION_NODES_V1
+            && analysis.words <= MAX_STATE_VALUE_WORDS)
+            .then_some(analysis)
     }
 }
 
@@ -131,46 +123,83 @@ struct JsonConstructionAnalysisV1 {
     depth: usize,
 }
 
-/// Return whether an aggregate-state schema belongs to the recursively
+/// Return whether an aggregate-state schema belongs to the nested
 /// JSON-convertible V1 subset.
 #[must_use]
 pub fn json_value_schema_is_supported(schema: &StateValueSchemaV1) -> bool {
-    fn supported_nodes(nodes: &[StateValueNodeV1], index: &mut usize) -> bool {
-        let Some(node) = nodes.get(*index) else {
-            return false;
-        };
-        *index = index.saturating_add(1);
-        match node {
-            StateValueNodeV1::Option => supported_nodes(nodes, index),
-            StateValueNodeV1::List { element, .. } => json_value_schema_is_supported(element),
-            StateValueNodeV1::Leaf(kind) => matches!(
-                kind,
-                StateValueKindV1::Int
-                    | StateValueKindV1::Decimal
-                    | StateValueKindV1::Quantity
-                    | StateValueKindV1::Bool
-                    | StateValueKindV1::String
-                    | StateValueKindV1::Json
-                    | StateValueKindV1::Bytes
-                    | StateValueKindV1::AccountId
-                    | StateValueKindV1::AssetDefinitionId
-                    | StateValueKindV1::AssetId
-                    | StateValueKindV1::DomainId
-                    | StateValueKindV1::NftId
-                    | StateValueKindV1::Name
-                    | StateValueKindV1::DataSpaceId
-            ),
-            StateValueNodeV1::Struct { .. }
-            | StateValueNodeV1::Tuple { .. }
-            | StateValueNodeV1::Result => false,
-        }
+    const fn supported_leaf(kind: StateValueKindV1) -> bool {
+        matches!(
+            kind,
+            StateValueKindV1::Int
+                | StateValueKindV1::Decimal
+                | StateValueKindV1::Quantity
+                | StateValueKindV1::Bool
+                | StateValueKindV1::String
+                | StateValueKindV1::Json
+                | StateValueKindV1::Bytes
+                | StateValueKindV1::AccountId
+                | StateValueKindV1::AssetDefinitionId
+                | StateValueKindV1::AssetId
+                | StateValueKindV1::DomainId
+                | StateValueKindV1::NftId
+                | StateValueKindV1::Name
+                | StateValueKindV1::DataSpaceId
+        )
     }
 
     if !schema.validate() {
         return false;
     }
-    let mut index = 0;
-    supported_nodes(&schema.nodes, &mut index) && index == schema.nodes.len()
+    let mut pending = vec![(&schema.nodes[..], 1usize)];
+    let mut visited_nodes = 0usize;
+    while let Some((nodes, mut depth)) = pending.pop() {
+        let mut index = 0usize;
+        loop {
+            if depth > MAX_STATE_VALUE_NODES {
+                return false;
+            }
+            visited_nodes = match visited_nodes.checked_add(1) {
+                Some(count) if count <= MAX_STATE_VALUE_NODES => count,
+                _ => return false,
+            };
+            let Some(node) = nodes.get(index) else {
+                return false;
+            };
+            index = match index.checked_add(1) {
+                Some(index) => index,
+                None => return false,
+            };
+            match node {
+                StateValueNodeV1::Option => {
+                    depth = match depth.checked_add(1) {
+                        Some(depth) => depth,
+                        None => return false,
+                    };
+                }
+                StateValueNodeV1::List { element, .. } => {
+                    if index != nodes.len() {
+                        return false;
+                    }
+                    let child_depth = match depth.checked_add(1) {
+                        Some(depth) => depth,
+                        None => return false,
+                    };
+                    pending.push((&element.nodes, child_depth));
+                    break;
+                }
+                StateValueNodeV1::Leaf(kind) => {
+                    if index != nodes.len() || !supported_leaf(*kind) {
+                        return false;
+                    }
+                    break;
+                }
+                StateValueNodeV1::Struct { .. }
+                | StateValueNodeV1::Tuple { .. }
+                | StateValueNodeV1::Result => return false,
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -183,6 +212,25 @@ mod tests {
         StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(kind)],
         }
+    }
+
+    fn nested_list_schema(wrappers: usize) -> StateValueSchemaV1 {
+        let mut schema = leaf(StateValueKindV1::Bool);
+        for _ in 0..wrappers {
+            schema = StateValueSchemaV1 {
+                nodes: vec![StateValueNodeV1::List {
+                    element: Box::new(schema),
+                    capacity: 1,
+                }],
+            };
+        }
+        schema
+    }
+
+    fn nested_option_schema(wrappers: usize) -> StateValueSchemaV1 {
+        let mut nodes = vec![StateValueNodeV1::Option; wrappers];
+        nodes.push(StateValueNodeV1::Leaf(StateValueKindV1::Bool));
+        StateValueSchemaV1 { nodes }
     }
 
     #[test]
@@ -256,6 +304,66 @@ mod tests {
         ] {
             assert!(!json_value_schema_is_supported(&rejected));
         }
+    }
+
+    #[test]
+    fn supported_value_walker_honours_the_256_node_boundary_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("json-schema-small-stack".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let lists = nested_list_schema(MAX_STATE_VALUE_NODES - 1);
+                assert!(json_value_schema_is_supported(&lists));
+
+                let options = nested_option_schema(MAX_STATE_VALUE_NODES - 1);
+                assert!(json_value_schema_is_supported(&options));
+
+                let too_deep = nested_list_schema(MAX_STATE_VALUE_NODES);
+                assert!(!json_value_schema_is_supported(&too_deep));
+                assert!(!json_value_schema_is_supported(&StateValueSchemaV1 {
+                    nodes: vec![StateValueNodeV1::Option],
+                }));
+            })
+            .expect("spawn small-stack JSON schema test")
+            .join()
+            .expect("small-stack JSON schema test");
+    }
+
+    #[test]
+    fn construction_schema_analyzer_honours_the_256_node_boundary_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("json-construction-schema-small-stack".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut nodes = Vec::with_capacity(MAX_JSON_CONSTRUCTION_NODES_V1);
+                nodes.extend(
+                    (0..MAX_JSON_CONSTRUCTION_NODES_V1 - 1)
+                        .map(|_| JsonConstructionNodeV1::Array { arity: 1 }),
+                );
+                nodes.push(JsonConstructionNodeV1::Value {
+                    schema: leaf(StateValueKindV1::Bool),
+                });
+                let boundary = JsonConstructionSchemaV1 { nodes };
+                assert!(boundary.validate());
+                assert_eq!(boundary.word_count(), Some(1));
+
+                let mut too_many_nodes = Vec::with_capacity(MAX_JSON_CONSTRUCTION_NODES_V1 + 1);
+                too_many_nodes.extend(
+                    (0..MAX_JSON_CONSTRUCTION_NODES_V1)
+                        .map(|_| JsonConstructionNodeV1::Array { arity: 1 }),
+                );
+                too_many_nodes.push(JsonConstructionNodeV1::Value {
+                    schema: leaf(StateValueKindV1::Bool),
+                });
+                let rejected = JsonConstructionSchemaV1 {
+                    nodes: too_many_nodes,
+                };
+                assert!(!rejected.validate());
+                assert_eq!(rejected.word_count(), None);
+            })
+            .expect("spawn small-stack JSON construction-schema test")
+            .join()
+            .expect("small-stack JSON construction-schema test");
     }
 
     #[test]

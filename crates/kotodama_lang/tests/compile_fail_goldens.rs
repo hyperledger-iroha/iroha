@@ -67,6 +67,14 @@ const CASES: &[CompileFailCase] = &[
         line: 2,
     },
     CompileFailCase {
+        name: "tail-type-mismatch",
+        source: "seiyaku TailMismatch {\nfn value() -> bool { 1 }\n}",
+        phase: DiagnosticPhase::Semantic,
+        code: "E_TAIL_TYPE_MISMATCH",
+        message: "block tail type mismatch: type annotation mismatch: expected bool, got int",
+        line: 2,
+    },
+    CompileFailCase {
         name: "implicit-int-decimal-arithmetic",
         source: "seiyaku ImplicitNumericArithmetic {\nfn add(int whole, decimal fraction) -> decimal { return whole + fraction; }\n}",
         phase: DiagnosticPhase::Semantic,
@@ -339,6 +347,14 @@ const CASES: &[CompileFailCase] = &[
         line: 2,
     },
     CompileFailCase {
+        name: "non-exhaustive-result-match",
+        source: "seiyaku NonExhaustiveResult {\nfn read(Result<int, bool> value) -> int { match value { Result::ok(item) => { item }, } }\n}",
+        phase: DiagnosticPhase::Semantic,
+        code: "E_MATCH_NON_EXHAUSTIVE",
+        message: "match must cover both namespaced variants",
+        line: 2,
+    },
+    CompileFailCase {
         name: "list-comprehension-capacity",
         source: "seiyaku ComprehensionCapacity {\nfn copy() { let List<int, 8> source = [1]; let List<int, 4> result = [item for item in source if false]; }\n}",
         phase: DiagnosticPhase::Semantic,
@@ -517,6 +533,143 @@ fn public_session_compile_fail_diagnostics_are_stable() {
     }
 
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+fn tail_type_mismatch_points_at_the_exact_tail_expression() {
+    let source = "seiyaku TailMismatch {\nfn value() -> bool { 1 }\n}";
+    let diagnostics = CompilerSession::default()
+        .build(CompileRequest {
+            source,
+            source_name: Some("tail-type-mismatch-exact.ko"),
+        })
+        .expect_err("the int tail must not satisfy the declared bool result");
+    let diagnostic = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.phase == DiagnosticPhase::Semantic
+                && diagnostic.code == "E_TAIL_TYPE_MISMATCH"
+        })
+        .expect("exact tail mismatch diagnostic");
+
+    assert_eq!(
+        diagnostic.message,
+        "block tail type mismatch: type annotation mismatch: expected bool, got int"
+    );
+    let span = diagnostic
+        .primary_span
+        .as_ref()
+        .expect("tail mismatch must retain the tail expression span");
+    assert_eq!(span.source.as_deref(), Some("tail-type-mismatch-exact.ko"));
+    assert_eq!((span.start.line, span.start.column), (2, 22));
+    assert_eq!((span.end.line, span.end.column), (2, 23));
+    let range = span
+        .byte_range
+        .expect("tail mismatch must retain the exact byte range");
+    let literal = source.rfind('1').expect("tail literal");
+    assert_eq!(
+        (range.start, range.end),
+        (
+            u32::try_from(literal).expect("source offset fits u32"),
+            u32::try_from(literal + 1).expect("source offset fits u32"),
+        )
+    );
+    assert_eq!(
+        &source[range.start as usize..range.end as usize],
+        "1",
+        "the diagnostic must select only the incompatible tail expression"
+    );
+}
+
+fn trigger_metadata_contract(value: &str) -> String {
+    format!(
+        r#"
+        seiyaku TriggerMetadata {{
+            kotoage fn run() authorize("RunTrigger") {{}}
+            trigger wake -> run {{
+                on time pre_commit;
+                metadata {{ payload: {value}; }}
+            }}
+        }}
+        "#,
+    )
+}
+
+#[test]
+fn public_session_enforces_json_parse_arguments_in_trigger_metadata() {
+    let session = CompilerSession::default();
+    for value in [r#"Json::parse("{}")"#, r#"Json::parse(value: "{}")"#] {
+        let source = trigger_metadata_contract(value);
+        session
+            .build(CompileRequest {
+                source: &source,
+                source_name: Some("trigger-json-canonical.ko"),
+            })
+            .unwrap_or_else(|diagnostics| {
+                panic!("canonical trigger metadata `{value}` failed: {diagnostics:#?}")
+            });
+    }
+
+    for (value, phase, code, message) in [
+        (
+            r#"Json::parse(raw: "{}")"#,
+            DiagnosticPhase::Semantic,
+            "E_UNKNOWN_NAMED_ARGUMENT",
+            "call `Json::parse` has no parameter named `raw`",
+        ),
+        (
+            r#"Json::parse(value: "{}", value: "{}")"#,
+            DiagnosticPhase::Parse,
+            "E_DUPLICATE_NAMED_ARGUMENT",
+            "named argument `value` is supplied more than once",
+        ),
+        (
+            "Json::parse()",
+            DiagnosticPhase::Semantic,
+            "K2003",
+            "Json::parse expects one argument",
+        ),
+        (
+            r#"Json::parse("{}", "{}")"#,
+            DiagnosticPhase::Semantic,
+            "K2003",
+            "Json::parse expects one argument",
+        ),
+        (
+            r#"json("{}")"#,
+            DiagnosticPhase::Resolve,
+            "K2002",
+            "unknown function or builtin `json`",
+        ),
+    ] {
+        let source = trigger_metadata_contract(value);
+        let diagnostics = match session.build(CompileRequest {
+            source: &source,
+            source_name: Some("trigger-json-invalid.ko"),
+        }) {
+            Ok(_) => panic!("invalid trigger metadata `{value}` compiled"),
+            Err(diagnostics) => diagnostics,
+        };
+        let diagnostic = diagnostics
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.phase == phase
+                    && diagnostic.code == code
+                    && diagnostic.message == message
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "trigger metadata `{value}` omitted {phase:?} {code} {message:?}: {:#?}",
+                    diagnostics.diagnostics
+                )
+            });
+        assert!(
+            diagnostic.primary_span.is_some(),
+            "trigger metadata `{value}` must retain a source span"
+        );
+    }
 }
 
 fn named_type_chain_source(contract: &str, struct_count: usize) -> String {

@@ -47,12 +47,12 @@ translation_last_reviewed: 2026-02-07
 | باريت ملاحظتها | م3 | يتم تنبيه لوحات المعلومات Prometheus/Grafana عند اكتشاف قطع بيانات السجل المتباينة؛ تنبيهات الفروع على l'astreinte ops. | إمكانية الملاحظة | لوحة معلومات الامتياز ومعرفات قواعد التنبيه ونتائج GameDay. |
 
 #### الأمر بالنشر القانوني```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
   --chunk-fetch-plan-out artifacts/docs/book/2025-11-01/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=429391872 \
   --root-cid=f40101... \
   --dag-codec=0x71

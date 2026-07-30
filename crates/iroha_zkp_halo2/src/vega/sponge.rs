@@ -9,6 +9,66 @@ use tiny_keccak::keccakf;
 
 const KECCAK_256_RATE: usize = 136;
 
+pub(super) struct Keccak256 {
+    state: [u64; 25],
+    pending: [u8; KECCAK_256_RATE],
+    pending_len: usize,
+}
+
+impl Keccak256 {
+    pub(super) const fn new() -> Self {
+        Self {
+            state: [0; 25],
+            pending: [0; KECCAK_256_RATE],
+            pending_len: 0,
+        }
+    }
+
+    pub(super) fn update(&mut self, mut input: &[u8]) {
+        if self.pending_len != 0 {
+            let take = input
+                .len()
+                .min(KECCAK_256_RATE.saturating_sub(self.pending_len));
+            self.pending[self.pending_len..self.pending_len + take].copy_from_slice(&input[..take]);
+            self.pending_len += take;
+            input = &input[take..];
+            if self.pending_len == KECCAK_256_RATE {
+                xor_rate_block(&mut self.state, &self.pending);
+                keccakf(&mut self.state);
+                self.pending.fill(0);
+                self.pending_len = 0;
+            } else {
+                // `take` consumed all remaining input when it did not fill the
+                // pending rate block. Preserve that partial block for the next
+                // update instead of resetting `pending_len` below.
+                return;
+            }
+        }
+
+        let mut chunks = input.chunks_exact(KECCAK_256_RATE);
+        for chunk in &mut chunks {
+            xor_rate_block(&mut self.state, chunk);
+            keccakf(&mut self.state);
+        }
+        let remainder = chunks.remainder();
+        self.pending[..remainder.len()].copy_from_slice(remainder);
+        self.pending_len = remainder.len();
+    }
+
+    pub(super) fn finalize(mut self) -> [u8; 32] {
+        self.pending[self.pending_len] ^= 0x01;
+        self.pending[KECCAK_256_RATE - 1] ^= 0x80;
+        xor_rate_block(&mut self.state, &self.pending);
+        keccakf(&mut self.state);
+
+        let mut output = [0_u8; 32];
+        for (destination, lane) in output.chunks_exact_mut(8).zip(self.state) {
+            destination.copy_from_slice(&lane.to_le_bytes());
+        }
+        output
+    }
+}
+
 fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
     let mut state = [0_u64; 25];
     let mut chunks = input.chunks_exact(KECCAK_256_RATE);
@@ -55,9 +115,9 @@ fn xor_rate_block(state: &mut [u64; 25], block: &[u8]) {
 }
 
 pub(super) fn keccak256(input: &[u8]) -> [u8; 32] {
-    sponge(input, 0x01, 32)
-        .try_into()
-        .expect("requested exactly 32 bytes")
+    let mut hash = Keccak256::new();
+    hash.update(input);
+    hash.finalize()
 }
 
 pub(super) fn shake256(input: &[u8], output_len: usize) -> Vec<u8> {
@@ -103,6 +163,28 @@ mod tests {
             let input = vec![0xa5; len];
             assert_eq!(keccak256(&input), keccak256(&input));
             assert_eq!(shake256(&input, 257).len(), 257);
+        }
+    }
+
+    #[test]
+    fn incremental_keccak_matches_one_shot_across_every_rate_boundary() {
+        let input = (0..3 * KECCAK_256_RATE + 17)
+            .map(|index| index as u8)
+            .collect::<Vec<_>>();
+        let expected = keccak256(&input);
+        for chunk_size in [
+            1,
+            7,
+            KECCAK_256_RATE - 1,
+            KECCAK_256_RATE,
+            KECCAK_256_RATE + 1,
+            input.len(),
+        ] {
+            let mut hash = Keccak256::new();
+            for chunk in input.chunks(chunk_size) {
+                hash.update(chunk);
+            }
+            assert_eq!(hash.finalize(), expected, "chunk_size={chunk_size}");
         }
     }
 }

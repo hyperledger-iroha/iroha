@@ -202,7 +202,7 @@ impl BlockBuilder {
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             trigger_completions: Vec::new(),
-            axt_policy_snapshot: None,
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
         let mut block = SignedBlock {
             signatures,

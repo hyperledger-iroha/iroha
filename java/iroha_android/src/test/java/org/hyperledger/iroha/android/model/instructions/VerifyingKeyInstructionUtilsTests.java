@@ -167,6 +167,7 @@ public final class VerifyingKeyInstructionUtilsTests {
       "orchard",
       "fcmp++",
       "jindo-lattice-pcs-zk",
+      "sis-hints-anoncred-pq-v0",
       "sis-with-hints",
       "vega-existing-credential-zk-v0",
       "anonymous-pgc-k-out-of-n-v1",

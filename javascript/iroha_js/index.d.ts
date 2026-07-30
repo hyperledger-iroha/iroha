@@ -165,204 +165,22 @@ export type CryptoAlgorithm =
   | "gost3410-2012-512-paramset-b"
   | "sm2";
 
-export type PrivacyCriterionKey =
-  | "hide_amount"
-  | "hide_sender"
-  | "hide_receiver"
-  | "hide_asset_type"
-  | "post_quantum";
-
-export interface PrivacyPqLayers {
-  readonly proof: boolean;
-  readonly authorization: boolean;
-  readonly noteEncryption: boolean;
-}
-
-export type PrivacyProductionSdkSurface =
-  | "rust_core"
-  | "ffi"
-  | "python"
-  | "javascript"
-  | "java_android"
-  | "kotlin"
-  | "swift"
-  | "csharp";
-
-export type PrivacyProductionSdkParityArtifactKind =
-  | "types"
-  | "validation_rules"
-  | "error_codes"
-  | "golden_vectors";
-
-export interface PrivacyProductionArtifact {
-  readonly label: string;
-  readonly uri: string;
-}
-
-export interface PrivacyProductionResult {
-  readonly passed: true;
-  readonly artifact: PrivacyProductionArtifact;
-}
-
-export type PrivacyProductionSdkExports = Readonly<
-  Record<PrivacyProductionSdkSurface, readonly string[]>
->;
-
-export type PrivacyProductionSdkParityArtifacts = Readonly<
-  Record<
-    PrivacyProductionSdkParityArtifactKind,
-    Readonly<Record<PrivacyProductionSdkSurface, PrivacyProductionArtifact>>
-  >
->;
-
-export interface PrivacyProductionReviewScope {
-  readonly version: string;
-  readonly algorithm_id: string;
-  readonly chain_id: string;
-  readonly verifier_key_id: string | null;
-  readonly proof_family: string;
-  readonly public_inputs_schema: string | null;
-  readonly sdk_entrypoints: readonly string[];
-  readonly required_state: readonly string[];
-  readonly fuzz_artifact_hash: string;
-  readonly performance_artifact_hash: string;
-  readonly localnet_run_id: string;
-}
-
-export interface PrivacyProductionLocalnetAcceptance {
-  readonly run_id: string;
-  readonly target: "localnet";
-  readonly peer_count: 4;
-  readonly peer_ids: readonly string[];
-  readonly chain_id: string;
-  readonly smoke_tx_hash: string;
-  readonly replay_rejection_hash: string;
-  readonly restart_replay_rejection_hash: string;
-  readonly state_recovery_hash: string;
-  readonly lifecycle_shield_tx_hash: string;
-  readonly lifecycle_hop_proof_hash: string;
-  readonly lifecycle_recursive_init_hash: string;
-  readonly lifecycle_recursive_init_verify_hash: string;
-  readonly lifecycle_recursive_append_hash: string;
-  readonly lifecycle_recursive_append_verify_hash: string;
-  readonly lifecycle_unshield_proof_hash: string;
-  readonly lifecycle_redeem_tx_hash: string;
-  readonly smoke_passed: true;
-  readonly replay_rejected: true;
-  readonly restart_persistence_checked: true;
-  readonly restart_replay_rejected: true;
-  readonly state_recovery_passed: true;
-  readonly lifecycle_passed: true;
-}
-
-export type PrivacyProductionGateEvidence = Readonly<
-  Record<string, readonly PrivacyProductionArtifact[]>
->;
-
-export interface PrivacyProductionGate {
-  readonly version: string;
-  readonly ready: boolean;
-  readonly gates: Readonly<Record<string, boolean>>;
-  readonly requiredGates: readonly string[];
-  readonly missing: readonly string[];
-  readonly auditReferences: readonly Readonly<{
-    label: string;
-    url: string;
-    uri?: string;
-    signature?: string;
-  }>[];
-  readonly chainId?: string;
-  readonly reviewerIdentity?: string;
-  readonly localnetRunId?: string;
-  readonly localnetAcceptance?: PrivacyProductionLocalnetAcceptance;
-  readonly fuzzResults?: PrivacyProductionResult;
-  readonly performanceResults?: PrivacyProductionResult;
-  readonly reviewScope?: PrivacyProductionReviewScope;
-  readonly sdkExports?: PrivacyProductionSdkExports;
-  readonly sdkParityArtifacts?: PrivacyProductionSdkParityArtifacts;
-  readonly gateEvidence?: PrivacyProductionGateEvidence;
-}
-
-export interface PrivacyProductionEvidenceOptions {
-  readonly chainId?: string | null;
-  readonly chain_id?: string | null;
-}
-
-export type PrivacyProductionEvidenceRegistry = JsonValue | null;
-
-export type PrivacyAlgorithmCategory =
-  | "payment"
-  | "authorization"
-  | "credential"
-  | "admission"
-  | "identity"
-  | "proof_backend";
-
-export type PrivacyAlgorithmMaturity =
-  | "peer_reviewed"
-  | "accepted_conference"
-  | "technical_report"
-  | "arxiv_preprint"
-  | "specification";
-
-export interface PrivacyAlgorithmDescriptor {
-  readonly id: string;
-  readonly name: string;
-  readonly shortName: string;
-  readonly summary: string;
-  readonly category: PrivacyAlgorithmCategory;
-  readonly maturity: PrivacyAlgorithmMaturity;
-  readonly coveredCriteria: readonly PrivacyCriterionKey[];
-  readonly proofFamily: string;
-  readonly publicInputsSchema: string | null;
-  readonly verifierKeyId: string | null;
-  readonly backendFamily: string;
-  readonly pqLayers: PrivacyPqLayers;
-  readonly implementationStage?: string | null;
-  readonly recommendedFor?: readonly string[];
-  readonly sourceReferences?: readonly Readonly<{
-    label: string;
-    url: string;
-  }>[];
-  readonly securityNotes?: readonly string[];
-  readonly requiredState?: readonly string[];
-  readonly failureModes?: readonly string[];
-  readonly setupSteps?: readonly string[];
-  readonly executionSteps?: readonly string[];
-  readonly sdkEntrypoints: readonly string[];
-  readonly plannedSdkEntrypoints?: readonly string[];
-  readonly sdkExports?: PrivacyProductionSdkExports;
-  readonly chainRequirements: readonly string[];
-  readonly productionReady: boolean;
-  readonly productionGate: PrivacyProductionGate;
-}
-
-export interface PrivacyCapabilities {
-  readonly javascriptSdkAvailable: boolean;
-  readonly bridgeAvailable: boolean;
-  readonly privacyAlgorithms: readonly PrivacyAlgorithmDescriptor[];
-  readonly privacyCriteria: readonly PrivacyCriterionKey[];
-}
-
-export function getPrivacyCriteria(): readonly PrivacyCriterionKey[];
-export function getPrivacyAlgorithmDescriptors(
-  productionEvidence?: PrivacyProductionEvidenceRegistry,
-  options?: PrivacyProductionEvidenceOptions,
-): readonly PrivacyAlgorithmDescriptor[];
-export function getPrivacyAlgorithmDescriptor(
-  id: string,
-  productionEvidence?: PrivacyProductionEvidenceRegistry,
-  options?: PrivacyProductionEvidenceOptions,
-): PrivacyAlgorithmDescriptor | null;
-export function getPrivacyCapabilities(
-  productionEvidence?: PrivacyProductionEvidenceRegistry,
-  options?: PrivacyProductionEvidenceOptions,
-): PrivacyCapabilities;
-export function validatePrivacyAlgorithmDescriptor(
-  descriptor: unknown,
-  index?: number,
-): PrivacyAlgorithmDescriptor;
-
+export type {
+  PrivacyCapabilityRowV1,
+  PrivacyCapabilitySnapshotV1,
+  PrivacyCompiledProfileBindingsV1,
+  PrivacyCompiledProfileResultV1,
+  PrivacyConsensusLimitsV1,
+  PrivacyConsensusPolicyTighteningV1,
+  PrivacyConsensusPolicyV1,
+  PrivacyFixed32BytesV1,
+  PrivacyProtocolActivationRecordV1,
+  PrivacyProtocolIdV1,
+  PrivacyProtocolLifecycleV1,
+  PrivacyProtocolLimitsV1,
+  PrivacyProtocolTagV1,
+  PrivacyTaggedUnitV1,
+} from "./privacy-capabilities.js";
 export interface CryptoKeyPair {
   algorithm: CryptoAlgorithm;
   publicKey: Buffer;
@@ -393,14 +211,7 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
-export const PRIVACY_FFI_VERSION_V1: 1;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 7;
-export const PRIVACY_FFI_STATUS_ERROR: 1;
-export const PRIVACY_FFI_ERROR_NULL_POINTER: 1;
-export const PRIVACY_FFI_ERROR_MALFORMED_NORITO: 2;
-export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM: 3;
-export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED: 4;
-export const PRIVACY_FFI_ERROR_INVALID_REQUEST: 5;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 21;
 
 export interface SignedTransactionResult {
   signedTransaction: Buffer;
@@ -1447,67 +1258,19 @@ export type BinaryLike =
   | ReadonlyArray<number>
   | string;
 
-export type PrivacyNativeArchiveLike = Buffer | ArrayBuffer | ArrayBufferView;
-
-export interface PrivacyProofRequestV1Input {
-  algorithmId: string;
-  entrypoint: string;
-  vkRef: string;
-  publicInputs: PrivacyNativeArchiveLike;
-  witness?: PrivacyNativeArchiveLike;
-  proof?: PrivacyNativeArchiveLike;
-}
-
 export type VerifyingKeyIdLike = string | { backend: string; name: string };
 
-export type PrivacyBackendTag =
-  | "Halo2IpaPasta"
-  | "Halo2Bn254"
-  | "Groth16"
-  | "Stark"
-  | "Unsupported"
-  | "Halo2IpaOrchard"
-  | "Groth16Bls12377"
-  | "FcmpPlusPlusCurveTree"
-  | "LatticePcsSis"
-  | "MidenStark"
-  | "AztecPlonkishPrivateKernel"
-  | "PqMaspStarkFri"
-  | "AnonymousPgc"
-  | "VeRange"
-  | "ZkAt"
-  | "RecursiveAnonymousAdmission"
-  | "VegaExistingCredentialZk"
-  | "SilentThresholdAnoncred"
-  | "ZkX509"
-  | "SisWithHints"
-  | "halo2-ipa-pasta"
-  | "halo2/ipa"
-  | "halo2/pasta/ipa"
-  | "halo2-bn254"
-  | "groth16"
-  | "stark"
-  | "stark/fri"
-  | "stark/fri/sha256-goldilocks"
-  | "stark/fri/poseidon2-goldilocks"
-  | "stark/fri/sha256_goldilocks.v1"
-  | "unsupported"
-  | "halo2-ipa-orchard"
-  | "groth16-bls12-377"
-  | "fcmp-plus-plus-curve-tree"
-  | "lattice-pcs-sis"
-  | "miden-stark"
-  | "aztec-plonkish-private-kernel"
-  | "pq-masp-stark-fri"
-  | "anonymous-pgc"
-  | "verange"
-  | "zkat"
-  | "recursive-anonymous-admission"
-  | "vega-existing-credential-zk"
-  | "silent-threshold-anoncred"
-  | "zk-x509"
-  | "sis-with-hints"
-  | string;
+/** Exact JSON labels for the two generic OpenVerify engines in Norito order. */
+export type OpenVerifyBackendTag = "halo2-ipa-pasta" | "stark";
+
+export interface OpenVerifyEnvelope {
+  backend: OpenVerifyBackendTag;
+  circuit_id: string;
+  vk_hash: BinaryLike;
+  public_inputs: BinaryLike;
+  proof_bytes: BinaryLike;
+  aux?: BinaryLike;
+}
 
 export interface ConfidentialEncryptedPayloadInput {
   version?: number;
@@ -1530,1635 +1293,6 @@ export interface ProofAttachmentInput {
     };
   } | null;
 }
-
-export interface PrivacyProofEnvelopeInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  publicInputs?: BinaryLike;
-  public_inputs?: BinaryLike;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface ZkAtPolicyCommitmentInput {
-  version?: NumericLike;
-  policyCommitment?: BinaryLike;
-  policy_commitment?: BinaryLike;
-  commitment?: BinaryLike;
-  policy?: unknown;
-  policyBytes?: BinaryLike;
-  policy_bytes?: BinaryLike;
-  policyJson?: unknown;
-  policy_json?: unknown;
-  policyEpoch?: NumericLike;
-  policy_epoch?: NumericLike;
-  domainSeparator?: string;
-  domain_separator?: string;
-  policySchema?: string;
-  policy_schema?: string;
-  maxPolicyBytes?: NumericLike;
-  max_policy_bytes?: NumericLike;
-}
-
-export interface ZkAtPolicyCommitment {
-  version: 1;
-  policy_commitment: number[];
-  policy_epoch: number;
-  domain_separator: string;
-  policy_schema: string;
-  commitment_kind: "external" | "dev-sha256-policy-digest";
-  policy_digest: number[] | null;
-}
-
-export interface ZkAtAuthenticatorEnvelopeInput
-  extends ZkAtPolicyCommitmentInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  txDigest?: BinaryLike;
-  tx_digest?: BinaryLike;
-  payloadDigest?: BinaryLike;
-  payload_digest?: BinaryLike;
-  payload?: BinaryLike;
-  payloadBytes?: BinaryLike;
-  payload_bytes?: BinaryLike;
-  payloadJson?: unknown;
-  payload_json?: unknown;
-  accountId?: string;
-  account_id?: string;
-  actionClass?: string;
-  action_class?: string;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-  maxPayloadBytes?: NumericLike;
-  max_payload_bytes?: NumericLike;
-}
-
-export interface ZkAtPublicInputs {
-  version: 1;
-  policy_commitment: string;
-  tx_digest: string;
-  account_id: string;
-  action_class: string;
-  domain_separator: string;
-  policy_epoch: number;
-}
-
-export interface ZkAtDevProofFixture {
-  kind: "zkat-dev-fixture-v1";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  public_inputs: ZkAtPublicInputs;
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export interface ZkAtAuthenticatorLocalVerificationInput
-  extends ZkAtAuthenticatorEnvelopeInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
-
-export interface ZkAtAuthenticatorLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "zkat-dev-fixture-v1";
-  backend: "stark/fri/sha256-goldilocks";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: ZkAtPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  account_id: string;
-  action_class: string;
-  policy_epoch: number;
-}
-
-export interface ZkAtPolicyProofVerificationResult {
-  ok: true;
-  production: true;
-  kind: "zkat-policy-private-auth-v1";
-  backend: "Stark";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: ZkAtPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  account_id: string;
-  action_class: string;
-  policy_epoch: number;
-}
-
-export interface ZkAmsAdmissionBatchInput {
-  version?: NumericLike;
-  issuerRoot?: BinaryLike;
-  issuer_root?: BinaryLike;
-  admissionBatchRoot?: BinaryLike;
-  admission_batch_root?: BinaryLike;
-  batchRoot?: BinaryLike;
-  batch_root?: BinaryLike;
-  admissionNullifiers?: ReadonlyArray<BinaryLike>;
-  admission_nullifiers?: ReadonlyArray<BinaryLike>;
-  nullifiers?: ReadonlyArray<BinaryLike>;
-  anonymousAccountCommitments?: ReadonlyArray<BinaryLike>;
-  anonymous_account_commitments?: ReadonlyArray<BinaryLike>;
-  accountCommitments?: ReadonlyArray<BinaryLike>;
-  account_commitments?: ReadonlyArray<BinaryLike>;
-  recursiveProofDigest?: BinaryLike;
-  recursive_proof_digest?: BinaryLike;
-  recursiveProof?: BinaryLike;
-  recursiveProofBytes?: BinaryLike;
-  recursive_proof?: BinaryLike;
-  recursive_proof_bytes?: BinaryLike;
-  domainSeparator?: string;
-  domain_separator?: string;
-  maxBatchSize?: NumericLike;
-  max_batch_size?: NumericLike;
-  maxRecursiveProofBytes?: NumericLike;
-  max_recursive_proof_bytes?: NumericLike;
-}
-
-export interface ZkAmsAdmissionBatch {
-  version: 1;
-  issuer_root: number[];
-  admission_batch_root: number[];
-  admission_nullifiers: number[][];
-  anonymous_account_commitments: number[][];
-  recursive_proof_digest: number[];
-  domain_separator: string;
-  batch_size: number;
-  root_kind: "dev-sha256-admission-batch-root";
-}
-
-export interface ZkAmsAdmissionProofEnvelopeInput
-  extends ZkAmsAdmissionBatchInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface ZkAmsPublicInputs {
-  version: 1;
-  issuer_root: string;
-  admission_batch_root: string;
-  admission_nullifiers: string[];
-  anonymous_account_commitments: string[];
-  recursive_proof_digest: string;
-  domain_separator: string;
-}
-
-export interface ZkAmsAdmissionDevProofFixture {
-  kind: "zk-ams-dev-fixture-v0";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  batch: Omit<ZkAmsAdmissionBatch, "root_kind">;
-  public_inputs: ZkAmsPublicInputs;
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export interface ZkAmsAdmissionLocalVerificationInput
-  extends ZkAmsAdmissionBatchInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
-
-export interface ZkAmsAdmissionLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "zk-ams-dev-fixture-v0";
-  backend: "stark/fri/sha256-goldilocks";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: ZkAmsPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  admission_batch_root: string;
-  batch_size: number;
-}
-
-export interface ZkAmsAdmissionProductionVerificationResult {
-  ok: true;
-  production: true;
-  kind: "zk-ams-recursive-admission-v0";
-  backend: "Stark";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: ZkAmsPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  admission_batch_root: string;
-  batch_size: number;
-}
-
-export interface VegaCredentialPredicateCommitmentInput {
-  version?: NumericLike;
-  predicateCommitment?: BinaryLike;
-  predicate_commitment?: BinaryLike;
-  commitment?: BinaryLike;
-  predicate?: unknown;
-  predicateBytes?: BinaryLike;
-  predicate_bytes?: BinaryLike;
-  predicateJson?: unknown;
-  predicate_json?: unknown;
-  credentialSchema?: string;
-  credential_schema?: string;
-  domainSeparator?: string;
-  domain_separator?: string;
-  maxPredicateBytes?: NumericLike;
-  max_predicate_bytes?: NumericLike;
-}
-
-export interface VegaCredentialPredicateCommitment {
-  version: 1;
-  predicate_commitment: number[];
-  credential_schema: string;
-  domain_separator: string;
-  commitment_kind: "external" | "dev-sha256-predicate-digest";
-  predicate_digest: number[] | null;
-}
-
-export interface VegaCredentialProofEnvelopeInput
-  extends VegaCredentialPredicateCommitmentInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  issuerCommitment?: BinaryLike;
-  issuer_commitment?: BinaryLike;
-  issuer?: unknown;
-  issuerBytes?: BinaryLike;
-  issuer_bytes?: BinaryLike;
-  issuerJson?: unknown;
-  issuer_json?: unknown;
-  subjectBinding?: BinaryLike;
-  subject_binding?: BinaryLike;
-  identityCommitment?: BinaryLike;
-  identity_commitment?: BinaryLike;
-  accountCommitment?: BinaryLike;
-  account_commitment?: BinaryLike;
-  accountId?: string;
-  account_id?: string;
-  subjectAccountId?: string;
-  subject_account_id?: string;
-  expirationEpoch?: NumericLike;
-  expiration_epoch?: NumericLike;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxIssuerBytes?: NumericLike;
-  max_issuer_bytes?: NumericLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface VegaCredentialPublicInputs {
-  version: 1;
-  issuer_commitment: string;
-  credential_schema: string;
-  predicate_commitment: string;
-  subject_binding: string;
-  expiration_epoch: number;
-  domain_separator: string;
-}
-
-export interface VegaCredentialDevProofFixture {
-  kind: "vega-dev-fixture-v0";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  public_inputs: VegaCredentialPublicInputs;
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export interface VegaCredentialLocalVerificationInput
-  extends VegaCredentialProofEnvelopeInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
-
-export interface VegaCredentialLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "vega-dev-fixture-v0";
-  backend: "stark/fri/sha256-goldilocks";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: VegaCredentialPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  credential_schema: string;
-  expiration_epoch: number;
-}
-
-export interface VegaCredentialProductionVerificationResult {
-  ok: true;
-  production: true;
-  kind: "vega-existing-credential-zk-v0";
-  backend: "Stark";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: VegaCredentialPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  credential_schema: string;
-  expiration_epoch: number;
-}
-
-export interface SilentThresholdCredentialCommitmentsInput {
-  version?: NumericLike;
-  issuerSetCommitment?: BinaryLike;
-  issuer_set_commitment?: BinaryLike;
-  issuerSet?: unknown;
-  issuer_set?: unknown;
-  issuerSetBytes?: BinaryLike;
-  issuer_set_bytes?: BinaryLike;
-  issuerSetJson?: unknown;
-  issuer_set_json?: unknown;
-  thresholdPolicyHash?: BinaryLike;
-  threshold_policy_hash?: BinaryLike;
-  thresholdPolicy?: unknown;
-  threshold_policy?: unknown;
-  thresholdPolicyBytes?: BinaryLike;
-  threshold_policy_bytes?: BinaryLike;
-  thresholdPolicyJson?: unknown;
-  threshold_policy_json?: unknown;
-  credentialShowingCommitment?: BinaryLike;
-  credential_showing_commitment?: BinaryLike;
-  showingCommitment?: BinaryLike;
-  showing_commitment?: BinaryLike;
-  credentialShowing?: unknown;
-  credential_showing?: unknown;
-  credentialShowingBytes?: BinaryLike;
-  credential_showing_bytes?: BinaryLike;
-  credentialShowingJson?: unknown;
-  credential_showing_json?: unknown;
-  showing?: unknown;
-  showingBytes?: BinaryLike;
-  showing_bytes?: BinaryLike;
-  showingJson?: unknown;
-  showing_json?: unknown;
-  showingNullifier?: BinaryLike;
-  showing_nullifier?: BinaryLike;
-  credentialShowingNullifier?: BinaryLike;
-  credential_showing_nullifier?: BinaryLike;
-  nullifier?: BinaryLike;
-  verifierPolicyHash?: BinaryLike;
-  verifier_policy_hash?: BinaryLike;
-  verifierPolicy?: unknown;
-  verifier_policy?: unknown;
-  verifierPolicyBytes?: BinaryLike;
-  verifier_policy_bytes?: BinaryLike;
-  verifierPolicyJson?: unknown;
-  verifier_policy_json?: unknown;
-  domainSeparator?: string;
-  domain_separator?: string;
-  maxIssuerSetBytes?: NumericLike;
-  max_issuer_set_bytes?: NumericLike;
-  maxPolicyBytes?: NumericLike;
-  max_policy_bytes?: NumericLike;
-  maxShowingBytes?: NumericLike;
-  max_showing_bytes?: NumericLike;
-}
-
-export interface SilentThresholdCredentialCommitments {
-  version: 1;
-  issuer_set_commitment: number[];
-  threshold_policy_hash: number[];
-  credential_showing_commitment: number[];
-  showing_nullifier: number[];
-  verifier_policy_hash: number[];
-  domain_separator: string;
-  commitment_kinds: Record<string, "external" | string>;
-  source_digests: Record<string, number[] | null>;
-}
-
-export interface SilentThresholdCredentialEnvelopeInput
-  extends SilentThresholdCredentialCommitmentsInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface SilentThresholdCredentialPublicInputs {
-  version: 1;
-  issuer_set_commitment: string;
-  threshold_policy_hash: string;
-  credential_showing_commitment: string;
-  showing_nullifier: string;
-  verifier_policy_hash: string;
-  domain_separator: string;
-}
-
-export interface SilentThresholdCredentialDevProofFixture {
-  kind: "silent-threshold-dev-fixture-v0";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  commitments: Omit<
-    SilentThresholdCredentialCommitments,
-    "commitment_kinds" | "source_digests" | "version"
-  >;
-  public_inputs: SilentThresholdCredentialPublicInputs;
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export interface SilentThresholdCredentialLocalVerificationInput
-  extends SilentThresholdCredentialCommitmentsInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
-
-export interface SilentThresholdCredentialLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "silent-threshold-dev-fixture-v0";
-  backend: "stark/fri/sha256-goldilocks";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: SilentThresholdCredentialPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  showing_nullifier: string;
-}
-
-export interface SilentThresholdCredentialProductionVerificationResult {
-  ok: true;
-  production: true;
-  kind: "silent-threshold-anoncred-v0";
-  backend: "Stark";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: SilentThresholdCredentialPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  showing_nullifier: string;
-}
-
-export interface ZkX509IdentityCommitmentsInput {
-  version?: NumericLike;
-  caRootCommitment?: BinaryLike;
-  ca_root_commitment?: BinaryLike;
-  caRoot?: unknown;
-  ca_root?: unknown;
-  caRootBytes?: BinaryLike;
-  ca_root_bytes?: BinaryLike;
-  caRootJson?: unknown;
-  ca_root_json?: unknown;
-  trustRoot?: unknown;
-  trust_root?: unknown;
-  trustRootJson?: unknown;
-  trust_root_json?: unknown;
-  certificatePolicyHash?: BinaryLike;
-  certificate_policy_hash?: BinaryLike;
-  certificatePolicy?: unknown;
-  certificate_policy?: unknown;
-  certificatePolicyBytes?: BinaryLike;
-  certificate_policy_bytes?: BinaryLike;
-  certificatePolicyJson?: unknown;
-  certificate_policy_json?: unknown;
-  revocationRoot?: BinaryLike;
-  revocation_root?: BinaryLike;
-  revocationData?: unknown;
-  revocation_data?: unknown;
-  revocationBytes?: BinaryLike;
-  revocation_bytes?: BinaryLike;
-  revocationJson?: unknown;
-  revocation_json?: unknown;
-  revocationSet?: unknown;
-  revocation_set?: unknown;
-  revocationSetJson?: unknown;
-  revocation_set_json?: unknown;
-  revocationList?: unknown;
-  revocation_list?: unknown;
-  revocationListJson?: unknown;
-  revocation_list_json?: unknown;
-  subjectCommitment?: BinaryLike;
-  subject_commitment?: BinaryLike;
-  subject?: unknown;
-  subjectBytes?: BinaryLike;
-  subject_bytes?: BinaryLike;
-  subjectJson?: unknown;
-  subject_json?: unknown;
-  certificateSubject?: unknown;
-  certificate_subject?: unknown;
-  certificateSubjectJson?: unknown;
-  certificate_subject_json?: unknown;
-  addressBinding?: BinaryLike;
-  address_binding?: BinaryLike;
-  walletBinding?: BinaryLike;
-  wallet_binding?: BinaryLike;
-  accountId?: string;
-  account_id?: string;
-  walletAccountId?: string;
-  wallet_account_id?: string;
-  walletAddress?: string;
-  wallet_address?: string;
-  domainSeparator?: string;
-  domain_separator?: string;
-  maxCaRootBytes?: NumericLike;
-  max_ca_root_bytes?: NumericLike;
-  maxPolicyBytes?: NumericLike;
-  max_policy_bytes?: NumericLike;
-  maxRevocationBytes?: NumericLike;
-  max_revocation_bytes?: NumericLike;
-  maxSubjectBytes?: NumericLike;
-  max_subject_bytes?: NumericLike;
-}
-
-export interface ZkX509IdentityCommitments {
-  version: 1;
-  ca_root_commitment: number[];
-  certificate_policy_hash: number[];
-  revocation_root: number[];
-  subject_commitment: number[];
-  address_binding: number[];
-  domain_separator: string;
-  commitment_kinds: Record<string, "external" | string>;
-  source_digests: Record<string, number[] | null>;
-}
-
-export interface ZkX509IdentityEnvelopeInput
-  extends ZkX509IdentityCommitmentsInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface ZkX509IdentityPublicInputs {
-  version: 1;
-  ca_root_commitment: string;
-  certificate_policy_hash: string;
-  revocation_root: string;
-  subject_commitment: string;
-  address_binding: string;
-  domain_separator: string;
-}
-
-export interface ZkX509IdentityDevProofFixture {
-  kind: "zk-x509-dev-fixture-v0";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  commitments: Omit<
-    ZkX509IdentityCommitments,
-    "commitment_kinds" | "source_digests" | "version"
-  >;
-  public_inputs: ZkX509IdentityPublicInputs;
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export interface ZkX509IdentityLocalVerificationInput
-  extends ZkX509IdentityCommitmentsInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
-
-export interface ZkX509IdentityLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "zk-x509-dev-fixture-v0";
-  backend: "stark/fri/sha256-goldilocks";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: ZkX509IdentityPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  address_binding: string;
-}
-
-export interface ZkX509IdentityProductionVerificationResult {
-  ok: true;
-  production: true;
-  kind: "zk-x509-onchain-identity-v0";
-  backend: "Stark";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: ZkX509IdentityPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  address_binding: string;
-}
-
-export interface JindoLatticePublicInputsInput {
-  version?: NumericLike;
-  commitment?: BinaryLike;
-  polynomialCommitment?: BinaryLike;
-  polynomial_commitment?: BinaryLike;
-  polynomial?: unknown;
-  polynomialBytes?: BinaryLike;
-  polynomial_bytes?: BinaryLike;
-  polynomialJson?: unknown;
-  polynomial_json?: unknown;
-  commitmentMaterial?: unknown;
-  commitment_material?: unknown;
-  commitmentMaterialJson?: unknown;
-  commitment_material_json?: unknown;
-  openingClaimCommitment?: BinaryLike;
-  opening_claim_commitment?: BinaryLike;
-  openingClaimHash?: BinaryLike;
-  opening_claim_hash?: BinaryLike;
-  openingClaimDigest?: BinaryLike;
-  opening_claim_digest?: BinaryLike;
-  opening_claim?: BinaryLike;
-  openingClaim?: BinaryLike;
-  claim?: unknown;
-  claimBytes?: BinaryLike;
-  claim_bytes?: BinaryLike;
-  claimJson?: unknown;
-  claim_json?: unknown;
-  openingClaimBytes?: BinaryLike;
-  opening_claim_bytes?: BinaryLike;
-  openingClaimJson?: unknown;
-  opening_claim_json?: unknown;
-  evaluationClaim?: unknown;
-  evaluation_claim?: unknown;
-  evaluationClaimJson?: unknown;
-  evaluation_claim_json?: unknown;
-  querySetHash?: BinaryLike;
-  query_set_hash?: BinaryLike;
-  querySetRoot?: BinaryLike;
-  query_set_root?: BinaryLike;
-  querySet?: unknown;
-  query_set?: unknown;
-  querySetBytes?: BinaryLike;
-  query_set_bytes?: BinaryLike;
-  querySetJson?: unknown;
-  query_set_json?: unknown;
-  queries?: unknown;
-  queriesJson?: unknown;
-  queries_json?: unknown;
-  parameterHash?: BinaryLike;
-  parameter_hash?: BinaryLike;
-  paramsHash?: BinaryLike;
-  params_hash?: BinaryLike;
-  parameters?: unknown;
-  parametersBytes?: BinaryLike;
-  parameters_bytes?: BinaryLike;
-  parametersJson?: unknown;
-  parameters_json?: unknown;
-  parameterSet?: unknown;
-  parameter_set?: unknown;
-  parameterSetJson?: unknown;
-  parameter_set_json?: unknown;
-  params?: unknown;
-  paramsBytes?: BinaryLike;
-  params_bytes?: BinaryLike;
-  paramsJson?: unknown;
-  params_json?: unknown;
-  domainSeparator?: string;
-  domain_separator?: string;
-  maxPolynomialBytes?: NumericLike;
-  max_polynomial_bytes?: NumericLike;
-  maxOpeningClaimBytes?: NumericLike;
-  max_opening_claim_bytes?: NumericLike;
-  maxQuerySetBytes?: NumericLike;
-  max_query_set_bytes?: NumericLike;
-  maxParameterBytes?: NumericLike;
-  max_parameter_bytes?: NumericLike;
-}
-
-export interface JindoLatticePublicInputsDescriptor {
-  version: 1;
-  commitment: number[];
-  opening_claim: number[];
-  query_set: number[];
-  parameter_hash: number[];
-  domain_separator: string;
-  commitment_kinds: Record<string, "external" | string>;
-  source_digests: Record<string, number[] | null>;
-}
-
-export interface JindoLatticeProofEnvelopeInput
-  extends JindoLatticePublicInputsInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface JindoLatticePublicInputs {
-  version: 1;
-  commitment: string;
-  opening_claim: string;
-  query_set: string;
-  parameter_hash: string;
-  domain_separator: string;
-}
-
-export interface JindoLatticeDevProofFixture {
-  kind: "jindo-lattice-dev-fixture-v0";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  public_inputs: JindoLatticePublicInputs;
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export interface JindoLatticeLocalVerificationInput
-  extends JindoLatticePublicInputsInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
-
-export interface JindoLatticeLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "jindo-lattice-dev-fixture-v0";
-  backend: "unsupported";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: JindoLatticePublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  parameter_hash: string;
-}
-
-export interface JindoPolynomialCommitmentVerificationResult {
-  ok: true;
-  production: true;
-  kind: "jindo-lattice-pcs-zk-v0";
-  backend: "LatticePcsSis";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: JindoLatticePublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  parameter_hash: string;
-}
-
-export interface SisHintsCredentialCommitmentsInput {
-  version?: NumericLike;
-  issuerCommitment?: BinaryLike;
-  issuer_commitment?: BinaryLike;
-  issuerParameterCommitment?: BinaryLike;
-  issuer_parameter_commitment?: BinaryLike;
-  issuer?: unknown;
-  issuerBytes?: BinaryLike;
-  issuer_bytes?: BinaryLike;
-  issuerJson?: unknown;
-  issuer_json?: unknown;
-  issuerParameters?: unknown;
-  issuer_parameters?: unknown;
-  issuerParametersJson?: unknown;
-  issuer_parameters_json?: unknown;
-  credentialCommitment?: BinaryLike;
-  credential_commitment?: BinaryLike;
-  credentialShowingCommitment?: BinaryLike;
-  credential_showing_commitment?: BinaryLike;
-  credential?: unknown;
-  credentialBytes?: BinaryLike;
-  credential_bytes?: BinaryLike;
-  credentialJson?: unknown;
-  credential_json?: unknown;
-  credentialShowing?: unknown;
-  credential_showing?: unknown;
-  credentialShowingJson?: unknown;
-  credential_showing_json?: unknown;
-  showing?: unknown;
-  showingJson?: unknown;
-  showing_json?: unknown;
-  showingPolicyHash?: BinaryLike;
-  showing_policy_hash?: BinaryLike;
-  policyHash?: BinaryLike;
-  policy_hash?: BinaryLike;
-  verifierPolicyHash?: BinaryLike;
-  verifier_policy_hash?: BinaryLike;
-  showingPolicy?: unknown;
-  showing_policy?: unknown;
-  showingPolicyBytes?: BinaryLike;
-  showing_policy_bytes?: BinaryLike;
-  showingPolicyJson?: unknown;
-  showing_policy_json?: unknown;
-  policy?: unknown;
-  policyBytes?: BinaryLike;
-  policy_bytes?: BinaryLike;
-  policyJson?: unknown;
-  policy_json?: unknown;
-  verifierPolicy?: unknown;
-  verifier_policy?: unknown;
-  verifierPolicyJson?: unknown;
-  verifier_policy_json?: unknown;
-  parameterHash?: BinaryLike;
-  parameter_hash?: BinaryLike;
-  paramsHash?: BinaryLike;
-  params_hash?: BinaryLike;
-  parameters?: unknown;
-  parametersBytes?: BinaryLike;
-  parameters_bytes?: BinaryLike;
-  parametersJson?: unknown;
-  parameters_json?: unknown;
-  parameterSet?: unknown;
-  parameter_set?: unknown;
-  parameterSetJson?: unknown;
-  parameter_set_json?: unknown;
-  sisParameters?: unknown;
-  sis_parameters?: unknown;
-  sisParametersJson?: unknown;
-  sis_parameters_json?: unknown;
-  params?: unknown;
-  paramsJson?: unknown;
-  params_json?: unknown;
-  domainSeparator?: string;
-  domain_separator?: string;
-  maxIssuerBytes?: NumericLike;
-  max_issuer_bytes?: NumericLike;
-  maxCredentialBytes?: NumericLike;
-  max_credential_bytes?: NumericLike;
-  maxPolicyBytes?: NumericLike;
-  max_policy_bytes?: NumericLike;
-  maxParameterBytes?: NumericLike;
-  max_parameter_bytes?: NumericLike;
-}
-
-export interface SisHintsCredentialCommitments {
-  version: 1;
-  issuer_commitment: number[];
-  credential_commitment: number[];
-  showing_policy_hash: number[];
-  parameter_hash: number[];
-  domain_separator: string;
-  commitment_kinds: Record<string, "external" | string>;
-  source_digests: Record<string, number[] | null>;
-}
-
-export interface SisHintsCredentialEnvelopeInput
-  extends SisHintsCredentialCommitmentsInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface SisHintsCredentialPublicInputs {
-  version: 1;
-  issuer_commitment: string;
-  credential_commitment: string;
-  showing_policy_hash: string;
-  parameter_hash: string;
-  domain_separator: string;
-}
-
-export interface SisHintsCredentialDevProofFixture {
-  kind: "sis-hints-dev-fixture-v0";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  commitments: Omit<
-    SisHintsCredentialCommitments,
-    "commitment_kinds" | "source_digests" | "version"
-  >;
-  public_inputs: SisHintsCredentialPublicInputs;
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export interface SisHintsCredentialLocalVerificationInput
-  extends SisHintsCredentialCommitmentsInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
-
-export interface SisHintsCredentialLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "sis-hints-dev-fixture-v0";
-  backend: "unsupported";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: SisHintsCredentialPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  parameter_hash: string;
-}
-
-export interface SisHintsAnonymousCredentialVerificationResult {
-  ok: true;
-  production: true;
-  kind: "sis-hints-anoncred-pq-v0";
-  backend: "SisWithHints";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: SisHintsCredentialPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  parameter_hash: string;
-}
-
-export type AnonymousPgcOptionalAlias2<
-  A extends string,
-  B extends string,
-  Value,
-> =
-  | ({ [Key in A]?: Value } & { [Key in B]?: never })
-  | ({ [Key in A]?: never } & { [Key in B]?: Value });
-
-export type AnonymousPgcRequiredAlias2<
-  A extends string,
-  B extends string,
-  Value,
-> =
-  | ({ [Key in A]: Value } & { [Key in B]?: never })
-  | ({ [Key in A]?: never } & { [Key in B]: Value });
-
-export type AnonymousPgcOptionalAlias3<
-  A extends string,
-  B extends string,
-  C extends string,
-  Value,
-> =
-  | ({ [Key in A]?: Value } & { [Key in B | C]?: never })
-  | ({ [Key in B]?: Value } & { [Key in A | C]?: never })
-  | ({ [Key in C]?: Value } & { [Key in A | B]?: never });
-
-export type AnonymousPgcOptionalAlias4<
-  A extends string,
-  B extends string,
-  C extends string,
-  D extends string,
-  Value,
-> =
-  | ({ [Key in A]?: Value } & { [Key in B | C | D]?: never })
-  | ({ [Key in B]?: Value } & { [Key in A | C | D]?: never })
-  | ({ [Key in C]?: Value } & { [Key in A | B | D]?: never })
-  | ({ [Key in D]?: Value } & { [Key in A | B | C]?: never });
-
-export type AnonymousPgcRequiredAlias4<
-  A extends string,
-  B extends string,
-  C extends string,
-  D extends string,
-  Value,
-> =
-  | ({ [Key in A]: Value } & { [Key in B | C | D]?: never })
-  | ({ [Key in B]: Value } & { [Key in A | C | D]?: never })
-  | ({ [Key in C]: Value } & { [Key in A | B | D]?: never })
-  | ({ [Key in D]: Value } & { [Key in A | B | C]?: never });
-
-export type AnonymousPgcOptionalAlias5<
-  A extends string,
-  B extends string,
-  C extends string,
-  D extends string,
-  E extends string,
-  Value,
-> =
-  | ({ [Key in A]?: Value } & { [Key in B | C | D | E]?: never })
-  | ({ [Key in B]?: Value } & { [Key in A | C | D | E]?: never })
-  | ({ [Key in C]?: Value } & { [Key in A | B | D | E]?: never })
-  | ({ [Key in D]?: Value } & { [Key in A | B | C | E]?: never })
-  | ({ [Key in E]?: Value } & { [Key in A | B | C | D]?: never });
-
-export type AnonymousPgcReceiverInput =
-  AnonymousPgcRequiredAlias4<
-    "accountCommitment",
-    "account_commitment",
-    "receiverCommitment",
-    "receiver_commitment",
-    BinaryLike
-  > &
-  AnonymousPgcRequiredAlias4<
-    "ciphertextCommitment",
-    "ciphertext_commitment",
-    "receiverCiphertextCommitment",
-    "receiver_ciphertext_commitment",
-    BinaryLike
-  > &
-  AnonymousPgcOptionalAlias5<
-    "ciphertext",
-    "receiverCiphertext",
-    "receiver_ciphertext",
-    "encryptedNote",
-    "encrypted_note",
-    BinaryLike
-  >;
-
-export type AnonymousPgcReceiverSetInput = {
-  version?: NumericLike;
-  receivers: ReadonlyArray<AnonymousPgcReceiverInput>;
-} & AnonymousPgcRequiredAlias2<"threshold", "k", NumericLike>;
-
-export interface AnonymousPgcReceiverSet {
-  version: 1;
-  threshold: number;
-  receiver_count: number;
-  receivers: Array<{
-    account_commitment: number[];
-    ciphertext_commitment: number[];
-    ciphertext_digest?: number[];
-  }>;
-  receiver_set_commitment: number[];
-}
-
-export type AnonymousPgcReceiverSetMaterialInput =
-  | {
-      receiverSet?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
-      receiver_set?: never;
-      version?: never;
-      threshold?: never;
-      k?: never;
-      receivers?: never;
-    }
-  | {
-      receiverSet?: never;
-      receiver_set?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
-      version?: never;
-      threshold?: never;
-      k?: never;
-      receivers?: never;
-    }
-  | ({
-      receiverSet?: never;
-      receiver_set?: never;
-      version?: NumericLike;
-      receivers?: ReadonlyArray<AnonymousPgcReceiverInput>;
-    } & AnonymousPgcOptionalAlias2<"threshold", "k", NumericLike>);
-
-export type AnonymousPgcPayloadInput =
-  | {
-      payload?: BinaryLike;
-      payloadBytes?: never;
-      payload_bytes?: never;
-      payloadJson?: never;
-      payload_json?: never;
-    }
-  | {
-      payload?: never;
-      payloadBytes?: BinaryLike;
-      payload_bytes?: never;
-      payloadJson?: never;
-      payload_json?: never;
-    }
-  | {
-      payload?: never;
-      payloadBytes?: never;
-      payload_bytes?: BinaryLike;
-      payloadJson?: never;
-      payload_json?: never;
-    }
-  | {
-      payload?: never;
-      payloadBytes?: never;
-      payload_bytes?: never;
-      payloadJson?: unknown;
-      payload_json?: never;
-    }
-  | {
-      payload?: never;
-      payloadBytes?: never;
-      payload_bytes?: never;
-      payloadJson?: never;
-      payload_json?: unknown;
-    };
-
-export interface AnonymousPgcProofMaterialBaseInput {
-  aux?: BinaryLike;
-}
-
-/**
- * Accepted anonymous-PGC proof material aliases.
- *
- * Runtime validation rejects conflicting aliases. Keeping the aliases as
- * independent optional properties prevents TypeScript from expanding the
- * cross-product of every alias union into an unrepresentable type.
- */
-export interface AnonymousPgcProofMaterialInput
-  extends AnonymousPgcProofMaterialBaseInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  receiverSet?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
-  receiver_set?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
-  version?: NumericLike;
-  threshold?: NumericLike;
-  k?: NumericLike;
-  receivers?: ReadonlyArray<AnonymousPgcReceiverInput>;
-  anonymitySetRoot?: BinaryLike;
-  anonymity_set_root?: BinaryLike;
-  txDigest?: BinaryLike;
-  tx_digest?: BinaryLike;
-  payloadDigest?: BinaryLike;
-  payload_digest?: BinaryLike;
-  payload?: BinaryLike;
-  payloadBytes?: BinaryLike;
-  payload_bytes?: BinaryLike;
-  payloadJson?: unknown;
-  payload_json?: unknown;
-  balanceCommitments?: ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>;
-  balance_commitments?: ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>;
-  linkTag?: BinaryLike;
-  link_tag?: BinaryLike;
-  rangeCommitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  range_commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  chainId?: string;
-  chain_id?: string;
-  domainSeparator?: string;
-  domain_separator?: string;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-  maxPayloadBytes?: NumericLike;
-  max_payload_bytes?: NumericLike;
-}
-
-export type AnonymousPgcPaymentBindingHashInput =
-  | { paymentBindingHash: BinaryLike; payment_binding_hash?: never }
-  | { paymentBindingHash?: never; payment_binding_hash: BinaryLike };
-
-export type AnonymousPgcOptionalPaymentBindingHashInput =
-  AnonymousPgcOptionalAlias2<"paymentBindingHash", "payment_binding_hash", BinaryLike>;
-
-export type AnonymousPgcDevProofFixtureInput =
-  AnonymousPgcProofMaterialInput & AnonymousPgcPaymentBindingHashInput;
-
-export type AnonymousPgcProofBytesInput =
-  | { proofBytes: BinaryLike; proof_bytes?: never; proof?: never }
-  | { proofBytes?: never; proof_bytes: BinaryLike; proof?: never }
-  | { proofBytes?: never; proof_bytes?: never; proof: BinaryLike };
-
-export type AnonymousPgcProofV1Input =
-  AnonymousPgcDevProofFixtureInput & AnonymousPgcProofBytesInput;
-
-export type AnonymousPgcAccountCommitmentInstructionInput =
-  AnonymousPgcRequiredAlias2<
-    "accountCommitment",
-    "account_commitment",
-    BinaryLike
-  > &
-  AnonymousPgcRequiredAlias2<
-    "anonymitySetRoot",
-    "anonymity_set_root",
-    BinaryLike
-  > &
-  AnonymousPgcRequiredAlias2<"chainId", "chain_id", string> &
-  AnonymousPgcOptionalAlias2<"domainSeparator", "domain_separator", string>;
-
-export interface AnonymousPgcAccountCommitmentInstruction {
-  kind: "zk::RegisterAnonymousPgcAccountCommitment";
-  version: 1;
-  account_commitment: string;
-  anonymity_set_root: string;
-  chain_id: string;
-  domain_separator: string;
-  instruction_digest: string;
-}
-
-export interface AnonymousPgcPublicInputs {
-  version: 1;
-  anonymity_set_root: string;
-  tx_digest: string;
-  balance_commitments: string[];
-  receiver_set_commitment: string;
-  receiver_ciphertext_commitments: string[];
-  receiver_threshold: number;
-  receiver_count: number;
-  link_tag: string;
-  range_commitments: string[];
-  payment_binding_hash: string;
-  chain_id: string;
-  domain_separator: string;
-}
-
-export interface AnonymousPgcDevProofFixture {
-  kind: "anonymous-pgc-dev-fixture-v1";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  receiver_set: AnonymousPgcReceiverSet;
-  public_inputs: AnonymousPgcPublicInputs;
-  public_input_bytes: Buffer;
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export type AnonymousPgcProofEnvelopeInput = AnonymousPgcOptionalAlias4<
-  "envelope",
-  "proofEnvelope",
-  "proof_envelope",
-  "bytes",
-  BinaryLike
->;
-
-export type AnonymousPgcDevProofLocalVerificationInput =
-  AnonymousPgcProofMaterialInput &
-  AnonymousPgcProofEnvelopeInput &
-  AnonymousPgcOptionalPaymentBindingHashInput;
-
-export interface AnonymousPgcDevProofLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "anonymous-pgc-dev-fixture-v1";
-  backend: "stark/fri/sha256-goldilocks";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: AnonymousPgcPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  receiver_count: number;
-  receiver_threshold: number;
-}
-
-export type AnonymousPgcProofV1VerificationInput =
-  AnonymousPgcProofMaterialInput &
-  AnonymousPgcProofEnvelopeInput &
-  AnonymousPgcOptionalPaymentBindingHashInput;
-
-export interface AnonymousPgcProofV1VerificationResult {
-  ok: true;
-  production: true;
-  kind: "anonymous-pgc-k-out-of-n-v1";
-  backend: "stark/fri/sha256-goldilocks";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: AnonymousPgcPublicInputs;
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  receiver_count: number;
-  receiver_threshold: number;
-}
-
-export type AnonymousPgcTransferInstructionInput =
-  AnonymousPgcProofV1VerificationInput & AnonymousPgcPaymentBindingHashInput;
-
-export interface AnonymousPgcTransferInstruction {
-  kind: "zk::SubmitAnonymousPgcTransfer";
-  version: 1;
-  proof_envelope: Buffer;
-  anonymity_set_root: string;
-  tx_digest: string;
-  receiver_set_commitment: string;
-  receiver_threshold: number;
-  receiver_count: number;
-  link_tag: string;
-  payment_binding_hash: string;
-  chain_id: string;
-  domain_separator: string;
-  instruction_digest: string;
-}
-
-export type VeRangeCommitmentScheme =
-  | "pedersen-v1"
-  | "pedersen-bls12-381"
-  | "pedersen-decaf377"
-  | "verange-pedersen-v1"
-  | string;
-
-export interface RangeCommitmentInput {
-  version?: NumericLike;
-  commitment?: BinaryLike;
-  rangeCommitment?: BinaryLike;
-  range_commitment?: BinaryLike;
-  valueCommitment?: BinaryLike;
-  value_commitment?: BinaryLike;
-  bitLength?: NumericLike;
-  bit_length?: NumericLike;
-  aggregationCount?: NumericLike;
-  aggregation_count?: NumericLike;
-  commitmentScheme?: VeRangeCommitmentScheme;
-  commitment_scheme?: VeRangeCommitmentScheme;
-  domainSeparator?: string;
-  domain_separator?: string;
-  payloadDigest?: BinaryLike;
-  payload_digest?: BinaryLike;
-  txDigest?: BinaryLike;
-  tx_digest?: BinaryLike;
-  payload?: BinaryLike;
-  payloadBytes?: BinaryLike;
-  payload_bytes?: BinaryLike;
-  payloadJson?: unknown;
-  payload_json?: unknown;
-  maxPayloadBytes?: NumericLike;
-  max_payload_bytes?: NumericLike;
-}
-
-export interface RangeCommitmentDescriptor {
-  version: 1;
-  commitment: number[];
-  bit_length: number;
-  aggregation_count: number;
-  commitment_scheme: string;
-  domain_separator: string;
-  payload_digest: number[];
-}
-
-export interface VeRangeProofEnvelopeInput extends RangeCommitmentInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  rangeCommitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  range_commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface VeRangeProofV1Input extends VeRangeProofEnvelopeInput {}
-
-export interface VeRangeDevProofFixtureInput extends RangeCommitmentInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  rangeCommitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  range_commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-}
-
-export interface VeRangeDevProofFixture {
-  kind: "verange-dev-fixture-v1";
-  production: false;
-  proof_bytes: number[];
-  proofBytes: Buffer;
-  public_inputs: {
-    version: 1;
-    commitments: string[];
-    range_parameters: {
-      bit_length: number;
-      commitment_scheme: string;
-    };
-    aggregation_count: number;
-    domain_separator: string;
-    payload_digest: string;
-  };
-  publicInputBytes: Buffer;
-  envelope: Buffer;
-}
-
-export interface VeRangeLocalVerificationInput extends RangeCommitmentInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
-
-export interface VeRangeLocalVerificationResult {
-  ok: true;
-  production: false;
-  kind: "verange-dev-fixture-v1";
-  backend: "stark/fri/sha256-goldilocks";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: VeRangeDevProofFixture["public_inputs"];
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-}
-
-export interface VeRangeProofV1VerificationInput
-  extends VeRangeLocalVerificationInput {}
-
-export interface VeRangeProofV1VerificationResult {
-  ok: true;
-  production: true;
-  kind: "verange-transparent-range-v1";
-  backend: "Stark";
-  circuit_id: string;
-  verifier_key_hash: string;
-  public_inputs: VeRangeDevProofFixture["public_inputs"];
-  public_input_bytes: number;
-  proof_bytes: number;
-  aux_bytes: number;
-  aggregation_count: number;
-  bit_length: number;
-  commitment_scheme: string;
-}
-
-export interface PrivacyVerifierKeyBoxInput {
-  backend?: string;
-  backendId?: string;
-  bytes?: BinaryLike;
-  keyBytes?: BinaryLike;
-  verifyingKeyBytes?: BinaryLike;
-  vkBytes?: BinaryLike;
-}
-
-export interface PrivacyVerifierKeyRecordInput {
-  version: NumericLike;
-  circuitId?: string;
-  circuit_id?: string;
-  ownerManifestId?: string | null;
-  owner_manifest_id?: string | null;
-  owner?: string | null;
-  namespace?: string;
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  curve?: string;
-  publicInputsSchemaHash?: BinaryLike;
-  public_inputs_schema_hash?: BinaryLike;
-  schemaHash?: BinaryLike;
-  schema_hash?: BinaryLike;
-  commitment?: BinaryLike;
-  verifyingKeyCommitment?: BinaryLike;
-  vkCommitment?: BinaryLike;
-  vk_commitment?: BinaryLike;
-  vkLen?: NumericLike;
-  vk_len?: NumericLike;
-  verifyingKeyLength?: NumericLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  gasScheduleId?: string;
-  gas_schedule_id?: string;
-  metadataUriCid?: string | null;
-  metadata_uri_cid?: string | null;
-  vkBytesCid?: string | null;
-  vk_bytes_cid?: string | null;
-  activationHeight?: NumericLike | null;
-  activation_height?: NumericLike | null;
-  withdrawHeight?: NumericLike | null;
-  withdraw_height?: NumericLike | null;
-  key?: PrivacyVerifierKeyBoxInput | BinaryLike | null;
-  verifyingKey?: PrivacyVerifierKeyBoxInput | BinaryLike | null;
-  verifying_key?: PrivacyVerifierKeyBoxInput | BinaryLike | null;
-  verifyingKeyBytes?: BinaryLike | null;
-  verifying_key_bytes?: BinaryLike | null;
-  vkBytes?: BinaryLike | null;
-  vk_bytes?: BinaryLike | null;
-  status?: "Proposed" | "Active" | "Withdrawn" | string;
-}
-
-export interface RegisterPrivacyVerifierKeyInstructionInput
-  extends PrivacyVerifierKeyRecordInput {
-  id?: VerifyingKeyIdLike;
-  verifierKey?: VerifyingKeyIdLike;
-  verifierKeyId?: VerifyingKeyIdLike;
-  verifyingKeyId?: VerifyingKeyIdLike;
-  keyId?: VerifyingKeyIdLike;
-  vkRef?: VerifyingKeyIdLike;
-  verifyingKeyRef?: VerifyingKeyIdLike;
-  record?: PrivacyVerifierKeyRecordInput;
-  verifierRecord?: PrivacyVerifierKeyRecordInput;
-  verifyingKeyRecord?: PrivacyVerifierKeyRecordInput;
-}
-
-export interface RetirePrivacyVerifierKeyInstructionInput
-  extends RegisterPrivacyVerifierKeyInstructionInput {}
 
 /**
  * Canonicalise an account identifier to i105.
@@ -4205,15 +2339,33 @@ export interface ToriiAttachmentMetadata {
 
 export type ToriiVerifyingKeyStatus = "Proposed" | "Active" | "Withdrawn";
 
+/** Exact verifier-registry labels admitted by the native Rust dispatcher. */
+export type ToriiVerifierBackendLabelV1 =
+  | "halo2/ipa"
+  | "halo2/pasta/kaigi-roster-v1"
+  | "halo2/pasta/kaigi-usage-v1"
+  | "halo2/pasta/ivm-overlay-bind"
+  | "halo2/pasta/ivm-execution-v1"
+  | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
+  | "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"
+  | "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"
+  | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
+  | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
+  | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
+  | "stark/fri"
+  | "stark/fri/sha256-goldilocks"
+  | "stark/fri/poseidon2-goldilocks"
+  | "stark/fri/sha256_goldilocks.v1";
+
 export interface ToriiVerifyingKeyInline {
-  backend: string;
+  backend: ToriiVerifierBackendLabelV1;
   bytes_b64: string;
 }
 
 export interface ToriiVerifyingKeyRecord {
   version: number;
   circuit_id: string;
-  backend: string;
+  backend: ToriiVerifierBackendLabelV1;
   curve: string | null;
   public_inputs_schema_hash: string;
   commitment_hex: string;
@@ -4229,7 +2381,7 @@ export interface ToriiVerifyingKeyRecord {
 }
 
 export interface ToriiVerifyingKeyId {
-  backend: string;
+  backend: ToriiVerifierBackendLabelV1;
   name: string;
 }
 
@@ -4244,7 +2396,7 @@ export interface ToriiVerifyingKeyListItem {
 }
 
 export interface ToriiVerifyingKeyListOptions {
-  backend?: string;
+  backend?: ToriiVerifierBackendLabelV1;
   status?: ToriiVerifyingKeyStatus | string;
   nameContains?: string;
   limit?: NumericLike;
@@ -4257,7 +2409,7 @@ export interface ToriiVerifyingKeyListOptions {
 export interface ToriiVerifyingKeyRegisterPayload {
   authority: string;
   private_key: string;
-  backend: string;
+  backend: ToriiVerifierBackendLabelV1;
   name: string;
   version: NumericLike;
   circuit_id: string;
@@ -4282,7 +2434,7 @@ export interface ToriiVerifyingKeyRegisterPayload {
 export interface ToriiVerifyingKeyUpdatePayload {
   authority: string;
   private_key: string;
-  backend: string;
+  backend: ToriiVerifierBackendLabelV1;
   name: string;
   version: NumericLike;
   circuit_id: string;
@@ -5800,15 +3952,15 @@ type NoritoRuntimeNamespaceExport =
   | "inspectSubscriptionTriggerAction"
   | "noritoDecodeBlockProofs"
   | "noritoDecodeInstruction"
-  | "noritoDecodePrivacyProofEnvelope"
+  | "noritoDecodeOpenVerifyEnvelope"
   | "noritoEncodeInstruction"
   | "noritoEncodeInstructionBoxArchive"
   | "noritoEncodeContractManifestSignaturePayload"
   | "noritoEncodeMultisigContractCallApproveRequest"
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
-  | "noritoEncodePrivacyProofEnvelope"
   | "noritoEncodeSorafsBillingAcknowledgementProofV1"
+  | "noritoEncodeOpenVerifyEnvelope"
   | "noritoEncodeTransactionPayloadBatch"
   | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1"
   | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1"
@@ -5819,13 +3971,7 @@ type NoritoRuntimeNamespaceExport =
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
-  | "PRIVACY_FFI_ERROR_INVALID_REQUEST"
-  | "PRIVACY_FFI_ERROR_MALFORMED_NORITO"
-  | "PRIVACY_FFI_ERROR_NULL_POINTER"
-  | "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED"
-  | "PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM"
-  | "PRIVACY_FFI_STATUS_ERROR"
-  | "PRIVACY_FFI_VERSION_V1"
+  | "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1"
   | "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES"
   | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
   | "SM2_DEFAULT_DISTINGUISHED_ID"
@@ -5834,7 +3980,6 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_SIGNATURE_LENGTH"
   | "SUPPORTED_CRYPTO_ALGORITHMS"
   | "buildKaigiRosterJoinProof"
-  | "buildZkAceTransferAuthorizationV1"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -5854,10 +3999,7 @@ type CryptoRuntimeNamespaceExport =
   | "loadSm2KeyPair"
   | "normalizeCryptoAlgorithm"
   | "normalizeRecoveryPhrase"
-  | "privacyBuildProofV1"
   | "privacyCapabilitiesV1"
-  | "privacyProofRequestV1"
-  | "privacyVerifyProofV1"
   | "privateKeyMultihash"
   | "publicKeyFromPrivate"
   | "publicKeyMultihash"
@@ -6848,6 +4990,13 @@ export interface ToriiGovernanceTallyResult {
   tally: ToriiGovernanceTally | null;
 }
 
+export interface ToriiGovernanceLockCustody {
+  escrowed: boolean;
+  asset_definition_id: string;
+  bond_escrow_account: string;
+  slash_receiver_account: string;
+}
+
 export interface ToriiGovernanceLockRecord {
   owner: string;
   amount: string;
@@ -6855,6 +5004,7 @@ export interface ToriiGovernanceLockRecord {
   expiry_height: number;
   direction: number;
   duration_blocks: number;
+  custody: ToriiGovernanceLockCustody | null;
 }
 
 export interface ToriiGovernanceLocksResult {
@@ -8635,42 +6785,6 @@ export interface KaigiRosterJoinProofOptions {
   roster_root_hex?: string | null;
 }
 
-export interface ZkAceTransferAuthorizationV1Options {
-  fromAccountId: string;
-  toAccountId: string;
-  assetDefinitionId: string;
-  amount: NumericLike;
-  chainId: string;
-  identityRoot: BinaryLike;
-  identityBlinding: BinaryLike;
-  replaySecret: BinaryLike;
-  policyHash: BinaryLike;
-  verifierKeyId?: string | null;
-  verifyingKeyCommitment?: BinaryLike | null;
-}
-
-export interface ZkAceTransferAuthorizationV1 {
-  publicInputs: object;
-  public_inputs: object;
-  proof: ProofAttachmentInput;
-  identityCommitment: string;
-  identity_commitment: string;
-  txDigest: string;
-  tx_digest: string;
-  replayNullifier: string;
-  replay_nullifier: string;
-  policyHash: string;
-  policy_hash: string;
-  verifierKeyId: string;
-  verifier_key_id: string;
-  authorizationProofBytes: number;
-  authorization_proof_bytes: number;
-  authorizationPublicInputBytes: number;
-  authorization_public_input_bytes: number;
-  replayNullifierBytes: number;
-  replay_nullifier_bytes: number;
-}
-
 export interface RegisterDomainInput {
   chainId: string;
   authority: string;
@@ -9645,88 +7759,6 @@ export interface RegisterAssetHiddenZkPoolInstructionInput {
   transferVerifyingKey: VerifyingKeyIdLike;
 }
 
-export interface RegisterZkAceIdentityCommitmentInstructionInput {
-  assetDefinitionId: string;
-  identityCommitment: BinaryLike;
-  policyHash: BinaryLike;
-  allowedAccounts: string[];
-  actionClass?: string;
-  domainTag?: string;
-  verifierKey: VerifyingKeyIdLike;
-}
-
-export interface RotateZkAceIdentityCommitmentInstructionInput {
-  assetDefinitionId: string;
-  oldIdentityCommitment: BinaryLike;
-  newIdentityCommitment: BinaryLike;
-  policyHash: BinaryLike;
-  allowedAccounts: string[];
-  actionClass?: string;
-  domainTag?: string;
-  verifierKey: VerifyingKeyIdLike;
-}
-
-export interface RevokeZkAceIdentityCommitmentInstructionInput {
-  assetDefinitionId: string;
-  identityCommitment: BinaryLike;
-  reasonHash?: BinaryLike | null;
-}
-
-export interface ZkAcePublicInputsV1Input {
-  version?: NumericLike;
-  identityCommitment: BinaryLike;
-  txDigest: BinaryLike;
-  chainId: string;
-  domainTag?: string;
-  actionClass?: string;
-  replayNullifier: BinaryLike;
-  policyHash: BinaryLike;
-  fromAccountId: string;
-  toAccountId: string;
-  assetDefinitionId: string;
-  amount: NumericLike;
-  verifierKeyId: VerifyingKeyIdLike;
-}
-
-export interface ZkAceAuthorizationProofV1Input {
-  publicInputs: ZkAcePublicInputsV1Input;
-  witness?: ZkAceWitnessV1Input;
-  proof?: ProofAttachmentInput | BinaryLike;
-  proofBytes?: BinaryLike;
-  proofAttachment?: ProofAttachmentInput;
-  verifyingKeyRef?: VerifyingKeyIdLike;
-  verifyingKeyCommitment?: BinaryLike | null;
-  envelopeHash?: BinaryLike | null;
-}
-
-export interface ZkAceAuthorizationProofV1 {
-  public_inputs: object;
-  proof: ProofAttachmentInput;
-}
-
-export interface ZkAceWitnessV1Input {
-  identityRoot: BinaryLike;
-  identityBlinding: BinaryLike;
-  replaySecret: BinaryLike;
-}
-
-export interface ZkAceAuthorizedTransferInstructionInput {
-  fromAccountId: string;
-  toAccountId: string;
-  assetDefinitionId: string;
-  /** Positive scale-0 quantity that fits the versioned u128 proof scalar. */
-  amount: QuantityInput;
-  identityCommitment: BinaryLike;
-  txDigest: BinaryLike;
-  chainId: string;
-  domainTag?: string;
-  actionClass?: string;
-  replayNullifier: BinaryLike;
-  policyHash: BinaryLike;
-  proof?: ProofAttachmentInput;
-  authorizationProof?: ZkAceAuthorizationProofV1Input;
-}
-
 export interface UnshieldInstructionInput {
   assetDefinitionId: string;
   destinationAccountId: string;
@@ -9844,16 +7876,55 @@ export interface SubmitIsoMessageOptions {
   wait?: IsoMessageWaitOptions;
 }
 
-export interface ContractDynamicAccessHintInput {
-  baseKey?: string;
-  base_key?: string;
-  keyType?: string;
-  key_type?: string;
-  boundKind?: string;
-  bound_kind?: string;
-  maxKeys?: NumericLike;
-  max_keys?: NumericLike;
-}
+type ContractRequiredAliasPair<
+  CamelCase extends string,
+  SnakeCase extends string,
+  Value,
+> =
+  | ({ [Key in CamelCase]: Value } & { [Key in SnakeCase]?: Value })
+  | ({ [Key in CamelCase]?: Value } & { [Key in SnakeCase]: Value });
+
+// BEGIN GENERATED: kotodama-v1-dynamic-access-policy
+export const KOTODAMA_V1_STATE_MAP_KEY_TYPES: readonly [
+  "int",
+  "decimal",
+  "quantity",
+  "bool",
+  "string",
+  "bytes",
+  "DataSpaceId",
+  "AccountId",
+  "AssetDefinitionId",
+  "AssetId",
+  "NftId",
+  "DomainId",
+  "Name",
+];
+export const KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS: readonly [
+  "range",
+  "take",
+];
+export const KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS: 64;
+
+export type ContractStateMapKeyTypeName =
+  (typeof KOTODAMA_V1_STATE_MAP_KEY_TYPES)[number];
+export type ContractDynamicAccessBoundKind =
+  (typeof KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS)[number];
+// END GENERATED: kotodama-v1-dynamic-access-policy
+
+export type ContractDynamicAccessHintInput =
+  & ContractRequiredAliasPair<"baseKey", "base_key", string>
+  & ContractRequiredAliasPair<
+    "keyType",
+    "key_type",
+    ContractStateMapKeyTypeName
+  >
+  & ContractRequiredAliasPair<
+    "boundKind",
+    "bound_kind",
+    ContractDynamicAccessBoundKind
+  >
+  & ContractRequiredAliasPair<"maxKeys", "max_keys", NumericLike>;
 
 export interface ContractAccessSetHintsInput {
   readKeys?: ReadonlyArray<string>;
@@ -9926,11 +7997,9 @@ export interface ContractEntrypointArgumentSchema {
   fields: ReadonlyArray<ContractEntrypointArgumentField>;
 }
 
-export interface ContractEntrypointParamInput {
+export type ContractEntrypointParamInput = {
   name: string;
-  typeName?: string;
-  type_name?: string;
-}
+} & ContractRequiredAliasPair<"typeName", "type_name", string>;
 
 export type ContractTriggerRepeats =
   | { Indefinitely: null }
@@ -9966,11 +8035,9 @@ export interface ContractEntrypointInput {
   triggers?: ReadonlyArray<ContractTriggerDescriptorInput>;
 }
 
-export interface ContractStateDescriptorInput {
+export type ContractStateDescriptorInput = {
   name: string;
-  typeName?: string;
-  type_name?: string;
-}
+} & ContractRequiredAliasPair<"typeName", "type_name", string>;
 
 export interface ContractErrorCodeDescriptorInput {
   namespace: string;
@@ -10268,14 +8335,14 @@ export interface ContractManifestRecord {
           write_keys: ReadonlyArray<string>;
           dynamic_reads: ReadonlyArray<{
             base_key: string;
-            key_type: string;
-            bound_kind: string;
+            key_type: ContractStateMapKeyTypeName;
+            bound_kind: ContractDynamicAccessBoundKind;
             max_keys: number;
           }>;
           dynamic_writes: ReadonlyArray<{
             base_key: string;
-            key_type: string;
-            bound_kind: string;
+            key_type: ContractStateMapKeyTypeName;
+            bound_kind: ContractDynamicAccessBoundKind;
             max_keys: number;
           }>;
         }
@@ -12297,6 +10364,7 @@ export declare class ToriiBrowserStreamGapError extends Error {
 }
 
 export declare class ToriiBrowserClient {
+  readonly baseUrl: string;
   constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
   submitTransaction(
     signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
@@ -12538,6 +10606,87 @@ export interface NormalizedValidationFeeLedgerBindingV1 {
   readonly checkpoint: NormalizedValidationFeeCheckpointV1;
 }
 
+export interface ValidationFeeVerifiedPlainElectorateSnapshotV1 {
+  readonly rosterRoot: string;
+  readonly memberCount: string;
+  readonly capturedAtHeight: string;
+  readonly approvalGateHeight: string;
+}
+
+export interface ValidationFeeVerifiedEnactmentWindowV1 {
+  readonly opens_at_height: string;
+  readonly closes_at_height: string;
+  readonly enacted_at_height: string;
+}
+
+export interface ValidationFeeVerifiedFinalizationV1 {
+  readonly proposal_id: string;
+  readonly referendum_id: string;
+  readonly finalized_at_height: string;
+  readonly mode: "PLAIN";
+  readonly approve: string;
+  readonly reject: string;
+  readonly abstain: string;
+  readonly min_turnout: string;
+  readonly approval_threshold_numerator: string;
+  readonly approval_threshold_denominator: string;
+  readonly approved: true;
+}
+
+export interface ValidationFeeVerifiedParliamentProposalV1 {
+  readonly proposal_kind:
+    | "ValidationFeePolicyV1"
+    | "ValidationFeePayoutLifecycleV1";
+  readonly proposal_id: string;
+  readonly payload_hash: string;
+  readonly parliament_roster_root: string;
+  readonly plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>;
+  readonly plainElectorateSnapshot: Readonly<ValidationFeeVerifiedPlainElectorateSnapshotV1>;
+  readonly enactment_window: Readonly<ValidationFeeVerifiedEnactmentWindowV1>;
+  readonly finalization: Readonly<ValidationFeeVerifiedFinalizationV1>;
+}
+
+export interface ValidationFeeVerifiedParliamentV1 {
+  readonly validationFeePolicy: Readonly<ValidationFeeVerifiedParliamentProposalV1>;
+  readonly payoutLifecycle: Readonly<ValidationFeeVerifiedParliamentProposalV1>;
+  readonly payoutLifecycleSealHash: string;
+}
+
+export interface ValidationFeeVerifiedPayoutRecipientV1 {
+  readonly account_id: string;
+  readonly share_basis_points: 2500;
+}
+
+export interface ValidationFeeVerifiedPayoutV1 {
+  readonly contractAddress: string;
+  readonly codeHash: string;
+  readonly entrypoint: "autonomous_validation_fee_tick";
+  readonly sbdAssetDefinitionId: string;
+  readonly xorAssetDefinitionId: string;
+  readonly treasuryAccountId: string;
+  readonly vaultAccountId: string;
+  readonly batchSbdMinorUnits: "1000";
+  readonly sbdScale: 2;
+  readonly xorOutputMin: "4";
+  readonly xorOutputMax: "100";
+  readonly recipients: ReadonlyArray<
+    Readonly<ValidationFeeVerifiedPayoutRecipientV1>
+  >;
+}
+
+export interface ValidationFeeVerifiedCurrentPolicyV1 {
+  readonly activePolicyVersion: string;
+  readonly activePolicyHash: string;
+  readonly feeAssetDefinitionId: string;
+  readonly feeScale: 2;
+  readonly feeMinorUnits: "10";
+  readonly chargingMode: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
+  readonly effectiveFromHeight: string;
+  readonly expiresAfterHeight: string | null;
+  readonly parliament: Readonly<ValidationFeeVerifiedParliamentV1>;
+  readonly payout: Readonly<ValidationFeeVerifiedPayoutV1>;
+}
+
 export interface ValidationFeeVerifiedPolicyProjectionV1 {
   readonly schema: "iroha.validation_fee.verified_policy_projection.v1";
   readonly version: 1;
@@ -12547,7 +10696,7 @@ export interface ValidationFeeVerifiedPolicyProjectionV1 {
   readonly registry_hash: string;
   readonly head_policy_version: bigint;
   readonly head_policy_hash: string;
-  readonly current_policy: Readonly<Record<string, unknown>> | null;
+  readonly current_policy: Readonly<ValidationFeeVerifiedCurrentPolicyV1> | null;
   readonly trusted_checkpoint_height: bigint;
   readonly trusted_checkpoint_context_id: string;
   readonly evaluated_block_height: bigint;
@@ -12785,12 +10934,12 @@ export declare class ToriiClient {
     options?: ToriiVerifyingKeyListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<ToriiVerifyingKeyListItem, void, unknown>;
   getVerifyingKey(
-    backend: string,
+    backend: ToriiVerifierBackendLabelV1,
     name: string,
     options?: { signal?: AbortSignal },
   ): Promise<unknown>;
   getVerifyingKeyTyped(
-    backend: string,
+    backend: ToriiVerifierBackendLabelV1,
     name: string,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiVerifyingKeyDetail>;
@@ -13923,10 +12072,6 @@ export function buildKaigiRosterJoinProof(
   options: KaigiRosterJoinProofOptions,
 ): KaigiRosterJoinProof;
 
-export function buildZkAceTransferAuthorizationV1(
-  options: ZkAceTransferAuthorizationV1Options,
-): ZkAceTransferAuthorizationV1;
-
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -14005,17 +12150,19 @@ export function deriveConfidentialNullifierV2(input: {
 }): { nullifier: Buffer; nullifierHex: string };
 
 export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;
+export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1: Readonly<{
+  VALID: 0;
+  NULL_POINTER: 1;
+  EMPTY: 2;
+  ARCHIVE_TOO_LARGE: 3;
+  DECODE_RESOURCE_LIMIT: 4;
+  SCHEMA_MISMATCH: 5;
+  NON_CANONICAL: 6;
+  MALFORMED_ARCHIVE: 7;
+  INVALID_SNAPSHOT: 8;
+}>;
 export function isPrivacyNativeAvailable(): boolean;
 export function privacyCapabilitiesV1(): Buffer;
-export function privacyProofRequestV1(
-  input: PrivacyProofRequestV1Input,
-): Buffer;
-export function privacyBuildProofV1(
-  requestArchive: PrivacyNativeArchiveLike,
-): Buffer;
-export function privacyVerifyProofV1(
-  requestArchive: PrivacyNativeArchiveLike,
-): Buffer;
 
 export interface Sm2Fixture {
   distid: string;
@@ -14093,10 +12240,17 @@ export interface SorafsBillingAcknowledgementProofV1 {
 export function noritoEncodeSorafsBillingAcknowledgementProofV1(
   proof: Readonly<SorafsBillingAcknowledgementProofV1>,
 ): Buffer;
-export function noritoEncodePrivacyProofEnvelope(envelope: object): Buffer;
-export function noritoDecodePrivacyProofEnvelope(
+export function noritoEncodeOpenVerifyEnvelope(envelope: OpenVerifyEnvelope): Buffer;
+export function noritoDecodeOpenVerifyEnvelope(
   bytes: ArrayBufferView | ArrayBuffer | Buffer | string,
-): object;
+): {
+  backend: OpenVerifyBackendTag;
+  circuit_id: string;
+  vk_hash: number[];
+  public_inputs: number[];
+  proof_bytes: number[];
+  aux: number[];
+};
 export interface NoritoFrameValidationOptions {
   context?: string;
   expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer;
@@ -14177,6 +12331,8 @@ export interface ValidationFeePlainEligibilityRuleV1 {
  */
 export interface ValidationFeePlainElectorateRulesV1 {
   readonly voting_asset_id: string;
+  readonly bond_escrow_account: string;
+  readonly slash_receiver_account: string;
   readonly ballot_amount: string;
   readonly ballot_duration_blocks: string;
   readonly citizenship_amount: string;
@@ -15350,368 +13506,8 @@ export function buildCancelTwitterEscrowInstruction(
   input: CancelTwitterEscrowInstructionInput,
 ): object;
 
-export function buildZkAtPolicyCommitment(
-  input: ZkAtPolicyCommitmentInput,
-): ZkAtPolicyCommitment;
-
-export function buildZkAtAuthenticatorEnvelope(
-  input: ZkAtAuthenticatorEnvelopeInput,
-): Buffer;
-
-export function buildZkAtPolicyProofV1(
-  input: ZkAtAuthenticatorEnvelopeInput,
-): Buffer;
-
-export function buildZkAtDevProofFixture(
-  input: Omit<
-    ZkAtAuthenticatorEnvelopeInput,
-    "proof" | "proofBytes" | "proof_bytes"
-  >,
-): ZkAtDevProofFixture;
-
-export function verifyZkAtAuthenticatorLocally(
-  input: ZkAtAuthenticatorLocalVerificationInput | BinaryLike,
-): ZkAtAuthenticatorLocalVerificationResult;
-
-export function verifyZkAtPolicyProofV1(
-  input: ZkAtAuthenticatorLocalVerificationInput | BinaryLike,
-): ZkAtPolicyProofVerificationResult;
-
-export function buildZkAmsAdmissionBatch(
-  input: ZkAmsAdmissionBatchInput,
-): ZkAmsAdmissionBatch;
-
-export function buildZkAmsAdmissionProofEnvelope(
-  input: ZkAmsAdmissionProofEnvelopeInput,
-): Buffer;
-
-export function buildZkAmsAdmissionBatchProofV0(
-  input: ZkAmsAdmissionProofEnvelopeInput,
-): Buffer;
-
-export function buildZkAmsAdmissionDevProofFixture(
-  input: Omit<
-    ZkAmsAdmissionProofEnvelopeInput,
-    "proof" | "proofBytes" | "proof_bytes"
-  >,
-): ZkAmsAdmissionDevProofFixture;
-
-export function verifyZkAmsAdmissionProofLocally(
-  input: ZkAmsAdmissionLocalVerificationInput | BinaryLike,
-): ZkAmsAdmissionLocalVerificationResult;
-
-export function verifyZkAmsAdmissionBatchProofV0(
-  input: ZkAmsAdmissionLocalVerificationInput | BinaryLike,
-): ZkAmsAdmissionProductionVerificationResult;
-
-export function buildVegaCredentialPredicateCommitment(
-  input: VegaCredentialPredicateCommitmentInput,
-): VegaCredentialPredicateCommitment;
-
-export function buildVegaCredentialProofEnvelope(
-  input: VegaCredentialProofEnvelopeInput,
-): Buffer;
-
-export function buildVegaCredentialPredicateProofV0(
-  input: VegaCredentialProofEnvelopeInput,
-): Buffer;
-
-export function buildVegaCredentialDevProofFixture(
-  input: Omit<
-    VegaCredentialProofEnvelopeInput,
-    "proof" | "proofBytes" | "proof_bytes"
-  >,
-): VegaCredentialDevProofFixture;
-
-export function verifyVegaCredentialProofLocally(
-  input: VegaCredentialLocalVerificationInput | BinaryLike,
-): VegaCredentialLocalVerificationResult;
-
-export function verifyVegaCredentialPredicateProofV0(
-  input: VegaCredentialLocalVerificationInput | BinaryLike,
-): VegaCredentialProductionVerificationResult;
-
-export function buildSilentThresholdCredentialCommitments(
-  input: SilentThresholdCredentialCommitmentsInput,
-): SilentThresholdCredentialCommitments;
-
-export function buildSilentThresholdCredentialEnvelope(
-  input: SilentThresholdCredentialEnvelopeInput,
-): Buffer;
-
-export function buildSilentThresholdCredentialShowingProofV0(
-  input: SilentThresholdCredentialEnvelopeInput,
-): Buffer;
-
-export function buildSilentThresholdCredentialDevProofFixture(
-  input: Omit<
-    SilentThresholdCredentialEnvelopeInput,
-    "proof" | "proofBytes" | "proof_bytes"
-  >,
-): SilentThresholdCredentialDevProofFixture;
-
-export function verifySilentThresholdCredentialProofLocally(
-  input: SilentThresholdCredentialLocalVerificationInput | BinaryLike,
-): SilentThresholdCredentialLocalVerificationResult;
-
-export function verifySilentThresholdCredentialShowingProofV0(
-  input: SilentThresholdCredentialLocalVerificationInput | BinaryLike,
-): SilentThresholdCredentialProductionVerificationResult;
-
-export function buildZkX509IdentityCommitments(
-  input: ZkX509IdentityCommitmentsInput,
-): ZkX509IdentityCommitments;
-
-export function buildZkX509IdentityEnvelope(
-  input: ZkX509IdentityEnvelopeInput,
-): Buffer;
-
-export function buildZkX509IdentityProofV0(
-  input: ZkX509IdentityEnvelopeInput,
-): Buffer;
-
-export function buildZkX509IdentityDevProofFixture(
-  input: Omit<
-    ZkX509IdentityEnvelopeInput,
-    "proof" | "proofBytes" | "proof_bytes"
-  >,
-): ZkX509IdentityDevProofFixture;
-
-export function verifyZkX509IdentityProofLocally(
-  input: ZkX509IdentityLocalVerificationInput | BinaryLike,
-): ZkX509IdentityLocalVerificationResult;
-
-export function verifyZkX509IdentityProofV0(
-  input: ZkX509IdentityLocalVerificationInput | BinaryLike,
-): ZkX509IdentityProductionVerificationResult;
-
-export function buildJindoLatticePublicInputs(
-  input: JindoLatticePublicInputsInput,
-): JindoLatticePublicInputsDescriptor;
-
-export function buildJindoLatticeProofEnvelope(
-  input: JindoLatticeProofEnvelopeInput,
-): Buffer;
-
-export function buildJindoLatticeProofV0(
-  input: JindoLatticeProofEnvelopeInput,
-): Buffer;
-
-export function buildJindoLatticeDevProofFixture(
-  input: Omit<
-    JindoLatticeProofEnvelopeInput,
-    "proof" | "proofBytes" | "proof_bytes"
-  >,
-): JindoLatticeDevProofFixture;
-
-export function verifyJindoLatticeProofLocally(
-  input: JindoLatticeLocalVerificationInput | BinaryLike,
-): JindoLatticeLocalVerificationResult;
-
-export function verifyJindoPolynomialCommitmentV0(
-  input: JindoLatticeLocalVerificationInput | BinaryLike,
-): JindoPolynomialCommitmentVerificationResult;
-
-export function buildSisHintsCredentialCommitments(
-  input: SisHintsCredentialCommitmentsInput,
-): SisHintsCredentialCommitments;
-
-export function buildSisHintsCredentialEnvelope(
-  input: SisHintsCredentialEnvelopeInput,
-): Buffer;
-
-export function buildSisHintsAnonymousCredentialProofV0(
-  input: SisHintsCredentialEnvelopeInput,
-): Buffer;
-
-export function buildSisHintsCredentialDevProofFixture(
-  input: Omit<
-    SisHintsCredentialEnvelopeInput,
-    "proof" | "proofBytes" | "proof_bytes"
-  >,
-): SisHintsCredentialDevProofFixture;
-
-export function verifySisHintsCredentialProofLocally(
-  input: SisHintsCredentialLocalVerificationInput | BinaryLike,
-): SisHintsCredentialLocalVerificationResult;
-
-export function verifySisHintsAnonymousCredentialProofV0(
-  input: SisHintsCredentialLocalVerificationInput | BinaryLike,
-): SisHintsAnonymousCredentialVerificationResult;
-
-export function buildAnonymousPgcReceiverSet(
-  input: AnonymousPgcReceiverSetInput,
-): AnonymousPgcReceiverSet;
-
-export function buildAnonymousPgcAccountCommitmentInstruction(
-  input: AnonymousPgcAccountCommitmentInstructionInput,
-): AnonymousPgcAccountCommitmentInstruction;
-
-export function buildAnonymousPgcKOutOfNProofV1(
-  input: AnonymousPgcProofV1Input,
-): Buffer;
-
-export function verifyAnonymousPgcKOutOfNProofV1(
-  input: AnonymousPgcProofV1VerificationInput | BinaryLike,
-): AnonymousPgcProofV1VerificationResult;
-
-export function buildAnonymousPgcTransferInstruction(
-  input: AnonymousPgcTransferInstructionInput,
-): AnonymousPgcTransferInstruction;
-
-export function buildAnonymousPgcDevProofFixture(
-  input: AnonymousPgcDevProofFixtureInput,
-): AnonymousPgcDevProofFixture;
-
-export function verifyAnonymousPgcDevProofLocally(
-  input: AnonymousPgcDevProofLocalVerificationInput | BinaryLike,
-): AnonymousPgcDevProofLocalVerificationResult;
-
-export interface ResearchProtocolInstruction {
-  algorithm_id: string;
-  instruction: string;
-  proof_envelope: Buffer;
-  proof_envelope_sha256: string;
-  metadata: Record<string, unknown>;
-}
-
-export function buildOrchardActionBundleProofV1(
-  input: PrivacyProofEnvelopeInput,
-): Buffer;
-
-export function buildOrchardActionBundleInstruction(
-  input: PrivacyProofEnvelopeInput & {
-    proofEnvelope?: BinaryLike;
-    proof_envelope?: BinaryLike;
-  },
-): ResearchProtocolInstruction;
-
-export function buildPenumbraSpendProofV1(
-  input: PrivacyProofEnvelopeInput,
-): Buffer;
-
-export function buildPenumbraOutputProofV1(
-  input: PrivacyProofEnvelopeInput,
-): Buffer;
-
-export function buildPenumbraShieldedPoolTransaction(
-  input: PrivacyProofEnvelopeInput & {
-    proofEnvelope?: BinaryLike;
-    proof_envelope?: BinaryLike;
-  },
-): ResearchProtocolInstruction;
-
-export function buildFcmpPlusPlusMembershipProofV1(
-  input: PrivacyProofEnvelopeInput,
-): Buffer;
-
-export function buildFcmpPlusPlusTransferInstruction(
-  input: PrivacyProofEnvelopeInput & {
-    proofEnvelope?: BinaryLike;
-    proof_envelope?: BinaryLike;
-  },
-): ResearchProtocolInstruction;
-
-export function buildMidenStarkTransactionProofV1(
-  input: PrivacyProofEnvelopeInput,
-): Buffer;
-
-export function buildMidenNoteTransactionInstruction(
-  input: PrivacyProofEnvelopeInput & {
-    proofEnvelope?: BinaryLike;
-    proof_envelope?: BinaryLike;
-  },
-): ResearchProtocolInstruction;
-
-export function buildAztecPrivateKernelProofV1(
-  input: PrivacyProofEnvelopeInput,
-): Buffer;
-
-export function buildAztecPrivateRollupTransactionInstruction(
-  input: PrivacyProofEnvelopeInput & {
-    proofEnvelope?: BinaryLike;
-    proof_envelope?: BinaryLike;
-  },
-): ResearchProtocolInstruction;
-
-export function buildPqMaspStarkTransferProofV0(
-  input: PrivacyProofEnvelopeInput,
-): Buffer;
-
-export function buildPqMaspStarkRegisterPoolInstruction(
-  input: PrivacyProofEnvelopeInput & {
-    proofEnvelope?: BinaryLike;
-    proof_envelope?: BinaryLike;
-  },
-): ResearchProtocolInstruction;
-
-export function buildPqMaspStarkTransferInstruction(
-  input: PrivacyProofEnvelopeInput & {
-    proofEnvelope?: BinaryLike;
-    proof_envelope?: BinaryLike;
-  },
-): ResearchProtocolInstruction;
-
-export function generateMlDsaKeyPair(): never;
-
-export function encapsulateMlKem(): never;
-
-export function buildRangeCommitment(
-  input: RangeCommitmentInput,
-): RangeCommitmentDescriptor;
-
-export function buildVeRangeDevProofFixture(
-  input: VeRangeDevProofFixtureInput,
-): VeRangeDevProofFixture;
-
-export function buildVeRangeProofEnvelope(
-  input: VeRangeProofEnvelopeInput,
-): Buffer;
-
-export function buildVeRangeProofV1(input: VeRangeProofV1Input): Buffer;
-
-export function verifyVeRangeProofLocally(
-  input: VeRangeLocalVerificationInput | BinaryLike,
-): VeRangeLocalVerificationResult;
-
-export function verifyVeRangeProofV1(
-  input: VeRangeProofV1VerificationInput | BinaryLike,
-): VeRangeProofV1VerificationResult;
-
-export function buildPrivacyProofEnvelope(
-  input: PrivacyProofEnvelopeInput,
-): Buffer;
-
-export function buildRegisterPrivacyVerifierKeyInstruction(
-  input: RegisterPrivacyVerifierKeyInstructionInput,
-): object;
-
-export function buildRetirePrivacyVerifierKeyInstruction(
-  input: RetirePrivacyVerifierKeyInstructionInput,
-): object;
-
 export function buildRegisterZkAssetInstruction(
   input: RegisterZkAssetInstructionInput,
-): object;
-
-export function buildRegisterZkAceIdentityCommitmentInstruction(
-  input: RegisterZkAceIdentityCommitmentInstructionInput,
-): object;
-
-export function buildRotateZkAceIdentityCommitmentInstruction(
-  input: RotateZkAceIdentityCommitmentInstructionInput,
-): object;
-
-export function buildRevokeZkAceIdentityCommitmentInstruction(
-  input: RevokeZkAceIdentityCommitmentInstructionInput,
-): object;
-
-export function buildZkAceAuthorizationProofV1(
-  input: ZkAceAuthorizationProofV1Input,
-): ZkAceAuthorizationProofV1;
-
-export function buildZkAceAuthorizedTransferInstruction(
-  input: ZkAceAuthorizedTransferInstructionInput,
 ): object;
 
 export function buildScheduleConfidentialPolicyTransitionInstruction(

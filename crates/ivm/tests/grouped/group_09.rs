@@ -26,8 +26,6 @@ mod wsv_host_account_admin;
 mod wsv_host_admin_tlv;
 #[path = "../wsv_host_decode_syscalls.rs"]
 mod wsv_host_decode_syscalls;
-#[path = "../wsv_host_execute_query_envelope.rs"]
-mod wsv_host_execute_query_envelope;
 #[path = "../wsv_host_grant_revoke_tlv.rs"]
 mod wsv_host_grant_revoke_tlv;
 #[path = "../wsv_host_input_publish_tlv.rs"]
@@ -38,6 +36,8 @@ mod wsv_host_nft_tlv;
 mod wsv_host_nft_unregister_positive;
 #[path = "../wsv_host_pointer_tlv.rs"]
 mod wsv_host_pointer_tlv;
+#[path = "../wsv_host_query_boundary.rs"]
+mod wsv_host_query_boundary;
 #[path = "../wsv_host_register_account_asset_tlv.rs"]
 mod wsv_host_register_account_asset_tlv;
 #[path = "../wsv_host_register_domain_tlv.rs"]

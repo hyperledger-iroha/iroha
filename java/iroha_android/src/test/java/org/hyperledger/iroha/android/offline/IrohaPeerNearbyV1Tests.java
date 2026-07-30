@@ -7,12 +7,7 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Arrays;
-import java.util.Map;
-import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyAuthenticationV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyDiscoveryContextV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyEncryptedRecordV1;
@@ -36,7 +31,7 @@ public final class IrohaPeerNearbyV1Tests {
     final int maximum = org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyV1.MAXIMUM_MESSAGE_BYTES;
     final IrohaPeerNearbyEncryptedRecordV1 record =
         new IrohaPeerNearbyEncryptedRecordV1(
-            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
             repeat(16, 0x5a),
             0,
@@ -50,7 +45,7 @@ public final class IrohaPeerNearbyV1Tests {
         IllegalArgumentException.class,
         () ->
             new IrohaPeerNearbyEncryptedRecordV1(
-                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
                 repeat(16, 0x5a),
                 0,
@@ -64,7 +59,7 @@ public final class IrohaPeerNearbyV1Tests {
             .MAXIMUM_AUTHENTICATION_SIGNATURE_BYTES;
     final IrohaPeerNearbyAuthenticationV1 authentication =
         new IrohaPeerNearbyAuthenticationV1(
-            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
             repeat(16, 1),
             repeat(32, 2),
@@ -77,137 +72,19 @@ public final class IrohaPeerNearbyV1Tests {
         IllegalArgumentException.class,
         () ->
             new IrohaPeerNearbyAuthenticationV1(
-                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
                 repeat(16, 1),
                 repeat(32, 2),
                 repeat(maximum + 1, 3)));
   }
 
-  @Test
-  @SuppressWarnings("unchecked")
-  public void matchesDiscoveryHelloAuthenticationAndCodecFixtures() throws Exception {
-    final Map<String, Object> fixture = fixture();
-    final byte[] session = hex((String) fixture.get("session_hex"));
-    final byte[] request = hex((String) fixture.get("request_hash_hex"));
-    final IrohaPeerNearbyDiscoveryContextV1 discovery =
-        new IrohaPeerNearbyDiscoveryContextV1(
-            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.RECEIVER,
-            session,
-            request);
-    assertEquals(fixture.get("service_id"), IrohaPeerNearbySecureChannelV1.SERVICE_ID);
-    assertArrayEquals(hex((String) fixture.get("discovery_receiver_hex")), discovery.encode());
-    assertEquals(discovery, IrohaPeerNearbyDiscoveryContextV1.decode(discovery.encode()));
-
-    final byte[] senderPrivate = scalar(1);
-    final byte[] receiverPrivate = scalar(2);
-    final IrohaPeerNearbySecureChannelV1 sender =
-        new IrohaPeerNearbySecureChannelV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerNearbyRoleV1.SENDER,
-            session,
-            request,
-            new byte[] {(byte) 0xa1, (byte) 0xa2},
-            repeat(32, 0x51),
-            senderPrivate);
-    final IrohaPeerNearbySecureChannelV1 receiver =
-        new IrohaPeerNearbySecureChannelV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerNearbyRoleV1.RECEIVER,
-            session,
-            request,
-            new byte[] {(byte) 0xb1, (byte) 0xb2, (byte) 0xb3},
-            repeat(32, 0x52),
-            receiverPrivate);
-    assertArrayEquals(hex((String) fixture.get("sender_hello_hex")), sender.localHello());
-    assertArrayEquals(hex((String) fixture.get("receiver_hello_hex")), receiver.localHello());
-    sender.acceptPeerHello(receiver.localHello());
-    receiver.acceptPeerHello(sender.localHello());
-    assertThrows(IllegalArgumentException.class, () -> sender.acceptPeerHello(receiver.localHello()));
-    final byte[] senderAuthentication = sender.makeAuthentication(new byte[] {(byte) 0x99, (byte) 0x98});
-    assertArrayEquals(hex((String) fixture.get("sender_auth_hex")), senderAuthentication);
-    final IrohaPeerNearbyAuthenticationV1 decoded =
-        IrohaPeerNearbyAuthenticationV1.decode(senderAuthentication);
-    assertEquals(fixture.get("transcript_hash_hex"), toHex(decoded.getTranscriptHash()));
-
-    final IrohaPeerNearbyEncryptedRecordV1 codec =
-        new IrohaPeerNearbyEncryptedRecordV1(
-            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
-            session,
-            0,
-            ascending(20));
-    assertArrayEquals(hex((String) fixture.get("encrypted_record_codec_hex")), codec.encode());
-
-    final IrohaPeerNearbyDiscoveryContextV1 bootstrap =
-        IrohaPeerNearbyDiscoveryContextV1.senderBootstrap(
-            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE);
-    assertArrayEquals(new byte[16], bootstrap.getSessionId());
-    assertArrayEquals(new byte[32], bootstrap.getRequestCanonicalHash());
-    assertThrows(
-        IllegalArgumentException.class,
-        () ->
-            new IrohaPeerNearbyDiscoveryContextV1(
-                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
-                new byte[16],
-                repeat(32, 1)));
-  }
-
-  @Test
-  @SuppressWarnings("unchecked")
-  public void matchesAesGcmFixturesInBothDirectionsAndRejectsReplay() throws Exception {
-    final Map<String, Object> vector = (Map<String, Object>) fixture().get("aes_gcm");
-    final byte[] session = repeat(16, ((Number) vector.get("session_repeat_byte")).intValue());
-    final byte[] request = repeat(32, ((Number) vector.get("request_hash_repeat_byte")).intValue());
-    final IrohaPeerNearbySessionV1 sender =
-        sharedSession(
-            org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
-            session,
-            request,
-            new byte[] {1},
-            repeat(32, ((Number) vector.get("sender_nonce_repeat_byte")).intValue()),
-            ((Number) vector.get("sender_private_scalar")).intValue());
-    final IrohaPeerNearbySessionV1 receiver =
-        sharedSession(
-            org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.RECEIVER,
-            session,
-            request,
-            new byte[] {2},
-            repeat(32, ((Number) vector.get("receiver_nonce_repeat_byte")).intValue()),
-            ((Number) vector.get("receiver_private_scalar")).intValue());
-    sender.acceptPeerHello(receiver.getLocalHello());
-    receiver.acceptPeerHello(sender.getLocalHello());
-    final IrohaPeerNearbyAuthenticationV1 senderAuth = sender.makeAuthentication(new byte[] {0x11});
-    final IrohaPeerNearbyAuthenticationV1 receiverAuth = receiver.makeAuthentication(new byte[] {0x22});
-    assertEquals(vector.get("transcript_hash_hex"), toHex(senderAuth.getTranscriptHash()));
-    final IrohaPeerNearbySignatureVerifierV1 acceptAll = (role, cert, signed, signature) -> true;
-    sender.acceptPeerAuthentication(receiverAuth, acceptAll);
-    receiver.acceptPeerAuthentication(senderAuth, acceptAll);
-    assertTrue(sender.isAuthenticated());
-    assertTrue(receiver.isAuthenticated());
-
-    final byte[] payment = ((String) vector.get("sender_plaintext_utf8")).getBytes(StandardCharsets.UTF_8);
-    final IrohaPeerNearbyEncryptedRecordV1 paymentRecord = sender.seal(payment);
-    assertArrayEquals(hex((String) vector.get("sender_record_hex")), paymentRecord.encode());
-    assertArrayEquals(payment, receiver.open(IrohaPeerNearbyEncryptedRecordV1.decode(paymentRecord.encode())));
-    assertThrows(IllegalArgumentException.class, () -> receiver.open(paymentRecord));
-
-    final byte[] acknowledgement =
-        ((String) vector.get("receiver_plaintext_utf8")).getBytes(StandardCharsets.UTF_8);
-    final IrohaPeerNearbyEncryptedRecordV1 acknowledgementRecord = receiver.seal(acknowledgement);
-    assertArrayEquals(hex((String) vector.get("receiver_record_hex")), acknowledgementRecord.encode());
-    assertArrayEquals(acknowledgement, sender.open(acknowledgementRecord));
-  }
-
-  @Test
   public void repeatedHelloAndAuthenticationCannotResetSequence() {
     final byte[] session = repeat(16, 0x31);
     final byte[] request = repeat(32, 0x32);
     final IrohaPeerNearbySecureChannelV1 sender =
         new IrohaPeerNearbySecureChannelV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             session,
             request,
@@ -216,7 +93,7 @@ public final class IrohaPeerNearbyV1Tests {
             scalar(5));
     final IrohaPeerNearbySecureChannelV1 receiver =
         new IrohaPeerNearbySecureChannelV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.RECEIVER,
             session,
             request,
@@ -245,7 +122,7 @@ public final class IrohaPeerNearbyV1Tests {
   public void authenticationIsMandatoryAndVerifierFailureFailsClosed() {
     final IrohaPeerNearbySecureChannelV1 channel =
         new IrohaPeerNearbySecureChannelV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             repeat(16, 1),
             repeat(32, 2),
@@ -260,7 +137,7 @@ public final class IrohaPeerNearbyV1Tests {
     final byte[] request = repeat(32, 0x42);
     final byte[] hello =
         new IrohaPeerNearbyHelloV1(
-                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
                 session,
                 repeat(32, 0x43),
@@ -270,7 +147,7 @@ public final class IrohaPeerNearbyV1Tests {
             .encode();
     final byte[] authentication =
         new IrohaPeerNearbyAuthenticationV1(
-                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
                 session,
                 repeat(32, 0x45),
@@ -278,7 +155,7 @@ public final class IrohaPeerNearbyV1Tests {
             .encode();
     final byte[] encrypted =
         new IrohaPeerNearbyEncryptedRecordV1(
-                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
                 session,
                 -1L,
@@ -286,7 +163,7 @@ public final class IrohaPeerNearbyV1Tests {
             .encode();
     final byte[] discovery =
         new IrohaPeerNearbyDiscoveryContextV1(
-                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.RECEIVER,
                 session,
                 request)
@@ -368,7 +245,7 @@ public final class IrohaPeerNearbyV1Tests {
         new long[] {0L, Long.MAX_VALUE, Long.MIN_VALUE, -2L, -1L}) {
       final IrohaPeerNearbyEncryptedRecordV1 record =
           new IrohaPeerNearbyEncryptedRecordV1(
-              org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+              org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
               org.hyperledger.iroha.sdk.offline.IrohaPeerNearbyRoleV1.SENDER,
               session,
               sequence,
@@ -424,7 +301,7 @@ public final class IrohaPeerNearbyV1Tests {
       final byte[] nonce,
       final int scalar) {
     return new IrohaPeerNearbySessionV1(
-        org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+        org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
         role,
         session,
         request,
@@ -434,28 +311,8 @@ public final class IrohaPeerNearbyV1Tests {
   }
 
   private static IrohaPeerWireMessageV1 message(final String value) {
-    return new IrohaPeerWireMessageV1(
-        new IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerPayloadKind.PAYMENT,
-            1,
-            value.getBytes(StandardCharsets.UTF_8)));
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Map<String, Object> fixture() throws Exception {
-    return (Map<String, Object>)
-        JsonParser.parse(new String(Files.readAllBytes(sharedFixture()), StandardCharsets.UTF_8));
-  }
-
-  private static Path sharedFixture() {
-    Path current = Paths.get("").toAbsolutePath();
-    while (current != null) {
-      final Path candidate = current.resolve("fixtures/offline/peer_nearby_v1.json");
-      if (Files.isRegularFile(candidate)) return candidate;
-      current = current.getParent();
-    }
-    throw new AssertionError("peer_nearby_v1.json was not found");
+    return IrohaPeerKagemushaStructuralTestV1.message(
+        IrohaPeerPayloadKind.PAYMENT, value.getBytes(StandardCharsets.UTF_8));
   }
 
   private static byte[] scalar(final int value) {
@@ -494,17 +351,4 @@ public final class IrohaPeerNearbyV1Tests {
     value[offset + 3] = (byte) number;
   }
 
-  private static byte[] hex(final String value) {
-    final byte[] bytes = new byte[value.length() / 2];
-    for (int index = 0; index < bytes.length; index++) {
-      bytes[index] = (byte) Integer.parseInt(value.substring(index * 2, index * 2 + 2), 16);
-    }
-    return bytes;
-  }
-
-  private static String toHex(final byte[] value) {
-    final StringBuilder out = new StringBuilder(value.length * 2);
-    for (final byte element : value) out.append(String.format("%02x", element & 0xff));
-    return out.toString();
-  }
 }

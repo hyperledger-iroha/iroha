@@ -8,12 +8,18 @@ use core::fmt;
 
 use thiserror::Error;
 
+#[cfg(test)]
+use super::{
+    VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
+    VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
+};
 use super::{
     VegaT256ScalarV1 as Scalar,
     circuit::{CircuitAssignment, CircuitBuilder, CircuitError},
     date::{
-        enforce_completed_age, enforce_not_before, enforce_strictly_after, parse_full_date,
-        parse_rfc3339_seconds, public_age_threshold, public_date,
+        enforce_completed_age, enforce_not_before, enforce_rfc3339_not_before,
+        enforce_strictly_after, parse_full_date, parse_rfc3339_seconds, public_age_threshold,
+        public_date,
     },
     figure9_layout::FIGURE9_LAYOUT,
     p256::{private_point_from_be_bytes, public_point, verify_es256},
@@ -78,8 +84,8 @@ impl<'a> VegaMdlFigure9WitnessV1<'a> {
     /// # Errors
     ///
     /// Returns [`VegaMdlFigure9ErrorV1::InvalidWitnessLength`] unless the
-    /// issuer COSE `Sig_structure` is exactly 368 bytes and the Tag-24 birth
-    /// item is exactly 92 bytes.
+    /// issuer COSE `Sig_structure` and Tag-24 birth item have their one
+    /// canonical released widths.
     pub fn new(
         issuer_authentication_sig_structure: &'a [u8],
         birth_date_issuer_signed_item: &'a [u8],
@@ -238,9 +244,9 @@ pub(super) fn synthesize_figure9(
         PRESENTATION_DAY_INDEX,
     )?;
     let (threshold, _) = public_age_threshold(&mut builder, AGE_THRESHOLD_INDEX)?;
-    enforce_not_before(&mut builder, &valid_from, &signed)?;
-    enforce_not_before(&mut builder, &presentation, &valid_from)?;
-    enforce_strictly_after(&mut builder, &valid_until, &presentation)?;
+    enforce_rfc3339_not_before(&mut builder, &valid_from, &signed)?;
+    enforce_not_before(&mut builder, &presentation, &valid_from.date)?;
+    enforce_strictly_after(&mut builder, &valid_until.date, &presentation)?;
     enforce_completed_age(&mut builder, &birth_date, &presentation, threshold)?;
 
     let issuer_digest = sha256(&mut builder, &issuer)?;
@@ -501,6 +507,11 @@ pub(super) mod tests {
         let layout = &*FIGURE9_LAYOUT;
         let issuer = layout.issuer_template.clone();
         let birth = layout.birth_template.clone();
+        assert_eq!(
+            issuer.len(),
+            VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1
+        );
+        assert_eq!(birth.len(), VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1);
         validate_vega_mdl_figure9_encoding_v1(&issuer, &birth).expect("template encoding");
 
         for (index, fixed) in layout.issuer_fixed.iter().copied().enumerate() {
@@ -527,9 +538,13 @@ pub(super) mod tests {
         assert!(
             validate_vega_mdl_figure9_encoding_v1(&issuer[..issuer.len() - 1], &birth).is_err()
         );
-        let mut trailing = birth.clone();
-        trailing.push(0);
-        assert!(validate_vega_mdl_figure9_encoding_v1(&issuer, &trailing).is_err());
+        let mut overlong_issuer = issuer.clone();
+        overlong_issuer.push(0);
+        assert!(validate_vega_mdl_figure9_encoding_v1(&overlong_issuer, &birth).is_err());
+        assert!(validate_vega_mdl_figure9_encoding_v1(&issuer, &birth[..birth.len() - 1]).is_err());
+        let mut overlong_birth = birth.clone();
+        overlong_birth.push(0);
+        assert!(validate_vega_mdl_figure9_encoding_v1(&issuer, &overlong_birth).is_err());
     }
 
     #[test]

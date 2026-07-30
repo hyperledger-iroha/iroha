@@ -116,11 +116,10 @@ class IrohaPeerQRFrameV1(
             )
         }
 
-        private fun maximumEncodedBytes(profile: IrohaPeerPayloadProfile): Int = when (profile) {
-            IrohaPeerPayloadProfile.OFFLINE_NOTE -> IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES
-            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND ->
-                IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES
-        }
+        private fun maximumEncodedBytes(
+            @Suppress("UNUSED_PARAMETER") profile: IrohaPeerPayloadProfile,
+        ): Int =
+            IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES
 
         private fun maximumDataShards(profile: IrohaPeerPayloadProfile): Int =
             (maximumEncodedBytes(profile) + 255) / 256
@@ -551,14 +550,9 @@ class IrohaPeerQRScanSessionV1 @JvmOverloads constructor(
         }
 
         try {
-            val maximumShards = when (frame.profile) {
-                IrohaPeerPayloadProfile.OFFLINE_NOTE ->
-                    (IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES +
-                        IrohaPeerQRCodecV1.SHARD_BYTES - 1) / IrohaPeerQRCodecV1.SHARD_BYTES
-                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND ->
-                    (IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES +
-                        IrohaPeerQRCodecV1.SHARD_BYTES - 1) / IrohaPeerQRCodecV1.SHARD_BYTES
-            }
+            val maximumShards =
+                (IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES +
+                    IrohaPeerQRCodecV1.SHARD_BYTES - 1) / IrohaPeerQRCodecV1.SHARD_BYTES
             require(frame.total <= maximumShards) { "IRQR total exceeds profile bound" }
             candidate.declaredTotal?.let {
                 require(it == frame.total) { "Conflicting IRQR frame total" }

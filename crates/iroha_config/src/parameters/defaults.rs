@@ -197,6 +197,29 @@ pub mod soracloud_runtime {
     pub const INROU_ENABLED: bool = false;
     /// Default hosted-runtime posture for Inrou nodes.
     pub const INROU_PROXY_ONLY: bool = false;
+    /// Maximum compressed size accepted for one Inrou bundle archive.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES: NonZeroU64 =
+        nonzero!(512_u64 * 1024 * 1024);
+    /// Hard production ceiling for compressed Inrou bundle archives.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
+    /// Maximum decoded size accepted for one Inrou bundle archive.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES: NonZeroU64 =
+        nonzero!(3_u64 * 1024 * 1024 * 1024);
+    /// Hard production ceiling for decoded Inrou bundle archives.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT: u64 = 3 * 1024 * 1024 * 1024;
+    /// Maximum number of entries accepted from one Inrou bundle archive.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_ENTRIES: NonZeroU32 = nonzero!(4_096_u32);
+    /// Hard protocol ceiling for entries in one Inrou bundle archive.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_ENTRIES_LIMIT: u32 = 65_536;
+    /// Maximum decoded size accepted for one file in an Inrou bundle archive.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
+    /// Hard production ceiling for one decoded Inrou bundle file.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
+    /// Maximum aggregate decoded file size accepted from one Inrou bundle archive.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES: NonZeroU64 =
+        nonzero!(2_u64 * 1024 * 1024 * 1024);
+    /// Hard production ceiling for aggregate decoded Inrou bundle file bytes.
+    pub const INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
     /// Default startup grace window in milliseconds for Inrou microVMs.
     pub const INROU_START_GRACE_MS: u64 = 30_000;
     /// Default shutdown grace window in milliseconds for Inrou microVMs.
@@ -230,10 +253,24 @@ pub mod soracloud_runtime {
         pub const ALLOW_INFERENCE_BRIDGE_FALLBACK: bool = false;
         /// Default maximum number of Hub files imported into the shared local cache for one source.
         pub const IMPORT_MAX_FILES: u32 = 32;
+        /// Hard maximum number of Hub files imported for one source.
+        pub const IMPORT_MAX_FILES_LIMIT: u32 = 128;
         /// Default maximum size of one imported Hub file.
         pub const IMPORT_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+        /// Hard maximum size of one imported Hub file.
+        pub const IMPORT_MAX_FILE_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
         /// Default aggregate import budget for one Hub source.
         pub const IMPORT_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+        /// Hard aggregate import budget for one Hub source.
+        pub const IMPORT_MAX_TOTAL_BYTES_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+        /// Default maximum in-memory Hugging Face model-info response.
+        pub const MODEL_INFO_MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+        /// Hard maximum in-memory Hugging Face model-info response.
+        pub const MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
+        /// Default maximum in-memory Hugging Face inference response.
+        pub const INFERENCE_MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+        /// Hard maximum in-memory Hugging Face inference response.
+        pub const INFERENCE_MAX_RESPONSE_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
 
         /// Default file-selection allowlist used by the HF importer.
         pub fn import_file_allowlist() -> Vec<String> {
@@ -1441,7 +1478,7 @@ pub mod sorafs {
                 /// Hard production ceiling for one canonical outbox checkpoint.
                 pub const CHECKPOINT_MAX_BYTES_LIMIT: u64 = 192 * 1024 * 1024;
                 /// Maximum canonical outbox checkpoint size.
-                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(160 * 1024 * 1024);
                 /// Deadline for one external sealed-checkpoint operation.
                 pub const CHECKPOINT_OPERATION_TIMEOUT_MS: u64 = 30_000;
                 /// Source-claim lease duration.
@@ -1452,12 +1489,95 @@ pub mod sorafs {
                 pub const RETRY_MAX_DELAY_MS: u64 = 5 * 60_000;
                 /// Maximum finalized-block age of a terminal tombstone.
                 pub const TERMINAL_RETENTION_BLOCKS: u64 = 100_000;
+                /// Canonical checkpoint framing reserved independently of entries.
+                pub const CHECKPOINT_CANONICAL_OVERHEAD_BYTES_V1: u64 = 4 * 1024;
+                /// Canonical non-payload bytes reserved for one active entry.
+                ///
+                /// This covers three separately retained, canonically bounded
+                /// account identities, the bounded chain identifier, immutable
+                /// authorization text, state/cursor material, and Norito framing.
+                /// The unsigned payload and signed transaction are counted
+                /// separately by [`worst_case_checkpoint_bytes_v1`].
+                pub const ACTIVE_ENTRY_CANONICAL_OVERHEAD_BYTES_V1: u64 = 64 * 1024;
+                /// Maximum canonical bytes for a chain identifier retained
+                /// outside the completion transaction payload.
+                pub const COMPLETION_CHAIN_ID_MAX_BYTES_V1: usize = 255;
+                /// Maximum canonical bytes for each retained completion account identity.
+                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 = 8 * 1024;
+                /// Canonical reserve for one immutable finalized authorization.
+                ///
+                /// The provider-ingest runtime validates the largest variable
+                /// fields at 256 bytes for the manifest CID and 128 bytes for
+                /// the chunker handle. This reserve also covers the fixed job,
+                /// cursor, provider, order, manifest, chunk-plan, PoR, and
+                /// content-length fields.
+                pub const TERMINAL_AUTHORIZATION_CANONICAL_RESERVE_BYTES_V1: u64 = 4 * 1024;
+                /// Canonical reserve for terminal evidence other than `completed_by`.
+                ///
+                /// This includes the bounded manifest identifier, completion
+                /// epoch, committed hash, finalized cursor, enum tag, and
+                /// length framing for the largest `FinalizedCompleted` variant.
+                pub const TERMINAL_OUTCOME_FIXED_CANONICAL_RESERVE_BYTES_V1: u64 = 2 * 1024;
+                /// Canonical entry/container framing reserved around terminal fields.
+                pub const TERMINAL_ENTRY_CANONICAL_FRAMING_RESERVE_BYTES_V1: u64 = 2 * 1024;
+                /// Canonical bytes reserved for one payload-free terminal entry.
+                ///
+                /// The bound is derived from the immutable authorization, one
+                /// explicitly bounded completion account, the largest terminal
+                /// outcome, and entry/container framing. A canonical fixture
+                /// maximizes the authorization fields and outcome variant,
+                /// while explicit account validation enforces the remaining
+                /// identity reserve.
+                pub const TERMINAL_ENTRY_CANONICAL_OVERHEAD_BYTES_V1: u64 =
+                    TERMINAL_AUTHORIZATION_CANONICAL_RESERVE_BYTES_V1
+                        + COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1
+                        + TERMINAL_OUTCOME_FIXED_CANONICAL_RESERVE_BYTES_V1
+                        + TERMINAL_ENTRY_CANONICAL_FRAMING_RESERVE_BYTES_V1;
+                /// Canonical envelope headroom reserved after encoding the unsigned
+                /// completion transaction.
+                pub const SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1: u64 = 4 * 1024;
+                /// Production floor for one canonical signed completion transaction.
+                ///
+                /// The daemon's canonical completion-payload fixture is encoded,
+                /// signed, round-tripped, and checked against this floor. Keeping
+                /// 64 KiB available avoids a syntactically valid but operationally
+                /// unusable configuration while remaining well below the default.
+                pub const MAX_SIGNED_TRANSACTION_BYTES_MIN: u64 = 64 * 1024;
                 /// Hard production ceiling for one canonical signed completion transaction.
-                pub const MAX_SIGNED_TRANSACTION_BYTES_LIMIT: u64 = 128 * 1024 * 1024;
+                ///
+                /// Two retained copies plus structural state still fit beneath
+                /// the 192 MiB checkpoint ceiling at this 64 MiB limit.
+                pub const MAX_SIGNED_TRANSACTION_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
                 /// Maximum canonical signed completion transaction size.
                 pub const MAX_SIGNED_TRANSACTION_BYTES: Bytes<u64> = Bytes(256 * 1024);
                 /// Maximum payload-free rows returned by one status page.
                 pub const MAX_STATUS_PAGE_SIZE: usize = 256;
+
+                /// Conservatively bound a full canonical outbox checkpoint.
+                ///
+                /// Each active entry can retain both an unsigned
+                /// `expected_payload` and the complete `signed_transaction`.
+                /// Every conversion and addition is checked so impossible
+                /// deployment policies fail closed instead of wrapping.
+                #[must_use]
+                pub fn worst_case_checkpoint_bytes_v1(
+                    max_active_entries: usize,
+                    max_terminal_entries: usize,
+                    max_signed_transaction_bytes: u64,
+                ) -> Option<u64> {
+                    let active_entries = u64::try_from(max_active_entries).ok()?;
+                    let terminal_entries = u64::try_from(max_terminal_entries).ok()?;
+                    let retained_active_payload_bytes =
+                        max_signed_transaction_bytes.checked_mul(2)?;
+                    let active_entry_bytes = retained_active_payload_bytes
+                        .checked_add(ACTIVE_ENTRY_CANONICAL_OVERHEAD_BYTES_V1)?;
+                    let active_bytes = active_entries.checked_mul(active_entry_bytes)?;
+                    let terminal_bytes =
+                        terminal_entries.checked_mul(TERMINAL_ENTRY_CANONICAL_OVERHEAD_BYTES_V1)?;
+                    CHECKPOINT_CANONICAL_OVERHEAD_BYTES_V1
+                        .checked_add(active_bytes)?
+                        .checked_add(terminal_bytes)
+                }
             }
         }
         /// Defaults for the durable admission-bound PDP provider protocol.

@@ -59,7 +59,7 @@ translation_last_reviewed: 2026-02-07
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - መገልገያዎችን፣ ፕሮፖዛል፣ የውሳኔ አሰጣጥ ሪፖርት እና መዝገብ የያዘ PR አስገባ

@@ -5,9 +5,10 @@ use norito::codec::{Decode, Encode};
 
 use crate::{
     AssetDefinitionId, ChainId,
-    account::{AccountId, address::ChainDiscriminantGuard},
-    privacy::{PrivacyNullifierV1, ZkAcePqAuthorizationStatementV1},
-    proof::VerifyingKeyId,
+    account::AccountId,
+    privacy::{
+        PrivacyNullifierV1, ZkAcePqAuthorizationStatementV1, privacy_protocol_label_is_reserved_v1,
+    },
 };
 
 /// Canonical ZK-ACE circuit identifier for post-quantum authorization v0.
@@ -66,8 +67,11 @@ pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authori
 /// First executable ZK-ACE action class.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
 
-const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
-const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+/// Permanent Norito schema identity for the typed ZK-ACE public-input wrapper.
+pub const ZK_ACE_PRIVACY_PUBLIC_INPUTS_SCHEMA_NAME_V1: &str =
+    "iroha.privacy.zk-ace.public-inputs.v1";
+/// Exact type-name-independent transfer-digest preimage schema.
+pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=chain-id:utf8|part6=action-class:utf8|part7=policy-digest:bytes32";
 
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
@@ -221,6 +225,8 @@ pub enum OpenVerifyEnvelopeValidationError {
     EmptyCircuitId,
     /// The circuit identifier contains unsupported characters or delimiters.
     InvalidCircuitId,
+    /// The circuit identifier reuses an active or retired privacy-protocol label.
+    ReservedPrivacyProtocolCircuitId,
     /// The circuit identifier exceeds configured bounds.
     CircuitIdTooLarge {
         /// Observed circuit identifier byte length.
@@ -270,6 +276,10 @@ impl core::fmt::Display for OpenVerifyEnvelopeValidationError {
             Self::InvalidCircuitId => write!(
                 f,
                 "OpenVerifyEnvelope circuit id must be a portable canonical identifier"
+            ),
+            Self::ReservedPrivacyProtocolCircuitId => write!(
+                f,
+                "OpenVerifyEnvelope circuit id uses a reserved privacy protocol label"
             ),
             Self::CircuitIdTooLarge { len, max } => write!(
                 f,
@@ -402,6 +412,9 @@ impl OpenVerifyEnvelope {
         if !open_verify_circuit_id_is_portable(&self.circuit_id) {
             return Err(OpenVerifyEnvelopeValidationError::InvalidCircuitId);
         }
+        if open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(&self.circuit_id) {
+            return Err(OpenVerifyEnvelopeValidationError::ReservedPrivacyProtocolCircuitId);
+        }
         if bounds.require_nonzero_vk_hash && self.vk_hash.iter().all(|byte| *byte == 0) {
             return Err(OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash);
         }
@@ -470,6 +483,18 @@ pub fn open_verify_circuit_id_is_portable(circuit_id: &str) -> bool {
     })
 }
 
+/// Return whether an `OpenVerify` circuit identifier reuses a privacy label.
+///
+/// Privacy labels are reserved as complete `:`- or `/`-delimited circuit
+/// namespace components. This closes bare, backend-qualified, and nested
+/// generic proof aliases without rejecting portable near-miss identifiers.
+#[must_use]
+pub fn open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(circuit_id: &str) -> bool {
+    circuit_id
+        .split([':', '/'])
+        .any(privacy_protocol_label_is_reserved_v1)
+}
+
 // Note: Norito serialization is derived via `Encode`/`Decode` (packed structs compatible)
 
 /// STARK/FRI proof payload embedded inside [`OpenVerifyEnvelope::proof_bytes`] when
@@ -497,53 +522,6 @@ pub struct StarkFriOpenProofV1 {
     pub envelope_bytes: Vec<u8>,
 }
 
-/// Canonical public input record proven by `zk_ace_pq_authorization_v0`.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ZkAcePublicInputsV1 {
-    /// Public-input schema version.
-    pub version: u16,
-    /// On-chain identity commitment being authorized.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub identity_commitment: [u8; 32],
-    /// Digest of the visible action fields.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub tx_digest: [u8; 32],
-    /// Digest of the complete typed authorization context.
-    ///
-    /// This separately commits transaction intent, governed artifacts, fee,
-    /// authorization epoch, and trusted genesis. Replay-nullifier derivation
-    /// uses this word; `tx_digest` remains the independently checked visible
-    /// transfer relation.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub authorization_digest: [u8; 32],
-    /// Chain id bound into the replay-nullifier domain.
-    pub chain_id: ChainId,
-    /// Domain separation tag.
-    pub domain_tag: String,
-    /// Action class authorized by this proof.
-    pub action_class: String,
-    /// Replay-prevention nullifier derived inside the circuit.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub replay_nullifier: [u8; 32],
-    /// Policy hash bound to the registered identity record.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub policy_hash: [u8; 32],
-    /// Source account whose transfer authority is proven.
-    pub from: AccountId,
-    /// Destination account.
-    pub to: AccountId,
-    /// Transparent asset definition being transferred.
-    pub asset: AssetDefinitionId,
-    /// Transparent amount being transferred.
-    pub amount: u128,
-    /// Verifier key that must validate the proof.
-    pub verifier_key_id: VerifyingKeyId,
-}
-
 /// Exact public inputs accepted by the native privacy ZK-ACE engine.
 ///
 /// The consensus statement is carried without a second, partially overlapping
@@ -551,6 +529,7 @@ pub struct ZkAcePublicInputsV1 {
 /// prevents the same proof from being replayed on a chain that happens to use
 /// the same textual chain identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[norito(schema_name = "iroha.privacy.zk-ace.public-inputs.v1")]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -563,24 +542,6 @@ pub struct ZkAcePrivacyPublicInputsV1 {
     /// Trusted genesis-block digest.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
-}
-
-/// Private witness used by the ZK-ACE prover.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ZkAceWitnessV1 {
-    /// External DIDP identity root.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub identity_root: [u8; 32],
-    /// Identity blinding factor.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub identity_blinding: [u8; 32],
-    /// Replay secret used to derive per-action nullifiers.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub replay_secret: [u8; 32],
 }
 
 /// Canonical byte packing used by ZK-ACE Poseidon2-domain hashing.
@@ -596,41 +557,6 @@ pub struct ZkAcePackedBytesV1 {
     pub limbs: Vec<u64>,
 }
 
-impl ZkAcePublicInputsV1 {
-    /// Construct v1 public inputs for the transparent-transfer action.
-    #[allow(clippy::too_many_arguments)]
-    pub fn transparent_transfer(
-        identity_commitment: [u8; 32],
-        tx_digest: [u8; 32],
-        authorization_digest: [u8; 32],
-        chain_id: ChainId,
-        replay_nullifier: [u8; 32],
-        policy_hash: [u8; 32],
-        from: AccountId,
-        to: AccountId,
-        asset: AssetDefinitionId,
-        amount: u128,
-        verifier_key_id: VerifyingKeyId,
-    ) -> Self {
-        Self {
-            version: 1,
-            identity_commitment,
-            tx_digest,
-            authorization_digest,
-            chain_id,
-            domain_tag: ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-            action_class: ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-            replay_nullifier,
-            policy_hash,
-            from,
-            to,
-            asset,
-            amount,
-            verifier_key_id,
-        }
-    }
-}
-
 impl ZkAcePrivacyPublicInputsV1 {
     /// Construct the only admitted first-release public-input schema.
     #[must_use]
@@ -640,46 +566,6 @@ impl ZkAcePrivacyPublicInputsV1 {
             statement,
             genesis_hash,
         }
-    }
-
-    /// Derive the fixed low-level AIR relation inputs.
-    ///
-    /// This is an internal protocol projection, not a second caller-controlled
-    /// wire format. Every field that does not already have a dedicated AIR
-    /// column is committed by `tx_digest`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`norito::Error`] if the typed statement cannot be encoded
-    /// canonically.
-    pub fn to_air_relation_inputs(&self) -> Result<ZkAcePublicInputsV1, norito::Error> {
-        let statement = &self.statement;
-        let authorization_digest = derive_zk_ace_privacy_authorization_digest(self)?;
-        let transfer_digest = derive_zk_ace_transfer_digest(
-            &statement.source,
-            &statement.destination,
-            &statement.asset_definition_id,
-            statement.amount,
-            &statement.context.chain_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            statement.policy_digest.as_bytes(),
-        );
-        Ok(ZkAcePublicInputsV1::transparent_transfer(
-            statement.identity_commitment.into_bytes(),
-            transfer_digest,
-            authorization_digest,
-            statement.context.chain_id.clone(),
-            statement.replay_nullifier.into_bytes(),
-            statement.policy_digest.into_bytes(),
-            statement.source.clone(),
-            statement.destination.clone(),
-            statement.asset_definition_id.clone(),
-            statement.amount,
-            VerifyingKeyId::new(
-                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-                ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            ),
-        ))
     }
 }
 
@@ -700,7 +586,7 @@ pub fn derive_zk_ace_privacy_authorization_digest(
 ) -> Result<[u8; 32], norito::Error> {
     let mut normalized = public_inputs.statement.clone();
     normalized.replay_nullifier = PrivacyNullifierV1::new([0; 32]);
-    let statement_bytes = norito::to_bytes(&normalized)?;
+    let statement_bytes = norito::encode_canonical(&normalized)?;
     Ok(zk_ace_poseidon2_domain_hash(
         b"zk-ace.privacy-authorization.v1",
         &[
@@ -763,44 +649,6 @@ fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     zk_ace_poseidon2_domain_hash(domain, parts)
 }
 
-/// Derive a private prover-side AIR statement digest from public inputs and witness.
-///
-/// # Errors
-///
-/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
-pub fn derive_zk_ace_air_statement_digest(
-    public_inputs: &ZkAcePublicInputsV1,
-    witness: &ZkAceWitnessV1,
-) -> Result<[u8; 32], norito::Error> {
-    let public_bytes = norito::to_bytes(public_inputs)?;
-    Ok(zk_ace_poseidon2_domain_hash(
-        b"zk-ace.air-statement.v1",
-        &[
-            &public_bytes,
-            &witness.identity_root,
-            &witness.identity_blinding,
-            &witness.replay_secret,
-        ],
-    ))
-}
-
-/// Derive the verifier-side public AIR word for a ZK-ACE proof.
-///
-/// # Errors
-///
-/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
-pub fn derive_zk_ace_air_public_digest(
-    public_inputs: &ZkAcePublicInputsV1,
-) -> Result<[u8; 32], norito::Error> {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"zk-ace.air-public.v1");
-    buf.extend_from_slice(&norito::to_bytes(public_inputs)?);
-    Ok(zk_ace_poseidon2_domain_hash(
-        b"zk-ace.air-public-digest.v1",
-        &[&buf],
-    ))
-}
-
 /// Derive the ZK-ACE identity commitment from its private witness components.
 pub fn derive_zk_ace_identity_commitment(
     identity_root: &[u8; 32],
@@ -833,14 +681,16 @@ pub fn derive_zk_ace_replay_nullifier(
     )
 }
 
-fn zk_ace_chain_discriminant_for_chain_id(chain_id: &ChainId) -> Option<u16> {
-    match chain_id.as_str() {
-        "iroha3-taira" | "taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
-        _ => None,
-    }
-}
-
 /// Derive the action digest for a ZK-ACE-authorized transparent asset transfer.
+///
+/// Account identities use their domainless canonical hex payload and the asset
+/// uses its raw canonical UUID. The result is therefore independent of I105
+/// display prefixes, ambient chain-discriminant guards, and Rust type names.
+///
+/// # Errors
+///
+/// Returns a typed error if either account controller cannot be represented by
+/// the canonical domainless account-address encoding.
 pub fn derive_zk_ace_transfer_digest(
     from: &AccountId,
     to: &AccountId,
@@ -849,80 +699,57 @@ pub fn derive_zk_ace_transfer_digest(
     chain_id: &ChainId,
     action_class: &str,
     policy_hash: &[u8; 32],
-) -> [u8; 32] {
-    let _chain_guard =
-        zk_ace_chain_discriminant_for_chain_id(chain_id).map(ChainDiscriminantGuard::enter);
-    let from_literal = from.to_string();
-    let to_literal = to.to_string();
-    let asset_literal = asset.to_string();
+) -> Result<[u8; 32], ZkAceTransferDigestErrorV1> {
+    let from_literal = from
+        .to_canonical_hex()
+        .map_err(|_| ZkAceTransferDigestErrorV1::SourceAccountEncoding)?;
+    let to_literal = to
+        .to_canonical_hex()
+        .map_err(|_| ZkAceTransferDigestErrorV1::DestinationAccountEncoding)?;
+    let asset_bytes = asset.aid_bytes();
     let amount_bytes = amount.to_be_bytes();
 
-    zk_ace_poseidon_bytes(
+    Ok(zk_ace_poseidon_bytes(
         b"zk-ace.transparent-transfer.v1",
         &[
+            ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
             from_literal.as_bytes(),
             to_literal.as_bytes(),
-            asset_literal.as_bytes(),
+            &asset_bytes,
             &amount_bytes,
             chain_id.as_str().as_bytes(),
             action_class.as_bytes(),
             policy_hash,
         ],
-    )
-}
-
-/// Hash canonical public inputs into a STARK public-input word.
-///
-/// # Errors
-///
-/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
-pub fn derive_zk_ace_public_inputs_digest(
-    public_inputs: &ZkAcePublicInputsV1,
-) -> Result<[u8; 32], norito::Error> {
-    let bytes = norito::to_bytes(public_inputs)?;
-    Ok(zk_ace_poseidon2_domain_hash(
-        b"zk-ace.public-inputs.v1",
-        &[&bytes],
     ))
 }
 
-/// Stable schema hash for ZK-ACE v0 transparent-transfer public inputs.
-#[must_use]
-pub fn zk_ace_public_inputs_schema_hash_v1() -> [u8; 32] {
-    zk_ace_poseidon2_domain_hash(
-        b"zk-ace.public-inputs-schema.v1",
-        &[
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.as_bytes(),
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.as_bytes(),
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.as_bytes(),
-            b"version:u32",
-            b"identity_commitment:bytes32",
-            b"tx_digest:bytes32",
-            b"authorization_digest:bytes32",
-            b"chain_id:string",
-            b"domain_tag:string",
-            b"action_class:string",
-            b"replay_nullifier:bytes32",
-            b"policy_hash:bytes32",
-            b"from:account_id",
-            b"to:account_id",
-            b"asset:asset_definition_id",
-            b"amount:u128",
-            b"verifier_key_id:verifying_key_id",
-        ],
-    )
+/// Canonical account encoding failure while deriving a ZK-ACE transfer digest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ZkAceTransferDigestErrorV1 {
+    /// The source account controller has no canonical domainless address encoding.
+    #[error("ZK-ACE source account cannot be encoded canonically")]
+    SourceAccountEncoding,
+    /// The destination account controller has no canonical domainless address encoding.
+    #[error("ZK-ACE destination account cannot be encoded canonically")]
+    DestinationAccountEncoding,
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::type_complexity)]
 
-    use std::str::FromStr as _;
+    use std::{
+        collections::BTreeSet,
+        str::FromStr as _,
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
-    use crate::{domain::DomainId, name::Name};
+    use crate::{account::address::ChainDiscriminantGuard, domain::DomainId, name::Name};
 
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -938,20 +765,16 @@ mod tests {
     }
 
     #[test]
-    fn zk_ace_transfer_digest_uses_taira_discriminant_from_chain_id() {
+    fn zk_ace_transfer_digest_is_domainless_and_discriminant_independent() {
         let from = account(0x42);
         let to = account(0x43);
         let asset = asset_definition_id();
-        let chain_id: ChainId = PUBLIC_TAIRA_CHAIN_ID.parse().expect("Taira chain id");
+        let chain_id: ChainId = "unregistered-zk-ace-chain"
+            .parse()
+            .expect("opaque chain id");
         let policy_hash = [0x44; 32];
         let amount = 123u128;
         let action_class = ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER;
-
-        let _ambient_guard = ChainDiscriminantGuard::enter(42);
-        assert!(
-            from.to_string().starts_with("n42"),
-            "fixture must start with a non-Taira ambient discriminant"
-        );
 
         let digest = derive_zk_ace_transfer_digest(
             &from,
@@ -961,36 +784,74 @@ mod tests {
             &chain_id,
             action_class,
             &policy_hash,
+        )
+        .expect("single-key accounts have canonical domainless encodings");
+        let from_canonical = from.to_canonical_hex().expect("canonical source encoding");
+        let to_canonical = to
+            .to_canonical_hex()
+            .expect("canonical destination encoding");
+        let asset_bytes = asset.aid_bytes();
+        let amount_bytes = amount.to_be_bytes();
+        let expected = zk_ace_poseidon_bytes(
+            b"zk-ace.transparent-transfer.v1",
+            &[
+                ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
+                from_canonical.as_bytes(),
+                to_canonical.as_bytes(),
+                &asset_bytes,
+                &amount_bytes,
+                chain_id.as_str().as_bytes(),
+                action_class.as_bytes(),
+                &policy_hash,
+            ],
         );
 
-        let expected = {
-            let _taira_guard = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
-            let from_literal = from.to_string();
-            let to_literal = to.to_string();
-            let asset_literal = asset.to_string();
-            let amount_bytes = amount.to_be_bytes();
-            assert!(
-                from_literal.starts_with("test") && to_literal.starts_with("test"),
-                "Taira ZK-ACE digest must bind public testnet account literals"
-            );
-            zk_ace_poseidon_bytes(
-                b"zk-ace.transparent-transfer.v1",
-                &[
-                    from_literal.as_bytes(),
-                    to_literal.as_bytes(),
-                    asset_literal.as_bytes(),
-                    &amount_bytes,
-                    chain_id.as_str().as_bytes(),
-                    action_class.as_bytes(),
-                    &policy_hash,
-                ],
-            )
-        };
-
         assert_eq!(digest, expected);
+        let barrier = Arc::new(Barrier::new(8));
+        let results = thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for discriminant in [0_u16, 1, 42, 73, 369, 655, 4096, u16::MAX] {
+                let barrier = Arc::clone(&barrier);
+                let from = &from;
+                let to = &to;
+                let asset = &asset;
+                let chain_id = &chain_id;
+                handles.push(scope.spawn(move || {
+                    let _guard = ChainDiscriminantGuard::enter(discriminant);
+                    let source_display = from.to_string();
+                    barrier.wait();
+                    let digest = derive_zk_ace_transfer_digest(
+                        from,
+                        to,
+                        asset,
+                        amount,
+                        chain_id,
+                        action_class,
+                        &policy_hash,
+                    )
+                    .expect("display discriminant cannot affect domainless encoding");
+                    (source_display, digest)
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("digest worker must not panic"))
+                .collect::<Vec<_>>()
+        });
         assert!(
-            from.to_string().starts_with("n42"),
-            "digest derivation must not leak the scoped Taira discriminant"
+            results
+                .iter()
+                .map(|(display, _)| display)
+                .collect::<BTreeSet<_>>()
+                .len()
+                > 1,
+            "adversarial workers must observe distinct ambient I105 displays"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|(_, observed_digest)| *observed_digest == digest),
+            "ambient display state must not enter the consensus digest"
         );
     }
 
@@ -1140,6 +1001,8 @@ mod tests {
             "aztec-plonkish-private-kernel",
             "zkat",
             "silent-threshold-anoncred",
+            "sis-hints-anoncred-pq-v0",
+            "sis-with-hints",
         ] {
             assert_eq!(
                 verifier_backend_registry_tag_v1(rejected),
@@ -1189,6 +1052,8 @@ mod tests {
             "miden-stark:dev-fixture",
             "aztec-private-kernel:mock-proof",
             "anonymous-pgc:placeholder",
+            "sis-hints-anoncred-pq-v0",
+            "sis-with-hints",
             "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
             "halo2/ipa/orchard:kzg",
             "orchard:universal-srs",
@@ -1254,6 +1119,64 @@ mod tests {
             envelope
                 .validate_for_admission()
                 .unwrap_or_else(|err| panic!("{circuit_id} should be accepted: {err}"));
+        }
+    }
+
+    #[test]
+    fn open_verify_admission_reserves_every_active_and_retired_privacy_label() {
+        use crate::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
+
+        fn assert_reserved(label: &str) {
+            for circuit_id in [
+                label.to_owned(),
+                format!("halo2/ipa::{label}"),
+                format!("halo2/pasta/{label}"),
+                format!("stark/fri:{label}"),
+                format!("stark/fri/sha256-goldilocks:{label}"),
+                format!("generic/namespace/{label}"),
+            ] {
+                assert!(
+                    open_verify_circuit_id_is_portable(&circuit_id),
+                    "reserved control {circuit_id:?} must otherwise be portable"
+                );
+                assert!(
+                    open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(&circuit_id),
+                    "privacy namespace component must be detected in {circuit_id:?}"
+                );
+
+                let mut envelope = valid_open_verify_admission_envelope();
+                envelope.circuit_id = circuit_id.clone();
+                assert_eq!(
+                    envelope.validate_for_admission().unwrap_err(),
+                    OpenVerifyEnvelopeValidationError::ReservedPrivacyProtocolCircuitId,
+                    "reserved generic circuit id {circuit_id:?}"
+                );
+            }
+
+            for near_miss in [
+                format!("generic-{label}"),
+                format!("{label}-generic"),
+                format!("stark/fri/sha256-goldilocks:generic-{label}"),
+                format!("halo2/ipa::{label}-generic"),
+            ] {
+                assert!(open_verify_circuit_id_is_portable(&near_miss));
+                assert!(
+                    !open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(&near_miss),
+                    "portable near miss {near_miss:?} must remain outside the reservation"
+                );
+                let mut envelope = valid_open_verify_admission_envelope();
+                envelope.circuit_id = near_miss.clone();
+                envelope
+                    .validate_for_admission()
+                    .unwrap_or_else(|error| panic!("near miss {near_miss:?}: {error}"));
+            }
+        }
+
+        for protocol in PrivacyProtocolIdV1::ALL {
+            assert_reserved(protocol.canonical_label());
+        }
+        for label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
+            assert_reserved(label);
         }
     }
 
@@ -1430,6 +1353,7 @@ mod tests {
             "vega-existing-credential-zk",
             "silent-threshold-anoncred",
             "zk-x509",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints",
             "unknown/privacy/backend",
         ] {
@@ -1482,23 +1406,17 @@ mod tests {
         assert_eq!(packed.length, 8);
         assert_eq!(packed.limbs, vec![0x0047_4645_4443_4241, 0x48]);
 
-        let witness = ZkAceWitnessV1 {
-            identity_root: [0x11; 32],
-            identity_blinding: [0x22; 32],
-            replay_secret: [0x33; 32],
-        };
+        let identity_root = [0x11; 32];
+        let identity_blinding = [0x22; 32];
+        let replay_secret = [0x33; 32];
         let policy_hash = [0x44; 32];
         let chain_id: ChainId = "boi-test-chain".parse().expect("chain id");
         let from = account(1);
         let to = account(2);
         let asset = asset_definition_id();
-        let verifier_key_id = VerifyingKeyId::new(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-        );
         let identity_commitment = derive_zk_ace_identity_commitment(
-            &witness.identity_root,
-            &witness.identity_blinding,
+            &identity_root,
+            &identity_blinding,
             ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
         );
         let tx_digest = derive_zk_ace_transfer_digest(
@@ -1509,34 +1427,15 @@ mod tests {
             &chain_id,
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             &policy_hash,
-        );
+        )
+        .expect("single-key fixture accounts have canonical encodings");
         let replay_nullifier = derive_zk_ace_replay_nullifier(
-            &witness.replay_secret,
+            &replay_secret,
             &tx_digest,
             &chain_id,
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
         );
-        let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
-            identity_commitment,
-            tx_digest,
-            tx_digest,
-            chain_id,
-            replay_nullifier,
-            policy_hash,
-            from,
-            to,
-            asset,
-            17,
-            verifier_key_id,
-        );
-        let public_digest =
-            derive_zk_ace_public_inputs_digest(&public_inputs).expect("public digest");
-        let air_public_digest =
-            derive_zk_ace_air_public_digest(&public_inputs).expect("air public digest");
-        let air_statement_digest = derive_zk_ace_air_statement_digest(&public_inputs, &witness)
-            .expect("air statement digest");
-        let schema_hash = zk_ace_public_inputs_schema_hash_v1();
 
         assert_eq!(
             hex::encode(identity_commitment),
@@ -1550,75 +1449,11 @@ mod tests {
             hex::encode(replay_nullifier),
             "1ddaf81b2865d10fdc5b597f0283c675a76928bfd171eadb6410aacb971cefc1"
         );
-        assert_eq!(
-            hex::encode(public_digest),
-            "9012f3ca1feff456ef7aced4c1bc95d11e314fedf93a28cd1b4fe182cb98b2fc"
-        );
-        assert_eq!(
-            hex::encode(air_public_digest),
-            "7a258cd04b6937e68f42927193e91da221b2344623d9f4cadd1ec0b49b703691"
-        );
-        assert_eq!(
-            hex::encode(air_statement_digest),
-            "ee9306cdc6d1bdfd3866449e730c10cb561b4038f5517a85d0e2f670d38acea6"
-        );
-        assert_eq!(
-            hex::encode(schema_hash),
-            "7a0ae407a51b3f376312c81a7cd962d7f50cc8c79b5a3ca0f3df0944689ffc18"
-        );
     }
 
     #[cfg(feature = "json")]
     #[test]
-    fn zk_ace_json_roundtrips_public_proof_witness_and_packing() {
-        let witness = ZkAceWitnessV1 {
-            identity_root: [0x11; 32],
-            identity_blinding: [0x22; 32],
-            replay_secret: [0x33; 32],
-        };
-        let policy_hash = [0x44; 32];
-        let chain_id: ChainId = "boi-test-chain".parse().expect("chain id");
-        let from = account(1);
-        let to = account(2);
-        let asset = asset_definition_id();
-        let verifier_key_id = VerifyingKeyId::new(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-        );
-        let identity_commitment = derive_zk_ace_identity_commitment(
-            &witness.identity_root,
-            &witness.identity_blinding,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        );
-        let tx_digest = derive_zk_ace_transfer_digest(
-            &from,
-            &to,
-            &asset,
-            17,
-            &chain_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            &policy_hash,
-        );
-        let replay_nullifier = derive_zk_ace_replay_nullifier(
-            &witness.replay_secret,
-            &tx_digest,
-            &chain_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        );
-        let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
-            identity_commitment,
-            tx_digest,
-            tx_digest,
-            chain_id,
-            replay_nullifier,
-            policy_hash,
-            from,
-            to,
-            asset,
-            17,
-            verifier_key_id,
-        );
+    fn zk_ace_json_roundtrips_generic_stark_wrapper_and_packing() {
         let packed = zk_ace_pack_bytes_to_field_limbs(b"ABCDEFGH");
         let open_proof = StarkFriOpenProofV1 {
             version: 1,
@@ -1626,8 +1461,6 @@ mod tests {
             envelope_bytes: vec![0x01, 0x02, 0x03, 0x04],
         };
 
-        assert_json_roundtrip(&public_inputs);
-        assert_json_roundtrip(&witness);
         assert_json_roundtrip(&packed);
         assert_json_roundtrip(&open_proof);
     }

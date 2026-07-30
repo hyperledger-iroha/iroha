@@ -1,76 +1,195 @@
-//! Prover-only Gaussian and randomized CELPC encoding support.
+//! Prover-only discrete-Gaussian and randomized CELPC encoding support.
 //!
-//! No floating-point value produced here is admitted by consensus.  Verifiers
-//! reconstruct exact integer coefficients and enforce pinned integer norms.
-//! The prover accepts only a caller-supplied `CryptoRng`, bounds every rejection
-//! loop, and returns an error instead of hanging on a failed or adversarial
-//! randomness source.
+//! The first-release sampler is entirely integer-defined.  Its six admissible
+//! widths are closed profile identifiers, randomized-encoding centers are
+//! derived from one exact signed numerator over `p = 60272^16 + 1`, and every
+//! probability comparison consumes one explicitly big-endian 256-bit draw.
+//! Every rejection loop is bounded and fails closed for adversarial randomness.
 
+use std::sync::OnceLock;
+
+use p256::elliptic_curve::bigint::{Encoding as _, Limb, NonZero, U128, U256, U512, U1024};
 use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
+
+use crate::privacy_engines::prover_randomness::{
+    HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
+};
 
 use super::{
     JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
     JINDO_RING_DEGREE_V1,
     encoding::encode_coefficient_slots_v1,
     field::JindoFieldElementV1,
+    parameters::JindoGaussianWidthV1,
     ring::{JINDO_INNER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1},
 };
-
-/// Standard deviation for ordinary randomized coefficient encodings.
-pub(crate) const JINDO_ECD_STD_DEV_V1: f64 = f64::from_bits(0x4013_265d_8bbe_d26c);
-/// Standard deviation for the evaluation-sensitive first row.
-pub(crate) const JINDO_ECD_BLIND_STD_DEV_V1: f64 = f64::from_bits(0x4131_9c98_a835_4ea5);
-/// Standard deviation for mask-row encodings.
-pub(crate) const JINDO_MASK_STD_DEV_V1: f64 = f64::from_bits(0x409b_14fd_dd24_75fe);
-/// Standard deviation for the evaluation-sensitive mask row.
-pub(crate) const JINDO_MASK_BLIND_STD_DEV_V1: f64 = f64::from_bits(0x41b8_e81e_3911_3843);
-/// Standard deviation for ordinary MLWE hiding polynomials.
-pub(crate) const JINDO_MLWE_STD_DEV_V1: f64 = f64::from_bits(0x401b_14c2_f863_e925);
-/// Standard deviation for mask-column MLWE polynomials.
-pub(crate) const JINDO_MASK_MLWE_STD_DEV_V1: f64 = f64::from_bits(0x40a3_2633_e6df_28bf);
 
 const MAX_GAUSSIAN_ATTEMPTS_V1: usize = 4_096;
 const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: usize = 4_096;
 const MAX_FIELD_REJECTION_ATTEMPTS_V1: usize = 65_536;
-const GAUSSIAN_TAIL_STANDARD_DEVIATIONS_V1: f64 = 14.0;
+const RNG_HEALTH_BLOCK_BYTES_V1: usize = 32;
 
-// Only the non-negligible `-b^i / p` entries survive the paper's threshold.
-const DELTA_INVERSE_V1: [f64; JINDO_ENCODING_EXPONENT_V1] = [
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    f64::from_bits(0xbbf6_5d8c_f5c1_c3be),
-    f64::from_bits(0xbcf4_91a9_5344_6375),
-    f64::from_bits(0xbdf2_eab6_2984_3538),
-    f64::from_bits(0xbef1_65bb_e7ce_86b2),
-];
+// The integer-decay tables split x into floor(x), the next twelve fractional
+// bits, and a remainder below 2^-12.  For the unit Taylor series, 1/97! is
+// below 2^-502; the 32-term fractional seed has still smaller remainder.  The
+// independently pinned Q256 seeds are within one ulp.  Thus 128 integer-table
+// products contribute fewer than 2^8 ulps, and 4095 fractional-table products
+// fewer than 2^13 ulps, including half-ulp product rounding.  The 16-term
+// residual has analytic remainder below 2^-252.  Including its arithmetic and
+// both final products, total evaluation error stays below 2^16 Q256 ulps,
+// i.e. below 2^-240.
+const FRACTION_TABLE_BITS_V1: usize = 12;
+const FRACTION_TABLE_LEN_V1: usize = 1 << FRACTION_TABLE_BITS_V1;
+const MAX_DECAY_INTEGER_V1: usize = 128;
+const UNIT_DECAY_SERIES_TERMS_V1: usize = 96;
+const FRACTION_STEP_SERIES_TERMS_V1: usize = 32;
+const RESIDUAL_DECAY_SERIES_TERMS_V1: usize = 16;
+
+const Q128_FRACTION_BITS_V1: usize = 128;
+const Q256_FRACTION_BITS_V1: usize = 256;
+
+/// Signed fixed-point value whose magnitude is encoded with 128 fraction bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignedQ128V1 {
+    negative: bool,
+    magnitude: U256,
+}
+
+impl SignedQ128V1 {
+    const ZERO: Self = Self {
+        negative: false,
+        magnitude: U256::ZERO,
+    };
+
+    fn new(negative: bool, magnitude: U256) -> Self {
+        Self {
+            negative: negative && magnitude != U256::ZERO,
+            magnitude,
+        }
+    }
+
+    fn from_i64(value: i64) -> Self {
+        Self::new(
+            value.is_negative(),
+            U256::from_u128(u128::from(value.unsigned_abs())).shl_vartime(Q128_FRACTION_BITS_V1),
+        )
+    }
+
+    fn negated(self) -> Self {
+        Self::new(!self.negative, self.magnitude)
+    }
+
+    fn floor_i128(self) -> Result<i128, JindoSamplingErrorV1> {
+        let (integer, fraction) = self.magnitude.split();
+        let integer = u128::from(integer);
+        let has_fraction = fraction != U128::ZERO;
+        signed_integer_part_v1(self.negative, integer, has_fraction, false)
+    }
+
+    fn ceil_i128(self) -> Result<i128, JindoSamplingErrorV1> {
+        let (integer, fraction) = self.magnitude.split();
+        let integer = u128::from(integer);
+        let has_fraction = fraction != U128::ZERO;
+        signed_integer_part_v1(self.negative, integer, has_fraction, true)
+    }
+}
+
+impl Zeroize for SignedQ128V1 {
+    fn zeroize(&mut self) {
+        self.negative = false;
+        self.magnitude = U256::ZERO;
+    }
+}
+
+/// Exact signed integer numerator used before the one Q128 center rounding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignedNumeratorV1 {
+    negative: bool,
+    magnitude: U512,
+}
+
+impl SignedNumeratorV1 {
+    const ZERO: Self = Self {
+        negative: false,
+        magnitude: U512::ZERO,
+    };
+
+    fn add_term(&mut self, negative: bool, magnitude: U512) {
+        if magnitude == U512::ZERO {
+            return;
+        }
+        if self.magnitude == U512::ZERO {
+            self.negative = negative;
+            self.magnitude = magnitude;
+            return;
+        }
+        if self.negative == negative {
+            // Every coefficient is signed-128-bit and every base power is
+            // below 2^256, so the complete sixteen-term sum is below 2^388.
+            self.magnitude = self.magnitude.wrapping_add(&magnitude);
+            return;
+        }
+        match self.magnitude.cmp(&magnitude) {
+            core::cmp::Ordering::Greater => {
+                self.magnitude = self.magnitude.wrapping_sub(&magnitude);
+            }
+            core::cmp::Ordering::Less => {
+                self.magnitude = magnitude.wrapping_sub(&self.magnitude);
+                self.negative = negative;
+            }
+            core::cmp::Ordering::Equal => {
+                self.negative = false;
+                self.magnitude = U512::ZERO;
+            }
+        }
+    }
+}
+
+impl Zeroize for SignedNumeratorV1 {
+    fn zeroize(&mut self) {
+        self.negative = false;
+        self.magnitude = U512::ZERO;
+    }
+}
 
 /// Bounded prover-side sampling failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum JindoSamplingErrorV1 {
+    /// The operating-system or caller-supplied cryptographic RNG failed.
+    #[error("Jindo cryptographic random source is unavailable")]
+    RandomnessUnavailable,
+    /// The source emitted a catastrophic constant or short-period prefix.
+    #[error("Jindo cryptographic random source failed its health check")]
+    RandomnessHealthCheckFailed,
     /// The supplied randomness stream failed every bounded rejection attempt.
     #[error("Jindo Gaussian rejection sampler exhausted its fixed attempt budget")]
     RejectionBudgetExhausted,
-    /// The requested Gaussian parameters are outside the closed profile.
-    #[error("invalid Jindo Gaussian parameters")]
-    InvalidGaussianParameters,
+    /// The CELPC input did not match the fixed sixteen-slot profile.
+    #[error("invalid Jindo randomized-encoding input length")]
+    InvalidEncodingLength,
+    /// An internal deterministic CELPC digit escaped its exact base range.
+    #[error("invalid Jindo deterministic CELPC coefficient")]
+    InvalidEncodedCoefficient,
     /// A sampled coefficient exceeded the fixed signed representation.
     #[error("Jindo Gaussian sample exceeded the fixed signed coefficient range")]
     SampleOutOfRange,
     /// Uniform coefficient-field sampling exhausted its fixed retry budget.
     #[error("Jindo coefficient-field rejection sampler exhausted its fixed attempt budget")]
     FieldRejectionBudgetExhausted,
+}
+
+pub(super) fn health_checked_jindo_rng_v1<R>(
+    rng: &mut R,
+) -> Result<HealthCheckedCryptoRngV1<'_, R>, JindoSamplingErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    HealthCheckedCryptoRngV1::new(rng).map_err(|error| match error {
+        ProverRandomnessErrorV1::Unavailable => JindoSamplingErrorV1::RandomnessUnavailable,
+        ProverRandomnessErrorV1::Unhealthy => JindoSamplingErrorV1::RandomnessHealthCheckFailed,
+    })
 }
 
 /// Sample one uniform canonical coefficient-field element.
@@ -82,7 +201,7 @@ where
 {
     for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
         let mut bytes = Zeroizing::new([0_u8; 32]);
-        rng.fill_bytes(bytes.as_mut());
+        fill_random_bytes_v1(rng, bytes.as_mut())?;
         if let Some(value) = JindoFieldElementV1::from_canonical_bytes(*bytes) {
             return Ok(value);
         }
@@ -90,49 +209,55 @@ where
     Err(JindoSamplingErrorV1::FieldRejectionBudgetExhausted)
 }
 
-/// Sample one discrete Gaussian integer by bounded uniform rejection.
+/// Sample one discrete-Gaussian integer by bounded uniform rejection.
 ///
-/// The proposal covers `center ± 14σ`; omitted mass is below `2^-140`.
-/// Rejection against `exp(-(x-center)^2/(2σ^2))` leaves the exact discrete
-/// Gaussian weights within that pinned tail.  An initial two-word continuous
-/// RNG health test rejects a stuck stream with a false-positive probability of
-/// `2^-64`.
-pub(crate) fn sample_discrete_gaussian_v1<R>(
-    center: f64,
-    standard_deviation: f64,
+/// The proposal is exactly the integer points whose distance from the Q128
+/// center is at most fourteen exact Q64 widths.  The omitted mass is below
+/// `2^-140`.  Acceptance weights are evaluated in Q256 and compared to one
+/// 256-bit threshold draw.  Across the complete support, threshold
+/// quantization, center rounding, Q256 evaluation, and tail truncation have
+/// conservative total statistical distance below `2^-118`.
+fn sample_discrete_gaussian_v1<R>(
+    center: SignedQ128V1,
+    width: JindoGaussianWidthV1,
     rng: &mut R,
 ) -> Result<i64, JindoSamplingErrorV1>
 where
     R: CryptoRng + RngCore,
 {
-    if !center.is_finite() || !standard_deviation.is_finite() || standard_deviation <= 0.0 {
-        return Err(JindoSamplingErrorV1::InvalidGaussianParameters);
-    }
+    ensure_rng_health_v1(rng)?;
 
-    // Treat two identical consecutive 64-bit outputs as a catastrophic source
-    // failure. This makes a constant/zero RNG fail closed instead of silently
-    // producing a deterministic mask.
-    if rng.next_u64() == rng.next_u64() {
-        return Err(JindoSamplingErrorV1::RejectionBudgetExhausted);
-    }
-
-    let radius = (GAUSSIAN_TAIL_STANDARD_DEVIATIONS_V1 * standard_deviation).ceil();
-    let lower = f64_to_i64_v1((center - radius).ceil())?;
-    let upper = f64_to_i64_v1((center + radius).floor())?;
-    let width = u64::try_from(i128::from(upper) - i128::from(lower) + 1)
+    // These are exactly the integer points satisfying
+    // `abs(candidate - center) <= 14 * sigma`:
+    // `[ceil(center - 14*sigma), floor(center + 14*sigma)]`.
+    let radius = SignedQ128V1::new(
+        false,
+        U256::from_u128(width.sigma_q64() * 14).shl_vartime(64),
+    );
+    let lower = add_signed_q128_v1(center, radius.negated()).ceil_i128()?;
+    let upper = add_signed_q128_v1(center, radius).floor_i128()?;
+    let lower = i64::try_from(lower).map_err(|_| JindoSamplingErrorV1::SampleOutOfRange)?;
+    let upper = i64::try_from(upper).map_err(|_| JindoSamplingErrorV1::SampleOutOfRange)?;
+    let proposal_width = u64::try_from(i128::from(upper) - i128::from(lower) + 1)
         .map_err(|_| JindoSamplingErrorV1::SampleOutOfRange)?;
-    if width == 0 {
+    if proposal_width == 0 {
         return Err(JindoSamplingErrorV1::SampleOutOfRange);
     }
 
     for _ in 0..MAX_GAUSSIAN_ATTEMPTS_V1 {
-        let offset = sample_bounded_u64_v1(width, rng)?;
+        let offset = sample_bounded_u64_v1(proposal_width, rng)?;
         let candidate = i128::from(lower) + i128::from(offset);
         let candidate =
             i64::try_from(candidate).map_err(|_| JindoSamplingErrorV1::SampleOutOfRange)?;
-        let delta = candidate as f64 - center;
-        let acceptance = (-(delta * delta) / (2.0 * standard_deviation * standard_deviation)).exp();
-        if uniform_open_v1(rng) < acceptance {
+        let exponent_q256 = gaussian_exponent_q256_v1(candidate, center, width)?;
+        let threshold = decay_threshold_u256_v1(exponent_q256);
+        let mut acceptance_bytes = Zeroizing::new([0_u8; 32]);
+        fill_random_bytes_v1(rng, acceptance_bytes.as_mut())?;
+        let draw = U256::from_be_bytes(*acceptance_bytes);
+        if match threshold {
+            None => true,
+            Some(value) => draw < value,
+        } {
             return Ok(candidate);
         }
     }
@@ -142,43 +267,28 @@ where
 /// Randomized encoding in the exact coset of the deterministic CELPC encoding.
 pub(crate) fn randomized_encode_coefficient_slots_v1<R>(
     values: &[JindoFieldElementV1],
-    standard_deviation: f64,
+    width: JindoGaussianWidthV1,
     rng: &mut R,
 ) -> Result<JindoRnsPolynomialV1, JindoSamplingErrorV1>
 where
     R: CryptoRng + RngCore,
 {
+    if values.len() != JINDO_ENCODING_SLOTS_V1 {
+        return Err(JindoSamplingErrorV1::InvalidEncodingLength);
+    }
     let deterministic = Zeroizing::new(
-        encode_coefficient_slots_v1(values)
-            .ok_or(JindoSamplingErrorV1::InvalidGaussianParameters)?,
+        encode_coefficient_slots_v1(values).ok_or(JindoSamplingErrorV1::InvalidEncodingLength)?,
     );
     let mut encoded_coefficients = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
     for (index, coefficient) in encoded_coefficients.iter_mut().enumerate() {
         *coefficient = deterministic.balanced_coefficient(index, JINDO_INNER_MODULI_V1);
     }
 
-    let mut centers = Zeroizing::new([0_f64; JINDO_RING_DEGREE_V1]);
-    for (digit, delta_inverse) in DELTA_INVERSE_V1.into_iter().enumerate() {
-        if delta_inverse == 0.0 {
-            continue;
-        }
-        let shift = (digit + 1) * JINDO_ENCODING_SLOTS_V1;
-        let remaining = JINDO_RING_DEGREE_V1 - shift;
-        for source in 0..remaining {
-            centers[source + shift] += delta_inverse * encoded_coefficients[source] as f64;
-        }
-        for source in remaining..JINDO_RING_DEGREE_V1 {
-            centers[source - remaining] -= delta_inverse * encoded_coefficients[source] as f64;
-        }
-    }
+    let centers = Zeroizing::new(randomized_encoding_centers_v1(&encoded_coefficients)?);
 
     let mut lattice = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
     for (sample, center) in lattice.iter_mut().zip(centers.iter().copied()) {
-        *sample = i128::from(sample_discrete_gaussian_v1(
-            -center,
-            standard_deviation,
-            rng,
-        )?);
+        *sample = i128::from(sample_discrete_gaussian_v1(center, width, rng)?);
     }
 
     let mut randomized = Zeroizing::new(*encoded_coefficients);
@@ -198,7 +308,7 @@ where
 
 /// Sample one independent small Gaussian application-ring polynomial.
 pub(crate) fn sample_gaussian_polynomial_v1<R>(
-    standard_deviation: f64,
+    width: JindoGaussianWidthV1,
     moduli: [JindoPrimeModulusV1; 2],
     rng: &mut R,
 ) -> Result<JindoRnsPolynomialV1, JindoSamplingErrorV1>
@@ -207,7 +317,7 @@ where
 {
     let mut coefficients = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
     for coefficient in coefficients.iter_mut() {
-        *coefficient = i128::from(sample_discrete_gaussian_v1(0.0, standard_deviation, rng)?);
+        *coefficient = i128::from(sample_discrete_gaussian_v1(SignedQ128V1::ZERO, width, rng)?);
     }
     Ok(JindoRnsPolynomialV1::from_balanced_coefficients(
         *coefficients,
@@ -219,7 +329,9 @@ fn sample_bounded_u64_v1(bound: u64, rng: &mut impl RngCore) -> Result<u64, Jind
     debug_assert!(bound > 0);
     let acceptance_limit = u64::MAX - (u64::MAX % bound);
     for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
-        let candidate = rng.next_u64();
+        let mut bytes = [0_u8; 8];
+        fill_random_bytes_v1(rng, &mut bytes)?;
+        let candidate = u64::from_be_bytes(bytes);
         if candidate < acceptance_limit {
             return Ok(candidate % bound);
         }
@@ -227,243 +339,324 @@ fn sample_bounded_u64_v1(bound: u64, rng: &mut impl RngCore) -> Result<u64, Jind
     Err(JindoSamplingErrorV1::RejectionBudgetExhausted)
 }
 
-fn uniform_open_v1(rng: &mut impl RngCore) -> f64 {
-    const DENOMINATOR: f64 = (1_u64 << 53) as f64;
-    let mantissa = rng.next_u64() >> 11;
-    (mantissa as f64 + 0.5) / DENOMINATOR
+fn ensure_rng_health_v1(rng: &mut impl RngCore) -> Result<(), JindoSamplingErrorV1> {
+    let mut first = Zeroizing::new([0_u8; RNG_HEALTH_BLOCK_BYTES_V1]);
+    let mut second = Zeroizing::new([0_u8; RNG_HEALTH_BLOCK_BYTES_V1]);
+    fill_random_bytes_v1(rng, first.as_mut())?;
+    fill_random_bytes_v1(rng, second.as_mut())?;
+    if *first == *second {
+        return Err(JindoSamplingErrorV1::RandomnessHealthCheckFailed);
+    }
+    Ok(())
 }
 
-fn f64_to_i64_v1(value: f64) -> Result<i64, JindoSamplingErrorV1> {
-    const TWO_TO_63: f64 = 9_223_372_036_854_775_808.0;
-    if value < -TWO_TO_63 || value >= TWO_TO_63 {
-        return Err(JindoSamplingErrorV1::SampleOutOfRange);
-    }
-    Ok(value as i64)
+fn fill_random_bytes_v1(
+    rng: &mut impl RngCore,
+    destination: &mut [u8],
+) -> Result<(), JindoSamplingErrorV1> {
+    rng.try_fill_bytes(destination)
+        .map_err(|_| JindoSamplingErrorV1::RandomnessUnavailable)
 }
 
-#[cfg(test)]
-mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
-    use super::super::encoding::decode_coefficient_slots_v1;
-    use super::*;
-
-    #[derive(Clone)]
-    struct TestRng(u64);
-
-    impl TestRng {
-        fn new(seed: u64) -> Self {
-            Self(seed)
-        }
+fn signed_integer_part_v1(
+    negative: bool,
+    integer: u128,
+    has_fraction: bool,
+    ceiling: bool,
+) -> Result<i128, JindoSamplingErrorV1> {
+    let increment = has_fraction && (negative != ceiling);
+    let magnitude = integer
+        .checked_add(u128::from(increment))
+        .ok_or(JindoSamplingErrorV1::SampleOutOfRange)?;
+    if !negative {
+        return i128::try_from(magnitude).map_err(|_| JindoSamplingErrorV1::SampleOutOfRange);
     }
+    if magnitude == (1_u128 << 127) {
+        return Ok(i128::MIN);
+    }
+    let magnitude =
+        i128::try_from(magnitude).map_err(|_| JindoSamplingErrorV1::SampleOutOfRange)?;
+    Ok(-magnitude)
+}
 
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            self.next_u64() as u32
+fn add_signed_q128_v1(left: SignedQ128V1, right: SignedQ128V1) -> SignedQ128V1 {
+    if left.negative == right.negative {
+        // Callers add an encoding center below two to a profile radius below
+        // 2^33, all in Q128, so this U256 addition is below 2^162.
+        return SignedQ128V1::new(left.negative, left.magnitude.wrapping_add(&right.magnitude));
+    }
+    match left.magnitude.cmp(&right.magnitude) {
+        core::cmp::Ordering::Greater => {
+            SignedQ128V1::new(left.negative, left.magnitude.wrapping_sub(&right.magnitude))
         }
+        core::cmp::Ordering::Less => SignedQ128V1::new(
+            right.negative,
+            right.magnitude.wrapping_sub(&left.magnitude),
+        ),
+        core::cmp::Ordering::Equal => SignedQ128V1::ZERO,
+    }
+}
 
-        fn next_u64(&mut self) -> u64 {
-            let mut value = self.0;
-            value ^= value >> 12;
-            value ^= value << 25;
-            value ^= value >> 27;
-            self.0 = value;
-            value.wrapping_mul(0x2545_f491_4f6c_dd1d)
+fn coefficient_modulus_v1() -> U512 {
+    static MODULUS: OnceLock<U512> = OnceLock::new();
+    *MODULUS.get_or_init(|| {
+        let mut bytes = [0_u8; 64];
+        for (chunk, limb) in bytes[32..]
+            .chunks_exact_mut(8)
+            .zip(JindoFieldElementV1::MODULUS.into_iter().rev())
+        {
+            chunk.copy_from_slice(&limb.to_be_bytes());
         }
+        U512::from_be_bytes(bytes)
+    })
+}
 
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            for chunk in destination.chunks_mut(8) {
-                let bytes = self.next_u64().to_le_bytes();
-                chunk.copy_from_slice(&bytes[..chunk.len()]);
+fn encoding_base_powers_v1() -> &'static [U512; JINDO_ENCODING_EXPONENT_V1] {
+    static POWERS: OnceLock<[U512; JINDO_ENCODING_EXPONENT_V1]> = OnceLock::new();
+    POWERS.get_or_init(|| {
+        let mut powers = [U512::ZERO; JINDO_ENCODING_EXPONENT_V1];
+        let mut power = U512::ONE;
+        for value in &mut powers {
+            *value = power;
+            // The final update is `b^16 = p - 1 < 2^255`; every
+            // `wrapping_mul` is therefore an exact ordinary product.
+            power = power.wrapping_mul(&U512::from_u64(JINDO_ENCODING_BASE_V1));
+        }
+        powers
+    })
+}
+
+fn randomized_encoding_centers_v1(
+    coefficients: &[i128; JINDO_RING_DEGREE_V1],
+) -> Result<[SignedQ128V1; JINDO_RING_DEGREE_V1], JindoSamplingErrorV1> {
+    if coefficients
+        .iter()
+        .any(|coefficient| *coefficient < 0 || *coefficient > i128::from(JINDO_ENCODING_BASE_V1))
+    {
+        return Err(JindoSamplingErrorV1::InvalidEncodedCoefficient);
+    }
+    let mut numerators = Zeroizing::new([SignedNumeratorV1::ZERO; JINDO_RING_DEGREE_V1]);
+    for (digit, power) in encoding_base_powers_v1().iter().copied().enumerate() {
+        // The CELPC inverse row has coefficient `-b^digit/p` at
+        // `X^(16*(digit+1))`.  The sampler negates that row's center, giving
+        // `+b^digit/p` before reduction.  Reduction by `X^256 = -1` flips
+        // exactly the wrapped terms below.
+        let shift = (digit + 1) * JINDO_ENCODING_SLOTS_V1;
+        let remaining = JINDO_RING_DEGREE_V1 - shift;
+        for (source, coefficient) in coefficients.iter().copied().enumerate() {
+            if coefficient == 0 {
+                continue;
+            }
+            // One term is at most `b^16 < 2^255`; the complete signed
+            // sixteen-term sum is below 2^259, far inside U512.
+            let magnitude = power.wrapping_mul(&U512::from_u128(coefficient.unsigned_abs()));
+            if source < remaining {
+                numerators[source + shift].add_term(coefficient.is_negative(), magnitude);
+            } else {
+                numerators[source - remaining].add_term(!coefficient.is_negative(), magnitude);
             }
         }
-
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
-            Ok(())
-        }
     }
 
-    impl CryptoRng for TestRng {}
-
-    struct StuckRng;
-
-    impl RngCore for StuckRng {
-        fn next_u32(&mut self) -> u32 {
-            0
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            0
-        }
-
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0);
-        }
-
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
-            Ok(())
-        }
+    let mut centers = [SignedQ128V1::ZERO; JINDO_RING_DEGREE_V1];
+    for (center, numerator) in centers.iter_mut().zip(numerators.iter().copied()) {
+        *center = round_numerator_over_modulus_q128_v1(numerator)?;
     }
+    Ok(centers)
+}
 
-    impl CryptoRng for StuckRng {}
-
-    struct RejectingFieldRng;
-
-    impl RngCore for RejectingFieldRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::MAX
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            u64::MAX
-        }
-
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(u8::MAX);
-        }
-
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
-            Ok(())
-        }
+fn round_numerator_over_modulus_q128_v1(
+    numerator: SignedNumeratorV1,
+) -> Result<SignedQ128V1, JindoSamplingErrorV1> {
+    if numerator.magnitude == U512::ZERO {
+        return Ok(SignedQ128V1::ZERO);
     }
-
-    impl CryptoRng for RejectingFieldRng {}
-
-    #[test]
-    fn invalid_parameters_and_failed_randomness_are_rejected() {
-        let mut rng = TestRng::new(1);
-        assert_eq!(
-            sample_discrete_gaussian_v1(0.0, 0.0, &mut rng),
-            Err(JindoSamplingErrorV1::InvalidGaussianParameters)
-        );
-        assert_eq!(
-            sample_discrete_gaussian_v1(f64::NAN, 1.0, &mut rng),
-            Err(JindoSamplingErrorV1::InvalidGaussianParameters)
-        );
-        assert_eq!(
-            sample_discrete_gaussian_v1(0.0, 1.0, &mut StuckRng),
-            Err(JindoSamplingErrorV1::RejectionBudgetExhausted)
-        );
-        assert_eq!(
-            sample_uniform_field_element_v1(&mut RejectingFieldRng),
-            Err(JindoSamplingErrorV1::FieldRejectionBudgetExhausted)
-        );
+    if numerator.magnitude.bits_vartime() > U512::BITS - Q128_FRACTION_BITS_V1 {
+        return Err(JindoSamplingErrorV1::SampleOutOfRange);
     }
-
-    #[test]
-    fn uniform_field_sampler_is_canonical_and_reproducible() {
-        let mut first = TestRng::new(0xfeed_face_cafe_babe);
-        let mut replay = first.clone();
-        let first_values: Vec<_> = (0..64)
-            .map(|_| sample_uniform_field_element_v1(&mut first).expect("field sample"))
-            .collect();
-        let replay_values: Vec<_> = (0..64)
-            .map(|_| sample_uniform_field_element_v1(&mut replay).expect("field sample"))
-            .collect();
-        assert_eq!(first_values, replay_values);
-        assert!(first_values.iter().all(|value| {
-            JindoFieldElementV1::from_canonical_bytes(value.to_canonical_bytes()).is_some()
-        }));
+    let modulus = coefficient_modulus_v1();
+    let Some(nonzero_modulus) = Option::<NonZero<U512>>::from(NonZero::new(modulus)) else {
+        return Err(JindoSamplingErrorV1::SampleOutOfRange);
+    };
+    let scaled = numerator.magnitude.shl_vartime(Q128_FRACTION_BITS_V1);
+    let (quotient, remainder) = scaled.div_rem(&nonzero_modulus);
+    let quotient = if remainder.shl_vartime(1) >= modulus {
+        // A validated digit vector has absolute numerator below `2p`, so the
+        // rounded Q128 center is below 2^129.
+        quotient.wrapping_add(&U512::ONE)
+    } else {
+        quotient
+    };
+    let (high, low) = quotient.split();
+    if high != U256::ZERO {
+        return Err(JindoSamplingErrorV1::SampleOutOfRange);
     }
+    Ok(SignedQ128V1::new(numerator.negative, low))
+}
 
-    #[test]
-    fn deterministic_randomness_tape_is_byte_stable_and_seed_separated() {
-        let mut first = TestRng::new(0x1234_5678_9abc_def0);
-        let mut replay = first.clone();
-        let mut distinct = TestRng::new(0x1234_5678_9abc_def1);
-        let first_samples: Vec<_> = (0..64)
-            .map(|_| {
-                sample_discrete_gaussian_v1(0.25, JINDO_ECD_STD_DEV_V1, &mut first).expect("sample")
-            })
-            .collect();
-        let replay_samples: Vec<_> = (0..64)
-            .map(|_| {
-                sample_discrete_gaussian_v1(0.25, JINDO_ECD_STD_DEV_V1, &mut replay)
-                    .expect("sample")
-            })
-            .collect();
-        let distinct_samples: Vec<_> = (0..64)
-            .map(|_| {
-                sample_discrete_gaussian_v1(0.25, JINDO_ECD_STD_DEV_V1, &mut distinct)
-                    .expect("sample")
-            })
-            .collect();
-        assert_eq!(first_samples, replay_samples);
-        assert_ne!(first_samples, distinct_samples);
-    }
-
-    #[test]
-    fn sampler_moments_match_the_pinned_small_gaussian() {
-        let mut rng = TestRng::new(0xd00d_f00d_cafe_babe);
-        let sample_count = 50_000_u64;
-        let mut sum = 0_f64;
-        let mut squares = 0_f64;
-        for _ in 0..sample_count {
-            let sample = sample_discrete_gaussian_v1(0.0, JINDO_MLWE_STD_DEV_V1, &mut rng)
-                .expect("sample") as f64;
-            sum += sample;
-            squares += sample * sample;
+fn absolute_delta_q128_v1(candidate: i64, center: SignedQ128V1) -> U256 {
+    let candidate = SignedQ128V1::from_i64(candidate);
+    if candidate.negative == center.negative {
+        if candidate.magnitude >= center.magnitude {
+            candidate.magnitude.wrapping_sub(&center.magnitude)
+        } else {
+            center.magnitude.wrapping_sub(&candidate.magnitude)
         }
-        let mean = sum / sample_count as f64;
-        let variance = squares / sample_count as f64 - mean * mean;
-        assert!(mean.abs() < 0.12, "mean {mean}");
-        assert!(
-            (variance - JINDO_MLWE_STD_DEV_V1.powi(2)).abs() < 1.0,
-            "variance {variance}"
-        );
-    }
-
-    #[test]
-    fn randomized_encoding_preserves_every_decoded_slot() {
-        let values: [JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1] =
-            core::array::from_fn(|index| {
-                JindoFieldElementV1::from_u64(index as u64 * 1_000_003 + 17)
-            });
-        for (index, standard_deviation) in [
-            JINDO_ECD_STD_DEV_V1,
-            JINDO_ECD_BLIND_STD_DEV_V1,
-            JINDO_MASK_STD_DEV_V1,
-            JINDO_MASK_BLIND_STD_DEV_V1,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let randomized = randomized_encode_coefficient_slots_v1(
-                &values,
-                standard_deviation,
-                &mut TestRng::new(index as u64 + 1),
-            )
-            .expect("randomized encoding");
-            assert_eq!(decode_coefficient_slots_v1(&randomized), values);
-        }
-    }
-
-    #[test]
-    fn gaussian_polynomial_is_canonical_nonzero_and_reproducible() {
-        let mut first_rng = TestRng::new(77);
-        let mut replay_rng = TestRng::new(77);
-        let first = sample_gaussian_polynomial_v1(
-            JINDO_MASK_MLWE_STD_DEV_V1,
-            JINDO_INNER_MODULI_V1,
-            &mut first_rng,
-        )
-        .expect("sample polynomial");
-        let replay = sample_gaussian_polynomial_v1(
-            JINDO_MASK_MLWE_STD_DEV_V1,
-            JINDO_INNER_MODULI_V1,
-            &mut replay_rng,
-        )
-        .expect("sample polynomial");
-        assert_eq!(first, replay);
-        assert!(
-            first
-                .residues()
-                .iter()
-                .flatten()
-                .any(|coefficient| *coefficient != 0)
-        );
+    } else {
+        // Candidate magnitude is below 2^63 in Q128 and an admitted encoding
+        // center is below two, so this addition is below 2^192.
+        candidate.magnitude.wrapping_add(&center.magnitude)
     }
 }
+
+fn gaussian_exponent_q256_v1(
+    candidate: i64,
+    center: SignedQ128V1,
+    width: JindoGaussianWidthV1,
+) -> Result<U512, JindoSamplingErrorV1> {
+    let delta_q128 = absolute_delta_q128_v1(candidate, center);
+    let squared_delta_q256: U512 = delta_q128.mul(&delta_q128);
+    if squared_delta_q256.bits_vartime() > U512::BITS - Q128_FRACTION_BITS_V1 {
+        return Err(JindoSamplingErrorV1::SampleOutOfRange);
+    }
+    let numerator = squared_delta_q256.shl_vartime(Q128_FRACTION_BITS_V1);
+    let sigma_q64 = U128::from_u128(width.sigma_q64());
+    let sigma_squared_q128: U256 = sigma_q64.mul(&sigma_q64);
+    let denominator = U512::from(&sigma_squared_q128.shl_vartime(1));
+    let Some(nonzero_denominator) = Option::<NonZero<U512>>::from(NonZero::new(denominator)) else {
+        return Err(JindoSamplingErrorV1::SampleOutOfRange);
+    };
+    let (quotient, remainder) = numerator.div_rem(&nonzero_denominator);
+    Ok(if remainder.shl_vartime(1) >= denominator {
+        // Admissible endpoints are below exponent 99 (pinned in tests), hence
+        // the rounded result is below 99 * 2^256.
+        quotient.wrapping_add(&U512::ONE)
+    } else {
+        quotient
+    })
+}
+
+fn q256_mul_round_v1(left: U512, right: U512) -> U512 {
+    // All decay operands are in `[0, 2^256]`; the product plus half an ulp is
+    // below 2^513 and therefore exact in U1024.
+    let product: U1024 = left.mul(&right);
+    let rounded = product
+        .wrapping_add(&U1024::ONE.shl_vartime(Q256_FRACTION_BITS_V1 - 1))
+        .shr_vartime(Q256_FRACTION_BITS_V1);
+    let (high, low) = rounded.split();
+    debug_assert_eq!(high, U512::ZERO);
+    low
+}
+
+fn q256_div_small_round_v1(value: U512, divisor: u64) -> U512 {
+    debug_assert!(divisor > 0);
+    let Ok(divisor_word) = u32::try_from(divisor) else {
+        return U512::ZERO;
+    };
+    let divisor_limb = Limb::from_u32(divisor_word);
+    let Some(nonzero_divisor) = Option::<NonZero<Limb>>::from(NonZero::new(divisor_limb)) else {
+        return U512::ZERO;
+    };
+    // `value <= 2^256` and `divisor <= 96`, so the rounding addition cannot
+    // approach the U512 boundary.
+    value
+        .wrapping_add(&U512::from_u64(divisor >> 1))
+        .div_rem_limb(nonzero_divisor)
+        .0
+}
+
+fn small_decay_q256_v1(value: U512, terms: usize) -> U512 {
+    let one = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1);
+    let mut sum = one;
+    let mut term = one;
+    for index in 1..=terms {
+        let Ok(divisor) = u64::try_from(index) else {
+            return U512::ZERO;
+        };
+        term = q256_div_small_round_v1(q256_mul_round_v1(term, value), divisor);
+        if term == U512::ZERO {
+            break;
+        }
+        if index % 2 == 0 {
+            // For `value <= 1`, alternating partial sums remain in `[0, 1]`
+            // after the second term; these fixed-point operations cannot wrap.
+            sum = sum.wrapping_add(&term);
+        } else {
+            sum = sum.wrapping_sub(&term);
+        }
+    }
+    sum
+}
+
+fn integer_decay_table_q256_v1() -> &'static [U512; MAX_DECAY_INTEGER_V1 + 1] {
+    static TABLE: OnceLock<[U512; MAX_DECAY_INTEGER_V1 + 1]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let one = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1);
+        let decay_one = small_decay_q256_v1(one, UNIT_DECAY_SERIES_TERMS_V1);
+        let mut table = [U512::ZERO; MAX_DECAY_INTEGER_V1 + 1];
+        table[0] = one;
+        for index in 1..table.len() {
+            table[index] = q256_mul_round_v1(table[index - 1], decay_one);
+        }
+        table
+    })
+}
+
+fn fraction_decay_table_q256_v1() -> &'static [U512; FRACTION_TABLE_LEN_V1] {
+    static TABLE: OnceLock<[U512; FRACTION_TABLE_LEN_V1]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let one = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1);
+        let step = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1);
+        let decay_step = small_decay_q256_v1(step, FRACTION_STEP_SERIES_TERMS_V1);
+        let mut table = [U512::ZERO; FRACTION_TABLE_LEN_V1];
+        table[0] = one;
+        for index in 1..table.len() {
+            table[index] = q256_mul_round_v1(table[index - 1], decay_step);
+        }
+        table
+    })
+}
+
+fn decay_q256_v1(value: U512) -> U512 {
+    let bytes = value.to_be_bytes();
+    if bytes[..31].iter().any(|byte| *byte != 0) {
+        return U512::ZERO;
+    }
+    let integer_byte = bytes[31];
+    let integer = usize::from(integer_byte);
+    if integer > MAX_DECAY_INTEGER_V1 {
+        return U512::ZERO;
+    }
+    let fraction_word = (u16::from(bytes[32]) << 4) | u16::from(bytes[33] >> 4);
+    let fraction_index = usize::from(fraction_word);
+    let integer_part = U512::from_u64(u64::from(integer_byte)).shl_vartime(Q256_FRACTION_BITS_V1);
+    let fraction_part = U512::from_u64(u64::from(fraction_word))
+        .shl_vartime(Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1);
+    let residual = value
+        // Integer and fractional parts are extracted from `value` itself, so
+        // both subtractions are ordered and exact.
+        .wrapping_sub(&integer_part)
+        .wrapping_sub(&fraction_part);
+    let residual_decay = small_decay_q256_v1(residual, RESIDUAL_DECAY_SERIES_TERMS_V1);
+    q256_mul_round_v1(
+        q256_mul_round_v1(
+            integer_decay_table_q256_v1()[integer],
+            fraction_decay_table_q256_v1()[fraction_index],
+        ),
+        residual_decay,
+    )
+}
+
+fn decay_threshold_u256_v1(value: U512) -> Option<U256> {
+    let (high, low) = decay_q256_v1(value).split();
+    if high != U256::ZERO {
+        return None;
+    }
+    Some(low)
+}
+
+// INTEGER_ONLY_PRODUCTION_END
+
+#[cfg(test)]
+#[path = "sampling_integer_tests.rs"]
+mod tests;

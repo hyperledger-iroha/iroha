@@ -4,7 +4,7 @@
 //! domain. Exact decimals and quantities use canonical strings so they never
 //! pass through floating-point conversion.
 
-use core::str::FromStr;
+use core::{fmt::Write as _, str::FromStr};
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -18,15 +18,19 @@ use iroha_primitives::{
     numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
 };
 use ivm_abi::{
+    codec::encode_canonical_norito,
     json::{
-        JsonConstructionNodeV1, JsonConstructionSchemaV1, MAX_JSON_CONSTRUCTION_SCHEMA_BYTES_V1,
+        JsonConstructionNodeV1, JsonConstructionSchemaV1, MAX_JSON_CONSTRUCTION_NODES_V1,
+        MAX_JSON_CONSTRUCTION_SCHEMA_BYTES_V1, MAX_JSON_LITERAL_ITEMS_V1,
     },
-    state_value::{MAX_STATE_VALUE_WORDS, StateValueKindV1, StateValueNodeV1, StateValueSchemaV1},
+    state_value::{
+        MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_WORDS, StateValueKindV1, StateValueNodeV1,
+        StateValueSchemaV1,
+    },
 };
-use norito::{
-    NoritoDeserialize, core::NoritoSerialize, decode_from_bytes, json as njson,
-    json::native::Number as JsonNumber, to_bytes,
-};
+#[cfg(test)]
+use norito::{decode_from_bytes, to_bytes};
+use norito::{json as njson, json::native::Number as JsonNumber};
 
 use crate::{
     IVM, PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls,
@@ -54,6 +58,188 @@ pub struct JsonGetterCost {
 struct BuildStats {
     source_bytes: usize,
     collection_elements: usize,
+}
+
+fn drain_json_values_stack_safe(values: &mut Vec<njson::Value>) {
+    let mut pending = core::mem::take(values);
+    while let Some(value) = pending.pop() {
+        match value {
+            njson::Value::Array(mut children) => pending.append(&mut children),
+            njson::Value::Object(object) => pending.extend(object.into_values()),
+            njson::Value::Null
+            | njson::Value::Bool(_)
+            | njson::Value::Number(_)
+            | njson::Value::String(_) => {}
+        }
+    }
+}
+
+// `norito::json::Value` has no custom destructor, so an owned deeply nested
+// array/object must be dismantled iteratively on every early-return path.
+#[derive(Debug)]
+struct StackSafeJsonValue(Option<njson::Value>);
+
+impl StackSafeJsonValue {
+    fn new(value: njson::Value) -> Self {
+        Self(Some(value))
+    }
+
+    fn value(&self) -> &njson::Value {
+        self.0.as_ref().expect("stack-safe JSON value is present")
+    }
+
+    fn into_inner(mut self) -> njson::Value {
+        self.0.take().expect("stack-safe JSON value is present")
+    }
+}
+
+impl Drop for StackSafeJsonValue {
+    fn drop(&mut self) {
+        if let Some(value) = self.0.take() {
+            let mut values = vec![value];
+            drain_json_values_stack_safe(&mut values);
+        }
+    }
+}
+
+#[derive(Default)]
+struct StackSafeJsonValues(Vec<njson::Value>);
+
+impl StackSafeJsonValues {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn push(&mut self, value: njson::Value) {
+        self.0.push(value);
+    }
+
+    fn push_guarded(&mut self, value: StackSafeJsonValue) {
+        self.push(value.into_inner());
+    }
+
+    fn split_off(&mut self, at: usize) -> Vec<njson::Value> {
+        self.0.split_off(at)
+    }
+
+    fn into_only(mut self) -> Result<StackSafeJsonValue, VMError> {
+        if self.0.len() != 1 {
+            return Err(VMError::DecodeError);
+        }
+        Ok(StackSafeJsonValue::new(
+            self.0.pop().ok_or(VMError::DecodeError)?,
+        ))
+    }
+}
+
+impl Drop for StackSafeJsonValues {
+    fn drop(&mut self) {
+        drain_json_values_stack_safe(&mut self.0);
+    }
+}
+
+fn escape_json_string(value: &str, output: &mut String) {
+    const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+
+    output.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            character if (character as u32) < 0x20 => {
+                output.push_str("\\u00");
+                output.push(HEX_DIGITS[((character as u32 >> 4) & 0xF) as usize] as char);
+                output.push(HEX_DIGITS[(character as u32 & 0xF) as usize] as char);
+            }
+            _ => output.push(character),
+        }
+    }
+    output.push('"');
+}
+
+fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
+    enum Task<'a> {
+        Value {
+            value: &'a njson::Value,
+            depth: usize,
+        },
+        Escaped(&'a str),
+        Byte(char),
+    }
+
+    let mut output = String::new();
+    let mut pending = vec![Task::Value { value, depth: 1 }];
+    while let Some(task) = pending.pop() {
+        match task {
+            Task::Escaped(value) => escape_json_string(value, &mut output),
+            Task::Byte(value) => output.push(value),
+            Task::Value { value, depth } => {
+                if depth > njson::MAX_JSON_VALUE_NESTING_DEPTH {
+                    return Err(VMError::DecodeError);
+                }
+                match value {
+                    njson::Value::Null => output.push_str("null"),
+                    njson::Value::Bool(value) => {
+                        output.push_str(if *value { "true" } else { "false" });
+                    }
+                    njson::Value::Number(value) => match value {
+                        JsonNumber::I64(value) => output.push_str(&value.to_string()),
+                        JsonNumber::U64(value) => output.push_str(&value.to_string()),
+                        JsonNumber::F64(value) => {
+                            if !value.is_finite() {
+                                return Err(VMError::DecodeError);
+                            }
+                            const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0;
+                            if value.fract() == 0.0 && value.abs() <= F64_SAFE_INT {
+                                let _ = write!(output, "{value:.1}");
+                            } else {
+                                let _ = write!(output, "{value:?}");
+                            }
+                        }
+                    },
+                    njson::Value::String(value) => escape_json_string(value, &mut output),
+                    njson::Value::Array(values) => {
+                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        output.push('[');
+                        pending.push(Task::Byte(']'));
+                        for (index, value) in values.iter().enumerate().rev() {
+                            if index + 1 < values.len() {
+                                pending.push(Task::Byte(','));
+                            }
+                            pending.push(Task::Value {
+                                value,
+                                depth: child_depth,
+                            });
+                        }
+                    }
+                    njson::Value::Object(object) => {
+                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        output.push('{');
+                        pending.push(Task::Byte('}'));
+                        for (index, (key, value)) in object.iter().enumerate().rev() {
+                            if index + 1 < object.len() {
+                                pending.push(Task::Byte(','));
+                            }
+                            pending.push(Task::Value {
+                                value,
+                                depth: child_depth,
+                            });
+                            pending.push(Task::Byte(':'));
+                            pending.push(Task::Escaped(key));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Every structural token and string escape was emitted above from a
+    // `Value`; the only otherwise-invalid payloads (non-finite numbers and
+    // excessive depth) were rejected explicitly. Avoid reparsing into another
+    // deeply nested owned `Value` merely to validate and recursively drop it.
+    Ok(Json::from_string_unchecked(output))
 }
 
 fn load_tlv<'a>(
@@ -101,13 +287,9 @@ fn load_getter_tlv<'a>(
 
 fn decode_canonical<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: norito::codec::Decode + norito::codec::Encode,
 {
-    let value = decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
-    if to_bytes(&value).map_err(|_| VMError::DecodeError)? != payload {
-        return Err(VMError::DecodeError);
-    }
-    Ok(value)
+    ivm_abi::codec::decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
 
 fn allocate_tlv(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> Result<u64, VMError> {
@@ -163,17 +345,21 @@ fn state_node_word_count(
     nodes: &[StateValueNodeV1],
     node_index: &mut usize,
 ) -> Result<usize, VMError> {
-    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-    *node_index = node_index.saturating_add(1);
-    match node {
-        StateValueNodeV1::Option => {
-            state_node_word_count(nodes, node_index)?;
-            Ok(1)
+    let mut visited = 0usize;
+    loop {
+        visited = visited.checked_add(1).ok_or(VMError::DecodeError)?;
+        if visited > MAX_STATE_VALUE_NODES {
+            return Err(VMError::DecodeError);
         }
-        StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => Ok(1),
-        StateValueNodeV1::Struct { .. }
-        | StateValueNodeV1::Tuple { .. }
-        | StateValueNodeV1::Result => Err(VMError::DecodeError),
+        let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
+        *node_index = node_index.checked_add(1).ok_or(VMError::DecodeError)?;
+        match node {
+            StateValueNodeV1::Option => {}
+            StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => return Ok(1),
+            StateValueNodeV1::Struct { .. }
+            | StateValueNodeV1::Tuple { .. }
+            | StateValueNodeV1::Result => return Err(VMError::DecodeError),
+        }
     }
 }
 
@@ -287,110 +473,148 @@ fn convert_leaf(
     })
 }
 
-fn convert_state_node(
-    vm: &IVM,
-    nodes: &[StateValueNodeV1],
-    node_index: &mut usize,
-    words: &[u64],
-    word_index: &mut usize,
-    resolver: AddressResolver,
-    stats: &mut BuildStats,
-) -> Result<njson::Value, VMError> {
-    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-    *node_index = node_index.saturating_add(1);
-    match node {
-        StateValueNodeV1::Option => {
-            let handle = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            if crate::dev_env::decode_trace_enabled() {
-                eprintln!("[json] convert Option handle=0x{handle:x}");
-            }
-            *word_index = word_index.saturating_add(1);
-            let child_start = *node_index;
-            let mut child_end = child_start;
-            let child_words = state_node_word_count(nodes, &mut child_end)?;
-            let layout = crate::sum::SumLayoutV1::option(
-                u64::try_from(child_words).map_err(|_| VMError::DecodeError)?,
-            )
-            .map_err(|_| VMError::DecodeError)?;
-            let (some, payload) = crate::sum::read_words(vm, handle, layout)?;
-            if !some {
-                *node_index = child_end;
-                return Ok(njson::Value::Null);
-            }
-            let mut payload_index = 0;
-            let value = convert_state_node(
-                vm,
-                nodes,
-                node_index,
-                &payload,
-                &mut payload_index,
-                resolver,
-                stats,
-            )?;
-            if *node_index != child_end || payload_index != payload.len() {
-                return Err(VMError::DecodeError);
-            }
-            Ok(value)
-        }
-        StateValueNodeV1::List { element, capacity } => {
-            let handle = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            if crate::dev_env::decode_trace_enabled() {
-                eprintln!(
-                    "[json] convert List handle=0x{handle:x} capacity={capacity} element_words={:?}",
-                    element.word_count()
-                );
-            }
-            *word_index = word_index.saturating_add(1);
-            let element_words = element.word_count().ok_or(VMError::DecodeError)?;
-            let layout = crate::list::ListLayoutV1::try_new(
-                u64::from(*capacity),
-                u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
-            )
-            .map_err(|_| VMError::DecodeError)?;
-            let items = crate::list::read_words(vm, handle, layout)?;
-            stats.collection_elements = stats.collection_elements.saturating_add(items.len());
-            let values = items
-                .into_iter()
-                .map(|item| convert_state_schema(vm, element, &item, resolver, stats))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(njson::Value::Array(values))
-        }
-        StateValueNodeV1::Leaf(kind) => {
-            let word = *words.get(*word_index).ok_or(VMError::DecodeError)?;
-            *word_index = word_index.saturating_add(1);
-            convert_leaf(vm, *kind, word, resolver, stats)
-        }
-        StateValueNodeV1::Struct { .. }
-        | StateValueNodeV1::Tuple { .. }
-        | StateValueNodeV1::Result => Err(VMError::DecodeError),
-    }
-}
-
 fn convert_state_schema(
     vm: &IVM,
     schema: &StateValueSchemaV1,
     words: &[u64],
     resolver: AddressResolver,
     stats: &mut BuildStats,
-) -> Result<njson::Value, VMError> {
-    let mut node_index = 0;
-    let mut word_index = 0;
-    let value = convert_state_node(
-        vm,
-        &schema.nodes,
-        &mut node_index,
-        words,
-        &mut word_index,
-        resolver,
-        stats,
-    )?;
-    if node_index != schema.nodes.len() || word_index != words.len() {
+) -> Result<StackSafeJsonValue, VMError> {
+    enum Pending<'a> {
+        Convert {
+            nodes: &'a [StateValueNodeV1],
+            node_start: usize,
+            node_end: usize,
+            words: Vec<u64>,
+            depth: usize,
+        },
+        FinishList {
+            value_start: usize,
+            item_count: usize,
+        },
+    }
+
+    let mut root_end = 0usize;
+    state_node_word_count(&schema.nodes, &mut root_end)?;
+    if root_end != schema.nodes.len() {
         return Err(VMError::DecodeError);
     }
-    Ok(value)
+    let mut pending = vec![Pending::Convert {
+        nodes: &schema.nodes,
+        node_start: 0,
+        node_end: root_end,
+        words: words.to_vec(),
+        depth: 1,
+    }];
+    let mut completed = StackSafeJsonValues::default();
+    while let Some(task) = pending.pop() {
+        match task {
+            Pending::Convert {
+                nodes,
+                mut node_start,
+                node_end,
+                mut words,
+                mut depth,
+            } => loop {
+                if depth > MAX_STATE_VALUE_NODES || words.len() != 1 {
+                    return Err(VMError::DecodeError);
+                }
+                let node = nodes.get(node_start).ok_or(VMError::DecodeError)?;
+                let next_node = node_start.checked_add(1).ok_or(VMError::DecodeError)?;
+                match node {
+                    StateValueNodeV1::Option => {
+                        let handle = words[0];
+                        if crate::dev_env::decode_trace_enabled() {
+                            eprintln!("[json] convert Option handle=0x{handle:x}");
+                        }
+                        let child_start = next_node;
+                        let mut child_end = child_start;
+                        let child_words = state_node_word_count(nodes, &mut child_end)?;
+                        if child_end != node_end {
+                            return Err(VMError::DecodeError);
+                        }
+                        let layout = crate::sum::SumLayoutV1::option(
+                            u64::try_from(child_words).map_err(|_| VMError::DecodeError)?,
+                        )
+                        .map_err(|_| VMError::DecodeError)?;
+                        let (some, payload) = crate::sum::read_words(vm, handle, layout)?;
+                        if !some {
+                            completed.push(njson::Value::Null);
+                            break;
+                        }
+                        node_start = child_start;
+                        words = payload;
+                        depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                    }
+                    StateValueNodeV1::List { element, capacity } => {
+                        if next_node != node_end {
+                            return Err(VMError::DecodeError);
+                        }
+                        if crate::dev_env::decode_trace_enabled() {
+                            eprintln!(
+                                "[json] convert List handle=0x{:x} capacity={capacity} element_words={:?}",
+                                words[0],
+                                element.word_count()
+                            );
+                        }
+                        let mut element_end = 0usize;
+                        let element_words =
+                            state_node_word_count(&element.nodes, &mut element_end)?;
+                        if element_end != element.nodes.len() {
+                            return Err(VMError::DecodeError);
+                        }
+                        let layout = crate::list::ListLayoutV1::try_new(
+                            u64::from(*capacity),
+                            u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+                        )
+                        .map_err(|_| VMError::DecodeError)?;
+                        let items = crate::list::read_words(vm, words[0], layout)?;
+                        stats.collection_elements =
+                            stats.collection_elements.saturating_add(items.len());
+                        let value_start = completed.len();
+                        let item_count = items.len();
+                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        pending.push(Pending::FinishList {
+                            value_start,
+                            item_count,
+                        });
+                        pending.extend(items.into_iter().rev().map(|words| Pending::Convert {
+                            nodes: &element.nodes,
+                            node_start: 0,
+                            node_end: element_end,
+                            words,
+                            depth: child_depth,
+                        }));
+                        break;
+                    }
+                    StateValueNodeV1::Leaf(kind) => {
+                        if next_node != node_end {
+                            return Err(VMError::DecodeError);
+                        }
+                        completed.push(convert_leaf(vm, *kind, words[0], resolver, stats)?);
+                        break;
+                    }
+                    StateValueNodeV1::Struct { .. }
+                    | StateValueNodeV1::Tuple { .. }
+                    | StateValueNodeV1::Result => return Err(VMError::DecodeError),
+                }
+            },
+            Pending::FinishList {
+                value_start,
+                item_count,
+            } => {
+                if completed.len().checked_sub(value_start) != Some(item_count) {
+                    return Err(VMError::DecodeError);
+                }
+                let values = completed.split_off(value_start);
+                completed.push(njson::Value::Array(values));
+            }
+        }
+    }
+    completed.into_only()
 }
 
-fn convert_construction_node(
+fn convert_construction_schema(
     vm: &IVM,
     nodes: &[JsonConstructionNodeV1],
     node_index: &mut usize,
@@ -398,41 +622,135 @@ fn convert_construction_node(
     word_index: &mut usize,
     resolver: AddressResolver,
     stats: &mut BuildStats,
-) -> Result<njson::Value, VMError> {
-    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-    *node_index = node_index.saturating_add(1);
-    match node {
-        JsonConstructionNodeV1::Object { keys } => {
-            stats.collection_elements = stats.collection_elements.saturating_add(keys.len());
-            let mut object = njson::Map::new();
-            for key in keys {
-                let value = convert_construction_node(
-                    vm, nodes, node_index, words, word_index, resolver, stats,
-                )?;
-                object.insert(key.clone(), value);
+) -> Result<StackSafeJsonValue, VMError> {
+    enum Pending<'a> {
+        Convert {
+            depth: usize,
+        },
+        FinishObject {
+            keys: &'a [String],
+            value_start: usize,
+        },
+        FinishArray {
+            value_start: usize,
+            item_count: usize,
+        },
+    }
+
+    if nodes.is_empty() || nodes.len() > MAX_JSON_CONSTRUCTION_NODES_V1 {
+        return Err(VMError::DecodeError);
+    }
+    let mut next_node = *node_index;
+    let mut next_word = *word_index;
+    let mut visited = 0usize;
+    let mut pending = vec![Pending::Convert { depth: 1 }];
+    let mut completed = StackSafeJsonValues::default();
+    while let Some(task) = pending.pop() {
+        match task {
+            Pending::Convert { depth } => {
+                visited = visited.checked_add(1).ok_or(VMError::DecodeError)?;
+                if visited > MAX_JSON_CONSTRUCTION_NODES_V1
+                    || depth > MAX_JSON_CONSTRUCTION_NODES_V1
+                {
+                    return Err(VMError::DecodeError);
+                }
+                let node = nodes.get(next_node).ok_or(VMError::DecodeError)?;
+                next_node = next_node.checked_add(1).ok_or(VMError::DecodeError)?;
+                match node {
+                    JsonConstructionNodeV1::Object { keys } => {
+                        if keys.len() > MAX_JSON_LITERAL_ITEMS_V1
+                            || keys
+                                .iter()
+                                .enumerate()
+                                .any(|(index, key)| keys[..index].contains(key))
+                        {
+                            return Err(VMError::DecodeError);
+                        }
+                        stats.collection_elements =
+                            stats.collection_elements.saturating_add(keys.len());
+                        let value_start = completed.len();
+                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        let required_tasks = pending
+                            .len()
+                            .checked_add(1)
+                            .and_then(|count| count.checked_add(keys.len()))
+                            .ok_or(VMError::DecodeError)?;
+                        if required_tasks > MAX_JSON_CONSTRUCTION_NODES_V1 {
+                            return Err(VMError::DecodeError);
+                        }
+                        pending.push(Pending::FinishObject { keys, value_start });
+                        pending.extend(
+                            (0..keys.len()).map(|_| Pending::Convert { depth: child_depth }),
+                        );
+                    }
+                    JsonConstructionNodeV1::Array { arity } => {
+                        let item_count = usize::from(*arity);
+                        if item_count > MAX_JSON_LITERAL_ITEMS_V1 {
+                            return Err(VMError::DecodeError);
+                        }
+                        stats.collection_elements =
+                            stats.collection_elements.saturating_add(item_count);
+                        let value_start = completed.len();
+                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        let required_tasks = pending
+                            .len()
+                            .checked_add(1)
+                            .and_then(|count| count.checked_add(item_count))
+                            .ok_or(VMError::DecodeError)?;
+                        if required_tasks > MAX_JSON_CONSTRUCTION_NODES_V1 {
+                            return Err(VMError::DecodeError);
+                        }
+                        pending.push(Pending::FinishArray {
+                            value_start,
+                            item_count,
+                        });
+                        pending.extend(
+                            (0..item_count).map(|_| Pending::Convert { depth: child_depth }),
+                        );
+                    }
+                    JsonConstructionNodeV1::Value { schema } => {
+                        let count = schema.word_count().ok_or(VMError::DecodeError)?;
+                        let end = next_word.checked_add(count).ok_or(VMError::DecodeError)?;
+                        let value_words = words.get(next_word..end).ok_or(VMError::DecodeError)?;
+                        next_word = end;
+                        completed.push_guarded(convert_state_schema(
+                            vm,
+                            schema,
+                            value_words,
+                            resolver,
+                            stats,
+                        )?);
+                    }
+                }
             }
-            Ok(njson::Value::Object(object))
-        }
-        JsonConstructionNodeV1::Array { arity } => {
-            stats.collection_elements = stats
-                .collection_elements
-                .saturating_add(usize::from(*arity));
-            let mut values = Vec::with_capacity(usize::from(*arity));
-            for _ in 0..*arity {
-                values.push(convert_construction_node(
-                    vm, nodes, node_index, words, word_index, resolver, stats,
-                )?);
+            Pending::FinishObject { keys, value_start } => {
+                if completed.len().checked_sub(value_start) != Some(keys.len()) {
+                    return Err(VMError::DecodeError);
+                }
+                let values = completed.split_off(value_start);
+                let mut object = njson::Map::new();
+                for (key, value) in keys.iter().cloned().zip(values) {
+                    let replaced = object.insert(key, value);
+                    debug_assert!(replaced.is_none(), "duplicate JSON keys were rejected");
+                }
+                completed.push(njson::Value::Object(object));
             }
-            Ok(njson::Value::Array(values))
-        }
-        JsonConstructionNodeV1::Value { schema } => {
-            let count = schema.word_count().ok_or(VMError::DecodeError)?;
-            let end = word_index.checked_add(count).ok_or(VMError::DecodeError)?;
-            let value_words = words.get(*word_index..end).ok_or(VMError::DecodeError)?;
-            *word_index = end;
-            convert_state_schema(vm, schema, value_words, resolver, stats)
+            Pending::FinishArray {
+                value_start,
+                item_count,
+            } => {
+                if completed.len().checked_sub(value_start) != Some(item_count) {
+                    return Err(VMError::DecodeError);
+                }
+                let values = completed.split_off(value_start);
+                completed.push(njson::Value::Array(values));
+            }
         }
     }
+    let value = completed.into_only()?;
+    *node_index = next_node;
+    *word_index = next_word;
+    Ok(value)
 }
 
 /// Deterministic gas charged by [`build_json`].
@@ -493,7 +811,7 @@ pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMErro
     let mut stats = BuildStats::default();
     let mut node_index = 0;
     let mut word_index = 0;
-    let value = convert_construction_node(
+    let value = convert_construction_schema(
         vm,
         &schema.nodes,
         &mut node_index,
@@ -512,8 +830,10 @@ pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMErro
     if node_index != schema.nodes.len() || word_index != words.len() {
         return Err(VMError::DecodeError);
     }
-    let json = Json::from(value);
-    let payload = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+    let json = json_from_value_ref(value.value());
+    drop(value);
+    let json = json?;
+    let payload = encode_canonical_norito(&json)?;
     if crate::dev_env::decode_trace_enabled() {
         eprintln!("[json] encoded JSON payload: bytes={}", payload.len());
     }
@@ -591,8 +911,8 @@ fn canonical_json_integer(field: &njson::Value) -> Option<BigInt> {
 fn getter_value(number: u32, field: &njson::Value) -> Option<(PointerType, Vec<u8>)> {
     Some(match number {
         syscalls::SYSCALL_JSON_GET_JSON => {
-            let json = Json::from_norito_value_ref(field).ok()?;
-            (PointerType::Json, to_bytes(&json).ok()?)
+            let json = json_from_value_ref(field).ok()?;
+            (PointerType::Json, encode_canonical_norito(&json).ok()?)
         }
         syscalls::SYSCALL_JSON_GET_NAME => {
             let raw = field.as_str()?;
@@ -600,22 +920,22 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<(PointerType, Vec<u
             if value.as_ref() != raw {
                 return None;
             }
-            (PointerType::Name, to_bytes(&value).ok()?)
+            (PointerType::Name, encode_canonical_norito(&value).ok()?)
         }
         syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => (
             PointerType::AccountId,
-            to_bytes(&canonical_account(field.as_str()?)?).ok()?,
+            encode_canonical_norito(&canonical_account(field.as_str()?)?).ok()?,
         ),
         syscalls::SYSCALL_JSON_GET_NFT_ID => (
             PointerType::NftId,
-            to_bytes(&canonical_from_str::<NftId>(field.as_str()?)?).ok()?,
+            encode_canonical_norito(&canonical_from_str::<NftId>(field.as_str()?)?).ok()?,
         ),
         syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
             (PointerType::Blob, canonical_hex_bytes(field.as_str()?)?)
         }
         syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID => (
             PointerType::AssetDefinitionId,
-            to_bytes(&canonical_asset_definition(field.as_str()?)?).ok()?,
+            encode_canonical_norito(&canonical_asset_definition(field.as_str()?)?).ok()?,
         ),
         syscalls::SYSCALL_JSON_GET_INT => {
             let frame = IntValueV1::try_new(canonical_json_integer(field)?)
@@ -662,13 +982,16 @@ pub fn typed_getter(
     let key_tlv = load_getter_tlv(vm, vm.register(11), PointerType::Name, direct, resolver)?;
     let json: Json = decode_canonical(json_tlv.payload)?;
     let key: Name = decode_canonical(key_tlv.payload)?;
-    let value: njson::Value = json
-        .try_into_any_norito()
-        .map_err(|_| VMError::DecodeError)?;
+    let value = StackSafeJsonValue::new(
+        json.try_into_any_norito()
+            .map_err(|_| VMError::DecodeError)?,
+    );
     let converted = value
+        .value()
         .as_object()
         .and_then(|object| object.get(key.as_ref()))
         .and_then(|field| getter_value(canonical, field));
+    drop(value);
     let input_bytes = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
     let layout = crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
     let (handle, payload_bytes) = match converted {
@@ -723,6 +1046,518 @@ mod tests {
         QuantityValueV1::new(value)
             .encode_frame()
             .expect("quantity frame")
+    }
+
+    fn nested_list_fixture(
+        vm: &mut IVM,
+        wrappers: usize,
+        kind: StateValueKindV1,
+        mut word: u64,
+    ) -> (StateValueSchemaV1, u64) {
+        let mut schema = leaf(kind);
+        let layout = crate::list::ListLayoutV1::try_new(1, 1).expect("unary list layout");
+        for _ in 0..wrappers {
+            word =
+                crate::list::allocate_words(vm, layout, &[vec![word]]).expect("nested list value");
+            schema = StateValueSchemaV1 {
+                nodes: vec![StateValueNodeV1::List {
+                    element: Box::new(schema),
+                    capacity: 1,
+                }],
+            };
+        }
+        (schema, word)
+    }
+
+    fn nested_option_schema(wrappers: usize, kind: StateValueKindV1) -> StateValueSchemaV1 {
+        let mut nodes = vec![StateValueNodeV1::Option; wrappers];
+        nodes.push(StateValueNodeV1::Leaf(kind));
+        StateValueSchemaV1 { nodes }
+    }
+
+    fn nested_some_options(vm: &mut IVM, wrappers: usize, mut word: u64) -> u64 {
+        let layout = crate::sum::SumLayoutV1::option(1).expect("unary Option layout");
+        for _ in 0..wrappers {
+            word = crate::sum::allocate_words(vm, layout, 1, &[word]).expect("nested Option::some");
+        }
+        word
+    }
+
+    fn install_build_inputs(vm: &mut IVM, schema: &JsonConstructionSchemaV1, words: &[u64]) {
+        assert!(schema.validate(), "test construction schema must be valid");
+        let schema_payload =
+            encode_canonical_norito(schema).expect("canonical construction schema");
+        let schema_pointer = vm
+            .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &schema_payload))
+            .expect("construction schema TLV");
+        let byte_len = u64::try_from(words.len())
+            .expect("test word count")
+            .checked_mul(8)
+            .expect("test word table length");
+        let word_table = vm.alloc_heap(byte_len).expect("construction word table");
+        for (index, word) in words.iter().copied().enumerate() {
+            let offset = u64::try_from(index)
+                .expect("test word index")
+                .checked_mul(8)
+                .expect("test word offset");
+            vm.store_u64(word_table + offset, word)
+                .expect("construction table word");
+        }
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, word_table);
+        vm.set_register(
+            12,
+            u64::try_from(words.len()).expect("test construction word count"),
+        );
+    }
+
+    fn getter_payload(
+        vm: &mut IVM,
+        json_pointer: u64,
+        key: &str,
+        syscall: u32,
+    ) -> (PointerType, Vec<u8>) {
+        let key: Name = key.parse().expect("valid JSON key");
+        let key_payload = encode_canonical_norito(&key).expect("canonical key payload");
+        let key_pointer = vm
+            .alloc_input_tlv(&tlv(PointerType::Name, &key_payload))
+            .expect("key TLV");
+        vm.set_register(10, json_pointer);
+        vm.set_register(11, key_pointer);
+        typed_getter(vm, syscall, CoreHost::resolve_code_tlv_addr).expect("typed JSON getter");
+        let (some, words) = crate::sum::read_words(
+            vm,
+            vm.register(10),
+            crate::sum::SumLayoutV1::option(1).expect("typed getter Option layout"),
+        )
+        .expect("read typed getter Option");
+        assert!(some, "fixture field must produce Option::some");
+        assert_eq!(words.len(), 1);
+        let output = vm.validate_tlv(words[0]).expect("typed getter output TLV");
+        (output.type_id, output.payload.to_vec())
+    }
+
+    #[test]
+    fn construction_schema_decode_rejects_alternate_layouts_independently_of_ambient_flags() {
+        let schema = JsonConstructionSchemaV1 {
+            nodes: vec![
+                JsonConstructionNodeV1::Object {
+                    keys: vec!["value".to_owned()],
+                },
+                JsonConstructionNodeV1::Value {
+                    schema: leaf(StateValueKindV1::Int),
+                },
+            ],
+        };
+        let canonical =
+            ivm_abi::codec::encode_canonical_norito(&schema).expect("canonical JSON schema");
+        assert_eq!(
+            decode_canonical::<JsonConstructionSchemaV1>(&canonical),
+            Ok(schema.clone())
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            to_bytes(&schema).expect("alternate JSON schema")
+        };
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            decode_canonical::<JsonConstructionSchemaV1>(&alternate),
+            Err(VMError::DecodeError)
+        );
+
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before = to_bytes(&schema).expect("ambient JSON schema");
+        assert_eq!(
+            decode_canonical::<JsonConstructionSchemaV1>(&canonical),
+            Ok(schema.clone())
+        );
+        assert_eq!(
+            to_bytes(&schema).expect("ambient JSON schema after decode"),
+            ambient_before
+        );
+    }
+
+    #[test]
+    fn native_json_state_conversion_is_bounded_and_stack_safe_at_256_schema_nodes() {
+        std::thread::Builder::new()
+            .name("json-state-small-stack".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut vm = IVM::new(u64::MAX);
+                let (list_schema, list_handle) = nested_list_fixture(
+                    &mut vm,
+                    MAX_STATE_VALUE_NODES - 1,
+                    StateValueKindV1::Bool,
+                    1,
+                );
+                let mut stats = BuildStats::default();
+                let value = convert_state_schema(
+                    &vm,
+                    &list_schema,
+                    &[list_handle],
+                    CoreHost::resolve_code_tlv_addr,
+                    &mut stats,
+                )
+                .expect("convert 255 nested Lists");
+                let mut current = value.value();
+                for _ in 0..MAX_STATE_VALUE_NODES - 1 {
+                    let njson::Value::Array(items) = current else {
+                        panic!("each nested List must produce a JSON array");
+                    };
+                    assert_eq!(items.len(), 1);
+                    current = &items[0];
+                }
+                assert_eq!(current, &njson::Value::Bool(true));
+                assert_eq!(stats.collection_elements, MAX_STATE_VALUE_NODES - 1);
+                drop(value);
+
+                let option_schema =
+                    nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
+                let option_handle = nested_some_options(&mut vm, MAX_STATE_VALUE_NODES - 1, 1);
+                let mut stats = BuildStats::default();
+                let option_value = convert_state_schema(
+                    &vm,
+                    &option_schema,
+                    &[option_handle],
+                    CoreHost::resolve_code_tlv_addr,
+                    &mut stats,
+                )
+                .expect("convert 255 nested Options");
+                assert_eq!(option_value.value(), &njson::Value::Bool(true));
+                drop(option_value);
+
+                let (too_deep, too_deep_handle) =
+                    nested_list_fixture(&mut vm, MAX_STATE_VALUE_NODES, StateValueKindV1::Bool, 1);
+                assert!(matches!(
+                    convert_state_schema(
+                        &vm,
+                        &too_deep,
+                        &[too_deep_handle],
+                        CoreHost::resolve_code_tlv_addr,
+                        &mut BuildStats::default(),
+                    ),
+                    Err(VMError::DecodeError)
+                ));
+
+                let malformed_schema =
+                    nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
+                let option_layout =
+                    crate::sum::SumLayoutV1::option(1).expect("unary Option layout");
+                let malformed_inner = crate::sum::allocate_words(&mut vm, option_layout, 0, &[])
+                    .expect("innermost Option::none");
+                vm.store_u64(malformed_inner + 8, 1)
+                    .expect("forge inactive Option payload");
+                let malformed_outer =
+                    nested_some_options(&mut vm, MAX_STATE_VALUE_NODES - 2, malformed_inner);
+                assert!(matches!(
+                    convert_state_schema(
+                        &vm,
+                        &malformed_schema,
+                        &[malformed_outer],
+                        CoreHost::resolve_code_tlv_addr,
+                        &mut BuildStats::default(),
+                    ),
+                    Err(VMError::DecodeError)
+                ));
+
+                let mut node_index = 0usize;
+                assert_eq!(
+                    state_node_word_count(&option_schema.nodes, &mut node_index),
+                    Ok(1)
+                );
+                assert_eq!(node_index, MAX_STATE_VALUE_NODES);
+                let too_many_options =
+                    nested_option_schema(MAX_STATE_VALUE_NODES, StateValueKindV1::Bool);
+                let mut too_many_index = 0usize;
+                assert_eq!(
+                    state_node_word_count(&too_many_options.nodes, &mut too_many_index),
+                    Err(VMError::DecodeError)
+                );
+            })
+            .expect("spawn small-stack JSON state test")
+            .join()
+            .expect("small-stack JSON state test");
+    }
+
+    #[test]
+    fn build_json_deep_success_and_later_invalid_sibling_cleanup_are_stack_safe() {
+        std::thread::Builder::new()
+            .name("json-build-small-stack".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut vm = IVM::new(u64::MAX);
+                let nesting = MAX_STATE_VALUE_NODES - 1;
+                let expected = Json::from_string_unchecked(format!(
+                    "{}true{}",
+                    "[".repeat(nesting),
+                    "]".repeat(nesting)
+                ));
+                let expected_payload =
+                    encode_canonical_norito(&expected).expect("canonical deep JSON payload");
+
+                {
+                    let (state_schema, state_handle) = nested_list_fixture(
+                        &mut vm,
+                        nesting,
+                        StateValueKindV1::Bool,
+                        1,
+                    );
+                    let schema = JsonConstructionSchemaV1 {
+                        nodes: vec![JsonConstructionNodeV1::Value {
+                            schema: state_schema,
+                        }],
+                    };
+                    install_build_inputs(&mut vm, &schema, &[state_handle]);
+                    build_json(&mut vm, CoreHost::resolve_code_tlv_addr)
+                        .expect("build and drop a 255-level state-list JSON value");
+                    let output = vm
+                        .validate_tlv(vm.register(10))
+                        .expect("deep state-list JSON output");
+                    assert_eq!(output.type_id, PointerType::Json);
+                    assert_eq!(output.payload, expected_payload);
+                }
+
+                {
+                    let mut nodes = Vec::with_capacity(MAX_JSON_CONSTRUCTION_NODES_V1);
+                    nodes.extend(
+                        (0..nesting)
+                            .map(|_| JsonConstructionNodeV1::Array { arity: 1 }),
+                    );
+                    nodes.push(JsonConstructionNodeV1::Value {
+                        schema: leaf(StateValueKindV1::Bool),
+                    });
+                    let schema = JsonConstructionSchemaV1 { nodes };
+                    install_build_inputs(&mut vm, &schema, &[1]);
+                    build_json(&mut vm, CoreHost::resolve_code_tlv_addr)
+                        .expect("walk and drop a 256-node construction schema");
+                    let output = vm
+                        .validate_tlv(vm.register(10))
+                        .expect("deep construction JSON output");
+                    assert_eq!(output.type_id, PointerType::Json);
+                    assert_eq!(output.payload, expected_payload);
+                }
+
+                {
+                    let (deep_schema, deep_handle) = nested_list_fixture(
+                        &mut vm,
+                        nesting,
+                        StateValueKindV1::Bool,
+                        1,
+                    );
+                    let schema = JsonConstructionSchemaV1 {
+                        nodes: vec![
+                            JsonConstructionNodeV1::Array { arity: 2 },
+                            JsonConstructionNodeV1::Value {
+                                schema: deep_schema,
+                            },
+                            JsonConstructionNodeV1::Value {
+                                schema: leaf(StateValueKindV1::Bool),
+                            },
+                        ],
+                    };
+                    install_build_inputs(&mut vm, &schema, &[deep_handle, 2]);
+                    assert_eq!(
+                        build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
+                        Err(VMError::DecodeError),
+                        "the valid deep first sibling must be cleaned up after the later invalid Bool"
+                    );
+                }
+            })
+            .expect("spawn small-stack JSON build test")
+            .join()
+            .expect("small-stack JSON build test");
+    }
+
+    #[test]
+    fn build_json_emits_canonical_payload_accepted_by_getter_under_alternate_flags() {
+        let schema = JsonConstructionSchemaV1 {
+            nodes: vec![
+                JsonConstructionNodeV1::Object {
+                    keys: vec!["name".to_owned()],
+                },
+                JsonConstructionNodeV1::Value {
+                    schema: leaf(StateValueKindV1::Name),
+                },
+            ],
+        };
+        let name: Name = "wonderland".parse().expect("canonical name");
+        let schema_payload = encode_canonical_norito(&schema).expect("canonical JSON schema");
+        let name_payload = encode_canonical_norito(&name).expect("canonical name payload");
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = vm
+            .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &schema_payload))
+            .expect("schema TLV");
+        let name_pointer = vm
+            .alloc_input_tlv(&tlv(PointerType::Name, &name_payload))
+            .expect("name TLV");
+        let table = vm.alloc_heap(8).expect("word table");
+        vm.store_u64(table, name_pointer).expect("name table word");
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient_probe = vec!["preserve".to_owned(), "ambient".to_owned()];
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before = to_bytes(&ambient_probe).expect("ambient probe");
+
+        build_json(&mut vm, CoreHost::resolve_code_tlv_addr)
+            .expect("build JSON under alternate ambient flags");
+        let json_pointer = vm.register(10);
+        let json_output = vm.validate_tlv(json_pointer).expect("JSON output TLV");
+        assert_eq!(json_output.type_id, PointerType::Json);
+        let json_payload = json_output.payload.to_vec();
+        let decoded_json: Json =
+            decode_canonical(&json_payload).expect("JSON output is canonically encoded");
+        assert_eq!(
+            decoded_json
+                .clone()
+                .try_into_any_norito::<njson::Value>()
+                .expect("decode JSON value"),
+            norito::json!({"name": "wonderland"})
+        );
+        assert_eq!(
+            json_payload,
+            encode_canonical_norito(&decoded_json).expect("re-encode canonical JSON")
+        );
+
+        let (pointer_type, getter_payload) = getter_payload(
+            &mut vm,
+            json_pointer,
+            "name",
+            syscalls::SYSCALL_JSON_GET_NAME,
+        );
+        assert_eq!(pointer_type, PointerType::Name);
+        assert_eq!(
+            decode_canonical::<Name>(&getter_payload),
+            Ok(name.clone()),
+            "the getter must accept JSON_BUILD output without an ambient-layout compatibility mode"
+        );
+        assert_eq!(
+            getter_payload,
+            encode_canonical_norito(&name).expect("re-encode canonical name")
+        );
+        assert_eq!(
+            to_bytes(&ambient_probe).expect("ambient probe after JSON syscalls"),
+            ambient_before,
+            "canonical output encoding must restore the caller's ambient layout"
+        );
+    }
+
+    #[test]
+    fn typed_getters_emit_all_norito_outputs_canonically_under_alternate_flags() {
+        let name: Name = "wonderland".parse().expect("canonical name");
+        let account = AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let domain = DomainId::try_new("wonderland", "universal").expect("canonical domain");
+        let nft = NftId::new(domain.clone(), "n0".parse().expect("NFT name"));
+        let asset_definition = AssetDefinitionId::new(domain, "rose".parse().expect("asset name"));
+        let nested_value = norito::json!({"inner": true});
+        let nested_json = Json::from(nested_value.clone());
+        let mut object = njson::Map::new();
+        object.insert("json".to_owned(), nested_value);
+        object.insert("name".to_owned(), njson::Value::from(name.to_string()));
+        object.insert(
+            "account".to_owned(),
+            njson::Value::from(account.to_string()),
+        );
+        object.insert("nft".to_owned(), njson::Value::from(nft.to_string()));
+        object.insert(
+            "asset_definition".to_owned(),
+            njson::Value::from(asset_definition.to_string()),
+        );
+        let root = Json::from(njson::Value::Object(object));
+        let root_payload = encode_canonical_norito(&root).expect("canonical root JSON");
+        let mut vm = IVM::new(u64::MAX);
+        let root_pointer = vm
+            .alloc_input_tlv(&tlv(PointerType::Json, &root_payload))
+            .expect("root JSON TLV");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient_probe = vec!["preserve".to_owned(), "ambient".to_owned()];
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before = to_bytes(&ambient_probe).expect("ambient probe");
+
+        let (pointer_type, payload) = getter_payload(
+            &mut vm,
+            root_pointer,
+            "json",
+            syscalls::SYSCALL_JSON_GET_JSON,
+        );
+        assert_eq!(pointer_type, PointerType::Json);
+        assert_eq!(decode_canonical::<Json>(&payload), Ok(nested_json.clone()));
+        assert_eq!(
+            payload,
+            encode_canonical_norito(&nested_json).expect("canonical nested JSON")
+        );
+
+        let (pointer_type, payload) = getter_payload(
+            &mut vm,
+            root_pointer,
+            "name",
+            syscalls::SYSCALL_JSON_GET_NAME,
+        );
+        assert_eq!(pointer_type, PointerType::Name);
+        assert_eq!(decode_canonical::<Name>(&payload), Ok(name.clone()));
+        assert_eq!(
+            payload,
+            encode_canonical_norito(&name).expect("canonical name")
+        );
+
+        let (pointer_type, payload) = getter_payload(
+            &mut vm,
+            root_pointer,
+            "account",
+            syscalls::SYSCALL_JSON_GET_ACCOUNT_ID,
+        );
+        assert_eq!(pointer_type, PointerType::AccountId);
+        assert_eq!(decode_canonical::<AccountId>(&payload), Ok(account.clone()));
+        assert_eq!(
+            payload,
+            encode_canonical_norito(&account).expect("canonical account")
+        );
+
+        let (pointer_type, payload) = getter_payload(
+            &mut vm,
+            root_pointer,
+            "nft",
+            syscalls::SYSCALL_JSON_GET_NFT_ID,
+        );
+        assert_eq!(pointer_type, PointerType::NftId);
+        assert_eq!(decode_canonical::<NftId>(&payload), Ok(nft.clone()));
+        assert_eq!(
+            payload,
+            encode_canonical_norito(&nft).expect("canonical NFT")
+        );
+
+        let (pointer_type, payload) = getter_payload(
+            &mut vm,
+            root_pointer,
+            "asset_definition",
+            syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
+        );
+        assert_eq!(pointer_type, PointerType::AssetDefinitionId);
+        assert_eq!(
+            decode_canonical::<AssetDefinitionId>(&payload),
+            Ok(asset_definition.clone())
+        );
+        assert_eq!(
+            payload,
+            encode_canonical_norito(&asset_definition).expect("canonical asset definition")
+        );
+        assert_eq!(
+            to_bytes(&ambient_probe).expect("ambient probe after typed getters"),
+            ambient_before,
+            "canonical getter encoding must restore the caller's ambient layout"
+        );
     }
 
     #[test]

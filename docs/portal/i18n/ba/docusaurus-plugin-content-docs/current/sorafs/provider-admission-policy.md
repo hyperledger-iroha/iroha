@@ -117,7 +117,7 @@ CLI ағымы хәҙер уртаса сертификат өйөмдәрен �
 1. `provider-admission proposal` һәм `provider-admission sign` менән вариҫлыҡ тәҡдиме/реклама парын төҙөү, `--retention-epoch`-ны арттырыу һәм кәрәк булғанда акциялар/аҙаҡҡы нөктәләрҙе яңыртыу.
 2.  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ CLI ағымы хәҙер уртаса сертификат өйөмдәрен �
 #### Ғәҙәттән тыш хәлдәрҙе тартып алыу
 1. Компрометацияланған конвертты билдәләгеҙ һәм ҡайтарыу сығарыу:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

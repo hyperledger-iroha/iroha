@@ -17,7 +17,11 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, bail};
-use iroha_config::parameters::{actual::SorafsProviderIngestRuntime, is_production_runtime_handle};
+use iroha_config::parameters::{
+    actual::SorafsProviderIngestRuntime,
+    defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
+    is_production_runtime_handle,
+};
 use iroha_core::{
     queue::{Error as QueueError, Queue},
     state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
@@ -45,7 +49,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use mv::storage::StorageReadOnly as _;
 use norito::{core::DecodeLimits, decode_from_bytes_with_limits};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
-use sorafs_car::{CarBuildPlan, compute_chunk_plan_digest_sha3};
+use sorafs_car::{CarBuildPlan, ChunkStoreError, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{
     ManifestV1,
     capacity::{
@@ -77,7 +81,6 @@ use crate::sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinaliz
 const SHUTDOWN_WAIT_FLOOR: Duration = Duration::from_secs(2);
 const READINESS_STALE_TICK_MULTIPLIER_V1: u32 = 3;
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
-const SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1: u64 = 4 * 1024;
 const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     MAX_CAPACITY_METADATA_VALUE_BYTES,
     REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1,
@@ -618,6 +621,14 @@ struct DeadlineBoundedReaderV1 {
     inner: Box<dyn Read + Send>,
     deadline: Instant,
     remaining: u64,
+    terminal_state: DeadlineBoundedReaderTerminalStateV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeadlineBoundedReaderTerminalStateV1 {
+    Pending,
+    Authenticated,
+    Failed(io::ErrorKind),
 }
 
 impl DeadlineBoundedReaderV1 {
@@ -628,39 +639,98 @@ impl DeadlineBoundedReaderV1 {
                 .checked_add(timeout)
                 .unwrap_or_else(Instant::now),
             remaining: expected_bytes,
+            terminal_state: DeadlineBoundedReaderTerminalStateV1::Pending,
+        }
+    }
+
+    fn failure(&mut self, kind: io::ErrorKind, message: &'static str) -> io::Error {
+        self.terminal_state = DeadlineBoundedReaderTerminalStateV1::Failed(kind);
+        io::Error::new(kind, message)
+    }
+
+    fn record_inner_failure(&mut self, error: io::Error) -> io::Error {
+        self.terminal_state = DeadlineBoundedReaderTerminalStateV1::Failed(error.kind());
+        error
+    }
+
+    fn require_live_deadline(&mut self) -> io::Result<()> {
+        if Instant::now() >= self.deadline {
+            return Err(self.failure(
+                io::ErrorKind::TimedOut,
+                "provider-ingest verified reader exceeded its operation deadline",
+            ));
+        }
+        Ok(())
+    }
+
+    fn authenticate_terminal_eof(&mut self) -> io::Result<usize> {
+        self.require_live_deadline()?;
+        let mut trailing = [0_u8; 1];
+        let result = self.inner.read(&mut trailing);
+        self.require_live_deadline()?;
+        match result {
+            Ok(0) => {
+                self.terminal_state = DeadlineBoundedReaderTerminalStateV1::Authenticated;
+                Ok(0)
+            }
+            Ok(_) => Err(self.failure(
+                io::ErrorKind::InvalidData,
+                "provider-ingest verified reader exceeded its authorized length",
+            )),
+            Err(error) => Err(self.record_inner_failure(error)),
         }
     }
 }
 
 impl Read for DeadlineBoundedReaderV1 {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-        if output.is_empty() || self.remaining == 0 {
+        if output.is_empty() {
             return Ok(0);
         }
-        if Instant::now() >= self.deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "provider-ingest verified reader exceeded its operation deadline",
-            ));
+        match self.terminal_state {
+            DeadlineBoundedReaderTerminalStateV1::Authenticated => return Ok(0),
+            DeadlineBoundedReaderTerminalStateV1::Failed(kind) => {
+                return Err(io::Error::new(
+                    kind,
+                    "provider-ingest verified reader previously failed",
+                ));
+            }
+            DeadlineBoundedReaderTerminalStateV1::Pending => {}
         }
+        if self.remaining == 0 {
+            return self.authenticate_terminal_eof();
+        }
+        self.require_live_deadline()?;
         let remaining = usize::try_from(self.remaining).unwrap_or(usize::MAX);
         let read_limit = remaining.min(output.len());
-        let read = self.inner.read(&mut output[..read_limit])?;
-        if Instant::now() > self.deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "provider-ingest verified reader exceeded its operation deadline",
-            ));
-        }
-        self.remaining = self
+        let result = self.inner.read(&mut output[..read_limit]);
+        self.require_live_deadline()?;
+        let read = match result {
+            Ok(0) => {
+                return Err(self.failure(
+                    io::ErrorKind::UnexpectedEof,
+                    "provider-ingest verified reader ended before its authorized length",
+                ));
+            }
+            Ok(read) if read <= read_limit => read,
+            Ok(_) => {
+                return Err(self.failure(
+                    io::ErrorKind::InvalidData,
+                    "provider-ingest verified reader violated its bounded read contract",
+                ));
+            }
+            Err(error) => return Err(self.record_inner_failure(error)),
+        };
+        let Some(remaining) = self
             .remaining
             .checked_sub(u64::try_from(read).unwrap_or(u64::MAX))
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "provider-ingest verified reader exceeded its authorized length",
-                )
-            })?;
+        else {
+            return Err(self.failure(
+                io::ErrorKind::InvalidData,
+                "provider-ingest verified reader exceeded its authorized length",
+            ));
+        };
+        self.remaining = remaining;
         Ok(read)
     }
 }
@@ -768,9 +838,9 @@ fn verify_existing_manifest(
         .load_manifest()
         .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
     validate_manifest_binding(authorization, &manifest)?;
-    if stored.payload_digest() != &manifest.car_digest {
-        return Err(ProviderIngestLocalStorageErrorV1::Permanent);
-    }
+    // Existing records are accepted only through StorageBackend's admission
+    // invariant, which separately binds raw bytes to the stored plan payload
+    // digest and ManifestV1.car_digest to the reconstructed full CARv2 archive.
     Ok(Some(stored.manifest_id().to_owned()))
 }
 
@@ -804,7 +874,6 @@ fn validate_verified_payload(
 ) -> std::result::Result<(), ProviderIngestLocalStorageErrorV1> {
     validate_manifest_binding(authorization, manifest)?;
     if plan.content_length != authorization.content_length()
-        || plan.payload_digest.as_bytes() != &manifest.car_digest
         || compute_chunk_plan_digest_sha3(&plan.chunks) != authorization.chunk_digest_sha3_256()
         || u32::try_from(plan.chunk_profile.min_size).ok() != Some(manifest.chunking.min_size)
         || u32::try_from(plan.chunk_profile.target_size).ok() != Some(manifest.chunking.target_size)
@@ -821,6 +890,24 @@ fn classify_storage_error(error: &NodeStorageError) -> ProviderIngestLocalStorag
         NodeStorageError::Storage(
             StorageError::ChunkDigestMismatch { .. }
             | StorageError::ManifestContentLengthMismatch
+            | StorageError::ManifestChunkPlanDigestMismatch
+            | StorageError::CarArchiveReconstruction { .. }
+            | StorageError::ManifestCarArchiveDigestMismatch
+            | StorageError::ManifestCarSizeMismatch { .. }
+            | StorageError::ManifestDagCodecMismatch { .. }
+            | StorageError::ChunkProfileMismatch
+            | StorageError::PorRootMismatch
+            | StorageError::ChunkStore(
+                ChunkStoreError::UnexpectedEof { .. }
+                | ChunkStoreError::DigestMismatch { .. }
+                | ChunkStoreError::LengthMismatch { .. }
+                | ChunkStoreError::PayloadDigestMismatch
+                | ChunkStoreError::SinkChunkOrder { .. }
+                | ChunkStoreError::SinkChunkMetadataMismatch { .. }
+                | ChunkStoreError::SinkChunkLengthMismatch { .. }
+                | ChunkStoreError::SinkChunkDigestMismatch { .. }
+                | ChunkStoreError::SinkIncomplete { .. },
+            )
             | StorageError::InvalidFileLayout { .. }
             | StorageError::CorruptStorageState { .. }
             | StorageError::UnsupportedIndexVersion { .. },
@@ -999,7 +1086,9 @@ impl NativeCompletionPayloadBuilderV1 {
         let encoded_len = u64::try_from(encoded.len())
             .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?;
         if encoded_len
-            .checked_add(SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1)
+            .checked_add(
+                provider_ingest_outbox_defaults::SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1,
+            )
             .is_none_or(|bytes| bytes > self.max_signed_transaction_bytes)
         {
             return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
@@ -2368,7 +2457,7 @@ fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
         || config.max_page_rows > config.finalized_archive.max_orders_per_provider
         || config.source_lease_renew_interval_ms >= config.outbox.source_lease_ttl_ms
         || config.outbox.max_signed_transaction_bytes.0
-            <= SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1
+            < provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
         || config
             .max_page_rows
             .checked_mul(config.max_pages_per_tick)
@@ -2433,6 +2522,79 @@ mod tests {
     };
 
     use super::*;
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestTerminalBehaviorV1 {
+        Eof,
+        Error {
+            kind: io::ErrorKind,
+            message: &'static str,
+        },
+        ExtraByte(u8),
+        DelayedEof(Duration),
+    }
+
+    struct TestTerminalReaderV1 {
+        payload: Vec<u8>,
+        offset: usize,
+        terminal_behavior: TestTerminalBehaviorV1,
+        terminal_probe_count: Arc<AtomicU64>,
+        terminal_probe_width: Arc<AtomicU64>,
+    }
+
+    impl TestTerminalReaderV1 {
+        fn new(
+            payload: impl Into<Vec<u8>>,
+            terminal_behavior: TestTerminalBehaviorV1,
+        ) -> (Self, Arc<AtomicU64>, Arc<AtomicU64>) {
+            let terminal_probe_count = Arc::new(AtomicU64::new(0));
+            let terminal_probe_width = Arc::new(AtomicU64::new(0));
+            (
+                Self {
+                    payload: payload.into(),
+                    offset: 0,
+                    terminal_behavior,
+                    terminal_probe_count: Arc::clone(&terminal_probe_count),
+                    terminal_probe_width: Arc::clone(&terminal_probe_width),
+                },
+                terminal_probe_count,
+                terminal_probe_width,
+            )
+        }
+    }
+
+    impl Read for TestTerminalReaderV1 {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if output.is_empty() {
+                return Ok(0);
+            }
+            if self.offset < self.payload.len() {
+                let copied = output.len().min(self.payload.len() - self.offset);
+                output[..copied].copy_from_slice(&self.payload[self.offset..self.offset + copied]);
+                self.offset += copied;
+                return Ok(copied);
+            }
+            self.terminal_probe_count.fetch_add(1, Ordering::SeqCst);
+            self.terminal_probe_width.store(
+                u64::try_from(output.len()).unwrap_or(u64::MAX),
+                Ordering::SeqCst,
+            );
+            match self.terminal_behavior {
+                TestTerminalBehaviorV1::Eof => Ok(0),
+                TestTerminalBehaviorV1::Error { kind, message } => {
+                    Err(io::Error::new(kind, message))
+                }
+                TestTerminalBehaviorV1::ExtraByte(byte) => {
+                    output[0] = byte;
+                    Ok(1)
+                }
+                TestTerminalBehaviorV1::DelayedEof(delay) => {
+                    std::thread::sleep(delay);
+                    Ok(0)
+                }
+            }
+        }
+    }
 
     #[derive(Clone)]
     struct TestOwnerAuthorityV1 {
@@ -2689,6 +2851,65 @@ mod tests {
             .expect("sign payload fixture")
             .payload()
             .clone()
+    }
+
+    #[test]
+    fn canonical_completion_payload_fixture_fits_production_floor() {
+        assert_eq!(
+            provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN,
+            64 * 1024
+        );
+        let key =
+            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("derive signer key");
+        let payload = test_completion_payload(&key, ProviderId::new([0x41; 32]), 8);
+        let payload_bytes =
+            norito::to_bytes(&payload).expect("encode canonical completion payload");
+        let decoded_payload = norito::decode_from_bytes::<TransactionPayload>(&payload_bytes)
+            .expect("decode canonical completion payload");
+        assert_eq!(decoded_payload, payload);
+        assert_eq!(
+            norito::to_bytes(&decoded_payload).expect("re-encode canonical completion payload"),
+            payload_bytes
+        );
+
+        let signed = TransactionBuilder::from_payload(payload.clone())
+            .expect("rebuild canonical completion transaction")
+            .try_sign(key.private_key())
+            .expect("sign canonical completion transaction");
+        let signed_bytes =
+            norito::to_bytes(&signed).expect("encode canonical signed completion transaction");
+        let decoded_signed = norito::decode_from_bytes::<SignedTransaction>(&signed_bytes)
+            .expect("decode canonical signed completion transaction");
+        assert_eq!(decoded_signed, signed);
+        assert_eq!(
+            norito::to_bytes(&decoded_signed)
+                .expect("re-encode canonical signed completion transaction"),
+            signed_bytes
+        );
+        let repeated_signed = TransactionBuilder::from_payload(payload.clone())
+            .expect("rebuild repeated canonical completion transaction")
+            .try_sign(key.private_key())
+            .expect("repeat canonical completion signature");
+        assert_eq!(
+            norito::to_bytes(&repeated_signed)
+                .expect("encode repeated canonical signed completion transaction"),
+            signed_bytes
+        );
+
+        let payload_with_envelope = u64::try_from(payload_bytes.len())
+            .expect("payload length fits u64")
+            .checked_add(
+                provider_ingest_outbox_defaults::SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1,
+            )
+            .expect("payload plus envelope reserve");
+        assert!(
+            payload_with_envelope
+                <= provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
+        );
+        assert!(
+            u64::try_from(signed_bytes.len()).expect("signed length fits u64")
+                <= provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
+        );
     }
 
     fn test_governed_signer(
@@ -3361,6 +3582,212 @@ mod tests {
         });
         drop(BlockingStoreJoinGuardV1(Some(thread)));
         assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn deadline_bounded_reader_authenticates_terminal_eof_once() {
+        let payload = b"authenticated provider payload".to_vec();
+        let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
+        let (inner, terminal_probe_count, terminal_probe_width) =
+            TestTerminalReaderV1::new(payload.clone(), TestTerminalBehaviorV1::Eof);
+        let mut reader =
+            DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
+
+        let mut observed = Vec::new();
+        reader
+            .read_to_end(&mut observed)
+            .expect("authenticate terminal EOF");
+        assert_eq!(observed, payload);
+        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
+        assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
+
+        let mut trailing = [0_u8; 8];
+        assert_eq!(reader.read(&mut trailing).expect("cached EOF"), 0);
+        assert_eq!(
+            terminal_probe_count.load(Ordering::SeqCst),
+            1,
+            "authenticated EOF must not re-enter the underlying transport"
+        );
+    }
+
+    #[test]
+    fn deadline_bounded_reader_rejects_premature_eof() {
+        let payload = b"short".to_vec();
+        let expected_len = u64::try_from(payload.len() + 1).expect("payload length fits u64");
+        let (inner, terminal_probe_count, _) =
+            TestTerminalReaderV1::new(payload.clone(), TestTerminalBehaviorV1::Eof);
+        let mut reader =
+            DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
+
+        let mut observed = Vec::new();
+        let error = reader
+            .read_to_end(&mut observed)
+            .expect_err("premature EOF must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        assert_eq!(observed, payload);
+        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
+
+        let mut trailing = [0_u8; 1];
+        assert_eq!(
+            reader
+                .read(&mut trailing)
+                .expect_err("premature EOF failure is sticky")
+                .kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn deadline_bounded_reader_propagates_terminal_verification_failures() {
+        for (kind, message) in [
+            (
+                io::ErrorKind::InvalidData,
+                "authenticated source trailer rejected",
+            ),
+            (
+                io::ErrorKind::PermissionDenied,
+                "authenticated source qualification drifted",
+            ),
+        ] {
+            let payload = b"exact bytes".to_vec();
+            let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
+            let (inner, terminal_probe_count, terminal_probe_width) = TestTerminalReaderV1::new(
+                payload.clone(),
+                TestTerminalBehaviorV1::Error { kind, message },
+            );
+            let mut reader =
+                DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
+            let mut observed = vec![0_u8; payload.len()];
+            reader
+                .read_exact(&mut observed)
+                .expect("read exact authorized bytes");
+            assert_eq!(observed, payload);
+
+            let mut trailing = [0_u8; 8];
+            let error = reader
+                .read(&mut trailing)
+                .expect_err("terminal source verification must propagate");
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.to_string(), message);
+            assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
+            assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
+
+            assert_eq!(
+                reader
+                    .read(&mut trailing)
+                    .expect_err("terminal verification failure is sticky")
+                    .kind(),
+                kind
+            );
+            assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn deadline_bounded_reader_rejects_extra_bytes_at_terminal_probe() {
+        let payload = b"exact bytes".to_vec();
+        let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
+        let (inner, terminal_probe_count, terminal_probe_width) =
+            TestTerminalReaderV1::new(payload.clone(), TestTerminalBehaviorV1::ExtraByte(0xA5));
+        let mut reader =
+            DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
+        let mut observed = vec![0_u8; payload.len()];
+        reader
+            .read_exact(&mut observed)
+            .expect("read exact authorized bytes");
+
+        let mut trailing = [0_u8; 8];
+        assert_eq!(
+            reader
+                .read(&mut trailing)
+                .expect_err("extra byte must fail closed")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
+        assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
+
+        assert_eq!(
+            reader
+                .read(&mut trailing)
+                .expect_err("extra-byte failure is sticky")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn deadline_bounded_reader_checks_deadline_after_terminal_probe() {
+        let payload = b"exact bytes".to_vec();
+        let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
+        let (inner, terminal_probe_count, terminal_probe_width) = TestTerminalReaderV1::new(
+            payload.clone(),
+            TestTerminalBehaviorV1::DelayedEof(Duration::from_millis(10)),
+        );
+        let mut reader =
+            DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
+        let mut observed = vec![0_u8; payload.len()];
+        reader
+            .read_exact(&mut observed)
+            .expect("read exact authorized bytes before deadline");
+        reader.deadline = Instant::now()
+            .checked_add(Duration::from_millis(1))
+            .expect("terminal deadline");
+
+        let mut trailing = [0_u8; 8];
+        assert_eq!(
+            reader
+                .read(&mut trailing)
+                .expect_err("late terminal EOF must fail closed")
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
+        assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn archive_binding_storage_failures_are_permanent() {
+        for error in [
+            StorageError::ManifestChunkPlanDigestMismatch,
+            StorageError::CarArchiveReconstruction {
+                reason: "staged chunk is corrupt".to_owned(),
+            },
+            StorageError::ManifestCarArchiveDigestMismatch,
+            StorageError::ManifestCarSizeMismatch {
+                expected: 128,
+                actual: 127,
+            },
+            StorageError::ManifestDagCodecMismatch {
+                expected: 0x71,
+                actual: 0x55,
+            },
+        ] {
+            assert_eq!(
+                classify_storage_error(&NodeStorageError::Storage(error)),
+                ProviderIngestLocalStorageErrorV1::Permanent
+            );
+        }
+
+        for error in [
+            ChunkStoreError::UnexpectedEof {
+                chunk_index: 0,
+                expected: 64,
+            },
+            ChunkStoreError::DigestMismatch { chunk_index: 0 },
+            ChunkStoreError::LengthMismatch {
+                expected: 64,
+                actual: 65,
+            },
+            ChunkStoreError::PayloadDigestMismatch,
+        ] {
+            assert_eq!(
+                classify_storage_error(&NodeStorageError::Storage(StorageError::ChunkStore(error))),
+                ProviderIngestLocalStorageErrorV1::Permanent
+            );
+        }
     }
 
     #[tokio::test]

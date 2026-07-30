@@ -20,8 +20,8 @@ let manifest = ManifestBuilder::new()
     .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
     .chunk_digest_sha3_256([0x41; 32]) // SHA3-256 of ordered chunk metadata
     .content_length(1_048_576)
-    .car_digest([0x42; 32])
-    .car_size(1_111_111)
+    .car_digest([0x42; 32]) // BLAKE3-256 of the entire canonical CARv2 archive
+    .car_size(1_111_111) // complete CARv2 archive bytes
     .pin_policy(PinPolicy {
         min_replicas: 3,
         storage_class: StorageClass::Hot,
@@ -41,7 +41,9 @@ the provided input. It accepts alias claims, governance signatures, metadata,
 and can optionally write the encoded Norito payload to disk. The tool now emits
 spec-compliant CARv2 archives and will compute both the CAR **payload** digest,
 the full archive digest/size, and the raw CID for you (it verifies any values
-you pass via `--car-digest`/`--car-size`/`--car-cid`).
+you pass via `--car-digest`/`--car-size`/`--car-cid`). `ManifestV1.car_digest`
+is the full archive digest across the pragma, CARv2 header, embedded CARv1
+payload, and index; it is never the raw payload digest.
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_manifest_builder \
@@ -75,7 +77,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder \
   BLAKE3 multihash) of the emitted CAR file.
 - The JSON report includes both the payload digest (`car_payload_digest_hex`)
   and the full archive digest (`car_archive_digest_hex`); pass
-  `--car-digest` to enforce the payload hash during CI.
+  `--car-digest` to enforce the complete archive hash during CI.
 - `--manifest-out=path` to persist the Norito payload; omit to only print the report.
   Only the canonical first-release Norito layout is accepted; there is no legacy
   encoding mode.
@@ -91,8 +93,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder \
   when the signer key is valid. Combine with `--manifest-out` so the CLI can confirm
   the manifest filename advertised in the envelope.
 - `--car-out=path` writes the CARv2 archive using `CarWriter`. The CLI always
-  computes and prints the CAR size/digest; pass `--car-digest`/`--car-size` only
-  if you need the tool to enforce pre-computed values.
+  computes and prints the complete archive size and BLAKE3-256 digest; pass
+  `--car-digest`/`--car-size` only if you need the tool to enforce those
+  pre-computed full-file values.
 - `--json-out=path` writes the JSON report to disk (exactly the same payload that
   is printed to stdout). Pass `--json-out=-` to stream the report directly to stdout
   without creating a temporary file.

@@ -192,9 +192,10 @@ batch above. Version 4 changes canonical validation-fee governance bytes by
 requiring exact `plain_electorate_rules` in policy and payout-lifecycle
 proposal instructions, retaining those rules in enacted registry entries, and
 binding finalized authorization to the frozen PLAIN electorate. The rules fix
-the voting asset, ballot and citizenship amounts, inclusive ballot duration,
-member cap, conviction, turnout, threshold, and closed eligibility rule. Taira
-requires PLAIN only and an exact 3,600-block window
+the voting asset, bond-escrow and slash-receiver accounts, ballot and
+citizenship amounts, inclusive ballot duration, member cap, conviction,
+turnout, threshold, and closed eligibility rule. Taira requires PLAIN only, an
+exact 150-XOR bond, and an exact 3,600-block window
 (`h_end = h_start + 3,599`).
 
 At `h_start`, after the seven-body Parliament gate, consensus persists a
@@ -209,6 +210,12 @@ the proposal-bound rules and retained anchors. An enacted policy is admitted
 only when `effective_from_height = enacted_at_height + 120,960`; both earlier
 and later activation fail closed. SDKs must reject a node advertising any
 other data-model version before submission.
+
+New validation-fee governance locks retain the proposal-bound voting asset,
+escrow account, and slash receiver. Bond locking, expiry release, slashing, and
+restitution use those retained identities and one prechecked exact numeric
+transfer. A missing or mismatched custody binding, insufficient escrow, or
+failed destination update leaves the lock and balances unchanged.
 
 ---
 

@@ -30,6 +30,8 @@ mod soracloud_runtime;
 #[cfg(not(feature = "embedded-soracloud-runtime"))]
 #[path = "soracloud_runtime_stub.rs"]
 mod soracloud_runtime;
+/// Exact external signer boundary for Soracloud runtime mutations.
+pub mod soracloud_runtime_signer;
 /// Supervised committed `SoraFS` hedging/billing projector and delivery worker.
 pub mod sorafs_hedging_billing_runtime;
 /// Fail-closed config-bound `SoraFS` `PoP` runtime construction.
@@ -118,8 +120,9 @@ use iroha_core::{
     sumeragi::{
         GenesisWithPubKey, InboundBlockMessage, LaneRelayMessage,
         ProductionTwoStageRelayRetryTraceProjection, SumeragiHandle, SumeragiIngressDisposition,
-        SumeragiStartArgs, VotingBlock, filter_validators_from_trusted, network_topology::Topology,
-        production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
+        SumeragiStartArgs, V2StartupReplayInventoryGuard, VotingBlock,
+        check_production_two_stage_relay_retry_transition, filter_validators_from_trusted,
+        network_topology::Topology,
     },
 };
 use iroha_crypto::Algorithm;
@@ -1340,8 +1343,9 @@ pub struct Iroha {
 /// appeal-finance transaction signers,
 /// role-separated `PoTR` signers, exact-view billing queries, threshold/HSM
 /// signers, immutable publication, acknowledgement, sealed witness storage,
-/// authenticated Governance DAG publication/readback/head updates, and sealed
-/// monotonic Governance DAG checkpoints are the reference-node boundaries for
+/// authenticated Governance DAG publication/readback/head updates, sealed
+/// monotonic Governance DAG checkpoints, and the Soracloud mutation/provenance
+/// signer are the reference-node boundaries for
 /// ledger access, PKCS#11, managed-KMS, and threshold services. Provider
 /// credentials, unwrapped keys, PRF shares, seeds, and outputs must stay inside
 /// those implementations and must never be sourced from `iroha_config`.
@@ -1445,6 +1449,8 @@ pub struct IrohaRuntimeDeps {
     >,
     sorafs_por_finalized_replay_archive:
         Option<Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>>,
+    soracloud_runtime_mutation_signer:
+        Option<Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>>,
 }
 
 impl IrohaRuntimeDeps {
@@ -1502,6 +1508,7 @@ impl IrohaRuntimeDeps {
             && self.sorafs_provider_ingest_checkpoint_runtime.is_none()
             && self.sorafs_provider_ingest_retention_authority.is_none()
             && self.sorafs_por_finalized_replay_archive.is_none()
+            && self.soracloud_runtime_mutation_signer.is_none()
     }
 
     /// Attach the production PKCS#11/KMS wrapper for moderation quarantine
@@ -1707,6 +1714,20 @@ impl IrohaRuntimeDeps {
         signer: Arc<dyn iroha_torii::SoraFsOrderbookTransactionSigner>,
     ) -> Self {
         self.sorafs_orderbook_transaction_signer = Some(signer);
+        self
+    }
+
+    /// Attach the raw deployment-owned Soracloud transaction and provenance signer.
+    ///
+    /// The runtime-provider registry replaces this provider with an immutable
+    /// facade qualified against the exact configured handle, authority, key,
+    /// revision, policy digest, active posture, and non-test posture.
+    #[must_use]
+    pub fn with_soracloud_runtime_mutation_signer(
+        mut self,
+        signer: Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
+    ) -> Self {
+        self.soracloud_runtime_mutation_signer = Some(signer);
         self
     }
 
@@ -4489,6 +4510,72 @@ fn sumeragi_relay_retain_retry(
     let retry_source = work.source.clone();
     let retry_route = work.reply_route.clone();
     let retry_geometry = work.retention_guard.geometry;
+    let source_depth_before_reinsert = retained.lanes.get(&retry_source).map_or(0, VecDeque::len);
+    if !retained.has_capacity() || source_depth_before_reinsert >= retained.source_capacity {
+        return Err(SumeragiRelayRetryRetentionError::Capacity(Box::new(work)));
+    }
+    let source_rank_before_reinsert = retained
+        .ready
+        .iter()
+        .position(|source| source == &retry_source);
+    let ready_sources_after = if source_depth_before_reinsert == 0 {
+        retained.ready.len().checked_add(1)
+    } else {
+        Some(retained.ready.len())
+    }
+    .ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?;
+    let selected_source_rank_after = if source_depth_before_reinsert == 0 {
+        retained.ready.len()
+    } else {
+        source_rank_before_reinsert.ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?
+    };
+    let source_depth_after = source_depth_before_reinsert
+        .checked_add(1)
+        .ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?;
+    let total_depth_after = retained
+        .len
+        .checked_add(1)
+        .ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?;
+    let prospective = ProductionTwoStageRelayRetryTraceProjection {
+        daemon_source_capacity_matches_two_upstream_lanes: retry_geometry
+            .daemon_source_capacity_matches_two_upstream_lanes(),
+        class_corridor_covers_authenticated_sources: retry_geometry
+            .class_corridor_covers_authenticated_sources(),
+        authenticated_source_matches_resource_owner: selection.source == retry_source
+            && retry_route.is_authenticated_via(&selection.source.via),
+        retry_route_same_delivery: true,
+        retry_route_active,
+        selected_eligible: selection.selected_eligible,
+        ready_sources_before: u64::try_from(selection.ready_sources_before)
+            .expect("retained ready-source count must fit u64"),
+        selected_source_rank_before: u64::try_from(selection.selected_source_rank_before)
+            .expect("retained source rank must fit u64"),
+        ready_sources_after: u64::try_from(ready_sources_after)
+            .expect("retained ready-source count must fit u64"),
+        selected_source_rank_after: u64::try_from(selected_source_rank_after)
+            .expect("retained source rank must fit u64"),
+        source_depth_before: u64::try_from(selection.source_depth_before)
+            .expect("retained source depth must fit u64"),
+        selected_item_rank_before: u64::try_from(selection.selected_item_rank_before)
+            .expect("retained item rank must fit u64"),
+        source_depth_after: u64::try_from(source_depth_after)
+            .expect("retained source depth must fit u64"),
+        selected_item_rank_after: u64::try_from(source_depth_before_reinsert)
+            .expect("retained item rank must fit u64"),
+        total_depth_before: u64::try_from(selection.total_depth_before)
+            .expect("retained total depth must fit u64"),
+        total_depth_after: u64::try_from(total_depth_after)
+            .expect("retained total depth must fit u64"),
+        source_capacity: u64::try_from(retained.source_capacity)
+            .expect("retained source capacity must fit u64"),
+        total_capacity: u64::try_from(retained.capacity)
+            .expect("retained total capacity must fit u64"),
+    };
+    let Some(checked_transition) = check_production_two_stage_relay_retry_transition(prospective)
+    else {
+        return Err(SumeragiRelayRetryRetentionError::RefinementViolation);
+    };
+    let prospective = checked_transition.into_projection();
     retained.push(retry_source.clone(), work).map_err(|error| {
         SumeragiRelayRetryRetentionError::Capacity(Box::new(match error {
             FairRetainedPushError::Full(work) | FairRetainedPushError::SourceFull(work) => work,
@@ -4505,7 +4592,7 @@ fn sumeragi_relay_retain_retry(
         lane.iter()
             .rposition(|candidate| candidate.reply_route.same_delivery(&retry_route))
     });
-    let projection = ProductionTwoStageRelayRetryTraceProjection {
+    let observed = ProductionTwoStageRelayRetryTraceProjection {
         daemon_source_capacity_matches_two_upstream_lanes: retry_geometry
             .daemon_source_capacity_matches_two_upstream_lanes(),
         class_corridor_covers_authenticated_sources: retry_geometry
@@ -4542,7 +4629,7 @@ fn sumeragi_relay_retain_retry(
         total_capacity: u64::try_from(retained.capacity)
             .expect("retained total capacity must fit u64"),
     };
-    if production_two_stage_relay_retry_trace_refines_source_fairness_kernel(projection) {
+    if observed == prospective {
         Ok(())
     } else {
         Err(SumeragiRelayRetryRetentionError::RefinementViolation)
@@ -8766,6 +8853,38 @@ fn validate_provider_ingest_archive_presence(
     }
 }
 
+fn qualify_soracloud_runtime_signer_for_startup(
+    production_mode: bool,
+    configured: Option<&iroha_config::parameters::actual::SoracloudRuntimeMutationSignerBinding>,
+    runtime_deps: &mut IrohaRuntimeDeps,
+) -> Result<(), &'static str> {
+    let injected = runtime_deps.soracloud_runtime_mutation_signer.take();
+    match (configured, injected) {
+        (None, None) if production_mode => {
+            Err("production mode requires an exact configured signer binding")
+        }
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err("an unrequested signer provider was injected"),
+        (Some(_), None) => Err("the configured signer provider is missing"),
+        (Some(configured), Some(provider)) => {
+            let binding =
+                soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1::try_from_config(
+                    configured,
+                )
+                .map_err(|_| "configured signer binding is invalid")?;
+            runtime_deps.soracloud_runtime_mutation_signer = Some(
+                soracloud_runtime_signer::qualify_soracloud_runtime_mutation_signer_v1(
+                    binding, provider,
+                )
+                .map_err(
+                    |_| "injected signer is substituted, stale, revoked, test-only, or unavailable",
+                )?,
+            );
+            Ok(())
+        }
+    }
+}
+
 impl Iroha {
     /// Starts Iroha with all its subsystems.
     ///
@@ -8800,8 +8919,8 @@ impl Iroha {
     /// Starts Iroha with deployment-owned, runtime-only service dependencies.
     ///
     /// The standard daemon entry point does not adapt the validator node key
-    /// into `SoraFS` proof-outcome, repair, reserve/rent, orderbook, or
-    /// moderation authority roles. Those signers, moderation durable
+    /// into `SoraFS` proof-outcome, repair, reserve/rent, orderbook, moderation,
+    /// or Soracloud mutation/provenance authority roles. Those signers, moderation durable
     /// handoffs, and all hedging/billing query, verification, HSM,
     /// publication, acknowledgement, and witness adapters must be supplied by
     /// an injecting launcher; enabling the dependent path without one fails
@@ -8824,7 +8943,7 @@ impl Iroha {
         mut genesis: Option<GenesisBlock>,
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
-        runtime_deps: IrohaRuntimeDeps,
+        mut runtime_deps: IrohaRuntimeDeps,
     ) -> ReportResult<
         (
             Self,
@@ -8832,6 +8951,16 @@ impl Iroha {
         ),
         StartError,
     > {
+        qualify_soracloud_runtime_signer_for_startup(
+            config.soracloud_runtime.production_mode,
+            config.soracloud_runtime.submission.signer.as_ref(),
+            &mut runtime_deps,
+        )
+        .map_err(|error| {
+            Report::new(StartError::StartTorii).attach(format!(
+                "failed to qualify Soracloud runtime mutation signer: {error}"
+            ))
+        })?;
         let sorafs_governance_dag_service_launch =
             resolve_governance_dag_service_launch(&config.torii.sorafs_storage, &runtime_deps)
                 .map_err(|error| {
@@ -9166,6 +9295,10 @@ impl Iroha {
         // Kura boundary have already been authenticated.
         let mut v2_replay_plan = iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref())
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        // Planning installs O(H) metadata used to avoid another historical
+        // finality scan. Own its cleanup across every remaining startup error
+        // and transfer that ownership to Sumeragi recovery below.
+        let startup_replay_inventory_guard = V2StartupReplayInventoryGuard::new(Arc::clone(&kura));
         v2_replay_plan
             .validate_restored_state_height(state.committed_height())
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
@@ -10533,6 +10666,8 @@ impl Iroha {
             reputation_finalized_archive: prepared_sorafs_reputation_archive
                 .as_ref()
                 .map(|prepared| Arc::clone(prepared.archive())),
+            startup_replay_plan: v2_replay_plan,
+            startup_replay_inventory_guard,
             network: network.clone(),
             max_frame_bytes: config.network.max_frame_bytes,
             max_frame_bytes_consensus: config.network.max_frame_bytes_consensus,
@@ -10618,6 +10753,8 @@ impl Iroha {
             runtime_deps.sorafs_reserve_transaction_signer.clone();
         let sorafs_orderbook_transaction_signer =
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
+        let soracloud_runtime_mutation_signer =
+            runtime_deps.soracloud_runtime_mutation_signer.clone();
         let sorafs_moderation_transaction_signer =
             runtime_deps.sorafs_moderation_transaction_signer.clone();
         let sorafs_moderation_settlement_handoff =
@@ -11101,17 +11238,22 @@ impl Iroha {
             })?;
             supervisor.monitor(relay_worker.start(supervisor.shutdown_signal()));
         }
-        let local_validator_account_id =
-            AccountId::new(config.common.key_pair.public_key().clone());
+        let local_validator_account_id = soracloud_runtime_mutation_signer.as_ref().map_or_else(
+            || {
+                AccountId::new(
+                    config
+                        .common
+                        .trusted_peers
+                        .value()
+                        .myself
+                        .id()
+                        .public_key()
+                        .clone(),
+                )
+            },
+            |signer| signer.authority(),
+        );
         let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
-        let runtime_mutation_sink = Arc::new(QueuedSoracloudRuntimeMutationSink::new(
-            Arc::clone(&chain_id),
-            Arc::clone(&queue),
-            Arc::clone(&state),
-            local_validator_account_id.clone(),
-            config.common.key_pair.clone(),
-            config.soracloud_runtime.submission.clone(),
-        ));
         let runtime_manager = SoracloudRuntimeManager::new(
             soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
                 &config.soracloud_runtime,
@@ -11119,14 +11261,38 @@ impl Iroha {
             .with_local_host_identity(local_validator_account_id, local_peer_id),
             Arc::clone(&state),
         )
-        .with_mutation_sink(runtime_mutation_sink)
         .with_sorafs_node(sorafs_node.clone());
+        let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
+            let runtime_mutation_sink = Arc::new(
+                QueuedSoracloudRuntimeMutationSink::new(
+                    Arc::clone(&chain_id),
+                    Arc::clone(&queue),
+                    Arc::clone(&state),
+                    signer,
+                    config.soracloud_runtime.submission.clone(),
+                )
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to construct qualified Soracloud runtime mutation sink: {error:#}"
+                    ))
+                })?,
+            );
+            runtime_manager.with_mutation_sink(runtime_mutation_sink)
+        } else {
+            runtime_manager
+        };
         let runtime_manager = if let Some(cache) = shared_sorafs_cache.clone() {
             runtime_manager.with_sorafs_provider_cache(cache)
         } else {
             runtime_manager
         };
-        let (soracloud_runtime, child) = runtime_manager.start(supervisor.shutdown_signal());
+        let (soracloud_runtime, child) = runtime_manager
+            .start(supervisor.shutdown_signal())
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to initialise embedded Soracloud runtime manager: {error:#}"
+                ))
+            })?;
         state.set_soracloud_runtime(Some(Arc::new(soracloud_runtime.clone())));
         supervisor.monitor(child);
 
@@ -13074,6 +13240,37 @@ pub(crate) fn apply_ivm_acceleration_config(
 mod build_line_tests {
     use super::{resolve_build_line_from_env, *};
     use iroha_config_base::toml::TomlSource;
+
+    #[test]
+    fn soracloud_runtime_manager_corridor_has_no_local_key_fallback() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("let local_validator_account_id =")
+            .expect("Soracloud identity corridor");
+        let end = source[start..]
+            .find("let runtime_manager = if let Some(signer)")
+            .map(|offset| start + offset)
+            .expect("Soracloud sink injection corridor");
+        let corridor = &source[start..end];
+        assert!(
+            !corridor.contains("config.common.key_pair"),
+            "Soracloud mutation authority must never fall back to the process-local node key"
+        );
+    }
+
+    #[test]
+    fn soracloud_production_fails_before_startup_without_signer_binding() {
+        let mut dependencies = IrohaRuntimeDeps::default();
+        assert_eq!(
+            qualify_soracloud_runtime_signer_for_startup(true, None, &mut dependencies),
+            Err("production mode requires an exact configured signer binding")
+        );
+        assert!(
+            qualify_soracloud_runtime_signer_for_startup(false, None, &mut dependencies).is_ok(),
+            "unbound non-production mode must remain read-only"
+        );
+        assert!(dependencies.is_empty());
+    }
     use iroha_crypto::Hash;
     use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId};
     use std::{io::Write, num::NonZeroU32, path::Path};

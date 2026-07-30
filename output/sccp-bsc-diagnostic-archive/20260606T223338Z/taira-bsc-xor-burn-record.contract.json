@@ -61,7 +61,7 @@
     "executable": "IvmProved",
     "force_zk_mode": true,
     "entrypoint": "burn_and_record",
-    "settlement_instruction": "Burn<Numeric, Asset>",
+      "settlement_instruction": "Burn<Quantity, Asset>",
     "record_instruction": "RecordSccpMessage"
   }
 }

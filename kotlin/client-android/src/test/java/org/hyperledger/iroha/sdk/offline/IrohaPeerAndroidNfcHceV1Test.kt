@@ -527,12 +527,10 @@ class IrohaPeerNfcDurabilityBoundaryV1Test {
         kind: IrohaPeerPayloadKind,
         byte: Int,
         count: Int,
-    ) = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-        IrohaPeerPayloadProfile.OFFLINE_NOTE,
+    ) = IrohaPeerKagemushaStructuralAndroidTestV1.message(
         kind,
-        1,
         ByteArray(count) { byte.toByte() },
-    ))
+    )
 
     private fun unusedCommit() = IrohaPeerNfcDurableCommitHandlerV1 { _, _ ->
         error("COMMIT is not expected")

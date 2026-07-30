@@ -66,9 +66,10 @@ pub use curve::{
 pub use engine::{
     MAX_VEGA_PROVER_RELEASE_MEMORY_CEILING_BYTES_V1, MAX_VEGA_PROVER_WORKERS_V1,
     VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1, VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
-    VEGA_MDL_COMPILED_PROFILE_DIGEST_V1, VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1,
-    VegaMdlProofContextV1, VegaMdlProofDimensionsV1, VegaMdlProofErrorV1, VegaMdlProverConfigV1,
-    VegaRandomSourceErrorV1, VegaRandomSourceV1, prove_vega_mdl_figure9_v1,
+    VEGA_MDL_CANONICAL_RELATION_DIGEST_V1, VEGA_MDL_COMPILED_PROFILE_DIGEST_V1,
+    VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1, VegaMdlProofContextV1, VegaMdlProofDimensionsV1,
+    VegaMdlProofErrorV1, VegaMdlProverConfigV1, VegaRandomSourceErrorV1, VegaRandomSourceV1,
+    prove_vega_mdl_figure9_v1, vega_mdl_canonical_relation_digest_v1,
     vega_mdl_compiled_profile_digest_v1, vega_mdl_proof_dimensions_v1, verify_vega_mdl_figure9_v1,
 };
 pub use figure9::{
@@ -88,12 +89,32 @@ pub use zk_ams::{
     zk_ams_t256_generator_digest_v1,
 };
 
+/// Exact canonical COSE `Sig_structure` width in the released Figure 9 relation.
+pub const VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1: usize = 368;
+/// Exact tagged ISO 18013-5 MSO payload width embedded in the `Sig_structure`.
+pub const VEGA_MDL_MSO_PAYLOAD_BYTES_V1: usize = 348;
+/// Exact tagged `IssuerSignedItemBytes` width for the private birth date.
+pub const VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1: usize = 92;
+/// Exact randomizer width inside the birth-date signed item.
+pub const VEGA_MDL_BIRTH_RANDOM_BYTES_V1: usize = 16;
+/// Exact `YYYY-MM-DD` text width parsed by the released relation.
+pub const VEGA_MDL_FULL_DATE_TEXT_BYTES_V1: usize = 10;
+/// Exact `YYYY-MM-DDTHH:MM:SSZ` text width parsed by the released relation.
+pub const VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1: usize = 20;
+/// Lowest trusted UTC presentation year admitted by the released relation.
+pub const VEGA_MDL_MIN_PRESENTATION_YEAR_V1: u16 = 1_970;
+/// Highest presentation year for which a later four-digit `validUntil` exists.
+pub const VEGA_MDL_MAX_PRESENTATION_YEAR_V1: u16 = 9_998;
+/// Lowest non-degenerate public age threshold admitted by the released relation.
+pub const VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1: u8 = 1;
+/// Highest achievable public age threshold admitted by the released relation.
+pub const VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1: u8 = 150;
+
 /// Tight first-release cap for one canonical Norito Vega proof.
 ///
-/// Microsoft's 1,920-byte mDL benchmark produces proofs of about 108 KiB.
-/// A 512 KiB ceiling leaves room for the exact Figure 9 relation and Norito
-/// framing while preventing this engine from inheriting the much broader
-/// per-action opaque-byte allowance.
+/// A 512 KiB ceiling leaves room for the exact 368-byte Figure 9 relation and
+/// Norito framing while preventing this engine from inheriting the much
+/// broader per-action opaque-byte allowance.
 pub const MAX_VEGA_PROOF_BYTES_V1: usize = 512 * 1024;
 
 /// Big-endian modulus of the canonical T256 scalar field.

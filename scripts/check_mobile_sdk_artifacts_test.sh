@@ -65,6 +65,8 @@ test_build_source_seal() {
     >"$root/crates/unrelated/Cargo.toml"
   printf 'pub fn unrelated_fixture() {}\n' >"$root/crates/unrelated/src/lib.rs"
   cargo generate-lockfile --manifest-path "$root/Cargo.toml" -q
+  mkdir -p "$root/private-lock"
+  cp "$root/Cargo.lock" "$root/private-lock/Cargo.lock"
   git -C "$root" init -q
   git -C "$root" add .
   git -C "$root" -c user.name=test -c user.email=test@example.invalid \
@@ -72,6 +74,37 @@ test_build_source_seal() {
 
   NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
     bash "$root/scripts/build_norito_xcframework.sh"
+  NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+    bash "$root/scripts/build_norito_xcframework.sh" \
+      --lockfile-path "$root/private-lock/Cargo.lock"
+
+  local invalid_lock_output
+  if invalid_lock_output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+      bash "$root/scripts/build_norito_xcframework.sh" \
+        --lockfile-path private-lock/Cargo.lock 2>&1)"; then
+    fail "expected Apple builder to reject a relative selected Cargo lock"
+  fi
+  case "$invalid_lock_output" in
+    *"selected Cargo lock path must be absolute"*) ;;
+    *)
+      printf '%s\n' "$invalid_lock_output" >&2
+      fail "relative selected Cargo lock failure was not explicit"
+      ;;
+  esac
+
+  ln -s "$root/private-lock/Cargo.lock" "$root/symlinked-Cargo.lock"
+  if invalid_lock_output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+      bash "$root/scripts/build_norito_xcframework.sh" \
+        --lockfile-path "$root/symlinked-Cargo.lock" 2>&1)"; then
+    fail "expected Apple builder to reject a symlinked selected Cargo lock"
+  fi
+  case "$invalid_lock_output" in
+    *"selected Cargo lock must be a non-symbolic regular file"*) ;;
+    *)
+      printf '%s\n' "$invalid_lock_output" >&2
+      fail "symlinked selected Cargo lock failure was not explicit"
+      ;;
+  esac
 
   local hostile_bin="$root/hostile-bin"
   local hostile_marker="$root/hostile-tool-invoked"
@@ -104,6 +137,21 @@ test_build_source_seal() {
     bash "$root/scripts/build_norito_xcframework.sh"
 
   local output
+  if output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+      NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE=private-lock/Cargo.lock \
+      bash "$root/scripts/build_norito_xcframework.sh" \
+        --lockfile-path "$root/private-lock/Cargo.lock" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected selected Cargo lock mutation to be rejected"
+  fi
+  case "$output" in
+    *"Selected Cargo lock changed"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "selected Cargo lock mutation failure was not explicit"
+      ;;
+  esac
+
   if output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
       NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE=Cargo.toml \
       bash "$root/scripts/build_norito_xcframework.sh" 2>&1)"; then
@@ -463,6 +511,7 @@ make_fixture() {
   local hash_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local hash_b="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   local hash_c="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  local cargo_lock_hash
   local slice
 
   mkdir -p "$root/IrohaSwift/Sources/IrohaSwift"
@@ -619,6 +668,8 @@ let package = Package(
 )
 SWIFT
 
+  printf '# mobile SDK checker fixture lock\n' >"$root/Cargo.lock"
+  cargo_lock_hash="$(shasum -a 256 "$root/Cargo.lock" | awk '{print $1}')"
   mkdir -p "$root/dist/NoritoBridge.xcframework"
   cat >"$root/dist/NoritoBridge.xcframework/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -648,11 +699,27 @@ PLIST
   local header_hash
   header_hash="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/Headers/connect_norito_bridge.h" | awk '{print $1}')"
   cat >"$root/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift" <<SWIFT
-enum NativeBridgeFixture {
-    static let manifestlessFallbackHashes = [
-        "ios-arm64": "$hash_a",
-        "ios-arm64_x86_64-simulator": "$hash_b",
+enum NoritoBridgeLoader {
+    static let expectedVersion = "1.0.0"
+    private static let expectedHashes: [String: String] = [
         "macos-arm64": "$hash_c",
+        "ios-arm64": "$hash_a",
+        "ios-arm64_x86_64-simulator": "$hash_b"
+    ]
+    private static let requiredSymbols = [
+        "connect_norito_bridge_abi_version",
+        "connect_norito_free",
+        "connect_norito_encode_transfer_signed_transaction",
+        "connect_norito_encode_transfer_instruction_box",
+        "connect_norito_detached_transaction_scaffold_inspect_v1",
+        "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
+        "connect_norito_canonical_json_blake3_v1",
+        "connect_norito_encode_account_onboarding_plan_body_v1",
+        "connect_norito_alias_instruction_round_trip_v1",
+        "connect_norito_sorafs_reference_validate_bundle_json",
+        "connect_norito_sorafs_reference_validate_governance_json",
+        "connect_norito_sorafs_reference_validate_governance_dag_block_json",
+        "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json"
     ]
 }
 SWIFT
@@ -672,21 +739,21 @@ SWIFT
         "CARGO", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME",
         "IPHONEOS_DEPLOYMENT_TARGET", "LANG", "LC_ALL",
-        "NORITO_SKIP_BINDINGS_SYNC", "PATH", "RUSTC", "RUSTUP_HOME",
-        "SDKROOT", "TMPDIR"
+        "NORITO_SKIP_BINDINGS_SYNC", "PATH", "RUSTC", "RUSTC_BOOTSTRAP",
+        "RUSTUP_HOME", "SDKROOT", "TMPDIR"
       ],
       "apple-ios-simulator": [
         "CARGO", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME",
         "IPHONEOS_DEPLOYMENT_TARGET", "IPHONESIMULATOR_DEPLOYMENT_TARGET",
         "LANG", "LC_ALL", "NORITO_SKIP_BINDINGS_SYNC", "PATH", "RUSTC",
-        "RUSTUP_HOME", "SDKROOT", "TMPDIR"
+        "RUSTC_BOOTSTRAP", "RUSTUP_HOME", "SDKROOT", "TMPDIR"
       ],
       "apple-macos": [
         "CARGO", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME", "LANG", "LC_ALL",
         "MACOSX_DEPLOYMENT_TARGET", "NORITO_SKIP_BINDINGS_SYNC", "PATH",
-        "RUSTC", "RUSTUP_HOME", "SDKROOT", "TMPDIR"
+        "RUSTC", "RUSTC_BOOTSTRAP", "RUSTUP_HOME", "SDKROOT", "TMPDIR"
       ]
     },
     "rust_toolchain_channel": "1.93.1",
@@ -711,6 +778,7 @@ SWIFT
   "source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
   "source_fingerprint_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "cargo_lock_sha256": "$cargo_lock_hash",
   "bridge_header_sha256": "$header_hash",
   "required_symbols": [
     "connect_norito_bridge_abi_version",
@@ -724,6 +792,10 @@ SWIFT
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_sorafs_reference_validate_bundle_json",
+    "connect_norito_sorafs_reference_validate_governance_json",
+    "connect_norito_sorafs_reference_validate_governance_dag_block_json",
+    "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
@@ -1596,6 +1668,33 @@ sed -i.bak 's/"native_bridge_abi_version": 21/"native_bridge_abi_version": 20/' 
   "$wrong_bridge_abi/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
 rm -f "$wrong_bridge_abi/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 21"
+
+tampered_apple_cargo_lock="$TMP_DIR/tampered-apple-cargo-lock"
+make_fixture "$tampered_apple_cargo_lock"
+printf '# changed after artifact creation\n' >>"$tampered_apple_cargo_lock/Cargo.lock"
+run_expect_fail \
+  "$tampered_apple_cargo_lock" \
+  "selected Cargo lock digest does not match checkout"
+
+malformed_apple_cargo_lock_hash="$TMP_DIR/malformed-apple-cargo-lock-hash"
+make_fixture "$malformed_apple_cargo_lock_hash"
+sed -i.bak \
+  's/"cargo_lock_sha256": "[0-9a-f]*"/"cargo_lock_sha256": "ABC"/' \
+  "$malformed_apple_cargo_lock_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f \
+  "$malformed_apple_cargo_lock_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
+run_expect_fail \
+  "$malformed_apple_cargo_lock_hash" \
+  "NoritoBridge selected Cargo lock hash"
+
+symlinked_apple_cargo_lock="$TMP_DIR/symlinked-apple-cargo-lock"
+make_fixture "$symlinked_apple_cargo_lock"
+mv "$symlinked_apple_cargo_lock/Cargo.lock" \
+  "$symlinked_apple_cargo_lock/Cargo.lock.real"
+ln -s Cargo.lock.real "$symlinked_apple_cargo_lock/Cargo.lock"
+run_expect_fail \
+  "$symlinked_apple_cargo_lock" \
+  "selected Apple Cargo lock is not an absolute canonical non-symbolic regular file"
 
 tampered_apple_build_environment="$TMP_DIR/tampered-apple-build-environment"
 make_fixture "$tampered_apple_build_environment"

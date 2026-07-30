@@ -46,14 +46,17 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
   --chunk-fetch-plan-out artifacts/docs/book/2025-11-01/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=429391872 \
   --root-cid=f40101... \
   --dag-codec=0x71
 ```
 
-Replace the digest, size, and CID values with the expected references recorded in
-the migration ledger entry for the artifact.
+Replace the digest, size, and CID values with the expected references recorded
+in the migration ledger entry for the artifact. The `--car-digest` placeholder
+is the lowercase BLAKE3-256 digest of the complete canonical CARv2 archive
+(pragma, header, embedded CARv1 payload, and index), not the separate SF1
+chunk-plan SHA3-256 digest.
 
 ### 3. Alias Transition & Communications
 

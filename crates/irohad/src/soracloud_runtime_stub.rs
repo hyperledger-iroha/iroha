@@ -11,7 +11,6 @@ use iroha_core::{
     },
     state::State,
 };
-use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::{AccountId, ChainId};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use parking_lot::RwLock;
@@ -55,16 +54,22 @@ impl SoracloudRuntimeManagerConfig {
 pub struct QueuedSoracloudRuntimeMutationSink;
 
 impl QueuedSoracloudRuntimeMutationSink {
-    #[must_use]
+    /// Construct the inert non-production sink used by builds without the
+    /// embedded Soracloud runtime.
+    ///
+    /// # Errors
+    ///
+    /// This constructor currently cannot fail. It keeps the production
+    /// launcher's fallible signature so feature selection cannot bypass its
+    /// signer checks.
     pub(crate) fn new(
         _chain_id: Arc<ChainId>,
         _queue: Arc<Queue>,
         _state: Arc<State>,
-        _authority: AccountId,
-        _key_pair: KeyPair,
+        _signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
         _submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission,
-    ) -> Self {
-        Self
+    ) -> eyre::Result<Self> {
+        Ok(Self)
     }
 }
 
@@ -103,7 +108,17 @@ impl SoracloudRuntimeManager {
         self
     }
 
-    pub fn start(self, shutdown_signal: ShutdownSignal) -> (SoracloudRuntimeManagerHandle, Child) {
+    /// Start the disabled-runtime shutdown waiter.
+    ///
+    /// # Errors
+    ///
+    /// The stub currently has no fallible initialization, but returns the same
+    /// result shape as the embedded runtime so launcher startup remains
+    /// feature-independent and fail-closed.
+    pub fn start(
+        self,
+        shutdown_signal: ShutdownSignal,
+    ) -> eyre::Result<(SoracloudRuntimeManagerHandle, Child)> {
         let handle = SoracloudRuntimeManagerHandle {
             snapshot: Arc::new(RwLock::new(SoracloudRuntimeSnapshot::default())),
             state_dir: Arc::new(self.config.state_dir),
@@ -112,10 +127,10 @@ impl SoracloudRuntimeManager {
         let task = task::spawn(async move {
             shutdown_signal.receive().await;
         });
-        (
+        Ok((
             handle,
             Child::new(task, OnShutdown::Wait(Duration::from_secs(1))),
-        )
+        ))
     }
 }
 

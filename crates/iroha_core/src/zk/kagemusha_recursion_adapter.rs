@@ -898,8 +898,8 @@ impl KagemushaStepBootstrapV4 {
         Ok(layout)
     }
 
-    /// Decode and canonically re-encode one bounded bootstrap payload before
-    /// exposing any of its recursion witnesses.
+    /// Decode one exact canonical bounded bootstrap payload before exposing any
+    /// of its recursion witnesses.
     pub(crate) fn decode_authenticated(
         bytes: &[u8],
         params: &KagemushaStepCircuitParamsV4,
@@ -917,17 +917,18 @@ impl KagemushaStepBootstrapV4 {
         if bytes.is_empty() || bytes.len() > maximum {
             return Err("Kagemusha V4 bootstrap payload length is invalid".to_owned());
         }
-        let decoded: Self = norito::decode_from_bytes_with_limits(
+        let decoded: Self = norito::decode_canonical_with_limits(
             bytes,
             kagemusha_runtime_norito_decode_limits_v4(bytes.len()),
         )
-        .map_err(|error| format!("failed to decode Kagemusha V4 bootstrap: {error}"))?;
+        .map_err(|error| {
+            if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                "Kagemusha V4 bootstrap payload is not canonical Norito".to_owned()
+            } else {
+                format!("failed to decode Kagemusha V4 bootstrap: {error}")
+            }
+        })?;
         decoded.validate(params, expected_parity, expected_structure_sha256)?;
-        let canonical = norito::to_bytes(&decoded)
-            .map_err(|error| format!("failed to re-encode Kagemusha V4 bootstrap: {error}"))?;
-        if canonical != bytes {
-            return Err("Kagemusha V4 bootstrap payload is not canonical Norito".to_owned());
-        }
         Ok(decoded)
     }
 
@@ -939,7 +940,7 @@ impl KagemushaStepBootstrapV4 {
         expected_structure_sha256: [u8; 32],
     ) -> Result<Vec<u8>, String> {
         self.validate(params, expected_parity, expected_structure_sha256)?;
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
             .map_err(|error| format!("failed to encode Kagemusha V4 bootstrap: {error}"))
     }
 
@@ -2375,7 +2376,7 @@ impl KagemushaPastaCycleProofPairV4 {
         if maximum == 0 || maximum > absolute_maximum {
             return Err("Kagemusha V4 authenticated pair bound is invalid".to_owned());
         }
-        let encoded = norito::to_bytes(self)
+        let encoded = norito::encode_canonical(self)
             .map_err(|error| format!("failed to encode Kagemusha V4 proof pair: {error}"))?;
         if encoded.len() > maximum {
             return Err(format!(
@@ -2399,17 +2400,18 @@ impl KagemushaPastaCycleProofPairV4 {
         if bytes.is_empty() || bytes.len() > maximum {
             return Err("Kagemusha V4 opaque proof payload length is invalid".to_owned());
         }
-        let pair: Self = norito::decode_from_bytes_with_limits(
+        let pair: Self = norito::decode_canonical_with_limits(
             bytes,
             kagemusha_runtime_norito_decode_limits_v4(bytes.len()),
         )
-        .map_err(|error| format!("failed to decode Kagemusha V4 proof pair: {error}"))?;
+        .map_err(|error| {
+            if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                "Kagemusha V4 proof pair is not canonical Norito".to_owned()
+            } else {
+                format!("failed to decode Kagemusha V4 proof pair: {error}")
+            }
+        })?;
         pair.validate(step_eq_params, step_ep_params, max_pair_bytes)?;
-        let canonical = norito::to_bytes(&pair)
-            .map_err(|error| format!("failed to re-encode Kagemusha V4 proof pair: {error}"))?;
-        if canonical != bytes {
-            return Err("Kagemusha V4 proof pair is not canonical Norito".to_owned());
-        }
         Ok(pair)
     }
 
@@ -2421,7 +2423,7 @@ impl KagemushaPastaCycleProofPairV4 {
         max_pair_bytes: u32,
     ) -> Result<Vec<u8>, String> {
         self.validate(step_eq_params, step_ep_params, max_pair_bytes)?;
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
             .map_err(|error| format!("failed to encode Kagemusha V4 proof pair: {error}"))
     }
 }
@@ -5156,7 +5158,7 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
     ) -> Result<Self, String> {
         candidate.validate().map_err(|error| error.to_string())?;
         let candidate_sha256 = candidate.sha256().map_err(|error| error.to_string())?;
-        let manifest_bytes = norito::to_bytes(&candidate.manifest).map_err(|error| {
+        let manifest_bytes = norito::encode_canonical(&candidate.manifest).map_err(|error| {
             format!("failed to encode Kagemusha V5 candidate manifest: {error}")
         })?;
         let manifest_sha256: [u8; 32] = Sha256::digest(manifest_bytes).into();
@@ -5294,15 +5296,26 @@ impl KagemushaProvingKeySpoolV5 {
         let mut header_bytes = vec![0_u8; header_len];
         file.read_exact(&mut header_bytes)
             .map_err(|error| format!("failed to read Kagemusha V5 PK spool header: {error}"))?;
+        let header_decode_limits = norito::core::DecodeLimits::new(
+            1024,
+            super::kagemusha_artifact_v4::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4,
+            4096,
+            super::kagemusha_artifact_v4::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4
+                .saturating_mul(4),
+            16,
+        );
         let header: iroha_data_model::offline::KagemushaPastaCycleFramedArtifactHeaderV4 =
-            norito::decode_from_bytes(&header_bytes)
-                .map_err(|_| "Kagemusha V5 PK spool header is malformed".to_owned())?;
-        if norito::to_bytes(&header)
-            .map_err(|error| format!("failed to re-encode Kagemusha V5 PK header: {error}"))?
-            != header_bytes
-            || header.parity != parity
-            || header.kind != KagemushaPastaCycleArtifactKindV4::ProvingKey
-        {
+            norito::decode_canonical_with_limits(&header_bytes, header_decode_limits).map_err(
+                |error| {
+                    if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                        "Kagemusha V5 PK spool header is non-canonical or has the wrong role"
+                            .to_owned()
+                    } else {
+                        "Kagemusha V5 PK spool header is malformed".to_owned()
+                    }
+                },
+            )?;
+        if header.parity != parity || header.kind != KagemushaPastaCycleArtifactKindV4::ProvingKey {
             return Err(
                 "Kagemusha V5 PK spool header is non-canonical or has the wrong role".to_owned(),
             );
@@ -13007,13 +13020,18 @@ mod tests {
     use std::{cell::Cell, mem, rc::Rc};
 
     use super::*;
+    use halo2_proofs::arithmetic::Field;
     use iroha_data_model::offline::{
         KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
     };
-    use norito::to_bytes;
-
-    use halo2_proofs::arithmetic::Field;
     use snark_verifier::util::arithmetic::PrimeCurveAffine as _;
+
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout Kagemusha recursion value")
+    }
 
     #[test]
     fn source_runtime_heavy_residency_is_strictly_eq_then_ep() {
@@ -14144,7 +14162,8 @@ mod tests {
                 .last_mut()
                 .expect("compact header carries its selector") = u128::from(selector);
             assert!(pair.validate(&params, &params, maximum).is_err());
-            let encoded = to_bytes(&pair).expect("encode adversarial V4 pair");
+            let encoded =
+                norito::encode_canonical(&pair).expect("encode adversarial V4 pair canonically");
             assert!(
                 validate_kagemusha_proof_pair_measurement_v4(&encoded, &params, &params, maximum,)
                     .is_err(),
@@ -14293,6 +14312,27 @@ mod tests {
             .expect("decode canonical bootstrap"),
             bootstrap
         );
+        let alternate = encode_with_alternate_norito_layout(&bootstrap);
+        assert_ne!(alternate, encoded);
+        assert_eq!(
+            KagemushaStepBootstrapV4::decode_authenticated(
+                &alternate,
+                &params,
+                KagemushaPastaCycleParityV1::StepEq,
+                structure,
+            )
+            .expect_err("alternate-layout bootstrap must be rejected"),
+            "Kagemusha V4 bootstrap payload is not canonical Norito"
+        );
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient_encoded = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            bootstrap
+                .encode_authenticated(&params, KagemushaPastaCycleParityV1::StepEq, structure)
+                .expect("encode bootstrap under alternate ambient layout")
+        };
+        assert_eq!(ambient_encoded, encoded);
 
         let mut missing_break_points = bootstrap.clone();
         missing_break_points.circuit_break_points.clear();
@@ -14408,6 +14448,15 @@ mod tests {
                 )
                 .expect("decode canonical pair"),
                 pair
+            );
+            let alternate = encode_with_alternate_norito_layout(&pair);
+            assert_ne!(alternate, bytes);
+            assert_eq!(
+                KagemushaPastaCycleProofPairV4::decode_authenticated(
+                    &alternate, &params, &params, maximum,
+                )
+                .expect_err("alternate-layout pair must be rejected"),
+                "Kagemusha V4 proof pair is not canonical Norito"
             );
             assert!(
                 pair.validate(

@@ -3983,7 +3983,18 @@ pub mod contracts_and_verification_keys {
     }
 
     const fn app_unprojected_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path).with_projections(RouteProjections::NONE)
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::Unauthenticated)
+            .with_projections(RouteProjections::NONE)
+    }
+
+    const fn app_unprojected_static_asset_get(
+        id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        app_unprojected_get(id, path).with_path_policy(PathPolicy::ProtocolException {
+            reason: "browser static asset filename requires a media-type extension",
+        })
     }
 
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -4051,6 +4062,7 @@ pub mod contracts_and_verification_keys {
         CONTRACTS_DEPLOYMENT_STATE_POST => app_signed_post("contracts.contracts_deployment_state_post", "/v1/contracts/deployment-state");
         ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
         CONTRACTS_CALL_POST => app_post("contracts.contracts_call_post", "/v1/contracts/call");
+        CONTRACTS_CALL_BATCH_PREPARE_POST => app_post("contracts.contracts_call_batch_prepare_post", "/v1/contracts/call/batch/prepare");
         CONTRACTS_CALL_SIMULATE_POST => app_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
         BRIDGE_PROOFS_SUBMIT_POST => app_post("contracts.bridge_proofs_submit_post", "/v1/bridge/proofs/submit");
         BRIDGE_MESSAGES_POST => app_post("contracts.bridge_messages_post", "/v1/bridge/messages");
@@ -4162,8 +4174,8 @@ pub mod contracts_and_verification_keys {
         EVIDENCE_RETENTION_POST => app_signed_post("contracts.evidence_retention_post", "/v1/evidence/retention");
         EVIDENCE_ERASURE_POST => app_signed_post("contracts.evidence_erasure_post", "/v1/evidence/erasure");
         EVIDENCE_VIEWER_GET => app_unprojected_get("contracts.evidence_viewer_get", "/v1/evidence/viewer");
-        EVIDENCE_VIEWER_CSS_GET => app_unprojected_get("contracts.evidence_viewer_css_get", "/v1/evidence/viewer/app.css");
-        EVIDENCE_VIEWER_JS_GET => app_unprojected_get("contracts.evidence_viewer_js_get", "/v1/evidence/viewer/app.js");
+        EVIDENCE_VIEWER_CSS_GET => app_unprojected_static_asset_get("contracts.evidence_viewer_css_get", "/v1/evidence/viewer/app.css");
+        EVIDENCE_VIEWER_JS_GET => app_unprojected_static_asset_get("contracts.evidence_viewer_js_get", "/v1/evidence/viewer/app.js");
         SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_POST => app_post("contracts.sorafs_moderation_viewer_audit_reports_post", "/v1/sorafs/moderation/viewer-audit-reports");
         SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_PUBLISH_DUE_POST => app_post("contracts.sorafs_moderation_viewer_audit_reports_publish_due_post", "/v1/sorafs/moderation/viewer-audit-reports/publish-due");
         SORAFS_AUDIT_REPAIR_REPORT_POST => app_post("contracts.sorafs_audit_repair_report_post", "/v1/sorafs/audit/repair/report");
@@ -4804,6 +4816,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
     contracts_and_verification_keys::ASSETS_TRANSFER_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_POST,
+    contracts_and_verification_keys::CONTRACTS_CALL_BATCH_PREPARE_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
     contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
     contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
@@ -5028,7 +5041,7 @@ mod tests {
     fn canonical_catalog_exposes_only_the_authoritative_privacy_snapshot_route() {
         let privacy_routes = CATALOGED_ROUTES
             .iter()
-            .filter(|route| route.path().contains("/privacy/"))
+            .filter(|route| route.path().starts_with("/v1/privacy/"))
             .collect::<Vec<_>>();
         assert_eq!(
             privacy_routes,
@@ -5573,6 +5586,20 @@ mod tests {
                 "{}",
                 route.stable_route_id()
             );
+        }
+
+        for route in [
+            contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
+            contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
+            contracts_and_verification_keys::EVIDENCE_VIEWER_JS_GET,
+        ] {
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert_eq!(route.projections(), RouteProjections::NONE);
+            assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
         }
 
         for route in [
@@ -6190,7 +6217,7 @@ mod tests {
         assert!(
             !CATALOGED_ROUTES
                 .iter()
-                .any(|route| { route.stable_route_id() == "sorafs.reputation_snapshot.publish" })
+                .any(|route| route.stable_route_id() == "sorafs.reputation_snapshot.publish")
         );
     }
 }

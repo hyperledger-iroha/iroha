@@ -13,13 +13,46 @@ use thiserror::Error;
 
 use crate::{AssetDefinitionId, ChainId, account::AccountId};
 
+pub use iroha_zkp_halo2::vega::{
+    VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
+    VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
+    VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MAX_PRESENTATION_YEAR_V1,
+    VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
+    VEGA_MDL_MSO_PAYLOAD_BYTES_V1, VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
+};
+
 /// Domain separator used to hash canonical [`PrivacyStatementV1`] values.
 pub const PRIVACY_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:statement:v1";
+/// Permanent Norito schema identity for the top-level typed privacy statement.
+pub const PRIVACY_STATEMENT_SCHEMA_NAME_V1: &str = "iroha.privacy.statement.v1";
+/// Permanent Norito schema identity for the top-level typed privacy proof.
+pub const PRIVACY_PROOF_SCHEMA_NAME_V1: &str = "iroha.privacy.proof.v1";
+/// Permanent Norito schema identity for the cross-SDK privacy proof envelope.
+pub const PRIVACY_PROOF_ENVELOPE_SCHEMA_NAME_V1: &str = "iroha.privacy.proof-envelope.v1";
+/// Permanent Norito schema identity for the concrete ZK-ACE authorization statement.
+pub const ZK_ACE_AUTHORIZATION_STATEMENT_SCHEMA_NAME_V1: &str =
+    "iroha.privacy.zk-ace.authorization-statement.v1";
+/// Permanent Norito schema identity for authoritative ZK-ACE policy digest material.
+pub const ZK_ACE_POLICY_DIGEST_MATERIAL_SCHEMA_NAME_V1: &str =
+    "iroha.privacy.zk-ace.policy-digest-material.v1";
 /// Domain separator used to hash canonical [`PrivacyRootPublicationV1`] values.
 pub const PRIVACY_ROOT_PUBLICATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:root-publication:v1";
 /// Domain separator used to hash canonical [`PrivacyOrchardPoolBootstrapV1`] values.
 pub const PRIVACY_ORCHARD_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:orchard-pool-bootstrap:v1";
+/// Domain separator for FCMP++, private-IVM, and PQ-MASP pool bootstraps.
+pub const PRIVACY_PROOF_MANAGED_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:proof-managed-pool-bootstrap:v1";
+/// Domain separator for the ledger index of one complete FCMP++ `(O, I, C)` tuple.
+///
+/// This identifier is never substituted for the tuple in the curve tree or
+/// membership relation.
+pub const PRIVACY_FCMP_OUTPUT_ID_DOMAIN_V1: &[u8] =
+    b"iroha.privacy.monero-fcmp-plus-plus.output-id.v1";
+/// Domain separator for the shared root-history commitment to a typed FCMP++
+/// Selene/Helios root.
+pub const PRIVACY_FCMP_ROOT_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha.privacy.monero-fcmp-plus-plus.root-commitment.v1";
 /// Domain separator used to hash canonical [`PrivacyPgcAccountBootstrapV1`] payloads.
 pub const PRIVACY_PGC_ACCOUNT_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:pgc-account-bootstrap:v1";
@@ -29,9 +62,22 @@ pub const PRIVACY_PGC_BOOTSTRAP_PROOF_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for core's deterministic PGC account-state root derivation.
 pub const PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha:privacy:pgc-account-state-root:v1";
+/// Domain separator for the exact private-IVM action selected by a statement.
+pub const IVM_PRIVATE_NOTE_ACTION_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:ivm-private-note:action:v1";
 /// Domain separator for canonical Bootle/Lantern issuer-policy record digests.
 pub const BOOTLE_LANTERN_ISSUER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:bootle-lantern:issuer-policy:v1";
+/// Domain separator for the exact Bootle/Lantern issuer verification matrix.
+pub const BOOTLE_LANTERN_ISSUER_PARAMETER_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:bootle-lantern:issuer-parameter:v1";
+/// Domain separator for canonical Vega issuer-key/policy revision self-digests.
+pub const VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:vega:issuer-record:v1";
+/// Domain for canonical length-delimited Vega issuer-record hashing.
+pub const VEGA_ISSUER_RECORD_HASH_FRAME_DOMAIN_V1: &[u8] =
+    b"iroha.privacy.vega.issuer-record.sha256-frame.v1";
+/// Implicit version committed by every Vega issuer governance record.
+pub const VEGA_ISSUER_GOVERNANCE_RECORD_VERSION_V1: u16 = 1;
 /// Domain separator for canonical ZK-AMS Personhood Credential hashes.
 pub const ZK_AMS_PHC_HASH_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:phc:v1";
 /// Domain separator for canonical ZK-AMS issuer-policy records.
@@ -51,13 +97,23 @@ pub const ZK_X509_TRUST_ANCHOR_RECORD_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for canonical X.509 certificate-policy revision self-digests.
 pub const ZK_X509_CERTIFICATE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:certificate-policy-record:v1";
+/// Domain separator for canonical signed-CRL revision self-digests.
+pub const ZK_X509_CRL_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:crl-record:v1";
+/// Domain for canonical SHA-256 field framing in the X.509 relation.
+pub const ZK_X509_HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha.zk-x509.sha256.frame.v1";
+/// Domain for the exact signed DER CRL digest.
+pub const ZK_X509_CRL_DER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.der.v1";
+/// Domain for the exact CRL issuer-SPKI digest.
+pub const ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.issuer-spki.v1";
+/// Implicit version committed by every X.509 governance-record digest.
+pub const ZK_X509_GOVERNANCE_RECORD_VERSION_V1: u16 = 1;
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
 /// Maximum privacy actions admitted in one Taira block.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK_V1: u32 = 2;
 /// Maximum proof payload bytes admitted for one Taira privacy action.
-pub const TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1: u32 = 8 * 1024 * 1024;
+pub const TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1: u32 = 9 * 1024 * 1024;
 /// Maximum canonical bytes admitted for one Anonymous PGC bootstrap proof.
 pub const TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1: u32 = 4 * 1024 * 1024;
 /// The only account-state epoch admitted for an Anonymous PGC bootstrap.
@@ -65,6 +121,8 @@ pub const TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1: u32 = 4 * 1024 * 1024;
 /// Successor proofs advance this epoch by exactly one. Keeping the origin
 /// fixed prevents governance or a caller from creating ambiguous histories.
 pub const PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1: u64 = 1;
+/// The sole initial epoch for a node-derived Orchard empty frontier.
+pub const PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1: u64 = 1;
 /// The only authorization epoch admitted for a new ZK-ACE policy.
 pub const PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1: u64 = 1;
 /// Maximum number of source accounts in one authoritative ZK-ACE policy.
@@ -72,11 +130,11 @@ pub const PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1: usize = 256;
 /// Maximum number of authoritative ZK-ACE policy lineages in world state.
 pub const PRIVACY_ZK_ACE_MAX_POLICIES_V1: usize = 4_096;
 /// Maximum encoded bytes admitted for one Taira privacy action.
-pub const TAIRA_PRIVACY_MAX_ACTION_BYTES_V1: u32 = 8 * 1024 * 1024;
+pub const TAIRA_PRIVACY_MAX_ACTION_BYTES_V1: u32 = 9 * 1024 * 1024;
 /// Maximum privacy bytes admitted in one Taira transaction.
-pub const TAIRA_PRIVACY_MAX_BYTES_PER_TRANSACTION_V1: u32 = 8 * 1024 * 1024;
+pub const TAIRA_PRIVACY_MAX_BYTES_PER_TRANSACTION_V1: u32 = 9 * 1024 * 1024;
 /// Maximum privacy bytes admitted in one Taira block.
-pub const TAIRA_PRIVACY_MAX_BYTES_PER_BLOCK_V1: u32 = 16 * 1024 * 1024;
+pub const TAIRA_PRIVACY_MAX_BYTES_PER_BLOCK_V1: u32 = 18 * 1024 * 1024;
 /// Maximum public-statement and encrypted-output payload bytes in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1: u32 =
     256 * 1024;
@@ -144,6 +202,24 @@ pub enum PrivacyProtocolIdV1 {
     PqMaspStarkV0,
 }
 
+/// Frozen protocol labels retired before the first-release privacy registry.
+///
+/// These identifiers remain reserved so generic proof systems, SDKs, and
+/// governance tooling cannot reuse them for a different protocol. Order is
+/// the canonical order carried by `fixtures/privacy/exact12_v1.tsv`.
+pub const PRIVACY_RETIRED_PROTOCOL_LABELS_V1: [&str; 10] = [
+    "zkat-policy-private-auth-v1",
+    "zk-ams-recursive-admission-v0",
+    "silent-threshold-anoncred-v0",
+    "zk-x509-onchain-identity-v0",
+    "jindo-lattice-pcs-zk-v0",
+    "sis-hints-anoncred-pq-v0",
+    "sis-with-hints",
+    "penumbra-masp-v1",
+    "miden-stark-note-v1",
+    "aztec-private-rollup-v1",
+];
+
 impl PrivacyProtocolIdV1 {
     /// Number of protocols in the closed first-release registry.
     pub const COUNT: usize = 12;
@@ -187,6 +263,31 @@ impl PrivacyProtocolIdV1 {
         }
     }
 
+    /// Exact Norito statement/proof variant label carried by the first-release
+    /// cross-SDK matrix.
+    ///
+    /// Statement and proof envelopes deliberately use the same closed variant
+    /// name for each protocol. Keeping this mapping next to the canonical
+    /// protocol identifier lets release tooling validate the complete matrix
+    /// without maintaining a second, drift-prone list.
+    #[must_use]
+    pub const fn canonical_typed_variant_label(self) -> &'static str {
+        match self {
+            Self::ZkAcePqAuthorizationV0 => "ZkAcePqAuthorizationV0",
+            Self::AnonymousPgcKOutOfNV1 => "AnonymousPgcKOutOfNV1",
+            Self::VeRangeTransparentRangeV1 => "VeRangeTransparentRangeV1",
+            Self::IrohaZkAmsV1 => "IrohaZkAmsV1",
+            Self::VegaExistingCredentialZkV0 => "VegaExistingCredentialZkV0",
+            Self::IrohaZkX509StarkP256V0 => "IrohaZkX509StarkP256V0",
+            Self::IrohaJindoPolynomialCommitmentV0 => "IrohaJindoPolynomialCommitmentV0",
+            Self::IrohaBootleLanternAnoncredV1 => "IrohaBootleLanternAnoncredV1",
+            Self::OrchardHalo2ActionsV1 => "OrchardHalo2ActionsV1",
+            Self::MoneroFcmpPlusPlusV1 => "MoneroFcmpPlusPlusV1",
+            Self::IrohaIvmPrivateNoteStarkV1 => "IrohaIvmPrivateNoteStarkV1",
+            Self::PqMaspStarkV0 => "PqMaspStarkV0",
+        }
+    }
+
     /// Parse one exact first-release external identifier.
     ///
     /// Returns `None` for aliases, retired identifiers, and non-canonical
@@ -214,12 +315,10 @@ impl PrivacyProtocolIdV1 {
     #[must_use]
     pub const fn expected_proof_system(self) -> PrivacyProofSystemIdV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0 | Self::PqMaspStarkV0 => {
-                PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
-            }
-            Self::IrohaZkX509StarkP256V0 | Self::IrohaIvmPrivateNoteStarkV1 => {
-                PrivacyProofSystemIdV1::StarkFriPoseidon2Goldilocks
-            }
+            Self::ZkAcePqAuthorizationV0
+            | Self::IrohaZkX509StarkP256V0
+            | Self::IrohaIvmPrivateNoteStarkV1
+            | Self::PqMaspStarkV0 => PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
             Self::IrohaBootleLanternAnoncredV1 => {
                 PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm
             }
@@ -261,6 +360,23 @@ impl PrivacyProtocolIdV1 {
     }
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use exact12_fixture::{
+    PrivacyExact12FixtureErrorV1, PrivacyExact12TypedEnvelopeRowV1,
+    privacy_exact12_typed_envelope_rows_v1,
+};
+
+/// Return whether `label` is reserved by the first-release privacy registry.
+///
+/// Active and retired labels are both exact, case-sensitive reservations.
+/// This predicate deliberately performs no trimming, normalization, or alias
+/// matching so near-miss identifiers remain available to unrelated protocols.
+#[must_use]
+pub fn privacy_protocol_label_is_reserved_v1(label: &str) -> bool {
+    PrivacyProtocolIdV1::from_canonical_label(label).is_some()
+        || PRIVACY_RETIRED_PROTOCOL_LABELS_V1.contains(&label)
+}
+
 /// Exact proof-system profile selected by a privacy protocol.
 ///
 /// This is intentionally distinct from [`PrivacyProtocolIdV1`] because several
@@ -278,9 +394,6 @@ pub enum PrivacyProofSystemIdV1 {
     /// STARK/FRI over Goldilocks with SHA-256 transcript and commitments.
     #[cfg_attr(feature = "json", norito(rename = "stark-fri-sha256-goldilocks"))]
     StarkFriSha256Goldilocks,
-    /// STARK/FRI over Goldilocks with Poseidon2 transcript and commitments.
-    #[cfg_attr(feature = "json", norito(rename = "stark-fri-poseidon2-goldilocks"))]
-    StarkFriPoseidon2Goldilocks,
     /// ZK-AMS masked relaxed-R1CS admission plus Ristretto255 possession and LSAG.
     ///
     /// Batch admission uses Poseidon2/Goldilocks commitment digests and a
@@ -475,6 +588,18 @@ define_privacy_digest!(
     PrivacyOrchardPoolBootstrapDigestV1
 );
 define_privacy_digest!(
+    /// Digest of one canonical governed FCMP++, private-IVM, or PQ-MASP pool bootstrap.
+    PrivacyProofManagedPoolBootstrapDigestV1
+);
+define_privacy_digest!(
+    /// Ledger-only identifier of one complete canonical FCMP++ `(O, I, C)` output tuple.
+    PrivacyFcmpOutputIdV1
+);
+define_privacy_digest!(
+    /// Typed FCMP++ linkability key image `L` used by the durable replay registry.
+    PrivacyFcmpKeyImageV1
+);
+define_privacy_digest!(
     /// Digest of a canonical PGC account bootstrap payload.
     PrivacyPgcAccountBootstrapDigestV1
 );
@@ -539,6 +664,10 @@ define_privacy_digest!(
     PrivacyVegaDeviceAuthenticationDigestV1
 );
 define_privacy_digest!(
+    /// Self-digest of one complete authoritative Vega issuer-key/policy revision.
+    PrivacyVegaIssuerRecordDigestV1
+);
+define_privacy_digest!(
     /// Fixed cryptographic recipient identity used by an encrypted output.
     PrivacyRecipientIdV1
 );
@@ -549,6 +678,10 @@ define_privacy_digest!(
 define_privacy_digest!(
     /// Fixed identifier of a private IVM program.
     PrivacyProgramIdV1
+);
+define_privacy_digest!(
+    /// Digest of the exact private IVM action selected by a statement.
+    PrivacyActionDigestV1
 );
 define_privacy_digest!(
     /// Digest of a certificate subject public key.
@@ -566,6 +699,41 @@ define_privacy_digest!(
     /// Self-digest of one immutable authoritative X.509 certificate-policy revision.
     PrivacyZkX509CertificatePolicyRecordDigestV1
 );
+define_privacy_digest!(
+    /// Domain-framed SHA-256 digest of one exact signed DER certificate-revocation list.
+    PrivacyX509CrlDerDigestV1
+);
+define_privacy_digest!(
+    /// Domain-framed SHA-256 digest of the exact SPKI that signs one governed CRL lineage.
+    PrivacyX509CrlIssuerSpkiDigestV1
+);
+define_privacy_digest!(
+    /// Self-digest of one immutable authoritative signed-CRL revision.
+    PrivacyZkX509CrlRecordDigestV1
+);
+
+impl PrivacyX509CrlDerDigestV1 {
+    /// Hash the complete exact signed DER CRL with the canonical X.509 frame.
+    #[must_use]
+    pub fn digest_exact_der(der: &[u8]) -> Self {
+        Self::new(privacy_zk_x509_sha256_frame_v1(
+            ZK_X509_CRL_DER_DIGEST_DOMAIN_V1,
+            &[der],
+        ))
+    }
+}
+
+impl PrivacyX509CrlIssuerSpkiDigestV1 {
+    /// Hash the complete exact issuer SPKI DER with the canonical X.509 frame.
+    #[must_use]
+    pub fn digest_exact_der(spki_der: &[u8]) -> Self {
+        Self::new(privacy_zk_x509_sha256_frame_v1(
+            ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1,
+            &[spki_der],
+        ))
+    }
+}
+
 define_privacy_digest!(
     /// Canonical commitment-tree or accumulator root.
     PrivacyRootV1
@@ -732,6 +900,7 @@ impl AsRef<[u8; 33]> for PrivacyP256PointV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyP256CiphertextV1 {
     /// `C_L = pk^r`.
     pub left: PrivacyP256PointV1,
@@ -745,6 +914,7 @@ pub struct PrivacyP256CiphertextV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPolicyNamespaceV1 {
     /// Exact policy identity.
     pub policy_id: PrivacyPolicyIdV1,
@@ -756,6 +926,7 @@ pub struct PrivacyPolicyNamespaceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPoolNamespaceV1 {
     /// Exact pool identity.
     pub pool_id: PrivacyPoolIdV1,
@@ -767,6 +938,7 @@ pub struct PrivacyPoolNamespaceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
     /// Exact credential issuer.
     pub issuer_id: PrivacyIssuerIdV1,
@@ -776,12 +948,31 @@ pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
     pub policy_id: PrivacyPolicyIdV1,
 }
 
-/// Trust-anchor and certificate-policy namespace payload.
+/// Trust-anchor-wide namespace payload.
+///
+/// This scope owns the single CA-membership root derived from a complete
+/// trust store. It deliberately excludes certificate-policy identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyTrustAnchorNamespaceV1 {
+    /// Exact trust-anchor issuer.
+    pub trust_anchor_id: PrivacyIssuerIdV1,
+}
+
+/// Trust-anchor and certificate-policy namespace payload.
+///
+/// This scope owns policy-specific statement state and the corresponding
+/// issuer CRL root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyTrustAnchorPolicyNamespaceV1 {
     /// Exact trust-anchor issuer.
     pub trust_anchor_id: PrivacyIssuerIdV1,
@@ -795,6 +986,7 @@ pub struct PrivacyTrustAnchorPolicyNamespaceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyParameterNamespaceV1 {
     /// Exact parameter-set identity.
     pub parameter_id: PrivacyParameterIdV1,
@@ -806,6 +998,7 @@ pub struct PrivacyParameterNamespaceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyIssuerPolicyNamespaceV1 {
     /// Exact credential issuer.
     pub issuer_id: PrivacyIssuerIdV1,
@@ -819,6 +1012,7 @@ pub struct PrivacyIssuerPolicyNamespaceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPoolProgramNamespaceV1 {
     /// Exact private-note pool.
     pub pool_id: PrivacyPoolIdV1,
@@ -832,7 +1026,10 @@ pub struct PrivacyPoolProgramNamespaceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "scope", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "scope", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyNamespaceScopeV1 {
     /// Governed authorization or range policy.
     Policy(PrivacyPolicyNamespaceV1),
@@ -840,6 +1037,8 @@ pub enum PrivacyNamespaceScopeV1 {
     Pool(PrivacyPoolNamespaceV1),
     /// Credential issuer, admitted-identity registry, and admission policy.
     IssuerRegistryPolicy(PrivacyIssuerRegistryPolicyNamespaceV1),
+    /// Certificate trust anchor, independent of certificate policy.
+    TrustAnchor(PrivacyTrustAnchorNamespaceV1),
     /// Certificate trust anchor and certificate policy.
     TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1),
     /// Governed polynomial-commitment parameter set.
@@ -873,6 +1072,7 @@ pub enum PrivacyNamespaceComponentV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyNamespaceV1 {
     protocol_id: PrivacyProtocolIdV1,
     scope: PrivacyNamespaceScopeV1,
@@ -1007,7 +1207,8 @@ impl PrivacyNamespaceV1 {
                 PrivacyNamespaceScopeV1::IssuerRegistryPolicy(_)
             ) | (
                 PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
-                PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
+                PrivacyNamespaceScopeV1::TrustAnchor(_)
+                    | PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
             ) | (
                 PrivacyProtocolIdV1::VegaExistingCredentialZkV0
                     | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
@@ -1048,6 +1249,10 @@ impl PrivacyNamespaceV1 {
                     PrivacyNamespaceComponentV1::Policy,
                 )
             }
+            PrivacyNamespaceScopeV1::TrustAnchor(scope) => validate_namespace_component(
+                !scope.trust_anchor_id.is_zero(),
+                PrivacyNamespaceComponentV1::Issuer,
+            ),
             PrivacyNamespaceScopeV1::TrustAnchorPolicy(scope) => {
                 validate_namespace_component(
                     !scope.trust_anchor_id.is_zero(),
@@ -1119,7 +1324,10 @@ pub enum PrivacyNamespaceValidationError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "management", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "management", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyRootManagementV1 {
     /// Roots advance only through an admitted proof-managed state transition.
     ProofManaged,
@@ -1133,7 +1341,10 @@ pub enum PrivacyRootManagementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "role", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "role", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyRootRoleV1 {
     /// Mutable encrypted PGC account table.
     PgcAccountState,
@@ -1143,8 +1354,6 @@ pub enum PrivacyRootRoleV1 {
     Revocation,
     /// X.509 CA-membership accumulator.
     CertificateAuthorityMembership,
-    /// X.509 CRL non-membership tree.
-    CertificateRevocationNonmembership,
     /// Orchard or PQ-MASP note-commitment anchor.
     NoteCommitmentAnchor,
     /// FCMP++ complete output-set accumulator.
@@ -1163,9 +1372,7 @@ impl PrivacyRootRoleV1 {
             | Self::NoteCommitmentAnchor
             | Self::OutputSet
             | Self::ProgramState => PrivacyRootManagementV1::ProofManaged,
-            Self::Revocation
-            | Self::CertificateAuthorityMembership
-            | Self::CertificateRevocationNonmembership => {
+            Self::Revocation | Self::CertificateAuthorityMembership => {
                 PrivacyRootManagementV1::GovernanceManaged
             }
         }
@@ -1186,7 +1393,7 @@ impl PrivacyRootRoleV1 {
                 )
                 | (
                     PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
-                    Self::CertificateAuthorityMembership | Self::CertificateRevocationNonmembership
+                    Self::CertificateAuthorityMembership
                 )
                 | (
                     PrivacyProtocolIdV1::OrchardHalo2ActionsV1 | PrivacyProtocolIdV1::PqMaspStarkV0,
@@ -1199,6 +1406,28 @@ impl PrivacyRootRoleV1 {
                 )
         )
     }
+
+    /// Return whether this role is meaningful for the exact namespace scope.
+    ///
+    /// X.509 has one trust-anchor-wide CA-membership root. Its signed CRL is a
+    /// governed record, not a second root-bearing state machine.
+    #[must_use]
+    pub const fn is_compatible_with_namespace(self, namespace: PrivacyNamespaceV1) -> bool {
+        if !self.is_compatible_with(namespace.protocol_id()) {
+            return false;
+        }
+        match self {
+            Self::CertificateAuthorityMembership => {
+                matches!(namespace.scope(), PrivacyNamespaceScopeV1::TrustAnchor(_))
+            }
+            Self::PgcAccountState
+            | Self::AccountRegistry
+            | Self::Revocation
+            | Self::NoteCommitmentAnchor
+            | Self::OutputSet
+            | Self::ProgramState => true,
+        }
+    }
 }
 
 /// Governance payload publishing one canonical privacy root.
@@ -1207,6 +1436,7 @@ impl PrivacyRootRoleV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyRootPublicationV1 {
     /// Exact protocol-scoped root namespace.
     pub namespace: PrivacyNamespaceV1,
@@ -1257,6 +1487,14 @@ impl PrivacyRootPublicationV1 {
                 role: self.role,
             });
         }
+        if !self.role.is_compatible_with_namespace(self.namespace) {
+            return Err(
+                PrivacyRootPublicationValidationError::IncompatibleNamespaceScope {
+                    scope: self.namespace.scope(),
+                    role: self.role,
+                },
+            );
+        }
         if self.epoch == 0 {
             return Err(PrivacyRootPublicationValidationError::ZeroEpoch);
         }
@@ -1301,6 +1539,14 @@ pub enum PrivacyRootPublicationValidationError {
         /// Incompatible role.
         role: PrivacyRootRoleV1,
     },
+    /// Root role is incompatible with the namespace's exact scope.
+    #[error("privacy root role {role:?} is incompatible with namespace scope {scope:?}")]
+    IncompatibleNamespaceScope {
+        /// Rejected namespace scope.
+        scope: PrivacyNamespaceScopeV1,
+        /// Rejected root role.
+        role: PrivacyRootRoleV1,
+    },
     /// Root epoch is zero.
     #[error("privacy root publication epoch must be non-zero")]
     ZeroEpoch,
@@ -1309,12 +1555,786 @@ pub enum PrivacyRootPublicationValidationError {
     ZeroRoot,
 }
 
+/// Governance payload establishing one Orchard pool's immutable public bridge.
+///
+/// The payload deliberately contains neither an initial root nor an initial
+/// epoch. Core derives the pinned Orchard V3 empty-tree root and installs it at
+/// [`PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1`], so governance cannot choose an
+/// alternate accumulator origin.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyOrchardPoolBootstrapV1 {
+    /// Stable Orchard pool identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by this private pool.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Governed public reserve account used for deposits and withdrawals.
+    pub reserve_account: AccountId,
+}
+
+impl PrivacyOrchardPoolBootstrapV1 {
+    /// Construct and validate one canonical Orchard pool bootstrap.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero pool identifier.
+    pub fn new(
+        pool_id: PrivacyPoolIdV1,
+        asset_definition_id: AssetDefinitionId,
+        reserve_account: AccountId,
+    ) -> Result<Self, PrivacyOrchardPoolBootstrapValidationErrorV1> {
+        let bootstrap = Self {
+            pool_id,
+            asset_definition_id,
+            reserve_account,
+        };
+        bootstrap.validate()?;
+        Ok(bootstrap)
+    }
+
+    /// Return the sole protocol-scoped namespace for this pool.
+    #[must_use]
+    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
+        PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: self.pool_id,
+            }),
+        )
+    }
+
+    /// Validate the closed Orchard namespace fields.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero pool identifier.
+    pub fn validate(&self) -> Result<(), PrivacyOrchardPoolBootstrapValidationErrorV1> {
+        if self.pool_id.is_zero() {
+            return Err(PrivacyOrchardPoolBootstrapValidationErrorV1::ZeroPoolId);
+        }
+        self.namespace()
+            .validate()
+            .map_err(PrivacyOrchardPoolBootstrapValidationErrorV1::Namespace)
+    }
+
+    /// Hash the exact canonical bootstrap in its own provenance domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if canonical encoding fails.
+    pub fn digest(&self) -> Result<PrivacyOrchardPoolBootstrapDigestV1, norito::Error> {
+        let encoded = norito::to_bytes(self)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_ORCHARD_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1);
+        hasher.update(
+            &u64::try_from(encoded.len())
+                .expect("Norito output length always fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(&encoded);
+        Ok(PrivacyOrchardPoolBootstrapDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+}
+
+/// Structural failure for [`PrivacyOrchardPoolBootstrapV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyOrchardPoolBootstrapValidationErrorV1 {
+    /// The stable pool identifier is all zero.
+    #[error("Orchard pool bootstrap pool id must be non-zero")]
+    ZeroPoolId,
+    /// The derived closed namespace is malformed.
+    #[error("Orchard pool bootstrap namespace is invalid: {0}")]
+    Namespace(PrivacyNamespaceValidationError),
+}
+
+/// Exact unframed byte width of one FCMP++ `(O,I,C)` tuple.
+pub const PRIVACY_FCMP_OUTPUT_TUPLE_BYTES_V1: usize = 3 * 32;
+
+/// One complete FCMP++ output-tree leaf `(O, I, C)`.
+///
+/// All three values are canonical compressed prime-order Edwards points. The
+/// data model preserves the exact encodings; the native FCMP++ engine performs
+/// the curve, subgroup, and non-identity checks before governance or proof
+/// admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyFcmpOutputTupleV1 {
+    /// One-time output key `O`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub output_key: [u8; 32],
+    /// Per-output linking-tag generator `I`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub linking_tag_generator: [u8; 32],
+    /// Amount commitment `C`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub amount_commitment: [u8; 32],
+}
+
+impl PrivacyFcmpOutputTupleV1 {
+    /// Derive the ledger-only identifier used for duplicate detection and
+    /// output lookup.
+    ///
+    /// The native curve tree and FCMP++ relation always consume the full tuple.
+    #[must_use]
+    pub fn output_id(self) -> PrivacyFcmpOutputIdV1 {
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVACY_FCMP_OUTPUT_ID_DOMAIN_V1);
+        hasher.update(self.output_key);
+        hasher.update(self.linking_tag_generator);
+        hasher.update(self.amount_commitment);
+        PrivacyFcmpOutputIdV1::new(hasher.finalize().into())
+    }
+
+    /// Reject the reserved all-zero encoding before native curve validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact zero component.
+    pub fn validate_nonzero(self) -> Result<(), PrivacyFcmpOutputTupleValidationErrorV1> {
+        if self.output_key.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyFcmpOutputTupleValidationErrorV1::ZeroComponent {
+                component: PrivacyFcmpOutputComponentV1::OutputKey,
+            });
+        }
+        if self.linking_tag_generator.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyFcmpOutputTupleValidationErrorV1::ZeroComponent {
+                component: PrivacyFcmpOutputComponentV1::LinkingTagGenerator,
+            });
+        }
+        if self.amount_commitment.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyFcmpOutputTupleValidationErrorV1::ZeroComponent {
+                component: PrivacyFcmpOutputComponentV1::AmountCommitment,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// FCMP++ output-tuple component selected by validation diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivacyFcmpOutputComponentV1 {
+    /// One-time output key `O`.
+    OutputKey,
+    /// Per-output linking-tag generator `I`.
+    LinkingTagGenerator,
+    /// Amount commitment `C`.
+    AmountCommitment,
+}
+
+/// Structural failure for one FCMP++ output tuple.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyFcmpOutputTupleValidationErrorV1 {
+    /// A mandatory point uses the reserved all-zero encoding.
+    #[error("FCMP++ output tuple component {component:?} must be non-zero")]
+    ZeroComponent {
+        /// Rejected component.
+        component: PrivacyFcmpOutputComponentV1,
+    },
+}
+
+/// Canonical typed root of the alternating FCMP++ Selene/Helios curve tree.
+///
+/// Odd layer counts identify Selene roots and even layer counts identify
+/// Helios roots. The layer count is cryptographically significant and cannot
+/// be inferred from the compressed point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyFcmpTreeRootV1 {
+    /// Number of alternating curve-tree layers.
+    pub layers: u8,
+    /// Canonical compressed Selene or Helios point selected by layer parity.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub point: [u8; 32],
+}
+
+impl PrivacyFcmpTreeRootV1 {
+    /// Largest layer count admitted by the first-release FCMP++ wire.
+    pub const MAX_LAYERS: u8 = 32;
+
+    /// Validate the closed structural shape before native curve validation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero/excessive layers or the all-zero point sentinel.
+    pub fn validate(self) -> Result<(), PrivacyFcmpTreeRootValidationErrorV1> {
+        if self.layers == 0 || self.layers > Self::MAX_LAYERS {
+            return Err(PrivacyFcmpTreeRootValidationErrorV1::InvalidLayerCount {
+                layers: self.layers,
+                max: Self::MAX_LAYERS,
+            });
+        }
+        if self.point.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyFcmpTreeRootValidationErrorV1::ZeroPoint);
+        }
+        Ok(())
+    }
+
+    /// Commit the typed root into the shared 32-byte retained-root index.
+    ///
+    /// Durable FCMP++ accumulator state still stores the complete typed root;
+    /// this digest is only the history/map key.
+    #[must_use]
+    pub fn history_commitment(self) -> PrivacyRootV1 {
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVACY_FCMP_ROOT_COMMITMENT_DOMAIN_V1);
+        hasher.update([self.layers]);
+        hasher.update(self.point);
+        PrivacyRootV1::new(hasher.finalize().into())
+    }
+}
+
+/// Structural failure for one typed FCMP++ tree root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyFcmpTreeRootValidationErrorV1 {
+    /// Layer count is outside the closed first-release bound.
+    #[error("FCMP++ tree layers {layers} are outside 1..={max}")]
+    InvalidLayerCount {
+        /// Rejected layer count.
+        layers: u8,
+        /// Compiled maximum.
+        max: u8,
+    },
+    /// Compressed root point is the reserved all-zero sentinel.
+    #[error("FCMP++ tree root point must be non-zero")]
+    ZeroPoint,
+}
+
+/// Complete public FCMP++ relation for one hidden consumed output.
+///
+/// The IFC1 proof duplicates `O~`, `I~`, and `R`; the native decoder must
+/// compare those bytes exactly. `C~` and the key image `L` remain
+/// statement-only public inputs to the complete relation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyFcmpInputPublicV1 {
+    /// Rerandomized output key `O~`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub output_key_tilde: [u8; 32],
+    /// Rerandomized linking-tag generator `I~`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub linking_tag_generator_tilde: [u8; 32],
+    /// Rerandomization commitment `R`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub rerandomization_commitment: [u8; 32],
+    /// Pseudo output amount commitment `C~`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub pseudo_out: [u8; 32],
+    /// Linkability key image `L`.
+    pub key_image: PrivacyFcmpKeyImageV1,
+}
+
+impl PrivacyFcmpInputPublicV1 {
+    /// Reject the reserved all-zero encoding before native curve validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact zero component.
+    pub fn validate_nonzero(self) -> Result<(), PrivacyFcmpInputValidationErrorV1> {
+        for (component, point) in [
+            (
+                PrivacyFcmpInputComponentV1::OutputKeyTilde,
+                self.output_key_tilde,
+            ),
+            (
+                PrivacyFcmpInputComponentV1::LinkingTagGeneratorTilde,
+                self.linking_tag_generator_tilde,
+            ),
+            (
+                PrivacyFcmpInputComponentV1::RerandomizationCommitment,
+                self.rerandomization_commitment,
+            ),
+            (PrivacyFcmpInputComponentV1::PseudoOut, self.pseudo_out),
+            (
+                PrivacyFcmpInputComponentV1::KeyImage,
+                self.key_image.into_bytes(),
+            ),
+        ] {
+            if point.iter().all(|byte| *byte == 0) {
+                return Err(PrivacyFcmpInputValidationErrorV1::ZeroComponent { component });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// FCMP++ input component selected by validation diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivacyFcmpInputComponentV1 {
+    /// Rerandomized output key `O~`.
+    OutputKeyTilde,
+    /// Rerandomized linking-tag generator `I~`.
+    LinkingTagGeneratorTilde,
+    /// Rerandomization commitment `R`.
+    RerandomizationCommitment,
+    /// Pseudo output amount commitment `C~`.
+    PseudoOut,
+    /// Linkability key image `L`.
+    KeyImage,
+}
+
+/// Structural failure for one FCMP++ public input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyFcmpInputValidationErrorV1 {
+    /// A mandatory point uses the reserved all-zero encoding.
+    #[error("FCMP++ public input component {component:?} must be non-zero")]
+    ZeroComponent {
+        /// Rejected component.
+        component: PrivacyFcmpInputComponentV1,
+    },
+}
+
+/// Magic prefix of the sole first-release FCMP++ wallet ciphertext codec.
+pub const PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1: [u8; 4] = *b"IFCE";
+/// XChaCha20-Poly1305 nonce width in the FCMP++ wallet ciphertext.
+pub const PRIVACY_FCMP_ENCRYPTED_OUTPUT_NONCE_BYTES_V1: usize = 24;
+/// Fixed plaintext width: magic, output id, complete `(O,I,C)` tuple, positive
+/// `u64` amount, amount-commitment mask, and the two spend-opening scalars.
+pub const PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1: usize =
+    4 + 32 + PRIVACY_FCMP_OUTPUT_TUPLE_BYTES_V1 + 8 + 32 + 32 + 32;
+/// Poly1305 authentication-tag width.
+pub const PRIVACY_FCMP_ENCRYPTED_OUTPUT_TAG_BYTES_V1: usize = 16;
+/// Exact ciphertext field width, including codec magic and explicit nonce.
+pub const PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1: usize = 4
+    + PRIVACY_FCMP_ENCRYPTED_OUTPUT_NONCE_BYTES_V1
+    + PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1
+    + PRIVACY_FCMP_ENCRYPTED_OUTPUT_TAG_BYTES_V1;
+
+/// Magic prefix of the sole first-release private-IVM wallet ciphertext.
+pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1: [u8; 4] = *b"IPNE";
+/// XChaCha20-Poly1305 nonce width in a private-IVM wallet ciphertext.
+pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1: usize = 24;
+/// Fixed plaintext width: magic, public commitment, `u128` value, spending
+/// authority, note nonce, commitment blinding, and wallet memo digest.
+pub const PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1: usize = 4 + 32 + 16 + 32 + 32 + 32 + 32;
+/// Poly1305 authentication-tag width.
+pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_TAG_BYTES_V1: usize = 16;
+/// Exact private-IVM ciphertext width, including codec magic and explicit
+/// nonce.
+pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1: usize = 4
+    + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1
+    + PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1
+    + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_TAG_BYTES_V1;
+
+/// Typed encrypted payload for one complete FCMP++ output tuple.
+///
+/// The output identifier is a ledger index only. The statement and native
+/// curve tree always retain and consume the corresponding full `(O, I, C)`
+/// tuple.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyFcmpEncryptedOutputV1 {
+    /// Cryptographic recipient identity.
+    pub recipient: PrivacyRecipientIdV1,
+    /// Ephemeral public encryption key.
+    pub ephemeral_public_key: PrivacyEncryptionKeyV1,
+    /// Identifier of the ordered public output tuple.
+    pub output_id: PrivacyFcmpOutputIdV1,
+    /// Exact `IFCE || nonce || XChaCha20-Poly1305(FCMP note)` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub ciphertext: Vec<u8>,
+}
+
+/// Immutable governance payload for one FCMP++ complete-output-set pool.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyFcmpPoolBootstrapV1 {
+    /// Stable FCMP++ output-set identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by the confidential outputs.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Non-empty complete genesis output set in strict output-identifier order.
+    pub initial_outputs: Vec<PrivacyFcmpOutputTupleV1>,
+}
+
+/// Immutable governance payload for one private-IVM program pool.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyIvmPrivateNotePoolBootstrapV1 {
+    /// Stable private-note pool identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset manipulated by the private program.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Public reserve account used by explicit value-balance bridges.
+    pub reserve_account: AccountId,
+    /// Exact compiled private-program digest accepted by this pool.
+    pub program_id: PrivacyProgramIdV1,
+    /// Non-empty genesis note set in strict commitment order.
+    pub initial_note_commitments: Vec<PrivacyCommitmentV1>,
+}
+
+/// Immutable governance payload for one PQ-MASP note pool.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyPqMaspPoolBootstrapV1 {
+    /// Stable PQ-MASP note-pool identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by the private notes.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Non-empty genesis note set in strict commitment order.
+    pub initial_note_commitments: Vec<PrivacyCommitmentV1>,
+}
+
+/// Closed typed bootstrap for proof-managed pools that do not use Orchard's
+/// compact frontier.
+///
+/// Initial roots and epochs are deliberately absent. Core derives each
+/// protocol's pinned root from the complete canonical genesis commitment set at
+/// epoch one, preventing governance from selecting an alternate accumulator
+/// origin.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "protocol", content = "bootstrap", deny_unknown_fields)
+)]
+pub enum PrivacyProofManagedPoolBootstrapV1 {
+    /// FCMP++ complete-output-set origin.
+    #[cfg_attr(feature = "json", norito(rename = "monero-fcmp-plus-plus-v1"))]
+    MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1),
+    /// Native private-IVM program-state origin.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
+    IrohaIvmPrivateNoteStarkV1(PrivacyIvmPrivateNotePoolBootstrapV1),
+    /// PQ-MASP note-commitment origin.
+    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
+    PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1),
+}
+
+impl PrivacyProofManagedPoolBootstrapV1 {
+    /// Return the exact protocol initialized by this payload.
+    #[must_use]
+    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
+        }
+    }
+
+    /// Return the exact proof-managed root role initialized by this payload.
+    #[must_use]
+    pub const fn root_role(&self) -> PrivacyRootRoleV1 {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyRootRoleV1::OutputSet,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyRootRoleV1::ProgramState,
+            Self::PqMaspStarkV0(_) => PrivacyRootRoleV1::NoteCommitmentAnchor,
+        }
+    }
+
+    /// Return the sole protocol-scoped namespace initialized by this payload.
+    #[must_use]
+    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: bootstrap.pool_id,
+                }),
+            ),
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
+                    pool_id: bootstrap.pool_id,
+                    program_id: bootstrap.program_id,
+                }),
+            ),
+            Self::PqMaspStarkV0(bootstrap) => PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::PqMaspStarkV0,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: bootstrap.pool_id,
+                }),
+            ),
+        }
+    }
+
+    /// Return the exact backing asset definition.
+    #[must_use]
+    pub const fn asset_definition_id(&self) -> &AssetDefinitionId {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => &bootstrap.asset_definition_id,
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => &bootstrap.asset_definition_id,
+            Self::PqMaspStarkV0(bootstrap) => &bootstrap.asset_definition_id,
+        }
+    }
+
+    /// Return the public reserve account when the protocol supports an
+    /// explicit value-balance bridge.
+    #[must_use]
+    pub const fn reserve_account(&self) -> Option<&AccountId> {
+        match self {
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => Some(&bootstrap.reserve_account),
+            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
+        }
+    }
+
+    /// Return the pinned private-program digest for private-IVM pools.
+    #[must_use]
+    pub const fn program_id(&self) -> Option<PrivacyProgramIdV1> {
+        match self {
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => Some(bootstrap.program_id),
+            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
+        }
+    }
+
+    /// Return the complete canonical genesis note-commitment set.
+    ///
+    /// FCMP++ uses full typed output tuples and therefore returns `None`.
+    #[must_use]
+    pub fn initial_note_commitments(&self) -> Option<&[PrivacyCommitmentV1]> {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(_) => None,
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
+                Some(&bootstrap.initial_note_commitments)
+            }
+            Self::PqMaspStarkV0(bootstrap) => Some(&bootstrap.initial_note_commitments),
+        }
+    }
+
+    /// Return the complete canonical FCMP++ genesis output set.
+    #[must_use]
+    pub fn initial_fcmp_outputs(&self) -> Option<&[PrivacyFcmpOutputTupleV1]> {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => Some(&bootstrap.initial_outputs),
+            Self::IrohaIvmPrivateNoteStarkV1(_) | Self::PqMaspStarkV0(_) => None,
+        }
+    }
+
+    /// Validate the exact closed namespace and required non-zero identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero pool/program identifiers or a malformed derived namespace.
+    pub fn validate(&self) -> Result<(), PrivacyProofManagedPoolBootstrapValidationErrorV1> {
+        let pool_id = match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => bootstrap.pool_id,
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
+                if bootstrap.program_id.is_zero() {
+                    return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroProgramId);
+                }
+                bootstrap.pool_id
+            }
+            Self::PqMaspStarkV0(bootstrap) => bootstrap.pool_id,
+        };
+        if pool_id.is_zero() {
+            return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroPoolId);
+        }
+        match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => {
+                if bootstrap.initial_outputs.is_empty() {
+                    return Err(
+                        PrivacyProofManagedPoolBootstrapValidationErrorV1::EmptyInitialFcmpOutputs,
+                    );
+                }
+                if bootstrap.initial_outputs.len() > PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1 {
+                    return Err(
+                        PrivacyProofManagedPoolBootstrapValidationErrorV1::TooManyInitialFcmpOutputs {
+                            count: bootstrap.initial_outputs.len(),
+                            max: PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1,
+                        },
+                    );
+                }
+                let mut previous = None;
+                for (index, output) in bootstrap.initial_outputs.iter().copied().enumerate() {
+                    output.validate_nonzero().map_err(|source| {
+                        PrivacyProofManagedPoolBootstrapValidationErrorV1::InvalidInitialFcmpOutput {
+                            index,
+                            source,
+                        }
+                    })?;
+                    let output_id = output.output_id();
+                    if previous.is_some_and(|value| value >= output_id) {
+                        return Err(
+                            PrivacyProofManagedPoolBootstrapValidationErrorV1::InitialFcmpOutputIdsNotStrictlyIncreasing {
+                                index,
+                            },
+                        );
+                    }
+                    previous = Some(output_id);
+                }
+            }
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
+                validate_initial_note_commitments(&bootstrap.initial_note_commitments)?;
+            }
+            Self::PqMaspStarkV0(bootstrap) => {
+                validate_initial_note_commitments(&bootstrap.initial_note_commitments)?;
+            }
+        }
+        let namespace = self.namespace();
+        namespace
+            .validate()
+            .map_err(PrivacyProofManagedPoolBootstrapValidationErrorV1::Namespace)?;
+        if !self.root_role().is_compatible_with_namespace(namespace) {
+            return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::IncompatibleRootRole);
+        }
+        Ok(())
+    }
+
+    /// Hash the exact canonical bootstrap in its own provenance domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if canonical encoding fails.
+    pub fn digest(&self) -> Result<PrivacyProofManagedPoolBootstrapDigestV1, norito::Error> {
+        let encoded = norito::to_bytes(self)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_PROOF_MANAGED_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1);
+        hasher.update(
+            &u64::try_from(encoded.len())
+                .expect("Norito output length always fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(&encoded);
+        Ok(PrivacyProofManagedPoolBootstrapDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+}
+
+fn validate_initial_note_commitments(
+    commitments: &[PrivacyCommitmentV1],
+) -> Result<(), PrivacyProofManagedPoolBootstrapValidationErrorV1> {
+    if commitments.is_empty() {
+        return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::EmptyInitialCommitments);
+    }
+    if commitments.len() > PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1 {
+        return Err(
+            PrivacyProofManagedPoolBootstrapValidationErrorV1::TooManyInitialCommitments {
+                count: commitments.len(),
+                max: PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1,
+            },
+        );
+    }
+    let mut previous = None;
+    for (index, commitment) in commitments.iter().copied().enumerate() {
+        if commitment.is_zero() {
+            return Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroInitialCommitment { index },
+            );
+        }
+        if previous.is_some_and(|value| value >= commitment) {
+            return Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::InitialCommitmentsNotStrictlyIncreasing {
+                    index,
+                },
+            );
+        }
+        previous = Some(commitment);
+    }
+    Ok(())
+}
+
+/// Structural failure for [`PrivacyProofManagedPoolBootstrapV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyProofManagedPoolBootstrapValidationErrorV1 {
+    /// The stable pool identifier is all zero.
+    #[error("proof-managed privacy pool bootstrap pool id must be non-zero")]
+    ZeroPoolId,
+    /// The private-IVM program digest is all zero.
+    #[error("private-IVM pool bootstrap program id must be non-zero")]
+    ZeroProgramId,
+    /// No complete FCMP++ genesis output was supplied.
+    #[error("FCMP++ pool bootstrap requires at least one initial output tuple")]
+    EmptyInitialFcmpOutputs,
+    /// The FCMP++ genesis output set exceeds the hard first-release bound.
+    #[error("FCMP++ pool bootstrap has {count} initial outputs; maximum is {max}")]
+    TooManyInitialFcmpOutputs {
+        /// Observed output count.
+        count: usize,
+        /// Hard first-release maximum.
+        max: usize,
+    },
+    /// One FCMP++ genesis tuple has a structurally invalid component.
+    #[error("FCMP++ pool bootstrap output {index} is invalid: {source}")]
+    InvalidInitialFcmpOutput {
+        /// Zero-based output position.
+        index: usize,
+        /// Exact structural tuple failure.
+        source: PrivacyFcmpOutputTupleValidationErrorV1,
+    },
+    /// FCMP++ genesis output identifiers contain a duplicate or are reordered.
+    #[error("FCMP++ pool bootstrap output ids must be strictly increasing at index {index}")]
+    InitialFcmpOutputIdsNotStrictlyIncreasing {
+        /// First non-increasing output position.
+        index: usize,
+    },
+    /// No genesis commitment was supplied.
+    #[error("proof-managed privacy pool bootstrap requires at least one initial commitment")]
+    EmptyInitialCommitments,
+    /// The genesis commitment set exceeds the hard first-release bound.
+    #[error(
+        "proof-managed privacy pool bootstrap has {count} initial commitments; maximum is {max}"
+    )]
+    TooManyInitialCommitments {
+        /// Observed commitment count.
+        count: usize,
+        /// Hard first-release maximum.
+        max: usize,
+    },
+    /// One genesis commitment is the all-zero sentinel.
+    #[error("proof-managed privacy pool bootstrap commitment {index} must be non-zero")]
+    ZeroInitialCommitment {
+        /// Zero-based commitment index.
+        index: usize,
+    },
+    /// Genesis commitments are duplicated or reordered.
+    #[error(
+        "proof-managed privacy pool bootstrap commitments stop increasing strictly at index {index}"
+    )]
+    InitialCommitmentsNotStrictlyIncreasing {
+        /// First invalid zero-based position.
+        index: usize,
+    },
+    /// The derived closed namespace is malformed.
+    #[error("proof-managed privacy pool bootstrap namespace is invalid: {0}")]
+    Namespace(PrivacyNamespaceValidationError),
+    /// The inferred root role is incompatible with the exact namespace.
+    #[error("proof-managed privacy pool bootstrap root role is incompatible")]
+    IncompatibleRootRole,
+}
+
 /// One canonical encrypted account in a PGC account-state bootstrap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPgcAccountV1 {
     /// Canonical compressed P-256 account public key.
     pub public_key: PrivacyP256PointV1,
@@ -1441,6 +2461,7 @@ pub enum PrivacyPgcBootstrapProofValidationError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyPgcAccountBootstrapV1 {
     /// Exact Anonymous PGC pool namespace.
     pub namespace: PrivacyNamespaceV1,
@@ -3844,6 +4865,110 @@ impl PrivacyCapabilitySnapshotV1 {
     }
 }
 
+/// Exact native bridge ABI required by the first-release privacy SDK surface.
+pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;
+/// Maximum accepted size of one canonical privacy capability archive.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
+/// Maximum elements accepted in any sequence while decoding a capability archive.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize = PrivacyProtocolIdV1::COUNT;
+/// Maximum cumulative elements accepted while decoding a capability archive.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1: usize = PrivacyProtocolIdV1::COUNT;
+/// Maximum bytes accepted in one length-delimited capability-archive field.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1: usize = 128 * 1024;
+/// Maximum cumulative allocation permitted while decoding a capability archive.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize = 256 * 1024;
+/// Maximum data-dependent nesting depth permitted in a capability archive.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_NESTING_DEPTH_V1: usize = 32;
+
+/// Stable result codes returned by every native privacy capability validator.
+///
+/// These numeric discriminants are part of ABI 21. SDKs must accept only
+/// [`Self::Valid`]; every other value is a fail-closed rejection.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivacyCapabilityArchiveValidationStatusV1 {
+    /// The archive is the exact canonical typed snapshot and is semantically valid.
+    Valid = 0,
+    /// A native ABI caller supplied a null archive pointer.
+    NullPointer = 1,
+    /// The archive contains no bytes.
+    Empty = 2,
+    /// The archive exceeds [`PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1`].
+    ArchiveTooLarge = 3,
+    /// Norito rejected a declared sequence, field, allocation, or nesting budget.
+    DecodeResourceLimit = 4,
+    /// The archive schema is not exactly [`PrivacyCapabilitySnapshotV1`].
+    SchemaMismatch = 5,
+    /// The bytes are not the one canonical uncompressed V1 encoding.
+    NonCanonical = 6,
+    /// The archive is malformed, truncated, or fails its checksum.
+    MalformedArchive = 7,
+    /// The typed snapshot violates its closed first-release semantic invariants.
+    InvalidSnapshot = 8,
+}
+
+impl PrivacyCapabilityArchiveValidationStatusV1 {
+    /// Return the stable ABI-21 integer representation.
+    #[must_use]
+    pub const fn code(self) -> i32 {
+        self as i32
+    }
+
+    /// Return whether the archive was accepted.
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        matches!(self, Self::Valid)
+    }
+}
+
+/// Validate one untrusted canonical typed privacy capability archive.
+///
+/// Admission first applies the fixed 256 KiB byte ceiling, then decodes with
+/// tight per-sequence, cumulative-element, allocation, and nesting budgets.
+/// The canonical decoder enforces the exact
+/// [`PrivacyCapabilitySnapshotV1`] schema and byte-for-byte canonical
+/// re-encoding. Finally [`PrivacyCapabilitySnapshotV1::validate`] enforces the
+/// exact twelve rows in [`PrivacyProtocolIdV1::ALL`] order and all profile,
+/// activation, and policy bindings.
+#[must_use]
+pub fn validate_privacy_capability_archive_v1(
+    archive: &[u8],
+) -> PrivacyCapabilityArchiveValidationStatusV1 {
+    use PrivacyCapabilityArchiveValidationStatusV1 as Status;
+
+    if archive.is_empty() {
+        return Status::Empty;
+    }
+    if archive.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+        return Status::ArchiveTooLarge;
+    }
+
+    let limits = norito::DecodeLimits::new(
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1,
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1,
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1,
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1,
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_NESTING_DEPTH_V1,
+    );
+    let snapshot = match norito::decode_canonical_with_limits::<PrivacyCapabilitySnapshotV1>(
+        archive, limits,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) if error.is_decode_resource_limit() => return Status::DecodeResourceLimit,
+        Err(norito::Error::SchemaMismatch) => return Status::SchemaMismatch,
+        Err(
+            norito::Error::NonCanonicalEncoding
+            | norito::Error::DecodeFlagsMismatch { .. }
+            | norito::Error::UnsupportedCompression { .. },
+        ) => return Status::NonCanonical,
+        Err(_) => return Status::MalformedArchive,
+    };
+    if snapshot.validate().is_err() {
+        return Status::InvalidSnapshot;
+    }
+    Status::Valid
+}
+
 /// Validation failure for [`PrivacyCapabilitySnapshotV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyCapabilitySnapshotValidationErrorV1 {
@@ -3948,35 +5073,33 @@ pub const BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1: usize = 8;
 pub const BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1: u32 = 8;
 /// Maximum governed allowed public values for one required attribute.
 pub const BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1: u32 = 32;
-/// Maximum decoded ISO 18013-5 MSO payload bytes admitted by Vega.
-///
-/// This is the 1,920-byte mDL profile evaluated in Figure 9 of the Vega paper.
-/// It is deliberately distinct from the COSE `Sig_structure` bytes hashed for
-/// issuer authentication.
-pub const VEGA_MDL_MAX_MSO_PAYLOAD_BYTES_V1: u32 = 1_920;
-/// Fixed SHA-256 compression-table width for the issuer-authenticated bytes.
-pub const VEGA_MDL_ISSUER_AUTH_SHA256_STEP_COUNT_V1: u8 = 32;
-/// Maximum canonical COSE `Sig_structure` bytes that fit the fixed table.
-///
-/// A 32-block SHA-256 table holds 2,048 bytes. Canonical SHA-256 padding needs
-/// at least nine bytes, so 2,039 is the exact maximum unpadded message length.
-pub const VEGA_MDL_MAX_ISSUER_AUTH_BYTES_V1: u32 = 2_039;
-/// Maximum canonical tagged `IssuerSignedItemBytes` for `birth_date`.
-pub const VEGA_MDL_MAX_BIRTH_DATE_ITEM_BYTES_V1: u32 = 256;
-/// Fixed SHA-256 compression-table width for the birth-date signed item.
-pub const VEGA_MDL_BIRTH_DATE_SHA256_STEP_COUNT_V1: u8 = 8;
-/// Lowest trusted UTC presentation year admitted by the first release.
-pub const VEGA_MDL_MIN_PRESENTATION_YEAR_V1: u16 = 1_970;
-/// Highest trusted UTC presentation year admitted by the first release.
-pub const VEGA_MDL_MAX_PRESENTATION_YEAR_V1: u16 = 9_999;
-/// Lowest non-degenerate public age threshold admitted by the first release.
-pub const VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1: u8 = 1;
-/// Highest public age threshold admitted by the first release.
-pub const VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1: u8 = 150;
+/// Maximum authoritative Bootle/Lantern issuer-policy lineages in committed state.
+pub const BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1: usize = 4_096;
+/// Maximum immutable Vega issuer revisions retained across all lineages.
+pub const VEGA_MAX_ISSUER_RECORDS_V1: usize = 4_096;
+/// Maximum immutable revisions retained for one Vega issuer lineage.
+pub const VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1: usize = 64;
+/// Canonical origin epoch for a Vega issuer-key/policy lineage.
+pub const VEGA_INITIAL_ISSUER_RECORD_EPOCH_V1: u64 = 1;
 /// Maximum admitted X.509 chain depth, including the leaf certificate.
 pub const ZK_X509_MAX_CHAIN_DEPTH_V1: u8 = 3;
-/// Maximum DER bytes for one X.509 certificate.
-pub const ZK_X509_MAX_CERTIFICATE_BYTES_V1: u32 = 16 * 1024;
+/// Minimum admitted X.509 chain depth, including leaf and terminal root.
+pub const ZK_X509_MIN_CHAIN_DEPTH_V1: u8 = 2;
+/// Maximum accepted lag from signed CRL `thisUpdate` to the presentation-window end.
+pub const ZK_X509_MAX_CRL_AGE_SECONDS_V1: u64 = 300;
+/// Maximum public presentation window covered by one X.509 proof.
+///
+/// The proof establishes certificate and signed-CRL validity for the complete
+/// window; consensus then checks the unpredictable inclusion timestamp lies
+/// inside it. Keeping this equal to the CRL-age ceiling preserves the strict
+/// five-minute freshness profile.
+pub const ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1: u64 = ZK_X509_MAX_CRL_AGE_SECONDS_V1;
+/// Maximum DER bytes for one X.509 certificate in the canonical proof topology.
+///
+/// This is deliberately identical to the native witness codec, RFC 5280 AIR,
+/// and fixed-capacity SHA-256 schedule. The first release has no larger
+/// API-only tier that could be admitted but not proved.
+pub const ZK_X509_MAX_CERTIFICATE_BYTES_V1: u32 = 4 * 1024;
 /// Maximum combined DER bytes for an admitted X.509 chain.
 pub const ZK_X509_MAX_CHAIN_BYTES_V1: u32 = ZK_X509_MAX_CERTIFICATE_BYTES_V1 * 3;
 /// Closed number of selectively disclosable X.509 subject attributes.
@@ -3987,6 +5110,12 @@ pub const ZK_X509_MAX_EXTENDED_KEY_USAGES_V1: usize = 3;
 pub const ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1: usize = 4_096;
 /// Maximum immutable certificate-policy revisions retained across all lineages.
 pub const ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1: usize = 4_096;
+/// Maximum current issuer-scoped signed-CRL lineages in world state.
+///
+/// Unlike rare trust-anchor and policy governance, CRLs rotate frequently.
+/// Consensus therefore stores one self-chained current record per policy
+/// lineage instead of retaining an eventually terminal fixed revision count.
+pub const ZK_X509_MAX_CRL_LINEAGES_V1: usize = 4_096;
 /// Maximum immutable revisions retained for one trust-anchor or policy lineage.
 pub const ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1: usize = 64;
 /// Canonical origin epoch for an X.509 trust-anchor or certificate-policy lineage.
@@ -4011,6 +5140,8 @@ pub const IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1: u32 = 2;
 pub const PQ_MASP_MAX_INPUTS_V1: u32 = 2;
 /// Maximum PQ-MASP outputs in one first-release action.
 pub const PQ_MASP_MAX_OUTPUTS_V1: u32 = 2;
+/// Maximum genesis commitments in one typed proof-managed pool bootstrap.
+pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
 /// Maximum UTF-8 byte length admitted for a privacy transcript chain id.
 pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = 255;
 
@@ -4020,6 +5151,7 @@ pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = 255;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyStatementContextV1 {
     /// Exact chain identifier.
     pub chain_id: ChainId,
@@ -4093,10 +5225,16 @@ impl PrivacyStatementContextV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyEncryptedOutputV1 {
     /// Cryptographic recipient identity.
     pub recipient: PrivacyRecipientIdV1,
-    /// Ephemeral public encryption key.
+    /// Protocol-defined identifier for the ephemeral encryption material.
+    ///
+    /// Diffie-Hellman profiles use a public key here. The fixed PQ-MASP
+    /// profile uses the domain-separated digest of its ML-KEM-768
+    /// encapsulation ciphertext; the full 1,088-byte encapsulation remains in
+    /// `ciphertext`.
     pub ephemeral_public_key: PrivacyEncryptionKeyV1,
     /// Commitment to the plaintext output.
     pub commitment: PrivacyCommitmentV1,
@@ -4111,7 +5249,7 @@ pub struct PrivacyEncryptedOutputV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "state", content = "value")]
+#[norito(tag = "state", content = "value", deny_unknown_fields)]
 pub enum PrivacyZkAcePolicyLifecycleV1 {
     /// The policy can authorize a matching proof action.
     #[cfg_attr(feature = "json", norito(rename = "active"))]
@@ -4122,6 +5260,7 @@ pub enum PrivacyZkAcePolicyLifecycleV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(schema_name = "iroha.privacy.zk-ace.policy-digest-material.v1")]
 struct PrivacyZkAcePolicyDigestMaterialV1 {
     policy_id: PrivacyPolicyIdV1,
     identity_commitment: PrivacyCommitmentV1,
@@ -4251,7 +5390,7 @@ impl PrivacyZkAcePolicyRecordV1 {
             source_allowlist: self.source_allowlist.clone(),
             lifecycle: self.lifecycle,
         };
-        let encoded = norito::to_bytes(&material)
+        let encoded = norito::encode_canonical(&material)
             .map_err(|_| PrivacyZkAcePolicyRecordValidationErrorV1::EncodingFailure)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(ZK_ACE_POLICY_RECORD_DIGEST_DOMAIN_V1);
@@ -4484,10 +5623,12 @@ pub fn validate_zk_ace_policy_revocation_v1(
 
 /// ZK-ACE authorization statement for a public asset transfer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[norito(schema_name = "iroha.privacy.zk-ace.authorization-statement.v1")]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ZkAcePqAuthorizationStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -4505,8 +5646,6 @@ pub struct ZkAcePqAuthorizationStatementV1 {
     pub asset_definition_id: AssetDefinitionId,
     /// Atomic transfer amount.
     pub amount: u128,
-    /// Atomic validation fee.
-    pub fee: u128,
     /// Ledger epoch used by authorization policy checks.
     pub authorization_epoch: u64,
     /// Per-action replay nullifier.
@@ -4519,6 +5658,7 @@ pub struct ZkAcePqAuthorizationStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AnonymousPgcKOutOfNStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -4548,7 +5688,10 @@ pub struct AnonymousPgcKOutOfNStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "bits", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "bits", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyVeRangeBitLengthV1 {
     /// 32-bit unsigned range.
     Bits32,
@@ -4573,6 +5716,7 @@ impl PrivacyVeRangeBitLengthV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct VeRangeTransparentRangeStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -4611,6 +5755,7 @@ pub const ZK_AMS_REGISTRY_BOOTSTRAP_PAYLOAD_BYTES_V1: usize = 201;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsRegistryBootstrapV1 {
     /// Credential issuer authorized to sign canonical PHCs.
     pub issuer_id: PrivacyIssuerIdV1,
@@ -4830,6 +5975,7 @@ pub enum PrivacyZkAmsRegistryBootstrapValidationError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsPersonhoodCredentialV1 {
     /// Closed credential wire version; must equal one.
     pub version: u8,
@@ -4913,6 +6059,7 @@ impl PrivacyZkAmsPhcCanonicalPayloadV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsAdmissionAnchorV1 {
     /// Hash of the canonical Personhood Credential.
     pub phc_hash: PrivacyZkAmsPhcHashV1,
@@ -4932,6 +6079,7 @@ pub struct PrivacyZkAmsAdmissionAnchorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsBatchAdmissionV1 {
     /// Current admitted-identity registry root.
     pub account_registry_root: PrivacyRootV1,
@@ -4956,6 +6104,7 @@ pub struct PrivacyZkAmsBatchAdmissionV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAmsProvisionAccountV1 {
     /// Canonical admitted-identity registry root used for ring membership.
     pub account_registry_root: PrivacyRootV1,
@@ -4975,7 +6124,10 @@ pub struct PrivacyZkAmsProvisionAccountV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "action", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyZkAmsActionV1 {
     /// Settle one recursively accumulated admission batch.
     BatchAdmission(PrivacyZkAmsBatchAdmissionV1),
@@ -4989,6 +6141,7 @@ pub enum PrivacyZkAmsActionV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaZkAmsStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -5019,7 +6172,10 @@ pub struct IrohaZkAmsStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "document", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "document", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyCredentialDocumentTypeV1 {
     /// ISO/IEC 18013-5 `org.iso.18013.5.1.mDL` document.
     Iso18013_5Mdl,
@@ -5031,7 +6187,10 @@ pub enum PrivacyCredentialDocumentTypeV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "namespace", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "namespace", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyVegaMdlNamespaceV1 {
     /// The standard mDL namespace `org.iso.18013.5.1`.
     OrgIso18013_5_1,
@@ -5043,7 +6202,10 @@ pub enum PrivacyVegaMdlNamespaceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "digest", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "digest", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyVegaMdlDigestAlgorithmV1 {
     /// SHA-256 for issuer authentication, signed-item digests, and `H_dev`.
     Sha256,
@@ -5055,10 +6217,421 @@ pub enum PrivacyVegaMdlDigestAlgorithmV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "signature", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "signature", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyVegaMdlSignatureAlgorithmV1 {
     /// COSE algorithm `-7`: ECDSA over P-256 with SHA-256 (`ES256`).
     CoseSign1Es256,
+}
+
+/// Forward-only lifecycle of one immutable Vega issuer governance lineage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "state", content = "value", deny_unknown_fields)
+)]
+pub enum PrivacyVegaIssuerRecordLifecycleV1 {
+    /// Credentials authenticated by this exact issuer revision may be verified.
+    #[cfg_attr(feature = "json", norito(rename = "active"))]
+    Active,
+    /// The issuer lineage is terminal and cannot be reactivated.
+    #[cfg_attr(feature = "json", norito(rename = "revoked"))]
+    Revoked,
+}
+
+/// One immutable authoritative Vega mDL issuer-key and algorithm-policy revision.
+///
+/// Revisions form a bounded append-only self-digested lineage. A proof
+/// statement must bind the exact current active revision, including its P-256
+/// key, so a submitter cannot manufacture a self-issued credential.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyVegaIssuerRecordV1 {
+    /// Stable credential-issuer identity selecting this lineage.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Strictly increasing immutable revision epoch.
+    pub record_epoch: u64,
+    /// Exact canonical compressed P-256 issuer verification key.
+    pub issuer_public_key: PrivacyP256PointV1,
+    /// Exact credential document family admitted by this issuer.
+    pub document_type: PrivacyCredentialDocumentTypeV1,
+    /// Exact mDL namespace admitted by this issuer.
+    pub namespace: PrivacyVegaMdlNamespaceV1,
+    /// Exact digest algorithm admitted by this issuer.
+    pub digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1,
+    /// Exact issuer-authentication algorithm admitted by this issuer.
+    pub issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1,
+    /// Exact device-authentication algorithm admitted by this issuer.
+    pub device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1,
+    /// Exact predecessor revision digest, absent only at epoch one.
+    pub previous_record_digest: Option<PrivacyVegaIssuerRecordDigestV1>,
+    /// Active or irreversibly revoked lifecycle.
+    pub lifecycle: PrivacyVegaIssuerRecordLifecycleV1,
+    /// Self-digest of every authoritative field above.
+    pub record_digest: PrivacyVegaIssuerRecordDigestV1,
+}
+
+impl PrivacyVegaIssuerRecordV1 {
+    /// Construct one canonical self-digested Vega issuer revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities or epochs, a malformed compressed-key shape,
+    /// or a non-canonical predecessor shape.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        issuer_id: PrivacyIssuerIdV1,
+        record_epoch: u64,
+        issuer_public_key: PrivacyP256PointV1,
+        document_type: PrivacyCredentialDocumentTypeV1,
+        namespace: PrivacyVegaMdlNamespaceV1,
+        digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1,
+        issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1,
+        device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1,
+        previous_record_digest: Option<PrivacyVegaIssuerRecordDigestV1>,
+        lifecycle: PrivacyVegaIssuerRecordLifecycleV1,
+    ) -> Result<Self, PrivacyVegaIssuerRecordValidationErrorV1> {
+        let mut record = Self {
+            issuer_id,
+            record_epoch,
+            issuer_public_key,
+            document_type,
+            namespace,
+            digest_algorithm,
+            issuer_authentication_algorithm,
+            device_authentication_algorithm,
+            previous_record_digest,
+            lifecycle,
+            record_digest: PrivacyVegaIssuerRecordDigestV1::new([0; 32]),
+        };
+        record.validate_contents()?;
+        record.record_digest = record.compute_record_digest();
+        if record.record_digest.is_zero() {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::ZeroRecordDigest);
+        }
+        Ok(record)
+    }
+
+    /// Validate a canonical active epoch-one registration.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
+    /// terminal origin.
+    pub fn validate_initial(&self) -> Result<(), PrivacyVegaIssuerRecordValidationErrorV1> {
+        self.validate()?;
+        if self.record_epoch != VEGA_INITIAL_ISSUER_RECORD_EPOCH_V1 {
+            return Err(
+                PrivacyVegaIssuerRecordValidationErrorV1::NonCanonicalInitialEpoch {
+                    actual: self.record_epoch,
+                },
+            );
+        }
+        if self.previous_record_digest.is_some() {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::OriginHasPredecessor);
+        }
+        if self.lifecycle != PrivacyVegaIssuerRecordLifecycleV1::Active {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::InitialRecordNotActive);
+        }
+        Ok(())
+    }
+
+    /// Validate all fields and the complete canonical self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any malformed or tampered revision.
+    pub fn validate(&self) -> Result<(), PrivacyVegaIssuerRecordValidationErrorV1> {
+        self.validate_contents()?;
+        if self.record_digest.is_zero() {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::ZeroRecordDigest);
+        }
+        if self.compute_record_digest() != self.record_digest {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::RecordDigestMismatch);
+        }
+        Ok(())
+    }
+
+    /// Recompute the domain-separated canonical self-digest.
+    #[must_use]
+    pub fn compute_record_digest(&self) -> PrivacyVegaIssuerRecordDigestV1 {
+        let version = VEGA_ISSUER_GOVERNANCE_RECORD_VERSION_V1.to_be_bytes();
+        let record_epoch = self.record_epoch.to_be_bytes();
+        let document_type = [match self.document_type {
+            PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl => 0,
+        }];
+        let namespace = [match self.namespace {
+            PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1 => 0,
+        }];
+        let digest_algorithm = [match self.digest_algorithm {
+            PrivacyVegaMdlDigestAlgorithmV1::Sha256 => 0,
+        }];
+        let issuer_authentication_algorithm = [match self.issuer_authentication_algorithm {
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256 => 0,
+        }];
+        let device_authentication_algorithm = [match self.device_authentication_algorithm {
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256 => 0,
+        }];
+        let predecessor = privacy_vega_issuer_predecessor_frame_v1(self.previous_record_digest);
+        let lifecycle = [match self.lifecycle {
+            PrivacyVegaIssuerRecordLifecycleV1::Active => 0,
+            PrivacyVegaIssuerRecordLifecycleV1::Revoked => 1,
+        }];
+        PrivacyVegaIssuerRecordDigestV1::new(privacy_vega_issuer_sha256_frame_v1(&[
+            &version,
+            self.issuer_id.as_bytes(),
+            &record_epoch,
+            self.issuer_public_key.as_bytes(),
+            &document_type,
+            &namespace,
+            &digest_algorithm,
+            &issuer_authentication_algorithm,
+            &device_authentication_algorithm,
+            &predecessor,
+            &lifecycle,
+        ]))
+    }
+
+    fn validate_contents(&self) -> Result<(), PrivacyVegaIssuerRecordValidationErrorV1> {
+        if self.issuer_id.is_zero() {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::ZeroIssuerId);
+        }
+        if self.record_epoch == 0 {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::ZeroRecordEpoch);
+        }
+        if self.issuer_public_key.is_zero() {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::ZeroIssuerPublicKey);
+        }
+        if !matches!(self.issuer_public_key.as_bytes()[0], 0x02 | 0x03) {
+            return Err(PrivacyVegaIssuerRecordValidationErrorV1::InvalidIssuerPublicKeyEncoding);
+        }
+        match (self.record_epoch, self.previous_record_digest) {
+            (VEGA_INITIAL_ISSUER_RECORD_EPOCH_V1, None) => {}
+            (VEGA_INITIAL_ISSUER_RECORD_EPOCH_V1, Some(_)) => {
+                return Err(PrivacyVegaIssuerRecordValidationErrorV1::OriginHasPredecessor);
+            }
+            (_, None) => {
+                return Err(PrivacyVegaIssuerRecordValidationErrorV1::SuccessorMissingPredecessor);
+            }
+            (_, Some(digest)) if digest.is_zero() => {
+                return Err(PrivacyVegaIssuerRecordValidationErrorV1::ZeroPreviousRecordDigest);
+            }
+            (_, Some(_)) => {}
+        }
+        Ok(())
+    }
+}
+
+fn privacy_vega_issuer_sha256_frame_v1(fields: &[&[u8]]) -> [u8; 32] {
+    let domain_len = u16::try_from(VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1.len())
+        .expect("fixed Vega issuer-record digest domain fits u16");
+    let field_count =
+        u16::try_from(fields.len()).expect("fixed Vega issuer-record field count fits u16");
+    let mut hash = Sha256::new();
+    hash.update(VEGA_ISSUER_RECORD_HASH_FRAME_DOMAIN_V1);
+    hash.update(domain_len.to_be_bytes());
+    hash.update(VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1);
+    hash.update(field_count.to_be_bytes());
+    for field in fields {
+        let field_len =
+            u64::try_from(field.len()).expect("slice length fits u64 on supported targets");
+        hash.update(field_len.to_be_bytes());
+        hash.update(field);
+    }
+    hash.finalize().into()
+}
+
+fn privacy_vega_issuer_predecessor_frame_v1(
+    previous: Option<PrivacyVegaIssuerRecordDigestV1>,
+) -> [u8; 33] {
+    let mut frame = [0_u8; 33];
+    if let Some(digest) = previous {
+        frame[0] = 1;
+        frame[1..].copy_from_slice(digest.as_bytes());
+    }
+    frame
+}
+
+/// Failure while validating one immutable Vega issuer governance revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyVegaIssuerRecordValidationErrorV1 {
+    /// The stable issuer identifier is all zero.
+    #[error("Vega issuer id must be non-zero")]
+    ZeroIssuerId,
+    /// Epoch zero is never authoritative.
+    #[error("Vega issuer-record epoch must be non-zero")]
+    ZeroRecordEpoch,
+    /// Registration must begin at canonical epoch one.
+    #[error(
+        "initial Vega issuer-record epoch must be {VEGA_INITIAL_ISSUER_RECORD_EPOCH_V1}, got {actual}"
+    )]
+    NonCanonicalInitialEpoch {
+        /// Rejected epoch.
+        actual: u64,
+    },
+    /// An origin revision cannot claim a predecessor.
+    #[error("Vega epoch-one issuer record must not carry a predecessor")]
+    OriginHasPredecessor,
+    /// Every non-origin revision must bind its exact predecessor.
+    #[error("Vega successor issuer record must carry a predecessor digest")]
+    SuccessorMissingPredecessor,
+    /// A predecessor digest cannot be the all-zero sentinel.
+    #[error("Vega predecessor issuer-record digest must be non-zero")]
+    ZeroPreviousRecordDigest,
+    /// The issuer public key cannot be all zero.
+    #[error("Vega issuer public key must be non-zero")]
+    ZeroIssuerPublicKey,
+    /// The wire key must at least have the canonical compressed SEC1 shape.
+    #[error("Vega issuer public key must use compressed SEC1 encoding")]
+    InvalidIssuerPublicKeyEncoding,
+    /// Registration cannot create a terminal lineage.
+    #[error("initial Vega issuer record must be active")]
+    InitialRecordNotActive,
+    /// A decoded record supplied an all-zero self-digest.
+    #[error("Vega issuer-record self-digest must be non-zero")]
+    ZeroRecordDigest,
+    /// Recomputing every authoritative field produced a different digest.
+    #[error("Vega issuer-record self-digest mismatch")]
+    RecordDigestMismatch,
+}
+
+/// Failure while validating an append-only Vega issuer transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyVegaIssuerTransitionValidationErrorV1 {
+    /// The persisted current revision is malformed.
+    #[error("current Vega issuer record is invalid: {0}")]
+    InvalidCurrent(PrivacyVegaIssuerRecordValidationErrorV1),
+    /// The proposed successor revision is malformed.
+    #[error("successor Vega issuer record is invalid: {0}")]
+    InvalidSuccessor(PrivacyVegaIssuerRecordValidationErrorV1),
+    /// A terminal lineage cannot advance.
+    #[error("current Vega issuer record is not active")]
+    CurrentNotActive,
+    /// A transition changed its stable issuer identity.
+    #[error("Vega issuer transition changed issuer id")]
+    IssuerIdMismatch,
+    /// An epoch cannot advance past `u64::MAX`.
+    #[error("Vega issuer-record epoch overflow")]
+    EpochOverflow,
+    /// The successor did not advance exactly one epoch.
+    #[error("Vega successor epoch must be {expected}, got {actual}")]
+    NonCanonicalSuccessorEpoch {
+        /// Required successor epoch.
+        expected: u64,
+        /// Rejected successor epoch.
+        actual: u64,
+    },
+    /// The successor did not bind the exact current revision.
+    #[error("Vega successor predecessor digest does not match the current revision")]
+    PredecessorDigestMismatch,
+    /// A rotation successor must remain active.
+    #[error("Vega issuer rotation successor must be active")]
+    RotationSuccessorNotActive,
+    /// A rotation must alter the issuer key or admitted algorithm policy.
+    #[error("Vega issuer rotation must change governed contents")]
+    RotationContentsUnchanged,
+    /// A revocation successor must be terminal.
+    #[error("Vega issuer revocation successor must be revoked")]
+    RevocationSuccessorNotRevoked,
+    /// Revocation cannot silently change the trusted key or policy.
+    #[error("Vega issuer revocation changed immutable governed contents")]
+    RevocationContentsChanged,
+}
+
+fn validate_vega_issuer_transition_common_v1(
+    current: &PrivacyVegaIssuerRecordV1,
+    successor: &PrivacyVegaIssuerRecordV1,
+) -> Result<(), PrivacyVegaIssuerTransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyVegaIssuerTransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyVegaIssuerTransitionValidationErrorV1::InvalidSuccessor)?;
+    if current.lifecycle != PrivacyVegaIssuerRecordLifecycleV1::Active {
+        return Err(PrivacyVegaIssuerTransitionValidationErrorV1::CurrentNotActive);
+    }
+    if successor.issuer_id != current.issuer_id {
+        return Err(PrivacyVegaIssuerTransitionValidationErrorV1::IssuerIdMismatch);
+    }
+    let expected = current
+        .record_epoch
+        .checked_add(1)
+        .ok_or(PrivacyVegaIssuerTransitionValidationErrorV1::EpochOverflow)?;
+    if successor.record_epoch != expected {
+        return Err(
+            PrivacyVegaIssuerTransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                expected,
+                actual: successor.record_epoch,
+            },
+        );
+    }
+    if successor.previous_record_digest != Some(current.record_digest) {
+        return Err(PrivacyVegaIssuerTransitionValidationErrorV1::PredecessorDigestMismatch);
+    }
+    Ok(())
+}
+
+/// Validate an active-to-active Vega issuer key or policy rotation.
+///
+/// # Errors
+///
+/// Rejects malformed records, identity changes, stale/skipped epochs,
+/// predecessor substitution, terminal successors, and no-op rotations.
+pub fn validate_vega_issuer_rotation_v1(
+    current: &PrivacyVegaIssuerRecordV1,
+    successor: &PrivacyVegaIssuerRecordV1,
+) -> Result<(), PrivacyVegaIssuerTransitionValidationErrorV1> {
+    validate_vega_issuer_transition_common_v1(current, successor)?;
+    if successor.lifecycle != PrivacyVegaIssuerRecordLifecycleV1::Active {
+        return Err(PrivacyVegaIssuerTransitionValidationErrorV1::RotationSuccessorNotActive);
+    }
+    if successor.issuer_public_key == current.issuer_public_key
+        && successor.document_type == current.document_type
+        && successor.namespace == current.namespace
+        && successor.digest_algorithm == current.digest_algorithm
+        && successor.issuer_authentication_algorithm == current.issuer_authentication_algorithm
+        && successor.device_authentication_algorithm == current.device_authentication_algorithm
+    {
+        return Err(PrivacyVegaIssuerTransitionValidationErrorV1::RotationContentsUnchanged);
+    }
+    Ok(())
+}
+
+/// Validate an irreversible Vega issuer revocation.
+///
+/// # Errors
+///
+/// Rejects malformed records, identity changes, stale/skipped epochs,
+/// predecessor substitution, nonterminal successors, or key/policy changes.
+pub fn validate_vega_issuer_revocation_v1(
+    current: &PrivacyVegaIssuerRecordV1,
+    successor: &PrivacyVegaIssuerRecordV1,
+) -> Result<(), PrivacyVegaIssuerTransitionValidationErrorV1> {
+    validate_vega_issuer_transition_common_v1(current, successor)?;
+    if successor.lifecycle != PrivacyVegaIssuerRecordLifecycleV1::Revoked {
+        return Err(PrivacyVegaIssuerTransitionValidationErrorV1::RevocationSuccessorNotRevoked);
+    }
+    if successor.issuer_public_key != current.issuer_public_key
+        || successor.document_type != current.document_type
+        || successor.namespace != current.namespace
+        || successor.digest_algorithm != current.digest_algorithm
+        || successor.issuer_authentication_algorithm != current.issuer_authentication_algorithm
+        || successor.device_authentication_algorithm != current.device_authentication_algorithm
+    {
+        return Err(PrivacyVegaIssuerTransitionValidationErrorV1::RevocationContentsChanged);
+    }
+    Ok(())
 }
 
 /// Gregorian UTC calendar date used as Vega Figure 9 public input `(Y, M, D)`.
@@ -5067,6 +6640,7 @@ pub enum PrivacyVegaMdlSignatureAlgorithmV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyVegaMdlDateV1 {
     /// Four-digit UTC year.
     pub year: u16,
@@ -5084,18 +6658,24 @@ pub struct PrivacyVegaMdlDateV1 {
 /// birth-date `IssuerSignedItemBytes`, and every lookup hint are private
 /// engine witness values.
 ///
-/// `Q_I` being a public proof input establishes only that the hidden
-/// credential was authenticated by that key. Issuer accreditation is a
-/// downstream policy decision; this reusable proof component has no ledger
-/// effect.
+/// `issuer_id`, `issuer_record_epoch`, and `issuer_record_digest` select the
+/// exact active governance revision whose key and algorithm policy must match
+/// this statement before native verification. The proof has no ledger effect.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct VegaExistingCredentialStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
+    /// Stable governed issuer identity selecting one authoritative lineage.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Exact current authoritative issuer revision epoch.
+    pub issuer_record_epoch: u64,
+    /// Exact self-digest of the authoritative issuer revision.
+    pub issuer_record_digest: PrivacyVegaIssuerRecordDigestV1,
     /// Exact supported credential document family and `docType`.
     pub document_type: PrivacyCredentialDocumentTypeV1,
     /// Exact namespace containing the `birth_date` signed item.
@@ -5106,7 +6686,7 @@ pub struct VegaExistingCredentialStatementV1 {
     pub issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1,
     /// Exact device COSE authentication algorithm constrained by the circuit.
     pub device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1,
-    /// Public P-256 issuer key `Q_I`.
+    /// Public P-256 issuer key `Q_I`, copied exactly from authoritative state.
     pub issuer_public_key: PrivacyP256PointV1,
     /// Public device-authentication digest `H_dev`.
     ///
@@ -5236,6 +6816,7 @@ impl norito::json::JsonDeserialize for PrivacyX509KeyUsageRequirementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyX509KeyUsageV1 {
     /// RFC 5280 digital-signature bit.
     pub digital_signature: PrivacyX509KeyUsageRequirementV1,
@@ -5253,7 +6834,10 @@ pub struct PrivacyX509KeyUsageV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "purpose", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "purpose", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyX509ExtendedKeyUsageV1 {
     /// TLS-style client authentication.
     ClientAuthentication,
@@ -5269,7 +6853,10 @@ pub enum PrivacyX509ExtendedKeyUsageV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "state", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "state", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyZkX509RecordLifecycleV1 {
     /// The trust-anchor or certificate-policy revision is authoritative.
     #[cfg_attr(feature = "json", norito(rename = "active"))]
@@ -5277,15 +6864,6 @@ pub enum PrivacyZkX509RecordLifecycleV1 {
     /// The lineage was irreversibly revoked.
     #[cfg_attr(feature = "json", norito(rename = "revoked"))]
     Revoked,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-struct PrivacyZkX509TrustAnchorDigestMaterialV1 {
-    trust_anchor_id: PrivacyIssuerIdV1,
-    record_epoch: u64,
-    trust_store_digest: PrivacyX509TrustStoreDigestV1,
-    previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
-    lifecycle: PrivacyZkX509RecordLifecycleV1,
 }
 
 /// One immutable authoritative revision of an RFC 5280 P-256/SHA-256 trust store.
@@ -5306,6 +6884,14 @@ pub struct PrivacyZkX509TrustAnchorRecordV1 {
     pub record_epoch: u64,
     /// Digest of the exact ordered P-256/SHA-256 trust-store artifact.
     pub trust_store_digest: PrivacyX509TrustStoreDigestV1,
+    /// Exact CA-membership root derived from that complete trust store.
+    pub ca_membership_root: PrivacyRootV1,
+    /// Canonical epoch of `ca_membership_root`.
+    ///
+    /// An active record requires this to equal `record_epoch`. A terminal
+    /// revocation preserves the preceding active root epoch and does not
+    /// manufacture a new CA-membership root.
+    pub ca_membership_root_epoch: u64,
     /// Exact predecessor revision digest, absent only at epoch one.
     pub previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
     /// Active or irreversibly revoked lifecycle.
@@ -5319,12 +6905,14 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects zero fields, a non-canonical predecessor shape, or canonical
-    /// encoding failure.
+    /// Rejects zero fields, a root epoch inconsistent with the lifecycle, a
+    /// non-canonical predecessor shape, or an invalid lifecycle/root binding.
     pub fn new(
         trust_anchor_id: PrivacyIssuerIdV1,
         record_epoch: u64,
         trust_store_digest: PrivacyX509TrustStoreDigestV1,
+        ca_membership_root: PrivacyRootV1,
+        ca_membership_root_epoch: u64,
         previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
         lifecycle: PrivacyZkX509RecordLifecycleV1,
     ) -> Result<Self, PrivacyZkX509RecordValidationErrorV1> {
@@ -5332,6 +6920,8 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
             trust_anchor_id,
             record_epoch,
             trust_store_digest,
+            ca_membership_root,
+            ca_membership_root_epoch,
             previous_record_digest,
             lifecycle,
             record_digest: PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32]),
@@ -5379,19 +6969,29 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
     ///
     /// # Errors
     ///
-    /// Returns an encoding error if canonical Norito serialization fails.
+    /// Uses the explicit SHA-256 field frame shared with the proof system.
     pub fn compute_record_digest(
         &self,
     ) -> Result<PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509RecordValidationErrorV1> {
-        let material = PrivacyZkX509TrustAnchorDigestMaterialV1 {
-            trust_anchor_id: self.trust_anchor_id,
-            record_epoch: self.record_epoch,
-            trust_store_digest: self.trust_store_digest,
-            previous_record_digest: self.previous_record_digest,
-            lifecycle: self.lifecycle,
-        };
+        let version = ZK_X509_GOVERNANCE_RECORD_VERSION_V1.to_be_bytes();
+        let record_epoch = self.record_epoch.to_be_bytes();
+        let ca_membership_root_epoch = self.ca_membership_root_epoch.to_be_bytes();
+        let predecessor = privacy_zk_x509_predecessor_frame_v1(self.previous_record_digest);
+        let lifecycle = privacy_zk_x509_lifecycle_frame_v1(self.lifecycle);
         Ok(PrivacyZkX509TrustAnchorRecordDigestV1::new(
-            privacy_zk_x509_record_digest(ZK_X509_TRUST_ANCHOR_RECORD_DIGEST_DOMAIN_V1, &material)?,
+            privacy_zk_x509_sha256_frame_v1(
+                ZK_X509_TRUST_ANCHOR_RECORD_DIGEST_DOMAIN_V1,
+                &[
+                    &version,
+                    self.trust_anchor_id.as_bytes(),
+                    &record_epoch,
+                    self.trust_store_digest.as_bytes(),
+                    self.ca_membership_root.as_bytes(),
+                    &ca_membership_root_epoch,
+                    &predecessor,
+                    &lifecycle,
+                ],
+            ),
         ))
     }
 
@@ -5402,21 +7002,37 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
         if self.trust_store_digest.is_zero() {
             return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustStoreDigest);
         }
+        if self.ca_membership_root.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCaMembershipRoot);
+        }
+        if self.ca_membership_root_epoch == 0 {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCaMembershipRootEpoch);
+        }
+        match self.lifecycle {
+            PrivacyZkX509RecordLifecycleV1::Active
+                if self.ca_membership_root_epoch != self.record_epoch =>
+            {
+                return Err(
+                    PrivacyZkX509RecordValidationErrorV1::CaMembershipRootEpochMismatch {
+                        record_epoch: self.record_epoch,
+                        root_epoch: self.ca_membership_root_epoch,
+                    },
+                );
+            }
+            PrivacyZkX509RecordLifecycleV1::Revoked
+                if self.ca_membership_root_epoch >= self.record_epoch =>
+            {
+                return Err(
+                    PrivacyZkX509RecordValidationErrorV1::RevokedCaMembershipRootEpochNotHistorical {
+                        record_epoch: self.record_epoch,
+                        root_epoch: self.ca_membership_root_epoch,
+                    },
+                );
+            }
+            PrivacyZkX509RecordLifecycleV1::Active | PrivacyZkX509RecordLifecycleV1::Revoked => {}
+        }
         validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-struct PrivacyZkX509CertificatePolicyDigestMaterialV1 {
-    trust_anchor_id: PrivacyIssuerIdV1,
-    policy_id: PrivacyPolicyIdV1,
-    record_epoch: u64,
-    policy_digest: PrivacyPolicyDigestV1,
-    required_key_usage: PrivacyX509KeyUsageV1,
-    required_extended_key_usages: Vec<PrivacyX509ExtendedKeyUsageV1>,
-    required_disclosed_attribute_indices: Vec<u8>,
-    previous_record_digest: Option<PrivacyZkX509CertificatePolicyRecordDigestV1>,
-    lifecycle: PrivacyZkX509RecordLifecycleV1,
 }
 
 /// One immutable authoritative X.509 certificate-policy revision.
@@ -5459,7 +7075,7 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
     /// # Errors
     ///
     /// Rejects zero fields, unsupported key usage, oversized or unordered
-    /// policy lists, a non-canonical predecessor shape, or encoding failure.
+    /// policy lists or a non-canonical predecessor shape.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         trust_anchor_id: PrivacyIssuerIdV1,
@@ -5527,27 +7143,54 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
     ///
     /// # Errors
     ///
-    /// Returns an encoding error if canonical Norito serialization fails.
+    /// Uses the explicit SHA-256 field frame shared with the proof system.
     pub fn compute_record_digest(
         &self,
     ) -> Result<PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509RecordValidationErrorV1>
     {
-        let material = PrivacyZkX509CertificatePolicyDigestMaterialV1 {
-            trust_anchor_id: self.trust_anchor_id,
-            policy_id: self.policy_id,
-            record_epoch: self.record_epoch,
-            policy_digest: self.policy_digest,
-            required_key_usage: self.required_key_usage,
-            required_extended_key_usages: self.required_extended_key_usages.clone(),
-            required_disclosed_attribute_indices: self.required_disclosed_attribute_indices.clone(),
-            previous_record_digest: self.previous_record_digest,
-            lifecycle: self.lifecycle,
-        };
+        validate_zk_x509_key_usage(self.required_key_usage)?;
+        validate_zk_x509_extended_key_usages(&self.required_extended_key_usages)?;
+        validate_zk_x509_disclosure_indices(&self.required_disclosed_attribute_indices)?;
+        let version = ZK_X509_GOVERNANCE_RECORD_VERSION_V1.to_be_bytes();
+        let record_epoch = self.record_epoch.to_be_bytes();
+        let key_usage = [privacy_zk_x509_key_usage_mask_v1(self.required_key_usage)];
+        let mut extended_key_usages =
+            Vec::with_capacity(1 + self.required_extended_key_usages.len());
+        extended_key_usages.push(
+            u8::try_from(self.required_extended_key_usages.len())
+                .expect("validated X.509 EKU count fits u8"),
+        );
+        extended_key_usages.extend(
+            self.required_extended_key_usages
+                .iter()
+                .copied()
+                .map(privacy_zk_x509_extended_key_usage_code_v1),
+        );
+        let mut disclosed_attributes =
+            Vec::with_capacity(1 + self.required_disclosed_attribute_indices.len());
+        disclosed_attributes.push(
+            u8::try_from(self.required_disclosed_attribute_indices.len())
+                .expect("validated X.509 disclosure count fits u8"),
+        );
+        disclosed_attributes.extend_from_slice(&self.required_disclosed_attribute_indices);
+        let predecessor = privacy_zk_x509_predecessor_frame_v1(self.previous_record_digest);
+        let lifecycle = privacy_zk_x509_lifecycle_frame_v1(self.lifecycle);
         Ok(PrivacyZkX509CertificatePolicyRecordDigestV1::new(
-            privacy_zk_x509_record_digest(
+            privacy_zk_x509_sha256_frame_v1(
                 ZK_X509_CERTIFICATE_POLICY_RECORD_DIGEST_DOMAIN_V1,
-                &material,
-            )?,
+                &[
+                    &version,
+                    self.trust_anchor_id.as_bytes(),
+                    self.policy_id.as_bytes(),
+                    &record_epoch,
+                    self.policy_digest.as_bytes(),
+                    &key_usage,
+                    &extended_key_usages,
+                    &disclosed_attributes,
+                    &predecessor,
+                    &lifecycle,
+                ],
+            ),
         ))
     }
 
@@ -5568,21 +7211,222 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
     }
 }
 
-fn privacy_zk_x509_record_digest<T: Encode>(
-    domain: &[u8],
-    material: &T,
-) -> Result<[u8; 32], PrivacyZkX509RecordValidationErrorV1> {
-    let encoded = norito::to_bytes(material)
-        .map_err(|_| PrivacyZkX509RecordValidationErrorV1::EncodingFailure)?;
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(domain);
-    hasher.update(
-        &u64::try_from(encoded.len())
-            .expect("Norito output length fits u64 on supported targets")
-            .to_le_bytes(),
-    );
-    hasher.update(&encoded);
-    Ok(*hasher.finalize().as_bytes())
+/// One immutable authoritative revision of an issuer-scoped signed CRL.
+///
+/// The exact signed DER digest, signing-key digest, and validity window are one
+/// self-digested governance object. The proof parses that complete, signed CRL
+/// and checks the leaf serial against every active entry; there is deliberately
+/// no second revocation accumulator whose contents could diverge from the CRL.
+/// The first release assigns exactly one leaf certificate issuer and its
+/// complete, non-partitioned CRL to each certificate-policy lineage;
+/// revocation checks the leaf certificate only.
+/// Multiple intermediates require distinct policy lineages. Consensus keeps
+/// only the current self-chained record while historical transitions remain
+/// committed by blocks. Revocation is terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkX509CrlRecordV1 {
+    /// Exact trust-store lineage whose certificate chain selects this CRL.
+    pub trust_anchor_id: PrivacyIssuerIdV1,
+    /// Exact certificate-policy lineage whose leaf revocation is represented.
+    pub certificate_policy_id: PrivacyPolicyIdV1,
+    /// Strictly increasing immutable revision epoch.
+    pub record_epoch: u64,
+    /// Required RFC 5280 CRLNumber, monotonically increasing in this lineage.
+    pub crl_number: u64,
+    /// SHA-256 digest of the complete exact signed DER CRL.
+    pub crl_der_digest: PrivacyX509CrlDerDigestV1,
+    /// SHA-256 digest of the exact issuer SPKI that signs the CRL.
+    pub issuer_spki_digest: PrivacyX509CrlIssuerSpkiDigestV1,
+    /// Signed CRL `thisUpdate` as Unix seconds, inclusive.
+    pub this_update_unix_seconds: u64,
+    /// Signed CRL `nextUpdate` as Unix seconds, exclusive.
+    pub next_update_unix_seconds: u64,
+    /// Exact predecessor revision digest, absent only at epoch one.
+    pub previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
+    /// Active or irreversibly revoked lifecycle.
+    pub lifecycle: PrivacyZkX509RecordLifecycleV1,
+    /// Self-digest of every authoritative field above.
+    pub record_digest: PrivacyZkX509CrlRecordDigestV1,
+}
+
+impl PrivacyZkX509CrlRecordV1 {
+    /// Construct one canonical self-digested signed-CRL revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities or digests, an invalid signed validity window,
+    /// or a non-canonical predecessor shape.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        certificate_policy_id: PrivacyPolicyIdV1,
+        record_epoch: u64,
+        crl_number: u64,
+        crl_der_digest: PrivacyX509CrlDerDigestV1,
+        issuer_spki_digest: PrivacyX509CrlIssuerSpkiDigestV1,
+        this_update_unix_seconds: u64,
+        next_update_unix_seconds: u64,
+        previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> Result<Self, PrivacyZkX509RecordValidationErrorV1> {
+        let mut record = Self {
+            trust_anchor_id,
+            certificate_policy_id,
+            record_epoch,
+            crl_number,
+            crl_der_digest,
+            issuer_spki_digest,
+            this_update_unix_seconds,
+            next_update_unix_seconds,
+            previous_record_digest,
+            lifecycle,
+            record_digest: PrivacyZkX509CrlRecordDigestV1::new([0; 32]),
+        };
+        record.validate_contents()?;
+        record.record_digest = record.compute_record_digest()?;
+        if record.record_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest);
+        }
+        Ok(record)
+    }
+
+    /// Validate a canonical active epoch-one registration.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
+    /// revoked origin.
+    pub fn validate_initial(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        self.validate()?;
+        validate_zk_x509_initial_revision(
+            self.record_epoch,
+            self.previous_record_digest.is_some(),
+            self.lifecycle,
+        )
+    }
+
+    /// Validate all fields and the complete canonical self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any malformed or tampered revision.
+    pub fn validate(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        self.validate_contents()?;
+        if self.record_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest);
+        }
+        if self.compute_record_digest()? != self.record_digest {
+            return Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch);
+        }
+        Ok(())
+    }
+
+    /// Recompute the domain-separated self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Uses the explicit SHA-256 field frame shared with the proof system.
+    pub fn compute_record_digest(
+        &self,
+    ) -> Result<PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509RecordValidationErrorV1> {
+        let version = ZK_X509_GOVERNANCE_RECORD_VERSION_V1.to_be_bytes();
+        let record_epoch = self.record_epoch.to_be_bytes();
+        let crl_number = self.crl_number.to_be_bytes();
+        let this_update = self.this_update_unix_seconds.to_be_bytes();
+        let next_update = self.next_update_unix_seconds.to_be_bytes();
+        let predecessor = privacy_zk_x509_predecessor_frame_v1(self.previous_record_digest);
+        let lifecycle = privacy_zk_x509_lifecycle_frame_v1(self.lifecycle);
+        Ok(PrivacyZkX509CrlRecordDigestV1::new(
+            privacy_zk_x509_sha256_frame_v1(
+                ZK_X509_CRL_RECORD_DIGEST_DOMAIN_V1,
+                &[
+                    &version,
+                    self.trust_anchor_id.as_bytes(),
+                    self.certificate_policy_id.as_bytes(),
+                    &record_epoch,
+                    &crl_number,
+                    self.crl_der_digest.as_bytes(),
+                    self.issuer_spki_digest.as_bytes(),
+                    &this_update,
+                    &next_update,
+                    &predecessor,
+                    &lifecycle,
+                ],
+            ),
+        ))
+    }
+
+    fn validate_contents(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        if self.trust_anchor_id.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustAnchorId);
+        }
+        if self.certificate_policy_id.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroPolicyId);
+        }
+        if self.crl_der_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlDerDigest);
+        }
+        if self.issuer_spki_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlIssuerSpkiDigest);
+        }
+        if self.next_update_unix_seconds <= self.this_update_unix_seconds {
+            return Err(PrivacyZkX509RecordValidationErrorV1::InvalidCrlValidityWindow);
+        }
+        validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
+    }
+}
+
+fn privacy_zk_x509_sha256_frame_v1(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
+    let domain_len = u16::try_from(domain.len()).expect("fixed X.509 digest domain fits u16");
+    let field_count = u16::try_from(fields.len()).expect("fixed X.509 digest field count fits u16");
+    let mut hash = Sha256::new();
+    hash.update(ZK_X509_HASH_FRAME_DOMAIN_V1);
+    hash.update(domain_len.to_be_bytes());
+    hash.update(domain);
+    hash.update(field_count.to_be_bytes());
+    for field in fields {
+        let field_len =
+            u64::try_from(field.len()).expect("slice length fits u64 on supported targets");
+        hash.update(field_len.to_be_bytes());
+        hash.update(field);
+    }
+    hash.finalize().into()
+}
+
+fn privacy_zk_x509_predecessor_frame_v1<D: PrivacyDigestValueV1>(previous: Option<D>) -> [u8; 33] {
+    let mut frame = [0_u8; 33];
+    if let Some(digest) = previous {
+        frame[0] = 1;
+        frame[1..].copy_from_slice(&digest.bytes());
+    }
+    frame
+}
+
+const fn privacy_zk_x509_lifecycle_frame_v1(lifecycle: PrivacyZkX509RecordLifecycleV1) -> [u8; 1] {
+    [match lifecycle {
+        PrivacyZkX509RecordLifecycleV1::Active => 0,
+        PrivacyZkX509RecordLifecycleV1::Revoked => 1,
+    }]
+}
+
+fn privacy_zk_x509_key_usage_mask_v1(key_usage: PrivacyX509KeyUsageV1) -> u8 {
+    u8::from(key_usage.digital_signature.is_required())
+        | (u8::from(key_usage.content_commitment.is_required()) << 1)
+        | (u8::from(key_usage.key_encipherment.is_required()) << 2)
+        | (u8::from(key_usage.key_agreement.is_required()) << 3)
+}
+
+const fn privacy_zk_x509_extended_key_usage_code_v1(usage: PrivacyX509ExtendedKeyUsageV1) -> u8 {
+    match usage {
+        PrivacyX509ExtendedKeyUsageV1::ClientAuthentication => 0,
+        PrivacyX509ExtendedKeyUsageV1::DocumentSigning => 1,
+        PrivacyX509ExtendedKeyUsageV1::WalletIdentity => 2,
+    }
 }
 
 fn validate_zk_x509_revision_shape<D: PrivacyDigestValueV1>(
@@ -5607,17 +7451,36 @@ fn validate_zk_x509_revision_shape<D: PrivacyDigestValueV1>(
 
 trait PrivacyDigestValueV1: Copy {
     fn is_zero(self) -> bool;
+    fn bytes(self) -> [u8; 32];
 }
 
 impl PrivacyDigestValueV1 for PrivacyZkX509TrustAnchorRecordDigestV1 {
     fn is_zero(self) -> bool {
         PrivacyZkX509TrustAnchorRecordDigestV1::is_zero(&self)
     }
+
+    fn bytes(self) -> [u8; 32] {
+        *self.as_bytes()
+    }
 }
 
 impl PrivacyDigestValueV1 for PrivacyZkX509CertificatePolicyRecordDigestV1 {
     fn is_zero(self) -> bool {
         PrivacyZkX509CertificatePolicyRecordDigestV1::is_zero(&self)
+    }
+
+    fn bytes(self) -> [u8; 32] {
+        *self.as_bytes()
+    }
+}
+
+impl PrivacyDigestValueV1 for PrivacyZkX509CrlRecordDigestV1 {
+    fn is_zero(self) -> bool {
+        PrivacyZkX509CrlRecordDigestV1::is_zero(&self)
+    }
+
+    fn bytes(self) -> [u8; 32] {
+        *self.as_bytes()
     }
 }
 
@@ -5709,9 +7572,44 @@ pub enum PrivacyZkX509RecordValidationErrorV1 {
     /// The canonical trust-store digest is all zero.
     #[error("X.509 trust-store digest must be non-zero")]
     ZeroTrustStoreDigest,
+    /// The CA-membership root derived from the trust store is all zero.
+    #[error("X.509 CA-membership root must be non-zero")]
+    ZeroCaMembershipRoot,
+    /// A CA-membership root epoch is zero.
+    #[error("X.509 CA-membership root epoch must be non-zero")]
+    ZeroCaMembershipRootEpoch,
+    /// The first-release trust-anchor record and CA-root epochs differ.
+    #[error(
+        "X.509 CA-membership root epoch {root_epoch} must equal trust-anchor record epoch {record_epoch}"
+    )]
+    CaMembershipRootEpochMismatch {
+        /// Immutable trust-anchor record epoch.
+        record_epoch: u64,
+        /// Rejected CA-membership root epoch.
+        root_epoch: u64,
+    },
+    /// A terminal trust-anchor record did not preserve a historical active root.
+    #[error(
+        "revoked X.509 CA-membership root epoch {root_epoch} must precede record epoch {record_epoch}"
+    )]
+    RevokedCaMembershipRootEpochNotHistorical {
+        /// Terminal trust-anchor record epoch.
+        record_epoch: u64,
+        /// Rejected retained active-root epoch.
+        root_epoch: u64,
+    },
     /// The canonical certificate-policy digest is all zero.
     #[error("X.509 certificate-policy digest must be non-zero")]
     ZeroPolicyDigest,
+    /// The SHA-256 digest of the exact signed DER CRL is all zero.
+    #[error("X.509 signed DER CRL digest must be non-zero")]
+    ZeroCrlDerDigest,
+    /// The SHA-256 digest of the CRL issuer SPKI is all zero.
+    #[error("X.509 CRL issuer SPKI digest must be non-zero")]
+    ZeroCrlIssuerSpkiDigest,
+    /// The signed CRL validity window is zero, empty, or reversed.
+    #[error("X.509 CRL validity window must satisfy thisUpdate < nextUpdate")]
+    InvalidCrlValidityWindow,
     /// Epoch zero is never authoritative.
     #[error("X.509 governance-record epoch must be non-zero")]
     ZeroRecordEpoch,
@@ -5769,9 +7667,6 @@ pub enum PrivacyZkX509RecordValidationErrorV1 {
     /// Disclosure indices were duplicated or reordered.
     #[error("X.509 disclosed attribute indices must be strictly increasing")]
     DisclosedAttributeIndicesNotStrictlyIncreasing,
-    /// Canonical encoding of self-digest material failed.
-    #[error("X.509 governance-record digest material could not be encoded")]
-    EncodingFailure,
     /// A decoded record supplied an all-zero self-digest.
     #[error("X.509 governance-record self-digest must be non-zero")]
     ZeroRecordDigest,
@@ -5795,9 +7690,18 @@ pub enum PrivacyZkX509TransitionValidationErrorV1 {
     /// A trust-anchor transition changed its stable identity.
     #[error("X.509 trust-anchor transition changed trust-anchor id")]
     TrustAnchorIdMismatch,
+    /// A trust-store digest rotated without its derived CA-membership root.
+    #[error("X.509 trust-store digest changed without changing its CA-membership root")]
+    TrustStoreDigestChangedWithoutCaMembershipRoot,
+    /// A CA-membership root rotated without its source trust-store digest.
+    #[error("X.509 CA-membership root changed without changing its trust-store digest")]
+    CaMembershipRootChangedWithoutTrustStoreDigest,
     /// A policy transition changed its stable identity.
     #[error("X.509 certificate-policy transition changed policy id")]
     PolicyIdMismatch,
+    /// A signed-CRL lineage changed the issuer public key.
+    #[error("X.509 CRL transition changed issuer SPKI digest")]
+    CrlIssuerSpkiDigestMismatch,
     /// An epoch cannot advance past `u64::MAX`.
     #[error("X.509 governance-record epoch overflow")]
     EpochOverflow,
@@ -5818,6 +7722,12 @@ pub enum PrivacyZkX509TransitionValidationErrorV1 {
     /// A rotation must alter at least one governed substantive field.
     #[error("X.509 rotation must change governed contents")]
     RotationContentsUnchanged,
+    /// A signed-CRL successor did not advance `thisUpdate`.
+    #[error("X.509 CRL successor thisUpdate must strictly increase")]
+    CrlThisUpdateNotIncreasing,
+    /// A signed-CRL successor did not advance CRLNumber.
+    #[error("X.509 CRL successor CRLNumber must strictly increase")]
+    CrlNumberNotIncreasing,
     /// A revocation successor must be terminal.
     #[error("X.509 revocation successor must be revoked")]
     RevocationSuccessorNotRevoked,
@@ -5858,7 +7768,8 @@ fn validate_zk_x509_transition_common<D: Copy + PartialEq>(
 /// # Errors
 ///
 /// Rejects malformed records, identity changes, stale/skipped epochs,
-/// predecessor substitution, terminal successors, and no-op rotations.
+/// predecessor substitution, terminal successors, no-op rotations, and a
+/// trust-store digest or CA-membership root changed without the other.
 pub fn validate_zk_x509_trust_anchor_rotation_v1(
     current: &PrivacyZkX509TrustAnchorRecordV1,
     successor: &PrivacyZkX509TrustAnchorRecordV1,
@@ -5882,8 +7793,23 @@ pub fn validate_zk_x509_trust_anchor_rotation_v1(
     if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
         return Err(PrivacyZkX509TransitionValidationErrorV1::RotationSuccessorNotActive);
     }
-    if successor.trust_store_digest == current.trust_store_digest {
-        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged);
+    let trust_store_changed = successor.trust_store_digest != current.trust_store_digest;
+    let ca_membership_root_changed = successor.ca_membership_root != current.ca_membership_root;
+    match (trust_store_changed, ca_membership_root_changed) {
+        (false, false) => {
+            return Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged);
+        }
+        (true, false) => {
+            return Err(
+                PrivacyZkX509TransitionValidationErrorV1::TrustStoreDigestChangedWithoutCaMembershipRoot,
+            );
+        }
+        (false, true) => {
+            return Err(
+                PrivacyZkX509TransitionValidationErrorV1::CaMembershipRootChangedWithoutTrustStoreDigest,
+            );
+        }
+        (true, true) => {}
     }
     Ok(())
 }
@@ -5893,7 +7819,8 @@ pub fn validate_zk_x509_trust_anchor_rotation_v1(
 /// # Errors
 ///
 /// Rejects malformed records, identity changes, stale/skipped epochs,
-/// predecessor substitution, nonterminal successors, or trust-store changes.
+/// predecessor substitution, nonterminal successors, or trust-store/root
+/// changes.
 pub fn validate_zk_x509_trust_anchor_revocation_v1(
     current: &PrivacyZkX509TrustAnchorRecordV1,
     successor: &PrivacyZkX509TrustAnchorRecordV1,
@@ -5917,7 +7844,10 @@ pub fn validate_zk_x509_trust_anchor_revocation_v1(
     if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Revoked {
         return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationSuccessorNotRevoked);
     }
-    if successor.trust_store_digest != current.trust_store_digest {
+    if successor.trust_store_digest != current.trust_store_digest
+        || successor.ca_membership_root != current.ca_membership_root
+        || successor.ca_membership_root_epoch != current.ca_membership_root_epoch
+    {
         return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged);
     }
     Ok(())
@@ -6009,6 +7939,100 @@ pub fn validate_zk_x509_certificate_policy_revocation_v1(
     Ok(())
 }
 
+/// Validate an active-to-active signed-CRL rotation.
+///
+/// # Errors
+///
+/// Rejects malformed records, namespace or issuer-key changes,
+/// stale/skipped epochs, predecessor substitution, non-increasing
+/// `thisUpdate`, terminal successors, and no-op rotations.
+pub fn validate_zk_x509_crl_rotation_v1(
+    current: &PrivacyZkX509CrlRecordV1,
+    successor: &PrivacyZkX509CrlRecordV1,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidSuccessor)?;
+    if successor.trust_anchor_id != current.trust_anchor_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::TrustAnchorIdMismatch);
+    }
+    if successor.certificate_policy_id != current.certificate_policy_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::PolicyIdMismatch);
+    }
+    if successor.issuer_spki_digest != current.issuer_spki_digest {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CrlIssuerSpkiDigestMismatch);
+    }
+    validate_zk_x509_transition_common(
+        current.record_epoch,
+        current.record_digest,
+        current.lifecycle,
+        successor.record_epoch,
+        successor.previous_record_digest,
+    )?;
+    if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationSuccessorNotActive);
+    }
+    if successor.this_update_unix_seconds <= current.this_update_unix_seconds {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CrlThisUpdateNotIncreasing);
+    }
+    if successor.crl_number <= current.crl_number {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CrlNumberNotIncreasing);
+    }
+    if successor.crl_der_digest == current.crl_der_digest {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged);
+    }
+    Ok(())
+}
+
+/// Validate an irreversible signed-CRL lineage revocation.
+///
+/// # Errors
+///
+/// Rejects malformed records, namespace or issuer-key changes,
+/// stale/skipped epochs, predecessor substitution, nonterminal successors,
+/// or any change to the signed CRL or validity window.
+pub fn validate_zk_x509_crl_revocation_v1(
+    current: &PrivacyZkX509CrlRecordV1,
+    successor: &PrivacyZkX509CrlRecordV1,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidSuccessor)?;
+    if successor.trust_anchor_id != current.trust_anchor_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::TrustAnchorIdMismatch);
+    }
+    if successor.certificate_policy_id != current.certificate_policy_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::PolicyIdMismatch);
+    }
+    if successor.issuer_spki_digest != current.issuer_spki_digest {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CrlIssuerSpkiDigestMismatch);
+    }
+    validate_zk_x509_transition_common(
+        current.record_epoch,
+        current.record_digest,
+        current.lifecycle,
+        successor.record_epoch,
+        successor.previous_record_digest,
+    )?;
+    if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Revoked {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationSuccessorNotRevoked);
+    }
+    if successor.crl_number != current.crl_number
+        || successor.crl_der_digest != current.crl_der_digest
+        || successor.this_update_unix_seconds != current.this_update_unix_seconds
+        || successor.next_update_unix_seconds != current.next_update_unix_seconds
+    {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged);
+    }
+    Ok(())
+}
+
 /// One public selectively disclosed X.509 subject attribute.
 ///
 /// Indices use the paper's closed order: `0=C`, `1=O`, `2=OU`, `3=CN`.
@@ -6031,6 +8055,7 @@ pub struct PrivacyZkX509DisclosedAttributeV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaZkX509StarkP256StatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -6046,34 +8071,35 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     pub certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
     /// Exact certificate-policy revision epoch selected by the statement.
     pub certificate_policy_record_epoch: u64,
-    /// Digest of the certificate subject public key.
+    /// Exact immutable signed-CRL revision selected by the statement.
+    pub crl_record_digest: PrivacyZkX509CrlRecordDigestV1,
+    /// Exact signed-CRL revision epoch selected by the statement.
+    pub crl_record_epoch: u64,
+    /// Governance-scoped digest of the leaf certificate subject public key.
+    ///
+    /// Parent-chain keys and the private chain depth are deliberately excluded:
+    /// the proof binds those through path validation, signatures, and the
+    /// governed trust anchor.
     pub subject_public_key_digest: PrivacyCertificateKeyDigestV1,
-    /// CA membership accumulator root for the complete chain.
+    /// CA trust-store membership root authenticating the terminal certificate.
     pub ca_membership_root: PrivacyRootV1,
     /// Epoch at which the CA membership root was canonical.
     pub ca_membership_root_epoch: u64,
-    /// CRL sparse-tree root against which non-membership is proven.
-    pub crl_nonmembership_root: PrivacyRootV1,
-    /// Epoch at which the CRL sparse-tree root was canonical.
-    pub crl_nonmembership_root_epoch: u64,
     /// Required RFC 5280 key usages.
     pub key_usage: PrivacyX509KeyUsageV1,
     /// Required extended-key-usage purposes, sorted in enum order.
     pub extended_key_usages: Vec<PrivacyX509ExtendedKeyUsageV1>,
     /// Canonical public selective disclosures in strict attribute-index order.
     pub disclosed_attributes: Vec<PrivacyZkX509DisclosedAttributeV1>,
-    /// Certificate validity start as Unix seconds, inclusive.
-    pub not_before_unix_seconds: u64,
-    /// Certificate validity end as Unix seconds, exclusive.
-    pub not_after_unix_seconds: u64,
-    /// Validation time as Unix seconds.
-    pub validation_unix_seconds: u64,
-    /// Number of certificates in the validated chain, including the leaf.
-    pub chain_depth: u8,
-    /// DER byte length of the leaf certificate.
-    pub leaf_certificate_bytes: u32,
-    /// Combined DER byte length of the complete chain.
-    pub chain_certificate_bytes: u32,
+    /// Earliest consensus timestamp at which this presentation may execute.
+    ///
+    /// The private certificate chain and signed CRL must cover the complete
+    /// presentation window, so no exact certificate dates are disclosed.
+    pub presentation_not_before_unix_seconds: u64,
+    /// Latest consensus timestamp at which this presentation may execute.
+    ///
+    /// This bound is inclusive; the private CRL `nextUpdate` remains exclusive.
+    pub presentation_not_after_unix_seconds: u64,
     /// Public wallet account to which the certificate showing is bound.
     pub wallet_account: AccountId,
     /// Wallet challenge preventing cross-account or cross-session replay.
@@ -6149,6 +8175,7 @@ impl PrivacyJindoLatticeCommitmentV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaJindoPolynomialCommitmentStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -6196,6 +8223,7 @@ impl BootleLanternAttributeValueV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternPolynomialV1 {
     /// Exactly 64 canonical coefficients, each strictly below 12,289.
     pub coefficients: Vec<u16>,
@@ -6207,6 +8235,7 @@ pub struct BootleLanternPolynomialV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternIssuerPublicMatrixV1 {
     /// Exactly 64 polynomials in row-major 8-by-8 order.
     pub entries: Vec<BootleLanternPolynomialV1>,
@@ -6218,9 +8247,29 @@ pub struct BootleLanternIssuerPublicMatrixV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternAllowedAttributeValuesV1 {
     /// Strictly increasing values; empty means any disclosed value is allowed.
     pub values: Vec<BootleLanternAttributeValueV1>,
+}
+
+/// Forward-only lifecycle of one authoritative Bootle/Lantern issuer policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "state", content = "value", deny_unknown_fields)
+)]
+pub enum BootleLanternIssuerPolicyLifecycleV1 {
+    /// Presentations selecting the exact current record may be admitted.
+    #[cfg_attr(feature = "json", norito(rename = "active"))]
+    Active,
+    /// Terminal state; the lineage cannot be rotated or reactivated.
+    #[cfg_attr(feature = "json", norito(rename = "revoked"))]
+    Revoked,
 }
 
 /// Committed issuer key and selective-disclosure policy trusted by verification.
@@ -6232,6 +8281,7 @@ pub struct BootleLanternAllowedAttributeValuesV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternIssuerPolicyV1 {
     /// Credential issuer governed by this record.
     pub issuer_id: PrivacyIssuerIdV1,
@@ -6239,6 +8289,8 @@ pub struct BootleLanternIssuerPolicyV1 {
     pub policy_id: PrivacyPolicyIdV1,
     /// Monotonically increasing policy/key epoch.
     pub epoch: u64,
+    /// Forward-only active or terminal-revoked lifecycle.
+    pub lifecycle: BootleLanternIssuerPolicyLifecycleV1,
     /// Exact issuer parameter artifact identity.
     pub issuer_parameter_id: PrivacyParameterIdV1,
     /// Digest of the exact issuer parameter artifact.
@@ -6254,6 +8306,29 @@ pub struct BootleLanternIssuerPolicyV1 {
 }
 
 impl BootleLanternIssuerPolicyV1 {
+    /// Compute the exact digest of the issuer verification matrix selected by
+    /// `issuer_parameter_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if canonical encoding of the matrix
+    /// unexpectedly fails.
+    pub fn computed_issuer_parameter_digest(
+        &self,
+    ) -> Result<PrivacyParameterDigestV1, norito::Error> {
+        let encoded = norito::to_bytes(&self.issuer_public_matrix)?;
+        let mut hasher = Sha256::new();
+        hasher.update(BOOTLE_LANTERN_ISSUER_PARAMETER_DIGEST_DOMAIN_V1);
+        hasher.update(self.issuer_parameter_id.as_bytes());
+        hasher.update(
+            u64::try_from(encoded.len())
+                .expect("Norito output length fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(encoded);
+        Ok(PrivacyParameterDigestV1::new(hasher.finalize().into()))
+    }
+
     /// Compute the canonical record digest with `record_digest` normalized to zero.
     ///
     /// # Errors
@@ -6373,6 +8448,13 @@ impl BootleLanternIssuerPolicyV1 {
         if matrix_is_zero {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix);
         }
+        let expected_issuer_parameter_digest =
+            self.computed_issuer_parameter_digest().map_err(|_| {
+                BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterEncodingFailure
+            })?;
+        if self.issuer_parameter_digest != expected_issuer_parameter_digest {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterDigestMismatch);
+        }
         Ok(())
     }
 
@@ -6449,6 +8531,9 @@ impl BootleLanternIssuerPolicyV1 {
                 },
             );
         }
+        if self.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::InitialPolicyMustBeActive);
+        }
         Ok(())
     }
 
@@ -6464,17 +8549,25 @@ impl BootleLanternIssuerPolicyV1 {
     ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         previous.validate()?;
         self.validate()?;
+        if previous.lifecycle == BootleLanternIssuerPolicyLifecycleV1::Revoked {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::PolicyAlreadyRevoked);
+        }
         if self.issuer_id != previous.issuer_id {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerIdChanged);
         }
         if self.policy_id != previous.policy_id {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::PolicyIdChanged);
         }
-        if self.epoch <= previous.epoch {
+        let expected_epoch = previous
+            .epoch
+            .checked_add(1)
+            .ok_or(BootleLanternIssuerPolicyValidationErrorV1::PolicyEpochOverflow)?;
+        if self.epoch != expected_epoch {
             return Err(
-                BootleLanternIssuerPolicyValidationErrorV1::NonIncreasingEpoch {
+                BootleLanternIssuerPolicyValidationErrorV1::NonConsecutiveEpoch {
                     previous: previous.epoch,
                     next: self.epoch,
+                    expected: expected_epoch,
                 },
             );
         }
@@ -6483,8 +8576,51 @@ impl BootleLanternIssuerPolicyV1 {
             && self.issuer_public_matrix == previous.issuer_public_matrix
             && self.required_disclosure_bitmap == previous.required_disclosure_bitmap
             && self.allowed_values == previous.allowed_values
+            && self.lifecycle == previous.lifecycle
         {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::UnchangedRotation);
+        }
+        Ok(())
+    }
+
+    /// Validate an active-to-active exact successor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first generic successor failure or rejects a successor that
+    /// does not remain active.
+    pub fn validate_rotation_successor(
+        &self,
+        previous: &Self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        self.validate_successor(previous)?;
+        if self.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::RotationMustRemainActive);
+        }
+        Ok(())
+    }
+
+    /// Validate an active-to-terminal-revoked exact successor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first generic successor failure or rejects a successor that
+    /// is not terminal-revoked.
+    pub fn validate_revocation_successor(
+        &self,
+        previous: &Self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        self.validate_successor(previous)?;
+        if self.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Revoked {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::RevocationMustBeRevoked);
+        }
+        if self.issuer_parameter_id != previous.issuer_parameter_id
+            || self.issuer_parameter_digest != previous.issuer_parameter_digest
+            || self.issuer_public_matrix != previous.issuer_public_matrix
+            || self.required_disclosure_bitmap != previous.required_disclosure_bitmap
+            || self.allowed_values != previous.allowed_values
+        {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::RevocationMustPreservePolicy);
         }
         Ok(())
     }
@@ -6551,6 +8687,12 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
     /// Issuer matrix is the all-zero sentinel.
     #[error("Bootle/Lantern issuer matrix must not be all zero")]
     AllZeroIssuerMatrix,
+    /// Canonical encoding of the issuer verification matrix failed.
+    #[error("Bootle/Lantern issuer parameter encoding failed")]
+    IssuerParameterEncodingFailure,
+    /// The declared issuer parameter digest does not authenticate the matrix.
+    #[error("Bootle/Lantern issuer parameter digest does not match the verification matrix")]
+    IssuerParameterDigestMismatch,
     /// An allowed-value vector length overflowed its canonical count.
     #[error("Bootle/Lantern allowed-value count overflow")]
     AllowedValueCountOverflow,
@@ -6602,23 +8744,45 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
         /// Rejected initial epoch.
         epoch: u64,
     },
+    /// A newly registered lineage was not active.
+    #[error("Bootle/Lantern initial issuer policy must be active")]
+    InitialPolicyMustBeActive,
+    /// A terminal-revoked lineage was used as a successor parent.
+    #[error("Bootle/Lantern issuer policy is already terminal-revoked")]
+    PolicyAlreadyRevoked,
+    /// The current epoch cannot be advanced.
+    #[error("Bootle/Lantern issuer-policy epoch overflow")]
+    PolicyEpochOverflow,
     /// A rotation changed the issuer namespace.
     #[error("Bootle/Lantern issuer-policy rotation must not change issuer id")]
     IssuerIdChanged,
     /// A rotation changed the policy namespace.
     #[error("Bootle/Lantern issuer-policy rotation must not change policy id")]
     PolicyIdChanged,
-    /// A replacement epoch did not strictly increase.
-    #[error("Bootle/Lantern issuer-policy epoch must increase: previous {previous}, next {next}")]
-    NonIncreasingEpoch {
+    /// A replacement epoch was not exactly the next epoch.
+    #[error(
+        "Bootle/Lantern issuer-policy epoch must advance exactly once: previous {previous}, next {next}, expected {expected}"
+    )]
+    NonConsecutiveEpoch {
         /// Current committed epoch.
         previous: u64,
         /// Proposed successor epoch.
         next: u64,
+        /// Only accepted successor epoch.
+        expected: u64,
     },
     /// A replacement changed only epoch and digest.
     #[error("Bootle/Lantern issuer-policy rotation must change key, parameters, or policy rules")]
     UnchangedRotation,
+    /// A rotation attempted to revoke the lineage.
+    #[error("Bootle/Lantern issuer-policy rotation successor must remain active")]
+    RotationMustRemainActive,
+    /// A revocation failed to enter the terminal state.
+    #[error("Bootle/Lantern issuer-policy revocation successor must be revoked")]
+    RevocationMustBeRevoked,
+    /// A revocation attempted to rotate key material or disclosure rules.
+    #[error("Bootle/Lantern issuer-policy revocation must preserve key material and policy rules")]
+    RevocationMustPreservePolicy,
 }
 
 /// One canonical Bootle/Lantern selective-disclosure entry.
@@ -6627,6 +8791,7 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternDisclosedAttributeV1 {
     /// Zero-based index in the fixed eight-attribute credential.
     pub index: u8,
@@ -6640,6 +8805,7 @@ pub struct BootleLanternDisclosedAttributeV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaBootleLanternAnoncredStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -6665,7 +8831,10 @@ pub struct IrohaBootleLanternAnoncredStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "direction", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "direction", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyValueBalanceDirectionV1 {
     /// No public value enters or leaves the pool.
     Balanced,
@@ -6681,6 +8850,7 @@ pub enum PrivacyValueBalanceDirectionV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyValueBalanceV1 {
     /// Direction relative to the private pool.
     pub direction: PrivacyValueBalanceDirectionV1,
@@ -6777,8 +8947,6 @@ pub struct OrchardHalo2ActionsStatementV1 {
     pub actions: Vec<PrivacyOrchardActionV1>,
     /// Public value balance in atomic units.
     pub value_balance: PrivacyValueBalanceV1,
-    /// Public validation fee in atomic units.
-    pub fee: u128,
     /// Last block height at which the action is valid.
     pub expiry_height: u64,
 }
@@ -6789,6 +8957,7 @@ pub struct OrchardHalo2ActionsStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MoneroFcmpPlusPlusStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -6796,24 +8965,20 @@ pub struct MoneroFcmpPlusPlusStatementV1 {
     pub asset_definition_id: AssetDefinitionId,
     /// FCMP++ output-set namespace.
     pub pool_id: PrivacyPoolIdV1,
-    /// Canonical full-output-set root.
-    pub output_set_root: PrivacyRootV1,
+    /// Canonical typed full-output-set root.
+    pub output_set_root: PrivacyFcmpTreeRootV1,
     /// Epoch at which the output-set root was canonical.
     pub root_epoch: u64,
-    /// Resulting complete output-set root.
-    pub next_output_set_root: PrivacyRootV1,
-    /// Successor epoch committed with `next_output_set_root`.
-    pub next_output_set_root_epoch: u64,
-    /// Commitments to the consumed outputs.
-    pub input_commitments: Vec<PrivacyCommitmentV1>,
-    /// Link tags corresponding one-to-one with consumed outputs.
-    pub link_tags: Vec<PrivacyNullifierV1>,
-    /// Commitments to new outputs.
-    pub output_commitments: Vec<PrivacyCommitmentV1>,
-    /// Encrypted new outputs, in commitment order.
-    pub encrypted_outputs: Vec<PrivacyEncryptedOutputV1>,
-    /// Public validation fee in atomic units.
-    pub fee: u128,
+    /// Complete public inputs for each hidden consumed output.
+    pub inputs: Vec<PrivacyFcmpInputPublicV1>,
+    /// Complete new output tuples in canonical append order.
+    ///
+    /// Validators derive the successor typed root and epoch from these tuples
+    /// and the authoritative mixed-radix frontier. A caller-selected successor
+    /// is intentionally unrepresentable.
+    pub outputs: Vec<PrivacyFcmpOutputTupleV1>,
+    /// Encrypted new outputs, aligned one-to-one with `outputs`.
+    pub encrypted_outputs: Vec<PrivacyFcmpEncryptedOutputV1>,
 }
 
 /// Native IVM private-note execution statement.
@@ -6822,6 +8987,7 @@ pub struct MoneroFcmpPlusPlusStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -6831,26 +8997,50 @@ pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     pub pool_id: PrivacyPoolIdV1,
     /// Exact private IVM program identifier.
     pub program_id: PrivacyProgramIdV1,
+    /// Digest of the exact canonical private-program action and public inputs.
+    pub action_digest: PrivacyActionDigestV1,
     /// Canonical private-note state root.
     pub state_root: PrivacyRootV1,
     /// Epoch at which `state_root` was canonical.
     pub root_epoch: u64,
-    /// Resulting private-note program-state root.
-    pub next_state_root: PrivacyRootV1,
-    /// Successor epoch committed with `next_state_root`.
-    pub next_state_root_epoch: u64,
     /// Consumed note nullifiers.
     pub nullifiers: Vec<PrivacyNullifierV1>,
-    /// New note commitments.
+    /// New note commitments in canonical append order.
+    ///
+    /// Validators derive the successor program-state root and epoch from these
+    /// commitments and the authoritative compact frontier. A caller-selected
+    /// successor is intentionally unrepresentable.
     pub output_commitments: Vec<PrivacyCommitmentV1>,
     /// Encrypted new notes, in commitment order.
     pub encrypted_outputs: Vec<PrivacyEncryptedOutputV1>,
     /// Public value balance in atomic units.
     pub value_balance: PrivacyValueBalanceV1,
-    /// Public validation fee in atomic units.
-    pub fee: u128,
     /// Ledger epoch bound into private program execution.
     pub execution_epoch: u64,
+}
+
+impl IrohaIvmPrivateNoteStarkStatementV1 {
+    /// Compute the action digest with its self-authenticating field normalized
+    /// to zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if canonical statement encoding unexpectedly
+    /// fails.
+    pub fn computed_action_digest(&self) -> Result<PrivacyActionDigestV1, norito::Error> {
+        let mut normalized = self.clone();
+        normalized.action_digest = PrivacyActionDigestV1::new([0; 32]);
+        let encoded = norito::to_bytes(&normalized)?;
+        let mut hasher = Sha256::new();
+        hasher.update(IVM_PRIVATE_NOTE_ACTION_DIGEST_DOMAIN_V1);
+        hasher.update(
+            u64::try_from(encoded.len())
+                .expect("Norito output length fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(encoded);
+        Ok(PrivacyActionDigestV1::new(hasher.finalize().into()))
+    }
 }
 
 /// Post-quantum authorization profile required by PQ-MASP v0.
@@ -6859,7 +9049,10 @@ pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "authorization", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "authorization", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyPqAuthorizationProfileV1 {
     /// ML-DSA-65 transaction authorization.
     MlDsa65,
@@ -6871,7 +9064,10 @@ pub enum PrivacyPqAuthorizationProfileV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "encryption", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "encryption", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyPqNoteEncryptionProfileV1 {
     /// ML-KEM-768 key establishment with XChaCha20-Poly1305 payload encryption.
     MlKem768XChaCha20Poly1305,
@@ -6883,6 +9079,7 @@ pub enum PrivacyPqNoteEncryptionProfileV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PqMaspStarkStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -6894,25 +9091,24 @@ pub struct PqMaspStarkStatementV1 {
     pub anchor: PrivacyRootV1,
     /// Epoch at which `anchor` was canonical.
     pub anchor_epoch: u64,
-    /// Resulting note-commitment tree anchor.
-    pub next_anchor: PrivacyRootV1,
-    /// Successor epoch committed with `next_anchor`.
-    pub next_anchor_epoch: u64,
     /// Consumed-note nullifiers.
     pub nullifiers: Vec<PrivacyNullifierV1>,
-    /// New note commitments.
+    /// New note commitments in canonical append order.
+    ///
+    /// Validators derive the successor anchor and epoch from these
+    /// commitments and the authoritative compact frontier. A caller-selected
+    /// successor is intentionally unrepresentable.
     pub output_commitments: Vec<PrivacyCommitmentV1>,
     /// ML-KEM-derived encrypted output notes, in commitment order.
     pub encrypted_outputs: Vec<PrivacyEncryptedOutputV1>,
-    /// Public validation fee in atomic units.
-    pub fee: u128,
     /// Required transaction-authorization profile.
     pub authorization_profile: PrivacyPqAuthorizationProfileV1,
     /// Digest of the authorized ML-DSA key.
     pub authorization_key_digest: PrivacyAuthorizationKeyDigestV1,
     /// Required note-encryption profile.
     pub note_encryption_profile: PrivacyPqNoteEncryptionProfileV1,
-    /// Digest of the wallet note-encryption key.
+    /// Digest of the ordered `(recipient key, ML-KEM encapsulation)` pairs for
+    /// every encrypted output.
     pub note_encryption_key_digest: PrivacyNoteEncryptionKeyDigestV1,
     /// Ledger epoch bound into authorization.
     pub authorization_epoch: u64,
@@ -6920,11 +9116,15 @@ pub struct PqMaspStarkStatementV1 {
 
 /// Protocol-typed canonical privacy statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[norito(schema_name = "iroha.privacy.statement.v1")]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "protocol", content = "statement"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "protocol", content = "statement", deny_unknown_fields)
+)]
 pub enum PrivacyStatementV1 {
     /// ZK-ACE post-quantum authorization statement.
     ZkAcePqAuthorizationV0(ZkAcePqAuthorizationStatementV1),
@@ -7023,7 +9223,7 @@ impl PrivacyStatementV1 {
     ///
     /// Returns a Norito encoding error if canonical statement encoding fails.
     pub fn digest(&self) -> Result<PrivacyStatementDigestV1, norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(PRIVACY_STATEMENT_DIGEST_DOMAIN_V1);
         hasher.update(
@@ -7333,6 +9533,15 @@ fn validate_zk_ams_provision_account(
 fn validate_vega(
     statement: &VegaExistingCredentialStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
+    require_nonzero_id(statement.issuer_id.is_zero(), PrivacyTypedFieldV1::IssuerId)?;
+    require_epoch(
+        statement.issuer_record_epoch,
+        PrivacyEpochFieldV1::VegaIssuerRecord,
+    )?;
+    require_nonzero_id(
+        statement.issuer_record_digest.is_zero(),
+        PrivacyTypedFieldV1::VegaIssuerRecordDigest,
+    )?;
     if statement.issuer_public_key.is_zero() {
         return Err(PrivacyStatementValidationError::ZeroP256Point { index: 0 });
     }
@@ -7435,6 +9644,14 @@ fn validate_zk_x509_governance_bindings(
         PrivacyEpochFieldV1::X509CertificatePolicyRecord,
     )?;
     require_nonzero_id(
+        statement.crl_record_digest.is_zero(),
+        PrivacyTypedFieldV1::X509CrlRecordDigest,
+    )?;
+    require_epoch(
+        statement.crl_record_epoch,
+        PrivacyEpochFieldV1::X509CrlRecord,
+    )?;
+    require_nonzero_id(
         statement.subject_public_key_digest.is_zero(),
         PrivacyTypedFieldV1::CertificateKeyDigest,
     )?;
@@ -7446,14 +9663,7 @@ fn validate_zk_x509_governance_bindings(
         statement.ca_membership_root_epoch,
         PrivacyEpochFieldV1::CertificateAuthorityMembership,
     )?;
-    require_nonzero_id(
-        statement.crl_nonmembership_root.is_zero(),
-        PrivacyTypedFieldV1::RevocationRoot,
-    )?;
-    require_epoch(
-        statement.crl_nonmembership_root_epoch,
-        PrivacyEpochFieldV1::Revocation,
-    )
+    Ok(())
 }
 
 fn validate_zk_x509_usage_and_disclosures(
@@ -7509,42 +9719,10 @@ fn validate_zk_x509_usage_and_disclosures(
             );
         }
     }
-    Ok(())
-}
-
-fn validate_zk_x509_certificate_shape(
-    statement: &IrohaZkX509StarkP256StatementV1,
-) -> Result<(), PrivacyStatementValidationError> {
-    validate_validity_epochs(
-        statement.not_before_unix_seconds,
-        statement.not_after_unix_seconds,
-        statement.validation_unix_seconds,
+    validate_zk_x509_presentation_window(
+        statement.presentation_not_before_unix_seconds,
+        statement.presentation_not_after_unix_seconds,
     )?;
-    if statement.chain_depth == 0 || statement.chain_depth > ZK_X509_MAX_CHAIN_DEPTH_V1 {
-        return Err(PrivacyStatementValidationError::InvalidX509ChainDepth {
-            depth: statement.chain_depth,
-            max: ZK_X509_MAX_CHAIN_DEPTH_V1,
-        });
-    }
-    if statement.leaf_certificate_bytes == 0
-        || statement.leaf_certificate_bytes > ZK_X509_MAX_CERTIFICATE_BYTES_V1
-    {
-        return Err(
-            PrivacyStatementValidationError::InvalidX509LeafCertificateSize {
-                bytes: statement.leaf_certificate_bytes,
-                max: ZK_X509_MAX_CERTIFICATE_BYTES_V1,
-            },
-        );
-    }
-    if statement.chain_certificate_bytes < statement.leaf_certificate_bytes
-        || statement.chain_certificate_bytes > ZK_X509_MAX_CHAIN_BYTES_V1
-    {
-        return Err(PrivacyStatementValidationError::InvalidX509ChainSize {
-            bytes: statement.chain_certificate_bytes,
-            leaf_bytes: statement.leaf_certificate_bytes,
-            max: ZK_X509_MAX_CHAIN_BYTES_V1,
-        });
-    }
     Ok(())
 }
 
@@ -7553,12 +9731,31 @@ fn validate_zk_x509(
 ) -> Result<(), PrivacyStatementValidationError> {
     validate_zk_x509_governance_bindings(statement)?;
     validate_zk_x509_usage_and_disclosures(statement)?;
-    validate_zk_x509_certificate_shape(statement)?;
     require_nonzero_id(
         statement.wallet_challenge.is_zero(),
         PrivacyTypedFieldV1::ReaderChallenge,
     )?;
     require_nullifier(statement.certificate_nullifier, 0)
+}
+
+fn validate_zk_x509_presentation_window(
+    start: u64,
+    end: u64,
+) -> Result<(), PrivacyStatementValidationError> {
+    if end <= start
+        || end
+            .checked_sub(start)
+            .is_none_or(|seconds| seconds > ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1)
+    {
+        return Err(
+            PrivacyStatementValidationError::InvalidX509PresentationWindow {
+                start,
+                end,
+                max_seconds: ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1,
+            },
+        );
+    }
+    Ok(())
 }
 
 fn validate_jindo(
@@ -7770,45 +9967,126 @@ fn validate_fcmp(
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
     require_nonzero_id(statement.pool_id.is_zero(), PrivacyTypedFieldV1::PoolId)?;
-    require_nonzero_id(
-        statement.output_set_root.is_zero(),
-        PrivacyTypedFieldV1::Root,
-    )?;
+    statement
+        .output_set_root
+        .validate()
+        .map_err(PrivacyStatementValidationError::InvalidFcmpTreeRoot)?;
     require_epoch(statement.root_epoch, PrivacyEpochFieldV1::Root)?;
-    validate_next_root_transition(
-        statement.output_set_root,
-        statement.root_epoch,
-        statement.next_output_set_root,
-        statement.next_output_set_root_epoch,
-        PrivacyRootTransitionFieldV1::OutputSet,
-    )?;
-    validate_commitments_with_max(
-        &statement.input_commitments,
-        true,
-        FCMP_MAX_INPUTS_V1.min(limits.max_commitments_per_action),
-    )?;
-    validate_nullifiers_with_max(
-        &statement.link_tags,
-        true,
-        FCMP_MAX_INPUTS_V1.min(limits.max_nullifiers_per_action),
-    )?;
-    if statement.input_commitments.len() != statement.link_tags.len() {
-        return Err(PrivacyStatementValidationError::InputLinkTagCountMismatch {
-            inputs: u32_len(statement.input_commitments.len())?,
-            link_tags: u32_len(statement.link_tags.len())?,
+    let max_inputs = FCMP_MAX_INPUTS_V1
+        .min(limits.max_commitments_per_action)
+        .min(limits.max_nullifiers_per_action);
+    let input_count = u32_len(statement.inputs.len())?;
+    if input_count == 0 || input_count > max_inputs {
+        return Err(PrivacyStatementValidationError::InvalidFcmpInputCount {
+            count: input_count,
+            max: max_inputs,
         });
     }
-    validate_commitments_with_max(
-        &statement.output_commitments,
-        true,
-        FCMP_MAX_OUTPUTS_V1.min(limits.max_commitments_per_action),
-    )?;
-    validate_encrypted_outputs(
+    for (index, input) in statement.inputs.iter().copied().enumerate() {
+        let canonical_index = u32_index(index)?;
+        input.validate_nonzero().map_err(|source| {
+            PrivacyStatementValidationError::InvalidFcmpInput {
+                index: canonical_index,
+                source,
+            }
+        })?;
+        if statement.inputs[..index]
+            .iter()
+            .any(|earlier| earlier.key_image == input.key_image)
+        {
+            return Err(PrivacyStatementValidationError::DuplicateFcmpKeyImage {
+                index: canonical_index,
+            });
+        }
+        if statement.inputs[..index]
+            .iter()
+            .any(|earlier| earlier.pseudo_out == input.pseudo_out)
+        {
+            return Err(PrivacyStatementValidationError::DuplicateFcmpPseudoOut {
+                index: canonical_index,
+            });
+        }
+    }
+
+    let max_outputs = FCMP_MAX_OUTPUTS_V1.min(limits.max_commitments_per_action);
+    let output_count = u32_len(statement.outputs.len())?;
+    if output_count == 0 || output_count > max_outputs {
+        return Err(PrivacyStatementValidationError::InvalidFcmpOutputCount {
+            count: output_count,
+            max: max_outputs,
+        });
+    }
+    for (index, output) in statement.outputs.iter().copied().enumerate() {
+        let canonical_index = u32_index(index)?;
+        output.validate_nonzero().map_err(|source| {
+            PrivacyStatementValidationError::InvalidFcmpOutput {
+                index: canonical_index,
+                source,
+            }
+        })?;
+        let output_id = output.output_id();
+        if statement.outputs[..index]
+            .iter()
+            .copied()
+            .any(|earlier| earlier.output_id() == output_id)
+        {
+            return Err(PrivacyStatementValidationError::DuplicateFcmpOutputId {
+                index: canonical_index,
+            });
+        }
+    }
+    validate_fcmp_encrypted_outputs(
         &statement.encrypted_outputs,
-        &statement.output_commitments,
-        true,
-        limits,
+        &statement.outputs,
+        max_outputs,
     )
+}
+
+fn validate_fcmp_encrypted_outputs(
+    encrypted_outputs: &[PrivacyFcmpEncryptedOutputV1],
+    outputs: &[PrivacyFcmpOutputTupleV1],
+    max: u32,
+) -> Result<(), PrivacyStatementValidationError> {
+    if encrypted_outputs.is_empty() {
+        return Err(PrivacyStatementValidationError::MissingEncryptedOutput);
+    }
+    let count = u32_len(encrypted_outputs.len())?;
+    if count > max {
+        return Err(PrivacyStatementValidationError::TooManyEncryptedOutputs { count, max });
+    }
+    if encrypted_outputs.len() != outputs.len() {
+        return Err(
+            PrivacyStatementValidationError::FcmpEncryptedOutputCountMismatch {
+                encrypted_outputs: count,
+                outputs: u32_len(outputs.len())?,
+            },
+        );
+    }
+    for (index, (encrypted_output, output)) in encrypted_outputs.iter().zip(outputs).enumerate() {
+        let index = u32_index(index)?;
+        if encrypted_output.recipient.is_zero() {
+            return Err(PrivacyStatementValidationError::ZeroEncryptedOutputRecipient { index });
+        }
+        if encrypted_output.ephemeral_public_key.is_zero() {
+            return Err(PrivacyStatementValidationError::ZeroEncryptedOutputEphemeralKey { index });
+        }
+        if encrypted_output.output_id != output.output_id() {
+            return Err(PrivacyStatementValidationError::FcmpEncryptedOutputIdMismatch { index });
+        }
+        if encrypted_output.ciphertext.len() != PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1
+            || encrypted_output.ciphertext.get(..4)
+                != Some(PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1.as_slice())
+            || encrypted_output.ciphertext[4..4 + PRIVACY_FCMP_ENCRYPTED_OUTPUT_NONCE_BYTES_V1]
+                .iter()
+                .all(|byte| *byte == 0)
+            || encrypted_output.ciphertext[4 + PRIVACY_FCMP_ENCRYPTED_OUTPUT_NONCE_BYTES_V1..]
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(PrivacyStatementValidationError::InvalidFcmpEncryptedOutputCodec { index });
+        }
+    }
+    Ok(())
 }
 
 fn validate_ivm_private_note(
@@ -7820,16 +10098,26 @@ fn validate_ivm_private_note(
         statement.program_id.is_zero(),
         PrivacyTypedFieldV1::ProgramId,
     )?;
+    require_nonzero_id(
+        statement.action_digest.is_zero(),
+        PrivacyTypedFieldV1::ActionDigest,
+    )?;
+    let computed_action_digest = statement
+        .computed_action_digest()
+        .map_err(|_| PrivacyStatementValidationError::ActionDigestEncodingFailed)?;
+    if statement.action_digest != computed_action_digest {
+        return Err(PrivacyStatementValidationError::ActionDigestMismatch);
+    }
     require_nonzero_id(statement.state_root.is_zero(), PrivacyTypedFieldV1::Root)?;
     require_epoch(statement.root_epoch, PrivacyEpochFieldV1::Root)?;
-    validate_next_root_transition(
-        statement.state_root,
-        statement.root_epoch,
-        statement.next_state_root,
-        statement.next_state_root_epoch,
-        PrivacyRootTransitionFieldV1::ProgramState,
-    )?;
     require_epoch(statement.execution_epoch, PrivacyEpochFieldV1::Execution)?;
+    if statement.execution_epoch != statement.root_epoch {
+        return Err(PrivacyStatementValidationError::EpochBindingMismatch {
+            field: PrivacyEpochFieldV1::Execution,
+            root_epoch: statement.root_epoch,
+            bound_epoch: statement.execution_epoch,
+        });
+    }
     statement.value_balance.validate()?;
     validate_nullifiers_with_max(
         &statement.nullifiers,
@@ -7846,7 +10134,8 @@ fn validate_ivm_private_note(
         &statement.output_commitments,
         true,
         limits,
-    )
+    )?;
+    validate_ivm_private_encrypted_outputs(&statement.encrypted_outputs)
 }
 
 fn validate_pq_masp(
@@ -7856,17 +10145,17 @@ fn validate_pq_masp(
     require_nonzero_id(statement.pool_id.is_zero(), PrivacyTypedFieldV1::PoolId)?;
     require_nonzero_id(statement.anchor.is_zero(), PrivacyTypedFieldV1::Root)?;
     require_epoch(statement.anchor_epoch, PrivacyEpochFieldV1::Root)?;
-    validate_next_root_transition(
-        statement.anchor,
-        statement.anchor_epoch,
-        statement.next_anchor,
-        statement.next_anchor_epoch,
-        PrivacyRootTransitionFieldV1::NoteCommitmentAnchor,
-    )?;
     require_epoch(
         statement.authorization_epoch,
         PrivacyEpochFieldV1::Authorization,
     )?;
+    if statement.authorization_epoch != statement.anchor_epoch {
+        return Err(PrivacyStatementValidationError::EpochBindingMismatch {
+            field: PrivacyEpochFieldV1::Authorization,
+            root_epoch: statement.anchor_epoch,
+            bound_epoch: statement.authorization_epoch,
+        });
+    }
     require_nonzero_id(
         statement.authorization_key_digest.is_zero(),
         PrivacyTypedFieldV1::AuthorizationKeyDigest,
@@ -7891,24 +10180,6 @@ fn validate_pq_masp(
         true,
         limits,
     )
-}
-
-fn validate_validity_epochs(
-    start: u64,
-    end: u64,
-    current: u64,
-) -> Result<(), PrivacyStatementValidationError> {
-    require_epoch(start, PrivacyEpochFieldV1::ValidityStart)?;
-    require_epoch(end, PrivacyEpochFieldV1::ValidityEnd)?;
-    require_epoch(current, PrivacyEpochFieldV1::Presentation)?;
-    if end <= start || current < start || current >= end {
-        return Err(PrivacyStatementValidationError::InvalidValidityWindow {
-            start,
-            end,
-            current,
-        });
-    }
-    Ok(())
 }
 
 fn validate_nullifiers_with_max(
@@ -7998,6 +10269,29 @@ fn validate_encrypted_outputs(
         }
         if output.ciphertext.iter().all(|byte| *byte == 0) {
             return Err(PrivacyStatementValidationError::AllZeroEncryptedOutput { index });
+        }
+    }
+    Ok(())
+}
+
+fn validate_ivm_private_encrypted_outputs(
+    outputs: &[PrivacyEncryptedOutputV1],
+) -> Result<(), PrivacyStatementValidationError> {
+    for (index, output) in outputs.iter().enumerate() {
+        let nonce_end = 4 + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1;
+        if output.ciphertext.len() != PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1
+            || output.ciphertext.get(..4)
+                != Some(PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1.as_slice())
+            || output.ciphertext[4..nonce_end]
+                .iter()
+                .all(|byte| *byte == 0)
+            || output.ciphertext[nonce_end..].iter().all(|byte| *byte == 0)
+        {
+            return Err(
+                PrivacyStatementValidationError::InvalidIvmPrivateEncryptedOutputCodec {
+                    index: u32_index(index)?,
+                },
+            );
         }
     }
     Ok(())
@@ -8211,12 +10505,12 @@ fn validate_fcmp_activation_statement(
 ) -> Result<(), PrivacyActivationStatementLimitsError> {
     validate_activation_statement_len(
         PrivacyActivationLimitFieldV1::FcmpInputCount,
-        statement.input_commitments.len(),
+        statement.inputs.len(),
         limits.max_input_count,
     )?;
     validate_activation_statement_len(
         PrivacyActivationLimitFieldV1::FcmpOutputCount,
-        statement.output_commitments.len(),
+        statement.outputs.len(),
         limits.max_output_count,
     )
 }
@@ -8368,7 +10662,10 @@ impl PrivacyProofBytesV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "action", content = "proof"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "action", content = "proof", deny_unknown_fields)
+)]
 pub enum IrohaZkAmsProofV1 {
     /// Setup-free masked Relaxed Spartan batch-admission proof.
     MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1),
@@ -8413,11 +10710,15 @@ impl IrohaZkAmsProofV1 {
 
 /// Protocol-typed native proof payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[norito(schema_name = "iroha.privacy.proof.v1")]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "protocol", content = "proof"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "protocol", content = "proof", deny_unknown_fields)
+)]
 pub enum PrivacyProofV1 {
     /// ZK-ACE post-quantum authorization proof.
     ZkAcePqAuthorizationV0(PrivacyProofBytesV1),
@@ -8540,6 +10841,10 @@ pub enum PrivacyTypedFieldV1 {
     X509TrustAnchorRecordDigest,
     /// Exact immutable X.509 certificate-policy record digest.
     X509CertificatePolicyRecordDigest,
+    /// Exact immutable X.509 signed-CRL record digest.
+    X509CrlRecordDigest,
+    /// Exact immutable Vega issuer-key/policy record digest.
+    VegaIssuerRecordDigest,
     /// Public Vega Figure 9 device-authentication digest `H_dev`.
     VegaDeviceAuthenticationDigest,
     /// ISO 18013-5 reader challenge.
@@ -8548,6 +10853,8 @@ pub enum PrivacyTypedFieldV1 {
     SessionTranscriptDigest,
     /// Private IVM program identifier.
     ProgramId,
+    /// Private IVM action digest.
+    ActionDigest,
     /// Post-quantum authorization-key digest.
     AuthorizationKeyDigest,
     /// Post-quantum note-encryption-key digest.
@@ -8563,12 +10870,16 @@ pub enum PrivacyTypedFieldV1 {
 pub enum PrivacyEpochFieldV1 {
     /// Commitment-root epoch.
     Root,
+    /// Immutable Vega issuer-key/policy revision epoch.
+    VegaIssuerRecord,
     /// X.509 certificate-authority membership epoch.
     CertificateAuthorityMembership,
     /// Immutable X.509 trust-anchor revision epoch.
     X509TrustAnchorRecord,
     /// Immutable X.509 certificate-policy revision epoch.
     X509CertificatePolicyRecord,
+    /// Immutable X.509 signed-CRL revision epoch.
+    X509CrlRecord,
     /// Revocation-state epoch.
     Revocation,
     /// Committed issuer-policy record epoch.
@@ -8594,12 +10905,8 @@ pub enum PrivacyRootTransitionFieldV1 {
     PgcAccountState,
     /// ZK-AMS admitted-identity registry.
     AccountRegistry,
-    /// Orchard or PQ-MASP note-commitment anchor.
-    NoteCommitmentAnchor,
     /// FCMP++ complete output set.
     OutputSet,
-    /// Native IVM private program state.
-    ProgramState,
 }
 
 /// Twisted-ElGamal ciphertext component selected by validation diagnostics.
@@ -8666,11 +10973,29 @@ pub enum PrivacyStatementValidationError {
         /// Invalid field.
         field: PrivacyTypedFieldV1,
     },
+    /// The private-IVM action projection could not be canonically encoded.
+    #[error("private IVM action digest projection failed canonical encoding")]
+    ActionDigestEncodingFailed,
+    /// The supplied private-IVM action digest does not authenticate the exact
+    /// canonical action projection.
+    #[error("private IVM action digest does not match the canonical action projection")]
+    ActionDigestMismatch,
     /// A protocol epoch or height is zero.
     #[error("privacy statement epoch or height {field:?} must be non-zero")]
     ZeroEpoch {
         /// Invalid epoch or height field.
         field: PrivacyEpochFieldV1,
+    },
+    /// A protocol-specific execution or authorization epoch differs from the
+    /// authoritative root epoch consumed by the same action.
+    #[error("privacy statement {field:?} epoch {bound_epoch} differs from root epoch {root_epoch}")]
+    EpochBindingMismatch {
+        /// Execution or authorization binding selected by the statement.
+        field: PrivacyEpochFieldV1,
+        /// Epoch of the authoritative root consumed by the action.
+        root_epoch: u64,
+        /// Observed execution or authorization epoch.
+        bound_epoch: u64,
     },
     /// A proof-managed successor root is zero.
     #[error("privacy root transition {field:?} has a zero successor root")]
@@ -8761,6 +11086,19 @@ pub enum PrivacyStatementValidationError {
     /// One encrypted output is all zero.
     #[error("privacy statement encrypted output {index} must not be all zero")]
     AllZeroEncryptedOutput {
+        /// Zero-based output index.
+        index: u32,
+    },
+    /// An FCMP++ encrypted output does not use the sole fixed `IFCE` codec.
+    #[error("FCMP++ encrypted output {index} has an invalid canonical codec shape")]
+    InvalidFcmpEncryptedOutputCodec {
+        /// Zero-based output index.
+        index: u32,
+    },
+    /// A private-IVM encrypted output does not use the sole fixed `IPNE`
+    /// codec.
+    #[error("private-IVM encrypted output {index} has an invalid canonical codec shape")]
+    InvalidIvmPrivateEncryptedOutputCodec {
         /// Zero-based output index.
         index: u32,
     },
@@ -8899,18 +11237,6 @@ pub enum PrivacyStatementValidationError {
     /// A ZK-AMS MLSAGS key image is the zero sentinel.
     #[error("ZK-AMS MLSAGS key image must be non-zero")]
     ZeroZkAmsKeyImage,
-    /// Credential validity epochs do not contain the presentation epoch.
-    #[error(
-        "privacy credential validity [{start}, {end}) does not contain current epoch {current}"
-    )]
-    InvalidValidityWindow {
-        /// Inclusive validity start.
-        start: u64,
-        /// Exclusive validity end.
-        end: u64,
-        /// Presentation or validation epoch.
-        current: u64,
-    },
     /// Vega public presentation year is outside the trusted UTC domain.
     #[error("Vega presentation year {year} is outside {min}..={max}")]
     InvalidVegaPresentationYear {
@@ -8981,31 +11307,17 @@ pub enum PrivacyStatementValidationError {
     /// Selective disclosures contain duplicate or reordered indices.
     #[error("X.509 disclosed attributes must be strictly increasing by index")]
     X509DisclosedAttributesNotStrictlyIncreasing,
-    /// X.509 certificate chain depth is outside the approved profile.
-    #[error("X.509 chain depth {depth} is outside 1..={max}")]
-    InvalidX509ChainDepth {
-        /// Observed chain depth.
-        depth: u8,
-        /// Approved maximum.
-        max: u8,
-    },
-    /// X.509 leaf certificate byte length is zero or exceeds the approved bound.
-    #[error("X.509 leaf certificate size {bytes} is outside 1..={max}")]
-    InvalidX509LeafCertificateSize {
-        /// Observed DER byte length.
-        bytes: u32,
-        /// Approved maximum.
-        max: u32,
-    },
-    /// X.509 complete chain byte length is inconsistent or exceeds the approved bound.
-    #[error("X.509 chain size {bytes} must be at least leaf size {leaf_bytes} and at most {max}")]
-    InvalidX509ChainSize {
-        /// Observed combined DER bytes.
-        bytes: u32,
-        /// Declared leaf DER bytes.
-        leaf_bytes: u32,
-        /// Approved combined maximum.
-        max: u32,
+    /// The public presentation window is empty, reversed, or too wide.
+    #[error(
+        "X.509 presentation window [{start}, {end}] must be non-empty and no wider than {max_seconds} seconds"
+    )]
+    InvalidX509PresentationWindow {
+        /// Inclusive presentation start.
+        start: u64,
+        /// Inclusive presentation end.
+        end: u64,
+        /// Closed first-release width ceiling.
+        max_seconds: u64,
     },
     /// The common Jindo evaluation point is not the canonical residue in `[0, p)`.
     #[error("Jindo evaluation point is not a canonical coefficient-field element")]
@@ -9120,13 +11432,74 @@ pub enum PrivacyStatementValidationError {
         /// Exact inclusive maximum.
         max: u128,
     },
-    /// FCMP++ consumed-output and link-tag counts differ.
-    #[error("FCMP++ input count {inputs} differs from link-tag count {link_tags}")]
-    InputLinkTagCountMismatch {
-        /// Consumed input commitment count.
-        inputs: u32,
-        /// Link-tag count.
-        link_tags: u32,
+    /// The typed FCMP++ root has an invalid layer count or zero point.
+    #[error("FCMP++ output-set root is structurally invalid: {0}")]
+    InvalidFcmpTreeRoot(PrivacyFcmpTreeRootValidationErrorV1),
+    /// FCMP++ public-input count is empty or exceeds the effective profile.
+    #[error("FCMP++ input count {count} is outside 1..={max}")]
+    InvalidFcmpInputCount {
+        /// Observed input count.
+        count: u32,
+        /// Effective first-release maximum.
+        max: u32,
+    },
+    /// One FCMP++ public input contains a structurally invalid point.
+    #[error("FCMP++ public input {index} is invalid: {source}")]
+    InvalidFcmpInput {
+        /// Zero-based input index.
+        index: u32,
+        /// Exact structural input failure.
+        source: PrivacyFcmpInputValidationErrorV1,
+    },
+    /// Two FCMP++ public inputs use the same key image.
+    #[error("FCMP++ public input {index} duplicates an earlier key image")]
+    DuplicateFcmpKeyImage {
+        /// Zero-based duplicate input index.
+        index: u32,
+    },
+    /// Two FCMP++ public inputs use the same pseudo output.
+    #[error("FCMP++ public input {index} duplicates an earlier pseudo output")]
+    DuplicateFcmpPseudoOut {
+        /// Zero-based duplicate input index.
+        index: u32,
+    },
+    /// FCMP++ output count is empty or exceeds the effective profile.
+    #[error("FCMP++ output count {count} is outside 1..={max}")]
+    InvalidFcmpOutputCount {
+        /// Observed output count.
+        count: u32,
+        /// Effective first-release maximum.
+        max: u32,
+    },
+    /// One FCMP++ output tuple contains a structurally invalid point.
+    #[error("FCMP++ output tuple {index} is invalid: {source}")]
+    InvalidFcmpOutput {
+        /// Zero-based output index.
+        index: u32,
+        /// Exact structural tuple failure.
+        source: PrivacyFcmpOutputTupleValidationErrorV1,
+    },
+    /// Two FCMP++ outputs derive the same ledger identifier.
+    #[error("FCMP++ output tuple {index} duplicates an earlier output id")]
+    DuplicateFcmpOutputId {
+        /// Zero-based duplicate output index.
+        index: u32,
+    },
+    /// FCMP++ encrypted-output and tuple counts differ.
+    #[error(
+        "FCMP++ encrypted output count {encrypted_outputs} differs from output tuple count {outputs}"
+    )]
+    FcmpEncryptedOutputCountMismatch {
+        /// Encrypted-output count.
+        encrypted_outputs: u32,
+        /// Public output-tuple count.
+        outputs: u32,
+    },
+    /// An FCMP++ encrypted output identifies a different ordered tuple.
+    #[error("FCMP++ encrypted output {index} output id mismatch")]
+    FcmpEncryptedOutputIdMismatch {
+        /// Zero-based output index.
+        index: u32,
     },
     /// Public statement and encrypted outputs exceed the transaction budget.
     #[error("privacy statement and encrypted outputs use {bytes} bytes, exceeding maximum {max}")]
@@ -9171,10 +11544,12 @@ pub enum PrivacyProofValidationError {
 
 /// Complete protocol-bound privacy proof admission envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[norito(schema_name = "iroha.privacy.proof-envelope.v1")]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProofEnvelopeV1 {
     /// Exact protocol identity.
     pub protocol_id: PrivacyProtocolIdV1,
@@ -9610,8 +11985,8 @@ pub enum PrivacyProofEnvelopeValidationError {
     ActivationStatementLimits(PrivacyActivationStatementLimitsError),
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test, feature = "test-fixtures"))]
+mod exact12_fixture {
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair};
@@ -9619,11 +11994,14 @@ mod tests {
     use super::*;
     use crate::{domain::DomainId, name::Name};
 
-    fn raw(seed: u8) -> [u8; 32] {
+    const _: [(); 12] = [(); PrivacyProtocolIdV1::COUNT];
+
+    pub(super) fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
 
-    fn assert_fixed_width_norito<T, const N: usize>(value: &T, raw: &[u8; N])
+    #[cfg(test)]
+    pub(super) fn assert_fixed_width_norito<T, const N: usize>(value: &T, raw: &[u8; N])
     where
         T: norito::core::NoritoSerialize
             + for<'de> norito::core::NoritoDeserialize<'de>
@@ -9663,33 +12041,33 @@ mod tests {
         );
     }
 
-    fn p256_point(seed: u8) -> PrivacyP256PointV1 {
+    pub(super) fn p256_point(seed: u8) -> PrivacyP256PointV1 {
         let mut bytes = [seed; 33];
         bytes[0] = 0x02;
         PrivacyP256PointV1::new(bytes)
     }
 
-    fn p256_ciphertext(seed: u8) -> PrivacyP256CiphertextV1 {
+    pub(super) fn p256_ciphertext(seed: u8) -> PrivacyP256CiphertextV1 {
         PrivacyP256CiphertextV1 {
             left: p256_point(seed),
             right: p256_point(seed.wrapping_add(64)),
         }
     }
 
-    fn account(seed: u8) -> AccountId {
+    pub(super) fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         AccountId::new(key_pair.public_key().clone())
     }
 
-    fn asset_definition_id() -> AssetDefinitionId {
+    pub(super) fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::new(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("asset").expect("asset name"),
         )
     }
 
-    fn context() -> PrivacyStatementContextV1 {
+    pub(super) fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             chain_id: "privacy-test-chain".parse().expect("chain id"),
             action_index: 0,
@@ -9702,17 +12080,19 @@ mod tests {
         }
     }
 
-    fn commitment(seed: u8) -> PrivacyCommitmentV1 {
+    pub(super) fn commitment(seed: u8) -> PrivacyCommitmentV1 {
         PrivacyCommitmentV1::new(raw(seed))
     }
 
-    fn zk_ace_allowlist() -> Vec<AccountId> {
+    #[cfg(test)]
+    pub(super) fn zk_ace_allowlist() -> Vec<AccountId> {
         let mut allowlist = vec![account(13), account(14), account(15)];
         allowlist.sort_unstable();
         allowlist
     }
 
-    fn zk_ace_policy(
+    #[cfg(test)]
+    pub(super) fn zk_ace_policy(
         epoch: u64,
         identity_seed: u8,
         lifecycle: PrivacyZkAcePolicyLifecycleV1,
@@ -9729,14 +12109,16 @@ mod tests {
         .expect("canonical ZK-ACE policy fixture")
     }
 
-    fn redigest_zk_ace_policy(record: &mut PrivacyZkAcePolicyRecordV1) {
+    #[cfg(test)]
+    pub(super) fn redigest_zk_ace_policy(record: &mut PrivacyZkAcePolicyRecordV1) {
         record.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
         record.record_digest = record
             .compute_record_digest()
             .expect("canonical ZK-ACE policy digest material");
     }
 
-    fn zk_x509_trust_anchor(
+    #[cfg(test)]
+    pub(super) fn zk_x509_trust_anchor(
         epoch: u64,
         trust_store_seed: u8,
         previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
@@ -9746,13 +12128,20 @@ mod tests {
             PrivacyIssuerIdV1::new(raw(61)),
             epoch,
             PrivacyX509TrustStoreDigestV1::new(raw(trust_store_seed)),
+            PrivacyRootV1::new(raw(trust_store_seed.wrapping_add(1))),
+            if lifecycle == PrivacyZkX509RecordLifecycleV1::Revoked {
+                epoch.saturating_sub(1)
+            } else {
+                epoch
+            },
             previous_record_digest,
             lifecycle,
         )
         .expect("canonical X.509 trust-anchor fixture")
     }
 
-    fn zk_x509_certificate_policy(
+    #[cfg(test)]
+    pub(super) fn zk_x509_certificate_policy(
         epoch: u64,
         policy_seed: u8,
         disclosures: Vec<u8>,
@@ -9781,22 +12170,47 @@ mod tests {
         .expect("canonical X.509 certificate-policy fixture")
     }
 
-    fn nullifier(seed: u8) -> PrivacyNullifierV1 {
+    #[cfg(test)]
+    pub(super) fn zk_x509_crl(
+        epoch: u64,
+        crl_der_seed: u8,
+        this_update_unix_seconds: u64,
+        _revoked_root_seed: u8,
+        previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509CrlRecordV1 {
+        PrivacyZkX509CrlRecordV1::new(
+            PrivacyIssuerIdV1::new(raw(61)),
+            PrivacyPolicyIdV1::new(raw(62)),
+            epoch,
+            epoch,
+            PrivacyX509CrlDerDigestV1::new(raw(crl_der_seed)),
+            PrivacyX509CrlIssuerSpkiDigestV1::new(raw(74)),
+            this_update_unix_seconds,
+            this_update_unix_seconds + 300,
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 signed-CRL fixture")
+    }
+
+    pub(super) fn nullifier(seed: u8) -> PrivacyNullifierV1 {
         PrivacyNullifierV1::new(raw(seed))
     }
 
-    fn zk_ams_seed_key(seed: u8) -> PrivacyZkAmsSeedPublicKeyV1 {
+    pub(super) fn zk_ams_seed_key(seed: u8) -> PrivacyZkAmsSeedPublicKeyV1 {
         PrivacyZkAmsSeedPublicKeyV1::new(raw(seed))
     }
 
-    fn zk_ams_anchor(seed: u8) -> PrivacyZkAmsAdmissionAnchorV1 {
+    pub(super) fn zk_ams_anchor(seed: u8) -> PrivacyZkAmsAdmissionAnchorV1 {
         PrivacyZkAmsAdmissionAnchorV1 {
             phc_hash: PrivacyZkAmsPhcHashV1::new(raw(seed)),
             seed_public_key: zk_ams_seed_key(seed.wrapping_add(32)),
         }
     }
 
-    fn zk_ams_provision_statement(ring_size: u8) -> PrivacyStatementV1 {
+    #[cfg(test)]
+    pub(super) fn zk_ams_provision_statement(ring_size: u8) -> PrivacyStatementV1 {
         PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
             context: context(),
             issuer_id: PrivacyIssuerIdV1::new(raw(40)),
@@ -9816,28 +12230,74 @@ mod tests {
         })
     }
 
-    fn jindo_field(seed: u8) -> PrivacyJindoFieldElementV1 {
+    pub(super) fn jindo_field(seed: u8) -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1];
         encoding[0] = seed;
         PrivacyJindoFieldElementV1::new(encoding)
     }
 
-    fn jindo_commitment(seed: u8) -> PrivacyJindoLatticeCommitmentV1 {
+    pub(super) fn jindo_commitment(seed: u8) -> PrivacyJindoLatticeCommitmentV1 {
         let mut encoding = vec![0; IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1];
         encoding[..4].copy_from_slice(&i32::from(seed).to_le_bytes());
         PrivacyJindoLatticeCommitmentV1::new(encoding)
     }
 
-    fn encrypted_output(commitment_seed: u8, recipient_seed: u8) -> PrivacyEncryptedOutputV1 {
+    pub(super) fn encrypted_output(
+        commitment_seed: u8,
+        recipient_seed: u8,
+    ) -> PrivacyEncryptedOutputV1 {
+        let mut ciphertext = vec![0xA5; PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1];
+        ciphertext[..4].copy_from_slice(&PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1);
+        ciphertext[4] = recipient_seed;
         PrivacyEncryptedOutputV1 {
             recipient: PrivacyRecipientIdV1::new(raw(recipient_seed)),
             ephemeral_public_key: PrivacyEncryptionKeyV1::new(raw(recipient_seed.wrapping_add(1))),
             commitment: commitment(commitment_seed),
-            ciphertext: vec![recipient_seed, commitment_seed, 0xA5],
+            ciphertext,
         }
     }
 
-    fn orchard_action(seed: u8) -> PrivacyOrchardActionV1 {
+    pub(super) fn fcmp_output(seed: u8) -> PrivacyFcmpOutputTupleV1 {
+        PrivacyFcmpOutputTupleV1 {
+            output_key: raw(seed),
+            linking_tag_generator: raw(seed.wrapping_add(1)),
+            amount_commitment: raw(seed.wrapping_add(2)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn sorted_fcmp_outputs(seeds: &[u8]) -> Vec<PrivacyFcmpOutputTupleV1> {
+        let mut outputs = seeds.iter().copied().map(fcmp_output).collect::<Vec<_>>();
+        outputs.sort_unstable_by_key(|output| output.output_id());
+        outputs
+    }
+
+    pub(super) fn fcmp_input(seed: u8) -> PrivacyFcmpInputPublicV1 {
+        PrivacyFcmpInputPublicV1 {
+            output_key_tilde: raw(seed),
+            linking_tag_generator_tilde: raw(seed.wrapping_add(1)),
+            rerandomization_commitment: raw(seed.wrapping_add(2)),
+            pseudo_out: raw(seed.wrapping_add(3)),
+            key_image: PrivacyFcmpKeyImageV1::new(raw(seed.wrapping_add(4))),
+        }
+    }
+
+    pub(super) fn fcmp_encrypted_output(
+        output: PrivacyFcmpOutputTupleV1,
+        recipient_seed: u8,
+    ) -> PrivacyFcmpEncryptedOutputV1 {
+        let mut ciphertext = vec![0xA5; PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1];
+        ciphertext[..4].copy_from_slice(&PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1);
+        ciphertext[4] = recipient_seed;
+        PrivacyFcmpEncryptedOutputV1 {
+            recipient: PrivacyRecipientIdV1::new(raw(recipient_seed)),
+            ephemeral_public_key: PrivacyEncryptionKeyV1::new(raw(recipient_seed.wrapping_add(1))),
+            output_id: output.output_id(),
+            ciphertext,
+        }
+    }
+
+    pub(super) fn orchard_action(seed: u8) -> PrivacyOrchardActionV1 {
         PrivacyOrchardActionV1 {
             nullifier: raw(seed),
             randomized_key: raw(seed.wrapping_add(1)),
@@ -9849,7 +12309,8 @@ mod tests {
         }
     }
 
-    fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
+    #[cfg(test)]
+    pub(super) fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
         let entries = (0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
             * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1)
             .map(|entry| BootleLanternPolynomialV1 {
@@ -9877,8 +12338,9 @@ mod tests {
             issuer_id: PrivacyIssuerIdV1::new(raw(171)),
             policy_id: PrivacyPolicyIdV1::new(raw(172)),
             epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
             issuer_parameter_id: PrivacyParameterIdV1::new(raw(173)),
-            issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(174)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
             issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
             required_disclosure_bitmap: 0b0001_0010,
             allowed_values,
@@ -9888,7 +12350,11 @@ mod tests {
         record
     }
 
-    fn redigest_bootle_lantern_policy(record: &mut BootleLanternIssuerPolicyV1) {
+    #[cfg(test)]
+    pub(super) fn redigest_bootle_lantern_policy(record: &mut BootleLanternIssuerPolicyV1) {
+        record.issuer_parameter_digest = record
+            .computed_issuer_parameter_digest()
+            .expect("test issuer-parameter digest");
         record.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
         record.record_digest = record
             .computed_record_digest()
@@ -9906,7 +12372,6 @@ mod tests {
                 destination: account(14),
                 asset_definition_id: asset.clone(),
                 amount: 1_000,
-                fee: 2,
                 authorization_epoch: 7,
                 replay_nullifier: nullifier(15),
             }),
@@ -9949,6 +12414,9 @@ mod tests {
             }),
             PrivacyStatementV1::VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1 {
                 context: context(),
+                issuer_id: PrivacyIssuerIdV1::new(raw(49)),
+                issuer_record_epoch: 3,
+                issuer_record_digest: PrivacyVegaIssuerRecordDigestV1::new(raw(51)),
                 document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
                 namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
                 digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
@@ -9980,11 +12448,11 @@ mod tests {
                     raw(70),
                 ),
                 certificate_policy_record_epoch: 4,
+                crl_record_digest: PrivacyZkX509CrlRecordDigestV1::new(raw(73)),
+                crl_record_epoch: 5,
                 subject_public_key_digest: PrivacyCertificateKeyDigestV1::new(raw(63)),
                 ca_membership_root: PrivacyRootV1::new(raw(64)),
                 ca_membership_root_epoch: 10,
-                crl_nonmembership_root: PrivacyRootV1::new(raw(65)),
-                crl_nonmembership_root_epoch: 11,
                 key_usage: PrivacyX509KeyUsageV1 {
                     digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
                     content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
@@ -10005,12 +12473,8 @@ mod tests {
                         attribute_digest: PrivacyAttributeDigestV1::new(raw(72)),
                     },
                 ],
-                not_before_unix_seconds: 1_000,
-                not_after_unix_seconds: 2_000,
-                validation_unix_seconds: 1_500,
-                chain_depth: 3,
-                leaf_certificate_bytes: 2_048,
-                chain_certificate_bytes: 6_144,
+                presentation_not_before_unix_seconds: 1_400,
+                presentation_not_after_unix_seconds: 1_600,
                 wallet_account: account(66),
                 wallet_challenge: PrivacyChallengeV1::new(raw(67)),
                 certificate_nullifier: nullifier(68),
@@ -10059,38 +12523,43 @@ mod tests {
                 anchor_epoch: 13,
                 actions: vec![orchard_action(83)],
                 value_balance: PrivacyValueBalanceV1::balanced(),
-                fee: 2,
                 expiry_height: 10_000,
             }),
-            PrivacyStatementV1::MoneroFcmpPlusPlusV1(MoneroFcmpPlusPlusStatementV1 {
-                context: context(),
-                asset_definition_id: asset.clone(),
-                pool_id: PrivacyPoolIdV1::new(raw(87)),
-                output_set_root: PrivacyRootV1::new(raw(88)),
-                root_epoch: 14,
-                next_output_set_root: PrivacyRootV1::new(raw(93)),
-                next_output_set_root_epoch: 15,
-                input_commitments: vec![commitment(89)],
-                link_tags: vec![nullifier(90)],
-                output_commitments: vec![commitment(91)],
-                encrypted_outputs: vec![encrypted_output(91, 92)],
-                fee: 2,
+            PrivacyStatementV1::MoneroFcmpPlusPlusV1({
+                let output = fcmp_output(91);
+                MoneroFcmpPlusPlusStatementV1 {
+                    context: context(),
+                    asset_definition_id: asset.clone(),
+                    pool_id: PrivacyPoolIdV1::new(raw(87)),
+                    output_set_root: PrivacyFcmpTreeRootV1 {
+                        layers: 1,
+                        point: raw(88),
+                    },
+                    root_epoch: 14,
+                    inputs: vec![fcmp_input(89)],
+                    outputs: vec![output],
+                    encrypted_outputs: vec![fcmp_encrypted_output(output, 92)],
+                }
             }),
-            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(IrohaIvmPrivateNoteStarkStatementV1 {
-                context: context(),
-                asset_definition_id: asset.clone(),
-                pool_id: PrivacyPoolIdV1::new(raw(94)),
-                program_id: PrivacyProgramIdV1::new(raw(95)),
-                state_root: PrivacyRootV1::new(raw(96)),
-                root_epoch: 15,
-                next_state_root: PrivacyRootV1::new(raw(100)),
-                next_state_root_epoch: 16,
-                nullifiers: vec![nullifier(97)],
-                output_commitments: vec![commitment(98)],
-                encrypted_outputs: vec![encrypted_output(98, 99)],
-                value_balance: PrivacyValueBalanceV1::balanced(),
-                fee: 2,
-                execution_epoch: 16,
+            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1({
+                let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
+                    context: context(),
+                    asset_definition_id: asset.clone(),
+                    pool_id: PrivacyPoolIdV1::new(raw(94)),
+                    program_id: PrivacyProgramIdV1::new(raw(95)),
+                    action_digest: PrivacyActionDigestV1::new([0; 32]),
+                    state_root: PrivacyRootV1::new(raw(96)),
+                    root_epoch: 15,
+                    nullifiers: vec![nullifier(97)],
+                    output_commitments: vec![commitment(98)],
+                    encrypted_outputs: vec![encrypted_output(98, 99)],
+                    value_balance: PrivacyValueBalanceV1::balanced(),
+                    execution_epoch: 15,
+                };
+                statement.action_digest = statement
+                    .computed_action_digest()
+                    .expect("compute private-IVM fixture action digest");
+                statement
             }),
             PrivacyStatementV1::PqMaspStarkV0(PqMaspStarkStatementV1 {
                 context: context(),
@@ -10098,23 +12567,20 @@ mod tests {
                 pool_id: PrivacyPoolIdV1::new(raw(101)),
                 anchor: PrivacyRootV1::new(raw(102)),
                 anchor_epoch: 17,
-                next_anchor: PrivacyRootV1::new(raw(106)),
-                next_anchor_epoch: 18,
                 nullifiers: vec![nullifier(103)],
                 output_commitments: vec![commitment(104)],
                 encrypted_outputs: vec![encrypted_output(104, 105)],
-                fee: 2,
                 authorization_profile: PrivacyPqAuthorizationProfileV1::MlDsa65,
                 authorization_key_digest: PrivacyAuthorizationKeyDigestV1::new(raw(107)),
                 note_encryption_profile:
                     PrivacyPqNoteEncryptionProfileV1::MlKem768XChaCha20Poly1305,
                 note_encryption_key_digest: PrivacyNoteEncryptionKeyDigestV1::new(raw(108)),
-                authorization_epoch: 18,
+                authorization_epoch: 17,
             }),
         ]
     }
 
-    fn sample_statements() -> Vec<PrivacyStatementV1> {
+    pub(super) fn sample_statements() -> Vec<PrivacyStatementV1> {
         let asset = asset_definition_id();
         let mut statements = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
         statements.extend(sample_authorization_statements(&asset));
@@ -10123,12 +12589,219 @@ mod tests {
         statements
     }
 
-    fn statement_for(protocol: PrivacyProtocolIdV1) -> PrivacyStatementV1 {
+    #[cfg(test)]
+    pub(super) fn statement_for(protocol: PrivacyProtocolIdV1) -> PrivacyStatementV1 {
         sample_statements()
             .into_iter()
             .find(|statement| statement.protocol_id() == protocol)
             .expect("sample statement for every protocol")
     }
+
+    pub(super) fn proof_for(protocol: PrivacyProtocolIdV1) -> PrivacyProofV1 {
+        let bytes = PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]);
+        match protocol {
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
+                PrivacyProofV1::ZkAcePqAuthorizationV0(bytes)
+            }
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+                PrivacyProofV1::AnonymousPgcKOutOfNV1(bytes)
+            }
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
+                PrivacyProofV1::VeRangeTransparentRangeV1(bytes)
+            }
+            PrivacyProtocolIdV1::IrohaZkAmsV1 => PrivacyProofV1::IrohaZkAmsV1(
+                IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(bytes),
+            ),
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+                PrivacyProofV1::VegaExistingCredentialZkV0(bytes)
+            }
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+                PrivacyProofV1::IrohaZkX509StarkP256V0(bytes)
+            }
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
+                PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(bytes)
+            }
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+                PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes)
+            }
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
+                PrivacyProofV1::OrchardHalo2ActionsV1(bytes)
+            }
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
+                PrivacyProofV1::MoneroFcmpPlusPlusV1(bytes)
+            }
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+                PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(bytes)
+            }
+            PrivacyProtocolIdV1::PqMaspStarkV0 => PrivacyProofV1::PqMaspStarkV0(bytes),
+        }
+    }
+
+    pub(super) fn statement_variant_name(statement: &PrivacyStatementV1) -> &'static str {
+        match statement {
+            PrivacyStatementV1::ZkAcePqAuthorizationV0(_) => "ZkAcePqAuthorizationV0",
+            PrivacyStatementV1::AnonymousPgcKOutOfNV1(_) => "AnonymousPgcKOutOfNV1",
+            PrivacyStatementV1::VeRangeTransparentRangeV1(_) => "VeRangeTransparentRangeV1",
+            PrivacyStatementV1::IrohaZkAmsV1(_) => "IrohaZkAmsV1",
+            PrivacyStatementV1::VegaExistingCredentialZkV0(_) => "VegaExistingCredentialZkV0",
+            PrivacyStatementV1::IrohaZkX509StarkP256V0(_) => "IrohaZkX509StarkP256V0",
+            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(_) => {
+                "IrohaJindoPolynomialCommitmentV0"
+            }
+            PrivacyStatementV1::IrohaBootleLanternAnoncredV1(_) => "IrohaBootleLanternAnoncredV1",
+            PrivacyStatementV1::OrchardHalo2ActionsV1(_) => "OrchardHalo2ActionsV1",
+            PrivacyStatementV1::MoneroFcmpPlusPlusV1(_) => "MoneroFcmpPlusPlusV1",
+            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(_) => "IrohaIvmPrivateNoteStarkV1",
+            PrivacyStatementV1::PqMaspStarkV0(_) => "PqMaspStarkV0",
+        }
+    }
+
+    pub(super) fn proof_variant_name(proof: &PrivacyProofV1) -> &'static str {
+        match proof {
+            PrivacyProofV1::ZkAcePqAuthorizationV0(_) => "ZkAcePqAuthorizationV0",
+            PrivacyProofV1::AnonymousPgcKOutOfNV1(_) => "AnonymousPgcKOutOfNV1",
+            PrivacyProofV1::VeRangeTransparentRangeV1(_) => "VeRangeTransparentRangeV1",
+            PrivacyProofV1::IrohaZkAmsV1(_) => "IrohaZkAmsV1",
+            PrivacyProofV1::VegaExistingCredentialZkV0(_) => "VegaExistingCredentialZkV0",
+            PrivacyProofV1::IrohaZkX509StarkP256V0(_) => "IrohaZkX509StarkP256V0",
+            PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(_) => {
+                "IrohaJindoPolynomialCommitmentV0"
+            }
+            PrivacyProofV1::IrohaBootleLanternAnoncredV1(_) => "IrohaBootleLanternAnoncredV1",
+            PrivacyProofV1::OrchardHalo2ActionsV1(_) => "OrchardHalo2ActionsV1",
+            PrivacyProofV1::MoneroFcmpPlusPlusV1(_) => "MoneroFcmpPlusPlusV1",
+            PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(_) => "IrohaIvmPrivateNoteStarkV1",
+            PrivacyProofV1::PqMaspStarkV0(_) => "PqMaspStarkV0",
+        }
+    }
+
+    fn try_envelope(
+        statement: PrivacyStatementV1,
+    ) -> Result<PrivacyProofEnvelopeV1, norito::Error> {
+        let protocol_id = statement.protocol_id();
+        let context = statement.context().clone();
+        let statement_digest = statement.digest()?;
+        let proof = match &statement {
+            PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
+                action: PrivacyZkAmsActionV1::ProvisionAccount(_),
+                ..
+            }) => {
+                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
+                    PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]),
+                ))
+            }
+            _ => proof_for(protocol_id),
+        };
+        Ok(PrivacyProofEnvelopeV1 {
+            protocol_id,
+            proof_system_id: protocol_id.expected_proof_system(),
+            engine_id: protocol_id.expected_engine(),
+            parameter_id: context.parameter_id,
+            parameter_digest: context.parameter_digest,
+            verifier_digest: context.verifier_digest,
+            statement_schema_digest: context.statement_schema_digest,
+            engine_manifest_digest: context.engine_manifest_digest,
+            statement_digest,
+            statement,
+            proof,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn envelope(statement: PrivacyStatementV1) -> PrivacyProofEnvelopeV1 {
+        try_envelope(statement).expect("fixture statement has a canonical digest")
+    }
+
+    /// One compiled semantic row of the canonical exact-12 cross-SDK fixture.
+    ///
+    /// This test-fixture-only type is derived from actual typed statements,
+    /// proof variants, and canonical Norito envelope bytes. It never parses the
+    /// checked-in TSV and carries no embedded digest constants.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct PrivacyExact12TypedEnvelopeRowV1 {
+        /// Closed protocol identity in canonical discriminant order.
+        pub protocol_id: PrivacyProtocolIdV1,
+        /// Actual typed statement variant selected for the sample.
+        pub statement_variant: &'static str,
+        /// Actual typed proof variant selected for the sample envelope.
+        pub proof_variant: &'static str,
+        /// Digest recomputed from the actual typed sample statement.
+        pub statement_digest: [u8; 32],
+        /// SHA-256 of the actual canonical Norito proof envelope.
+        pub envelope_sha256: [u8; 32],
+    }
+
+    /// Failure to derive the fixed exact-12 semantic fixture from current
+    /// typed values and canonical Norito serialization.
+    #[derive(Debug, Error)]
+    pub enum PrivacyExact12FixtureErrorV1 {
+        /// A typed statement digest or proof-envelope encoding failed.
+        #[error("exact12 typed fixture canonical encoding failed: {0}")]
+        CanonicalEncoding(#[from] norito::Error),
+        /// The fixture constructor no longer produced the closed registry size.
+        #[error("exact12 typed fixture produced {actual} rows instead of 12")]
+        RowCount {
+            /// Number of rows constructed from the current typed fixtures.
+            actual: usize,
+        },
+    }
+
+    /// Recompute all 12 canonical cross-SDK semantic rows from current Rust
+    /// types and canonical Norito serialization.
+    ///
+    /// The helper is available only to tests and builds that explicitly enable
+    /// `iroha_data_model/test-fixtures`; ordinary validator builds do not
+    /// compile this fixture surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a typed statement or envelope cannot be encoded
+    /// canonically, or if the fixture constructor does not produce exactly 12
+    /// rows.
+    pub fn privacy_exact12_typed_envelope_rows_v1()
+    -> Result<[PrivacyExact12TypedEnvelopeRowV1; 12], PrivacyExact12FixtureErrorV1> {
+        let rows = sample_statements()
+            .into_iter()
+            .map(|statement| {
+                let protocol_id = statement.protocol_id();
+                let proof_envelope = try_envelope(statement)?;
+                let canonical_envelope = norito::encode_canonical(&proof_envelope)?;
+                Ok(PrivacyExact12TypedEnvelopeRowV1 {
+                    protocol_id,
+                    statement_variant: statement_variant_name(&proof_envelope.statement),
+                    proof_variant: proof_variant_name(&proof_envelope.proof),
+                    statement_digest: *proof_envelope.statement_digest.as_bytes(),
+                    envelope_sha256: Sha256::digest(canonical_envelope).into(),
+                })
+            })
+            .collect::<Result<Vec<_>, norito::Error>>()?;
+        rows.try_into()
+            .map_err(|rows: Vec<PrivacyExact12TypedEnvelopeRowV1>| {
+                PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() }
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use hex_literal::hex;
+
+    use super::{
+        exact12_fixture::{
+            account, assert_fixed_width_norito, asset_definition_id, bootle_lantern_policy,
+            commitment, context, encrypted_output, envelope, fcmp_input, fcmp_output,
+            jindo_commitment, jindo_field, nullifier, orchard_action, p256_ciphertext, p256_point,
+            proof_for, proof_variant_name, raw, redigest_bootle_lantern_policy,
+            redigest_zk_ace_policy, sample_statements, sorted_fcmp_outputs, statement_for,
+            statement_variant_name, zk_ace_allowlist, zk_ace_policy, zk_ams_anchor,
+            zk_ams_provision_statement, zk_ams_seed_key, zk_x509_certificate_policy, zk_x509_crl,
+            zk_x509_trust_anchor,
+        },
+        *,
+    };
+    use crate::{domain::DomainId, name::Name};
 
     fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
         (1..=count)
@@ -10195,65 +12868,12 @@ mod tests {
             PrivacyStatementV1::OrchardHalo2ActionsV1(_) => {
                 panic!("Orchard successor roots are derived from the authoritative node frontier")
             }
-            PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) => corrupt!(
-                statement.output_set_root,
-                statement.root_epoch,
-                statement.next_output_set_root,
-                statement.next_output_set_root_epoch
-            ),
-            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => corrupt!(
-                statement.state_root,
-                statement.root_epoch,
-                statement.next_state_root,
-                statement.next_state_root_epoch
-            ),
-            PrivacyStatementV1::PqMaspStarkV0(statement) => corrupt!(
-                statement.anchor,
-                statement.anchor_epoch,
-                statement.next_anchor,
-                statement.next_anchor_epoch
-            ),
+            PrivacyStatementV1::MoneroFcmpPlusPlusV1(_)
+            | PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(_)
+            | PrivacyStatementV1::PqMaspStarkV0(_) => {
+                panic!("FCMP++ and private-note successor roots are validator-derived")
+            }
             _ => panic!("protocol does not manage a root transition"),
-        }
-    }
-
-    fn proof_for(protocol: PrivacyProtocolIdV1) -> PrivacyProofV1 {
-        let bytes = PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]);
-        match protocol {
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
-                PrivacyProofV1::ZkAcePqAuthorizationV0(bytes)
-            }
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
-                PrivacyProofV1::AnonymousPgcKOutOfNV1(bytes)
-            }
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
-                PrivacyProofV1::VeRangeTransparentRangeV1(bytes)
-            }
-            PrivacyProtocolIdV1::IrohaZkAmsV1 => PrivacyProofV1::IrohaZkAmsV1(
-                IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(bytes),
-            ),
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
-                PrivacyProofV1::VegaExistingCredentialZkV0(bytes)
-            }
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
-                PrivacyProofV1::IrohaZkX509StarkP256V0(bytes)
-            }
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
-                PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(bytes)
-            }
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
-                PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes)
-            }
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
-                PrivacyProofV1::OrchardHalo2ActionsV1(bytes)
-            }
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
-                PrivacyProofV1::MoneroFcmpPlusPlusV1(bytes)
-            }
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
-                PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(bytes)
-            }
-            PrivacyProtocolIdV1::PqMaspStarkV0 => PrivacyProofV1::PqMaspStarkV0(bytes),
         }
     }
 
@@ -10329,34 +12949,122 @@ mod tests {
         }
     }
 
-    fn envelope(statement: PrivacyStatementV1) -> PrivacyProofEnvelopeV1 {
-        let protocol_id = statement.protocol_id();
-        let context = statement.context().clone();
-        let statement_digest = statement.digest().expect("statement digest");
-        let proof = match &statement {
-            PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
-                action: PrivacyZkAmsActionV1::ProvisionAccount(_),
-                ..
-            }) => {
-                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
-                    PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]),
-                ))
-            }
-            _ => proof_for(protocol_id),
+    fn assert_stable_schema_wire<T>(value: &T, schema_name: &str, expected_schema_hash: [u8; 16])
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + core::fmt::Debug
+            + 'static,
+    {
+        let derived_schema_hash = norito::core::schema_hash_for_name(schema_name);
+        assert_eq!(
+            derived_schema_hash, expected_schema_hash,
+            "permanent schema-name KAT changed for {schema_name}"
+        );
+        assert_eq!(
+            <T as norito::NoritoSerialize>::schema_hash(),
+            expected_schema_hash
+        );
+        assert_eq!(
+            <T as norito::NoritoDeserialize<'static>>::schema_hash(),
+            expected_schema_hash
+        );
+
+        let legacy_type_name_hash = norito::core::type_name_schema_hash::<T>();
+        assert_ne!(
+            legacy_type_name_hash, expected_schema_hash,
+            "permanent public schema must not fall back to the Rust type name"
+        );
+
+        let canonical = norito::encode_canonical(value).expect("encode permanent-schema frame");
+        assert_eq!(
+            &canonical[6..22],
+            expected_schema_hash.as_slice(),
+            "canonical frame header must carry the permanent schema identity"
+        );
+        assert_eq!(
+            norito::decode_canonical::<T>(&canonical).expect("decode permanent-schema frame"),
+            *value
+        );
+
+        let mut legacy_header = canonical.clone();
+        legacy_header[6..22].copy_from_slice(&legacy_type_name_hash);
+        assert!(
+            matches!(
+                norito::decode_canonical::<T>(&legacy_header),
+                Err(norito::Error::SchemaMismatch)
+            ),
+            "the pre-release Rust type-name wire must fail closed"
+        );
+
+        let mut forged_header = canonical;
+        forged_header[6] ^= 0x80;
+        assert!(
+            matches!(
+                norito::decode_canonical::<T>(&forged_header),
+                Err(norito::Error::SchemaMismatch)
+            ),
+            "an unknown schema identity must fail before payload decoding"
+        );
+    }
+
+    #[test]
+    fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
+        let statement = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
+        let PrivacyStatementV1::ZkAcePqAuthorizationV0(authorization_statement) = &statement else {
+            unreachable!("ZK-ACE fixture must use the typed authorization statement")
         };
-        PrivacyProofEnvelopeV1 {
-            protocol_id,
-            proof_system_id: protocol_id.expected_proof_system(),
-            engine_id: protocol_id.expected_engine(),
-            parameter_id: context.parameter_id,
-            parameter_digest: context.parameter_digest,
-            verifier_digest: context.verifier_digest,
-            statement_schema_digest: context.statement_schema_digest,
-            engine_manifest_digest: context.engine_manifest_digest,
-            statement_digest,
-            statement,
-            proof,
-        }
+        let authorization_statement = authorization_statement.clone();
+        let public_inputs =
+            crate::zk::ZkAcePrivacyPublicInputsV1::new(authorization_statement.clone(), raw(0xD1));
+        let proof = proof_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
+        let proof_envelope = envelope(statement.clone());
+        let policy = zk_ace_policy(
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
+            11,
+            PrivacyZkAcePolicyLifecycleV1::Active,
+        );
+        let policy_material = PrivacyZkAcePolicyDigestMaterialV1 {
+            policy_id: policy.policy_id,
+            identity_commitment: policy.identity_commitment,
+            policy_digest: policy.policy_digest,
+            authorization_epoch: policy.authorization_epoch,
+            asset_definition_id: policy.asset_definition_id,
+            source_allowlist: policy.source_allowlist,
+            lifecycle: policy.lifecycle,
+        };
+
+        assert_stable_schema_wire(
+            &authorization_statement,
+            ZK_ACE_AUTHORIZATION_STATEMENT_SCHEMA_NAME_V1,
+            hex!("4acf679326b17350dcb57f4ea7ac20a1"),
+        );
+        assert_stable_schema_wire(
+            &statement,
+            PRIVACY_STATEMENT_SCHEMA_NAME_V1,
+            hex!("7966b2f6ebc8c1ff1a1eb8ac458657af"),
+        );
+        assert_stable_schema_wire(
+            &public_inputs,
+            crate::zk::ZK_ACE_PRIVACY_PUBLIC_INPUTS_SCHEMA_NAME_V1,
+            hex!("0f16958a9641702815d6cddee3aeb8aa"),
+        );
+        assert_stable_schema_wire(
+            &policy_material,
+            ZK_ACE_POLICY_DIGEST_MATERIAL_SCHEMA_NAME_V1,
+            hex!("5f08d7306e9c76b183a60175fa514966"),
+        );
+        assert_stable_schema_wire(
+            &proof,
+            PRIVACY_PROOF_SCHEMA_NAME_V1,
+            hex!("8335f36ecd62f6cc59715441a3496a27"),
+        );
+        assert_stable_schema_wire(
+            &proof_envelope,
+            PRIVACY_PROOF_ENVELOPE_SCHEMA_NAME_V1,
+            hex!("3956178024ddd2abae83d3a5b59827fb"),
+        );
     }
 
     fn activation(envelope: &PrivacyProofEnvelopeV1) -> PrivacyProtocolActivationRecordV1 {
@@ -10516,6 +13224,52 @@ mod tests {
     }
 
     #[test]
+    fn active_and_retired_protocol_labels_share_one_exact_reservation_namespace() {
+        let mut reserved = std::collections::BTreeSet::new();
+        for protocol in PrivacyProtocolIdV1::ALL {
+            let label = protocol.canonical_label();
+            assert!(
+                privacy_protocol_label_is_reserved_v1(label),
+                "active label {label} must be reserved"
+            );
+            assert!(reserved.insert(label), "duplicate active label {label}");
+        }
+        for label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
+            assert!(
+                PrivacyProtocolIdV1::from_canonical_label(label).is_none(),
+                "retired label {label} must not become active"
+            );
+            assert!(
+                privacy_protocol_label_is_reserved_v1(label),
+                "retired label {label} must remain reserved"
+            );
+            assert!(
+                reserved.insert(label),
+                "retired label {label} overlaps another reservation"
+            );
+        }
+        assert_eq!(
+            reserved.len(),
+            PrivacyProtocolIdV1::COUNT + PRIVACY_RETIRED_PROTOCOL_LABELS_V1.len()
+        );
+
+        for label in reserved {
+            for near_miss in [
+                format!("generic-{label}"),
+                format!("{label}-generic"),
+                format!(" {label}"),
+                format!("{label} "),
+                label.to_ascii_uppercase(),
+            ] {
+                assert!(
+                    !privacy_protocol_label_is_reserved_v1(&near_miss),
+                    "near-miss label {near_miss:?} must not alias {label:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn protocol_id_parser_rejects_aliases_retired_ids_and_noncanonical_text() {
         for label in [
             "",
@@ -10527,6 +13281,7 @@ mod tests {
             "zk-x509-onchain-identity-v0",
             "jindo-lattice-pcs-zk-v0",
             "sis-hints-anoncred-pq-v0",
+            "sis-with-hints",
             "iroha-bootle-genisis-ac-stark-v0",
             "miden-stark-note-v1",
             "pq-masp-stark-fri-v1",
@@ -10584,10 +13339,6 @@ mod tests {
             (
                 PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
                 "stark-fri-sha256-goldilocks",
-            ),
-            (
-                PrivacyProofSystemIdV1::StarkFriPoseidon2Goldilocks,
-                "stark-fri-poseidon2-goldilocks",
             ),
             (
                 PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
@@ -10759,6 +13510,7 @@ mod tests {
             "{\"protocol\":\"anonymous-pgc-k-out-of-n-v1\",\"protocol\":\"anonymous-pgc-k-out-of-n-v1\",\"value\":null}",
             "{\"proof_system\":\"AnonymousPgcP256\",\"value\":null}",
             "{\"proof_system\":\"anonymous-pgc-p256 \",\"value\":null}",
+            "{\"proof_system\":\"stark-fri-poseidon2-goldilocks\",\"value\":null}",
             "{\"engine\":\"NativeAnonymousPgcP256\",\"value\":null}",
             "{\"engine\":\"native-anonymous-pgc-p25\u{ff16}\",\"value\":null}",
             "{\"reason\":\"EngineUnavailable\",\"detail\":null}",
@@ -10923,12 +13675,121 @@ mod tests {
     }
 
     #[test]
+    fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
+        use PrivacyCapabilityArchiveValidationStatusV1 as Status;
+
+        assert_eq!(PRIVACY_BRIDGE_ABI_VERSION_V1, 21);
+        assert_eq!(PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1, 256 * 1024);
+        assert_eq!(Status::Valid.code(), 0);
+        assert_eq!(Status::NullPointer.code(), 1);
+        assert_eq!(Status::Empty.code(), 2);
+        assert_eq!(Status::ArchiveTooLarge.code(), 3);
+        assert_eq!(Status::DecodeResourceLimit.code(), 4);
+        assert_eq!(Status::SchemaMismatch.code(), 5);
+        assert_eq!(Status::NonCanonical.code(), 6);
+        assert_eq!(Status::MalformedArchive.code(), 7);
+        assert_eq!(Status::InvalidSnapshot.code(), 8);
+
+        let snapshot = capability_snapshot();
+        let archive = norito::encode_canonical(&snapshot).expect("canonical capability archive");
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&archive),
+            Status::Valid
+        );
+
+        assert_eq!(validate_privacy_capability_archive_v1(&[]), Status::Empty);
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&vec![
+                0;
+                PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
+                    + 1
+            ]),
+            Status::ArchiveTooLarge
+        );
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&archive[..archive.len() - 1]),
+            Status::MalformedArchive
+        );
+
+        let mut wrong_schema = archive.clone();
+        wrong_schema[6] ^= 0x80;
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&wrong_schema),
+            Status::SchemaMismatch
+        );
+
+        // Preserve a valid CRC over a one-byte payload while substituting the
+        // expected snapshot schema. Header-only validation used to accept this
+        // exact adversary; the typed decoder must reject it.
+        let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("canonical one-byte value");
+        one_byte_fake[6..22].copy_from_slice(&archive[6..22]);
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&one_byte_fake),
+            Status::MalformedArchive
+        );
+
+        let mut reordered = snapshot.clone();
+        reordered.protocols.swap(0, 1);
+        let reordered =
+            norito::encode_canonical(&reordered).expect("canonical reordered snapshot bytes");
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&reordered),
+            Status::InvalidSnapshot
+        );
+
+        let mut profile_mutation = snapshot.clone();
+        let PrivacyCompiledProfileResultV1::Available(profile) =
+            &mut profile_mutation.protocols[1].compiled_profile
+        else {
+            panic!("PGC fixture must have a compiled profile");
+        };
+        profile.parameter_digest = PrivacyParameterDigestV1::new([0; 32]);
+        let profile_mutation =
+            norito::encode_canonical(&profile_mutation).expect("canonical invalid-profile bytes");
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&profile_mutation),
+            Status::InvalidSnapshot
+        );
+
+        let mut activation_mutation = snapshot.clone();
+        activation_mutation.protocols[1]
+            .activation
+            .as_mut()
+            .expect("PGC fixture activation")
+            .parameter_digest = PrivacyParameterDigestV1::new(raw(250));
+        let activation_mutation = norito::encode_canonical(&activation_mutation)
+            .expect("canonical activation-mismatch bytes");
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&activation_mutation),
+            Status::InvalidSnapshot
+        );
+
+        let mut excessive_rows = snapshot;
+        excessive_rows.protocols.push(excessive_rows.protocols[0]);
+        let excessive_rows =
+            norito::encode_canonical(&excessive_rows).expect("canonical excessive-row bytes");
+        assert_eq!(
+            validate_privacy_capability_archive_v1(&excessive_rows),
+            Status::DecodeResourceLimit
+        );
+    }
+
+    #[test]
     fn all_protocol_mappings_and_typed_variants_are_exact() {
         let statements = sample_statements();
         assert_eq!(statements.len(), PrivacyProtocolIdV1::COUNT);
         for (protocol, statement) in PrivacyProtocolIdV1::ALL.into_iter().zip(statements) {
             assert_eq!(statement.protocol_id(), protocol);
-            assert_eq!(proof_for(protocol).protocol_id(), protocol);
+            let proof = proof_for(protocol);
+            assert_eq!(proof.protocol_id(), protocol);
+            assert_eq!(
+                statement_variant_name(&statement),
+                protocol.canonical_typed_variant_label()
+            );
+            assert_eq!(
+                proof_variant_name(&proof),
+                protocol.canonical_typed_variant_label()
+            );
             assert_eq!(
                 protocol_limits(protocol).protocol_id(),
                 protocol,
@@ -10951,6 +13812,224 @@ mod tests {
             PrivacyProtocolIdV1::IrohaZkAmsV1.expected_engine(),
             PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
         );
+        for protocol in [
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyProtocolIdV1::PqMaspStarkV0,
+        ] {
+            assert_eq!(
+                protocol.expected_proof_system(),
+                PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
+                "{protocol:?} must identify the SHA-256 transcript/Merkle STARK"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit regeneration helper for fixtures/privacy/exact12_v1.tsv"]
+    fn emit_exact12_typed_envelope_fixture_rows() {
+        for row in privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics") {
+            println!(
+                "typed-envelope\t{}\t{}\t{}\t{}\t{}",
+                row.protocol_id.canonical_label(),
+                row.statement_variant,
+                row.proof_variant,
+                hex::encode(row.statement_digest),
+                hex::encode(row.envelope_sha256)
+            );
+        }
+    }
+
+    #[test]
+    fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
+        let matrix = include_str!("../../../fixtures/privacy/exact12_v1.tsv");
+        assert!(matrix.ends_with('\n'), "matrix must end with one LF");
+        assert!(!matrix.contains('\r'), "matrix must use canonical LF lines");
+        assert!(
+            matrix
+                .strip_suffix('\n')
+                .expect("terminal LF")
+                .lines()
+                .all(|line| !line.is_empty()),
+            "matrix must not contain empty rows"
+        );
+
+        let mut matrix_version = None;
+        let mut registry_sha256 = None;
+        let mut protocols = Vec::new();
+        let mut typed_envelopes = Vec::new();
+        let mut retired = Vec::new();
+        for (line_index, line) in matrix.lines().enumerate() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields = line.split('\t').collect::<Vec<_>>();
+            match fields.as_slice() {
+                ["matrix-version", version] => {
+                    assert!(
+                        matrix_version.replace(*version).is_none(),
+                        "duplicate version"
+                    );
+                }
+                ["registry-sha256", digest] => {
+                    assert!(
+                        registry_sha256.replace(*digest).is_none(),
+                        "duplicate registry digest"
+                    );
+                }
+                ["protocol", index, label, statement_variant, proof_variant] => {
+                    protocols.push((
+                        index.parse::<usize>().expect("decimal protocol index"),
+                        *label,
+                        *statement_variant,
+                        *proof_variant,
+                    ));
+                }
+                [
+                    "typed-envelope",
+                    label,
+                    statement_variant,
+                    proof_variant,
+                    statement_digest,
+                    envelope_sha256,
+                ] => typed_envelopes.push((
+                    *label,
+                    *statement_variant,
+                    *proof_variant,
+                    *statement_digest,
+                    *envelope_sha256,
+                )),
+                ["retired", label] => retired.push(*label),
+                _ => panic!("malformed exact12 matrix row {}", line_index + 1),
+            }
+        }
+
+        assert_eq!(matrix_version, Some("1"));
+        assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(typed_envelopes.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(!retired.is_empty());
+        let semantic_rows =
+            privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics");
+        assert_eq!(semantic_rows.len(), PrivacyProtocolIdV1::COUNT);
+        let mut registry_preimage = String::new();
+        let mut unique_labels = std::collections::BTreeSet::new();
+        for (expected_index, (protocol, semantic)) in PrivacyProtocolIdV1::ALL
+            .into_iter()
+            .zip(&semantic_rows)
+            .enumerate()
+        {
+            let (index, label, expected_statement_variant, expected_proof_variant) =
+                protocols[expected_index];
+            assert_eq!(index, expected_index);
+            assert_eq!(label, protocol.canonical_label());
+            assert_eq!(semantic.protocol_id, protocol);
+            assert_eq!(
+                PrivacyProtocolIdV1::from_canonical_label(label),
+                Some(protocol)
+            );
+            assert!(unique_labels.insert(label), "duplicate protocol label");
+            assert_eq!(semantic.statement_variant, expected_statement_variant);
+            assert_eq!(semantic.proof_variant, expected_proof_variant);
+            registry_preimage.push_str(label);
+            registry_preimage.push('\n');
+        }
+        assert_eq!(
+            hex::encode(Sha256::digest(registry_preimage.as_bytes())),
+            registry_sha256.expect("registry digest")
+        );
+
+        for (semantic, row) in semantic_rows.iter().zip(typed_envelopes) {
+            let (
+                label,
+                expected_statement_variant,
+                expected_proof_variant,
+                expected_statement_digest,
+                expected_envelope_sha256,
+            ) = row;
+            assert_eq!(
+                PrivacyProtocolIdV1::from_canonical_label(label),
+                Some(semantic.protocol_id)
+            );
+            assert_eq!(semantic.statement_variant, expected_statement_variant);
+            assert_eq!(semantic.proof_variant, expected_proof_variant);
+            for expected_digest in [expected_statement_digest, expected_envelope_sha256] {
+                assert_eq!(expected_digest.len(), 64);
+                assert!(
+                    expected_digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                    "typed envelope digest must be canonical lowercase hex"
+                );
+                assert!(
+                    expected_digest.bytes().any(|byte| byte != b'0'),
+                    "typed envelope digest must not be the zero placeholder"
+                );
+            }
+            assert_eq!(
+                hex::encode(semantic.statement_digest),
+                expected_statement_digest
+            );
+            assert_eq!(
+                hex::encode(semantic.envelope_sha256),
+                expected_envelope_sha256
+            );
+        }
+
+        let mut unique_retired = std::collections::BTreeSet::new();
+        for label in retired {
+            assert!(unique_retired.insert(label), "duplicate retired label");
+            assert!(
+                PrivacyProtocolIdV1::from_canonical_label(label).is_none(),
+                "retired label {label:?} must remain unrepresentable"
+            );
+        }
+    }
+
+    #[test]
+    fn exact12_compiled_semantics_are_closed_unique_and_context_bound() {
+        let rows = privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics");
+        assert_eq!(rows.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(
+            rows.iter().map(|row| row.protocol_id).collect::<Vec<_>>(),
+            PrivacyProtocolIdV1::ALL.to_vec()
+        );
+        assert!(rows.iter().all(|row| {
+            row.statement_variant == row.protocol_id.canonical_typed_variant_label()
+                && row.proof_variant == row.protocol_id.canonical_typed_variant_label()
+                && row.statement_digest != [0; 32]
+                && row.envelope_sha256 != [0; 32]
+        }));
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.statement_digest)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            PrivacyProtocolIdV1::COUNT
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.envelope_sha256)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            PrivacyProtocolIdV1::COUNT
+        );
+
+        let mut mutated = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
+        let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &mut mutated else {
+            unreachable!("closed first row is ZK-ACE")
+        };
+        statement.context.action_index = 1;
+        let mutated_statement_digest = mutated.digest().expect("mutated statement digest");
+        let mutated_envelope_sha256: [u8; 32] = Sha256::digest(
+            norito::encode_canonical(&envelope(mutated)).expect("mutated canonical envelope"),
+        )
+        .into();
+        assert_ne!(
+            *mutated_statement_digest.as_bytes(),
+            rows[0].statement_digest
+        );
+        assert_ne!(mutated_envelope_sha256, rows[0].envelope_sha256);
     }
 
     #[test]
@@ -10963,6 +14042,15 @@ mod tests {
                 assert!(!value.is_zero());
                 assert!($type::new([0; 32]).is_zero());
                 assert_fixed_width_norito(&value, &raw($seed));
+                let encoded = value.encode();
+                // Bare Norito encodes a fixed byte-array field as one
+                // canonical compact-width prefix followed by exactly 32
+                // bytes. No variable-length payload is admitted.
+                assert_eq!(encoded.len(), 33);
+                assert_eq!(
+                    $type::decode(&mut encoded.as_slice()).expect("decode fixed value"),
+                    value
+                );
             }};
         }
         check_type!(PrivacyParameterIdV1, 1);
@@ -10972,6 +14060,10 @@ mod tests {
         check_type!(PrivacyEngineManifestDigestV1, 5);
         check_type!(PrivacyStatementDigestV1, 6);
         check_type!(PrivacyTransactionIntentDigestV1, 17);
+        check_type!(PrivacyOrchardPoolBootstrapDigestV1, 20);
+        check_type!(PrivacyProofManagedPoolBootstrapDigestV1, 21);
+        check_type!(PrivacyFcmpOutputIdV1, 22);
+        check_type!(PrivacyFcmpKeyImageV1, 23);
         check_type!(PrivacyBootleLanternIssuerPolicyDigestV1, 18);
         check_type!(PrivacyNullifierV1, 7);
         check_type!(PrivacyCommitmentV1, 8);
@@ -11087,6 +14179,14 @@ mod tests {
         let point = p256_point(9);
         assert_eq!(point.as_bytes().len(), 33);
         assert_fixed_width_norito(&point, point.as_bytes());
+        let encoded = point.encode();
+        assert_eq!(encoded.len(), 34);
+        assert_eq!(
+            PrivacyP256PointV1::decode(&mut encoded.as_slice()).expect("decode exact point"),
+            point
+        );
+        assert!(PrivacyP256PointV1::decode(&mut [0x02; 32].as_slice()).is_err());
+        assert!(PrivacyP256PointV1::decode(&mut [0x02; 34].as_slice()).is_err());
 
         let ciphertext = p256_ciphertext(10);
         let bytes = norito::to_bytes(&ciphertext).expect("frame ciphertext");
@@ -11110,6 +14210,19 @@ mod tests {
         let key_image = PrivacyZkAmsKeyImageV1::new(raw(10));
         assert_eq!(key_image.as_bytes().len(), 32);
         assert_fixed_width_norito(&key_image, key_image.as_bytes());
+        let encoded = seed_key.encode();
+        assert_eq!(encoded.len(), 33);
+        assert_eq!(
+            PrivacyZkAmsSeedPublicKeyV1::decode(&mut encoded.as_slice())
+                .expect("decode exact seed key"),
+            seed_key
+        );
+        assert!(PrivacyZkAmsSeedPublicKeyV1::decode(&mut [9; 31].as_slice()).is_err());
+        assert!(PrivacyZkAmsSeedPublicKeyV1::decode(&mut [9; 33].as_slice()).is_err());
+
+        let key_image = PrivacyZkAmsKeyImageV1::new(raw(10));
+        assert_eq!(key_image.encode().len(), 33);
+        assert!(PrivacyZkAmsKeyImageV1::decode(&mut key_image.encode().as_slice()).is_ok());
 
         for unknown in [2_u32, 3, u32::MAX] {
             assert!(PrivacyZkAmsActionV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
@@ -11155,6 +14268,164 @@ mod tests {
     }
 
     #[test]
+    fn privacy_context_statement_proof_and_envelope_json_are_closed() {
+        let context = context();
+        let context_json = norito::json::to_json(&context).expect("encode privacy context JSON");
+        let context_prefix = context_json
+            .strip_suffix('}')
+            .expect("privacy context JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyStatementContextV1>(&format!(
+                "{context_prefix},\"legacy_context\":true}}"
+            ))
+            .is_err()
+        );
+
+        let envelope = envelope(statement_for(
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        ));
+        let envelope_json = norito::json::to_json(&envelope).expect("encode privacy envelope JSON");
+        let decoded: PrivacyProofEnvelopeV1 =
+            norito::json::from_json(&envelope_json).expect("decode canonical envelope JSON");
+        assert_eq!(decoded, envelope);
+        let envelope_prefix = envelope_json
+            .strip_suffix('}')
+            .expect("privacy envelope JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyProofEnvelopeV1>(&format!(
+                "{envelope_prefix},\"legacy_envelope\":true}}"
+            ))
+            .is_err()
+        );
+
+        let statement_json =
+            norito::json::to_json(&envelope.statement).expect("encode typed statement JSON");
+        let statement_prefix = statement_json
+            .strip_suffix('}')
+            .expect("typed statement JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyStatementV1>(&format!(
+                "{statement_prefix},\"legacy_statement\":true}}"
+            ))
+            .is_err()
+        );
+
+        let proof_json = norito::json::to_json(&envelope.proof).expect("encode typed proof JSON");
+        let proof_prefix = proof_json
+            .strip_suffix('}')
+            .expect("typed proof JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyProofV1>(&format!(
+                "{proof_prefix},\"legacy_proof\":true}}"
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn first_release_statements_reject_nested_unknown_json_fields() {
+        for protocol_id in PrivacyProtocolIdV1::ALL {
+            let statement = statement_for(protocol_id);
+            let canonical =
+                norito::json::to_json(&statement).expect("encode private-transfer statement JSON");
+            let nested_prefix = canonical
+                .strip_suffix("}}")
+                .expect("tagged statement ends with nested and outer objects");
+            let hostile = format!("{nested_prefix},\"legacy_transfer\":true}}}}");
+            assert!(
+                norito::json::from_json::<PrivacyStatementV1>(&hostile).is_err(),
+                "nested unknown field must fail for {protocol_id:?}"
+            );
+        }
+        for (protocol_id, removed_field) in [
+            (PrivacyProtocolIdV1::ZkAcePqAuthorizationV0, "fee"),
+            (PrivacyProtocolIdV1::OrchardHalo2ActionsV1, "fee"),
+            (PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, "fee"),
+            (PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1, "fee"),
+            (PrivacyProtocolIdV1::PqMaspStarkV0, "fee"),
+            (
+                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                "next_state_root",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                "next_state_root_epoch",
+            ),
+            (PrivacyProtocolIdV1::PqMaspStarkV0, "next_anchor"),
+            (PrivacyProtocolIdV1::PqMaspStarkV0, "next_anchor_epoch"),
+        ] {
+            let canonical = norito::json::to_json(&statement_for(protocol_id))
+                .expect("encode validator-derived-successor statement");
+            let nested_prefix = canonical
+                .strip_suffix("}}")
+                .expect("tagged statement ends with nested and outer objects");
+            let hostile = format!("{nested_prefix},\"{removed_field}\":null}}}}");
+            assert!(
+                norito::json::from_json::<PrivacyStatementV1>(&hostile).is_err(),
+                "removed caller-selected field `{removed_field}` must not decode"
+            );
+        }
+
+        let authorization = norito::json::to_json(&PrivacyPqAuthorizationProfileV1::MlDsa65)
+            .expect("encode PQ authorization profile");
+        let authorization_prefix = authorization
+            .strip_suffix('}')
+            .expect("PQ authorization profile is an object");
+        assert!(
+            norito::json::from_json::<PrivacyPqAuthorizationProfileV1>(&format!(
+                "{authorization_prefix},\"legacy\":null}}"
+            ))
+            .is_err()
+        );
+
+        let encryption =
+            norito::json::to_json(&PrivacyPqNoteEncryptionProfileV1::MlKem768XChaCha20Poly1305)
+                .expect("encode PQ note-encryption profile");
+        let encryption_prefix = encryption
+            .strip_suffix('}')
+            .expect("PQ note-encryption profile is an object");
+        assert!(
+            norito::json::from_json::<PrivacyPqNoteEncryptionProfileV1>(&format!(
+                "{encryption_prefix},\"legacy\":null}}"
+            ))
+            .is_err()
+        );
+
+        let encrypted_note =
+            norito::json::to_json(&encrypted_output(31, 32)).expect("encode encrypted note");
+        let encrypted_note_prefix = encrypted_note
+            .strip_suffix('}')
+            .expect("encrypted note is an object");
+        assert!(
+            norito::json::from_json::<PrivacyEncryptedOutputV1>(&format!(
+                "{encrypted_note_prefix},\"legacy_ciphertext\":null}}"
+            ))
+            .is_err(),
+            "nested private-note encrypted output must reject unknown fields"
+        );
+
+        let output = fcmp_output(33);
+        let fcmp_encrypted_output = PrivacyFcmpEncryptedOutputV1 {
+            recipient: PrivacyRecipientIdV1::new(raw(34)),
+            ephemeral_public_key: PrivacyEncryptionKeyV1::new(raw(35)),
+            output_id: output.output_id(),
+            ciphertext: vec![0xA5],
+        };
+        let fcmp_encrypted_output_json =
+            norito::json::to_json(&fcmp_encrypted_output).expect("encode FCMP++ encrypted output");
+        let fcmp_encrypted_output_prefix = fcmp_encrypted_output_json
+            .strip_suffix('}')
+            .expect("FCMP++ encrypted output is an object");
+        assert!(
+            norito::json::from_json::<PrivacyFcmpEncryptedOutputV1>(&format!(
+                "{fcmp_encrypted_output_prefix},\"legacy_output_id\":null}}"
+            ))
+            .is_err(),
+            "nested FCMP++ encrypted output must reject unknown fields"
+        );
+    }
+
+    #[test]
     fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
         let defaults = PrivacyConsensusLimitsV1::taira_default();
         defaults.validate().expect("Taira defaults");
@@ -11162,6 +14433,10 @@ mod tests {
             defaults.max_actions_per_transaction,
             TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1
         );
+        assert_eq!(defaults.max_proof_bytes_per_action, 9 * 1024 * 1024);
+        assert_eq!(defaults.max_action_bytes, 9 * 1024 * 1024);
+        assert_eq!(defaults.max_privacy_bytes_per_transaction, 9 * 1024 * 1024);
+        assert_eq!(defaults.max_privacy_bytes_per_block, 18 * 1024 * 1024);
         assert_eq!(
             defaults.max_commitments_per_action,
             TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1
@@ -11235,6 +14510,60 @@ mod tests {
                 "mutated limits must fail: {value:?}"
             );
         }
+
+        let hard_maximum_mutations: [(PrivacyLimitFieldV1, u32, fn(&mut PrivacyConsensusLimitsV1));
+            4] = [
+            (
+                PrivacyLimitFieldV1::ProofBytesPerAction,
+                TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
+                |value| value.max_proof_bytes_per_action += 1,
+            ),
+            (
+                PrivacyLimitFieldV1::ActionBytes,
+                TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
+                |value| value.max_action_bytes += 1,
+            ),
+            (
+                PrivacyLimitFieldV1::PrivacyBytesPerTransaction,
+                TAIRA_PRIVACY_MAX_BYTES_PER_TRANSACTION_V1,
+                |value| value.max_privacy_bytes_per_transaction += 1,
+            ),
+            (
+                PrivacyLimitFieldV1::PrivacyBytesPerBlock,
+                TAIRA_PRIVACY_MAX_BYTES_PER_BLOCK_V1,
+                |value| value.max_privacy_bytes_per_block += 1,
+            ),
+        ];
+        for (field, hard_max, mutate) in hard_maximum_mutations {
+            let mut value = defaults;
+            mutate(&mut value);
+            assert_eq!(
+                value.validate(),
+                Err(PrivacyConsensusLimitsValidationError::ExceedsHardMaximum {
+                    field,
+                    value: hard_max + 1,
+                    hard_max,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_proof_payload_admits_exact_nine_mib_and_rejects_cap_plus_one() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let maximum =
+            usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1).expect("cap fits usize");
+        let mut proof = PrivacyProofBytesV1::new(vec![0xA5; maximum]);
+        proof.validate(&limits).expect("exact 9 MiB proof payload");
+
+        proof.bytes.push(0x5A);
+        assert_eq!(
+            proof.validate(&limits),
+            Err(PrivacyProofValidationError::TooLarge {
+                bytes: u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1) + 1,
+                max: TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
+            })
+        );
     }
 
     type ConsensusLimitMutationV1 = (PrivacyLimitFieldV1, fn(&mut PrivacyConsensusLimitsV1));
@@ -11513,6 +14842,81 @@ mod tests {
             Err(PrivacyNamespaceValidationError::ZeroComponent { .. })
         ));
 
+        let x509_trust_anchor_namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
+                trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
+            }),
+        );
+        x509_trust_anchor_namespace
+            .validate()
+            .expect("X.509 trust-anchor namespace");
+        let encoded =
+            norito::to_bytes(&x509_trust_anchor_namespace).expect("encode trust-anchor namespace");
+        let decoded: PrivacyNamespaceV1 =
+            norito::decode_from_bytes(&encoded).expect("decode trust-anchor namespace");
+        assert_eq!(decoded, x509_trust_anchor_namespace);
+        let json = norito::json::to_json(&x509_trust_anchor_namespace)
+            .expect("encode trust-anchor namespace JSON");
+        let decoded_json: PrivacyNamespaceV1 =
+            norito::json::from_json(&json).expect("decode trust-anchor namespace JSON");
+        assert_eq!(decoded_json, x509_trust_anchor_namespace);
+
+        let x509_statement = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
+        let x509_policy_namespace = PrivacyNamespaceV1::from_statement(&x509_statement);
+        assert!(matches!(
+            x509_policy_namespace.scope(),
+            PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
+        ));
+        let ca_publication = PrivacyRootPublicationV1::new(
+            x509_trust_anchor_namespace,
+            PrivacyRootRoleV1::CertificateAuthorityMembership,
+            1,
+            PrivacyRootV1::new(raw(170)),
+        )
+        .expect("CA root uses the trust-anchor-wide namespace");
+        ca_publication
+            .validate()
+            .expect("canonical CA root publication");
+        assert!(matches!(
+            PrivacyRootPublicationV1::new(
+                x509_policy_namespace,
+                PrivacyRootRoleV1::CertificateAuthorityMembership,
+                1,
+                PrivacyRootV1::new(raw(172)),
+            ),
+            Err(
+                PrivacyRootPublicationValidationError::IncompatibleNamespaceScope {
+                    role: PrivacyRootRoleV1::CertificateAuthorityMembership,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+                PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
+                    trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
+                }),
+            )
+            .validate(),
+            Err(PrivacyNamespaceValidationError::IncompatibleScope {
+                protocol_id: PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            })
+        ));
+        assert_eq!(
+            PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+                PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
+                    trust_anchor_id: PrivacyIssuerIdV1::new([0; 32]),
+                }),
+            )
+            .validate(),
+            Err(PrivacyNamespaceValidationError::ZeroComponent {
+                component: PrivacyNamespaceComponentV1::Issuer,
+            })
+        );
+
         for role in [
             PrivacyRootRoleV1::PgcAccountState,
             PrivacyRootRoleV1::AccountRegistry,
@@ -11525,7 +14929,6 @@ mod tests {
         for role in [
             PrivacyRootRoleV1::Revocation,
             PrivacyRootRoleV1::CertificateAuthorityMembership,
-            PrivacyRootRoleV1::CertificateRevocationNonmembership,
         ] {
             assert_eq!(
                 role.management(),
@@ -11649,6 +15052,210 @@ mod tests {
     }
 
     #[test]
+    fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() {
+        let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
+            PrivacyPoolIdV1::new(raw(210)),
+            asset_definition_id(),
+            account(211),
+        )
+        .expect("canonical Orchard pool bootstrap");
+        bootstrap.validate().expect("valid Orchard pool bootstrap");
+        assert_eq!(
+            bootstrap.namespace().protocol_id(),
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1
+        );
+        let encoded = norito::to_bytes(&bootstrap).expect("frame Orchard bootstrap");
+        let decoded: PrivacyOrchardPoolBootstrapV1 =
+            norito::decode_from_bytes(&encoded).expect("decode Orchard bootstrap");
+        assert_eq!(decoded, bootstrap);
+
+        let digest = bootstrap.digest().expect("digest Orchard bootstrap");
+        assert!(!digest.is_zero());
+        let mut changed_asset = bootstrap.clone();
+        changed_asset.asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("domain"),
+            Name::from_str("other").expect("asset name"),
+        );
+        assert_ne!(
+            changed_asset.digest().expect("digest changed asset"),
+            digest,
+            "the immutable public bridge asset must be provenance-bound"
+        );
+        let mut changed_reserve = bootstrap.clone();
+        changed_reserve.reserve_account = account(212);
+        assert_ne!(
+            changed_reserve.digest().expect("digest changed reserve"),
+            digest,
+            "the immutable reserve account must be provenance-bound"
+        );
+        assert_eq!(
+            PrivacyOrchardPoolBootstrapV1::new(
+                PrivacyPoolIdV1::new([0; 32]),
+                asset_definition_id(),
+                account(211),
+            ),
+            Err(PrivacyOrchardPoolBootstrapValidationErrorV1::ZeroPoolId)
+        );
+    }
+
+    #[test]
+    fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
+        let variants = [
+            PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
+                pool_id: PrivacyPoolIdV1::new(raw(213)),
+                asset_definition_id: asset_definition_id(),
+                initial_outputs: sorted_fcmp_outputs(&[1, 2]),
+            }),
+            PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
+                PrivacyIvmPrivateNotePoolBootstrapV1 {
+                    pool_id: PrivacyPoolIdV1::new(raw(214)),
+                    asset_definition_id: asset_definition_id(),
+                    reserve_account: account(215),
+                    program_id: PrivacyProgramIdV1::new(raw(216)),
+                    initial_note_commitments: vec![commitment(3), commitment(4)],
+                },
+            ),
+            PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1 {
+                pool_id: PrivacyPoolIdV1::new(raw(217)),
+                asset_definition_id: asset_definition_id(),
+                initial_note_commitments: vec![commitment(5), commitment(6)],
+            }),
+        ];
+        for bootstrap in variants {
+            bootstrap
+                .validate()
+                .expect("canonical typed pool bootstrap");
+            assert_eq!(bootstrap.namespace().protocol_id(), bootstrap.protocol_id());
+            assert!(
+                bootstrap
+                    .root_role()
+                    .is_compatible_with_namespace(bootstrap.namespace())
+            );
+            let digest = bootstrap.digest().expect("digest typed pool bootstrap");
+            assert!(!digest.is_zero());
+            let encoded = norito::to_bytes(&bootstrap).expect("encode typed pool bootstrap");
+            let decoded: PrivacyProofManagedPoolBootstrapV1 =
+                norito::decode_from_bytes(&encoded).expect("decode typed pool bootstrap");
+            assert_eq!(decoded, bootstrap);
+            let json = norito::json::to_json(&bootstrap).expect("encode pool-bootstrap JSON");
+            let decoded_json: PrivacyProofManagedPoolBootstrapV1 =
+                norito::json::from_json(&json).expect("decode pool-bootstrap JSON");
+            assert_eq!(decoded_json, bootstrap);
+            let nested_prefix = json
+                .strip_suffix("}}")
+                .expect("tagged bootstrap ends with nested and outer objects");
+            assert!(
+                norito::json::from_json::<PrivacyProofManagedPoolBootstrapV1>(&format!(
+                    "{nested_prefix},\"legacy_root\":true}}}}"
+                ))
+                .is_err()
+            );
+        }
+
+        let mut invalid =
+            PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
+                pool_id: PrivacyPoolIdV1::new(raw(218)),
+                asset_definition_id: asset_definition_id(),
+                initial_outputs: Vec::new(),
+            });
+        assert_eq!(
+            invalid.validate(),
+            Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::EmptyInitialFcmpOutputs)
+        );
+        let PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(fcmp) = &mut invalid else {
+            unreachable!()
+        };
+        fcmp.initial_outputs = vec![fcmp_output(7), fcmp_output(7)];
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::InitialFcmpOutputIdsNotStrictlyIncreasing {
+                    index: 1
+                }
+            )
+        ));
+        let PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(fcmp) = &mut invalid else {
+            unreachable!()
+        };
+        fcmp.initial_outputs = vec![
+            PrivacyFcmpOutputTupleV1 {
+                output_key: [0; 32],
+                linking_tag_generator: raw(8),
+                amount_commitment: raw(9),
+            },
+            fcmp_output(10),
+        ];
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::InvalidInitialFcmpOutput {
+                    index: 0,
+                    source: PrivacyFcmpOutputTupleValidationErrorV1::ZeroComponent {
+                        component: PrivacyFcmpOutputComponentV1::OutputKey
+                    }
+                }
+            )
+        ));
+        let PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(fcmp) = &mut invalid else {
+            unreachable!()
+        };
+        fcmp.initial_outputs = vec![fcmp_output(9); PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1 + 1];
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::TooManyInitialFcmpOutputs {
+                    count,
+                    max: PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1
+                }
+            ) if count == PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1 + 1
+        ));
+
+        let invalid_program = PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
+            PrivacyIvmPrivateNotePoolBootstrapV1 {
+                pool_id: PrivacyPoolIdV1::new(raw(219)),
+                asset_definition_id: asset_definition_id(),
+                reserve_account: account(220),
+                program_id: PrivacyProgramIdV1::new([0; 32]),
+                initial_note_commitments: vec![commitment(10)],
+            },
+        );
+        assert_eq!(
+            invalid_program.validate(),
+            Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroProgramId)
+        );
+    }
+
+    #[test]
+    fn fcmp_output_and_typed_root_domains_match_known_answers() {
+        let output = PrivacyFcmpOutputTupleV1 {
+            output_key: raw(1),
+            linking_tag_generator: raw(2),
+            amount_commitment: raw(3),
+        };
+        assert_eq!(
+            output.output_id().into_bytes(),
+            hex!("5a67b729f611b60999fabfdb9028dc2e6aec85c1e63422e82ceb0d48bef6d824")
+        );
+        let root = PrivacyFcmpTreeRootV1 {
+            layers: 1,
+            point: raw(4),
+        };
+        assert_eq!(
+            root.history_commitment().into_bytes(),
+            hex!("d78fe90fc23fc58cf72a5eeaa6c9b145a47319c1ca5ef32eba9d30d359734906")
+        );
+        assert_ne!(
+            PrivacyFcmpTreeRootV1 {
+                layers: 2,
+                point: raw(4),
+            }
+            .history_commitment(),
+            root.history_commitment(),
+            "layer parity is part of the shared root-history commitment"
+        );
+    }
+
+    #[test]
     fn pgc_bootstrap_proof_bytes_enforce_exact_cap_and_distinct_digest() {
         let max = usize::try_from(TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1)
             .expect("compiled proof cap fits usize");
@@ -11682,14 +15289,11 @@ mod tests {
     }
 
     #[test]
-    fn every_proof_managed_root_requires_a_distinct_exact_successor() {
+    fn every_caller_declared_root_transition_requires_a_distinct_exact_successor() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let protocols = [
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyProtocolIdV1::IrohaZkAmsV1,
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            PrivacyProtocolIdV1::PqMaspStarkV0,
         ];
         for protocol in protocols {
             for corruption in [
@@ -12216,6 +15820,26 @@ mod tests {
             value.validate(&limits)
         };
         assert!(matches!(
+            mutate_vega(|statement| statement.issuer_id = PrivacyIssuerIdV1::new([0; 32])),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::IssuerId
+            })
+        ));
+        assert!(matches!(
+            mutate_vega(|statement| statement.issuer_record_epoch = 0),
+            Err(PrivacyStatementValidationError::ZeroEpoch {
+                field: PrivacyEpochFieldV1::VegaIssuerRecord
+            })
+        ));
+        assert!(matches!(
+            mutate_vega(|statement| {
+                statement.issuer_record_digest = PrivacyVegaIssuerRecordDigestV1::new([0; 32])
+            }),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::VegaIssuerRecordDigest
+            })
+        ));
+        assert!(matches!(
             mutate_vega(|statement| statement.issuer_public_key = PrivacyP256PointV1::new([0; 33])),
             Err(PrivacyStatementValidationError::ZeroP256Point { index: 0 })
         ));
@@ -12260,6 +15884,125 @@ mod tests {
             PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
                 parameter_id: context().parameter_id
             })
+        );
+    }
+
+    #[test]
+    fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
+        let issuer_id = PrivacyIssuerIdV1::new(raw(0x91));
+        let origin = PrivacyVegaIssuerRecordV1::new(
+            issuer_id,
+            1,
+            p256_point(0x92),
+            PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+            PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+            PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .expect("canonical Vega issuer origin");
+        origin.validate_initial().expect("valid issuer origin");
+
+        let mut tampered = origin;
+        tampered.issuer_public_key = p256_point(0x93);
+        assert_eq!(
+            tampered.validate(),
+            Err(PrivacyVegaIssuerRecordValidationErrorV1::RecordDigestMismatch)
+        );
+
+        let rotation = PrivacyVegaIssuerRecordV1::new(
+            issuer_id,
+            2,
+            p256_point(0x93),
+            origin.document_type,
+            origin.namespace,
+            origin.digest_algorithm,
+            origin.issuer_authentication_algorithm,
+            origin.device_authentication_algorithm,
+            Some(origin.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .expect("canonical issuer rotation");
+        validate_vega_issuer_rotation_v1(&origin, &rotation)
+            .expect("one-step key rotation is valid");
+
+        let no_op = PrivacyVegaIssuerRecordV1::new(
+            issuer_id,
+            2,
+            origin.issuer_public_key,
+            origin.document_type,
+            origin.namespace,
+            origin.digest_algorithm,
+            origin.issuer_authentication_algorithm,
+            origin.device_authentication_algorithm,
+            Some(origin.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .expect("intrinsically valid no-op successor");
+        assert_eq!(
+            validate_vega_issuer_rotation_v1(&origin, &no_op),
+            Err(PrivacyVegaIssuerTransitionValidationErrorV1::RotationContentsUnchanged)
+        );
+
+        let wrong_predecessor = PrivacyVegaIssuerRecordV1::new(
+            issuer_id,
+            2,
+            p256_point(0x93),
+            origin.document_type,
+            origin.namespace,
+            origin.digest_algorithm,
+            origin.issuer_authentication_algorithm,
+            origin.device_authentication_algorithm,
+            Some(PrivacyVegaIssuerRecordDigestV1::new(raw(0x94))),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .expect("intrinsically valid predecessor substitution");
+        assert_eq!(
+            validate_vega_issuer_rotation_v1(&origin, &wrong_predecessor),
+            Err(PrivacyVegaIssuerTransitionValidationErrorV1::PredecessorDigestMismatch)
+        );
+
+        let revocation = PrivacyVegaIssuerRecordV1::new(
+            issuer_id,
+            3,
+            rotation.issuer_public_key,
+            rotation.document_type,
+            rotation.namespace,
+            rotation.digest_algorithm,
+            rotation.issuer_authentication_algorithm,
+            rotation.device_authentication_algorithm,
+            Some(rotation.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Revoked,
+        )
+        .expect("canonical issuer revocation");
+        validate_vega_issuer_revocation_v1(&rotation, &revocation)
+            .expect("exact terminal successor");
+        assert_eq!(
+            validate_vega_issuer_rotation_v1(&revocation, &rotation),
+            Err(PrivacyVegaIssuerTransitionValidationErrorV1::CurrentNotActive)
+        );
+
+        let encoded = norito::json::to_json(&origin).expect("encode Vega issuer record");
+        let unknown_algorithm = encoded.replacen("Sha256", "Sha512", 1);
+        assert_ne!(
+            unknown_algorithm, encoded,
+            "fixture contains digest algorithm"
+        );
+        assert!(
+            norito::json::from_json::<PrivacyVegaIssuerRecordV1>(&unknown_algorithm).is_err(),
+            "unreleased algorithm-policy variants must reject"
+        );
+        let legacy_field = encoded.replacen(
+            "\"record_epoch\":1",
+            "\"record_epoch\":1,\"legacy_key_id\":\"forbidden\"",
+            1,
+        );
+        assert_ne!(legacy_field, encoded, "fixture contains record epoch");
+        assert!(
+            norito::json::from_json::<PrivacyVegaIssuerRecordV1>(&legacy_field).is_err(),
+            "unknown legacy fields must reject"
         );
     }
 
@@ -12334,6 +16077,29 @@ mod tests {
             })
             .is_ok()
         );
+        assert!(
+            mutate_date(PrivacyVegaMdlDateV1 {
+                year: VEGA_MDL_MAX_PRESENTATION_YEAR_V1,
+                month: 12,
+                day: 31,
+            })
+            .is_ok(),
+            "the maximum presentation date has a possible later four-digit expiry"
+        );
+    }
+
+    #[test]
+    fn vega_release_constants_match_the_one_compiled_figure9_shape() {
+        assert_eq!(VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, 368);
+        assert_eq!(VEGA_MDL_MSO_PAYLOAD_BYTES_V1, 348);
+        assert_eq!(VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, 92);
+        assert_eq!(VEGA_MDL_BIRTH_RANDOM_BYTES_V1, 16);
+        assert_eq!(VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, 10);
+        assert_eq!(VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1, 20);
+        assert_eq!(VEGA_MDL_MIN_PRESENTATION_YEAR_V1, 1_970);
+        assert_eq!(VEGA_MDL_MAX_PRESENTATION_YEAR_V1, 9_998);
+        assert_eq!(VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, 1);
+        assert_eq!(VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1, 150);
     }
 
     #[test]
@@ -12374,12 +16140,6 @@ mod tests {
             })
             .is_err()
         );
-        assert!(
-            validate_mutated_x509(base, limits, |statement| {
-                statement.crl_nonmembership_root_epoch = 0;
-            })
-            .is_err()
-        );
         assert!(matches!(
             validate_mutated_x509(base, limits, |statement| {
                 statement.trust_anchor_record_epoch = 0;
@@ -12412,6 +16172,22 @@ mod tests {
             }),
             Err(PrivacyStatementValidationError::ZeroTypedField {
                 field: PrivacyTypedFieldV1::X509CertificatePolicyRecordDigest
+            })
+        ));
+        assert!(matches!(
+            validate_mutated_x509(base, limits, |statement| {
+                statement.crl_record_epoch = 0;
+            }),
+            Err(PrivacyStatementValidationError::ZeroEpoch {
+                field: PrivacyEpochFieldV1::X509CrlRecord
+            })
+        ));
+        assert!(matches!(
+            validate_mutated_x509(base, limits, |statement| {
+                statement.crl_record_digest = PrivacyZkX509CrlRecordDigestV1::new([0; 32])
+            }),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::X509CrlRecordDigest
             })
         ));
         assert!(matches!(
@@ -12454,7 +16230,7 @@ mod tests {
         ));
     }
 
-    fn assert_x509_disclosure_and_chain_rejections(
+    fn assert_x509_disclosure_and_presentation_rejections(
         base: &PrivacyStatementV1,
         limits: &PrivacyConsensusLimitsV1,
     ) {
@@ -12497,32 +16273,133 @@ mod tests {
                 }
             )
         ));
-        assert!(matches!(
-            validate_mutated_x509(base, limits, |statement| {
-                statement.chain_depth = ZK_X509_MAX_CHAIN_DEPTH_V1 + 1;
-            }),
-            Err(PrivacyStatementValidationError::InvalidX509ChainDepth { .. })
-        ));
-        assert!(matches!(
-            validate_mutated_x509(base, limits, |statement| {
-                statement.leaf_certificate_bytes = ZK_X509_MAX_CERTIFICATE_BYTES_V1 + 1
-            }),
-            Err(PrivacyStatementValidationError::InvalidX509LeafCertificateSize { .. })
-        ));
-        assert!(matches!(
-            validate_mutated_x509(base, limits, |statement| {
-                statement.chain_certificate_bytes = statement.leaf_certificate_bytes - 1
-            }),
-            Err(PrivacyStatementValidationError::InvalidX509ChainSize { .. })
-        ));
+        validate_mutated_x509(base, limits, |statement| {
+            statement.presentation_not_after_unix_seconds = statement
+                .presentation_not_before_unix_seconds
+                + ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1;
+        })
+        .expect("the exact presentation-window ceiling is admitted");
+        let window_mutations: [fn(&mut IrohaZkX509StarkP256StatementV1); 3] = [
+            |statement: &mut IrohaZkX509StarkP256StatementV1| {
+                statement.presentation_not_after_unix_seconds =
+                    statement.presentation_not_before_unix_seconds;
+            },
+            |statement: &mut IrohaZkX509StarkP256StatementV1| {
+                statement.presentation_not_after_unix_seconds =
+                    statement.presentation_not_before_unix_seconds - 1;
+            },
+            |statement: &mut IrohaZkX509StarkP256StatementV1| {
+                statement.presentation_not_after_unix_seconds = statement
+                    .presentation_not_before_unix_seconds
+                    + ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1
+                    + 1;
+            },
+        ];
+        for mutation in window_mutations {
+            assert!(matches!(
+                validate_mutated_x509(base, limits, mutation),
+                Err(PrivacyStatementValidationError::InvalidX509PresentationWindow { .. })
+            ));
+        }
     }
 
     #[test]
-    fn x509_rejects_stale_roots_invalid_usage_and_invalid_chain_sizes() {
+    fn zk_x509_governance_sha256_frames_match_known_answers() {
+        // A small, canonical DER SEQUENCE containing INTEGER 42 and NULL.
+        let exact_crl_der = hex!("300502012a0500");
+        // RFC 5480 id-ecPublicKey/P-256 SPKI for the SEC 2 generator.
+        let exact_issuer_spki_der = hex!(
+            "3059301306072a8648ce3d020106082a8648ce3d03010703420004\
+             6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296\
+             4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+        );
+        let crl_der_digest = PrivacyX509CrlDerDigestV1::digest_exact_der(&exact_crl_der);
+        let issuer_spki_digest =
+            PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(&exact_issuer_spki_der);
+        assert_eq!(
+            crl_der_digest.as_bytes(),
+            &hex!("bfa3e6225fbdc178b8595c06d8fb7ac8c48bcbf22370733501284b73fbba7e98")
+        );
+        assert_eq!(
+            issuer_spki_digest.as_bytes(),
+            &hex!("f7e1ecd75dd0aee92a81c2e8cfbb22cdee73ba8700b64349f6331d989d2b4400")
+        );
+        assert_ne!(
+            crl_der_digest.as_bytes(),
+            PrivacyX509CrlDerDigestV1::digest_exact_der(&exact_issuer_spki_der).as_bytes(),
+            "the exact byte sequence must remain bound to its digest input"
+        );
+        assert_ne!(
+            crl_der_digest.as_bytes(),
+            PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(&exact_crl_der).as_bytes(),
+            "identical bytes under distinct digest domains must not collide"
+        );
+
+        let record = PrivacyZkX509CrlRecordV1::new(
+            PrivacyIssuerIdV1::new([0x11; 32]),
+            PrivacyPolicyIdV1::new([0x22; 32]),
+            1,
+            42,
+            crl_der_digest,
+            issuer_spki_digest,
+            1_700_000_000,
+            1_700_000_300,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("known-answer CRL record is canonical");
+        assert_eq!(
+            record.record_digest.as_bytes(),
+            &hex!("d9cc3938a2fb3b8407f17c9e71ce926c627c144c1bf6c6a89a5fa2b73176c64d")
+        );
+
+        let trust_anchor = PrivacyZkX509TrustAnchorRecordV1::new(
+            PrivacyIssuerIdV1::new([0x11; 32]),
+            1,
+            PrivacyX509TrustStoreDigestV1::new([0x22; 32]),
+            PrivacyRootV1::new([0x33; 32]),
+            1,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("known-answer trust-anchor record is canonical");
+        assert_eq!(
+            trust_anchor.record_digest.as_bytes(),
+            &hex!("e4a0cf77fc1f0acefeeb98e62c74f718a2aa44e6471f7d1ee4d8b9022743e429")
+        );
+
+        let policy = PrivacyZkX509CertificatePolicyRecordV1::new(
+            PrivacyIssuerIdV1::new([0x11; 32]),
+            PrivacyPolicyIdV1::new([0x22; 32]),
+            1,
+            PrivacyPolicyDigestV1::new([0x33; 32]),
+            PrivacyX509KeyUsageV1 {
+                digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
+                content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
+                key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
+            },
+            vec![
+                PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+            ],
+            vec![0, 3],
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("known-answer certificate-policy record is canonical");
+        assert_eq!(
+            policy.record_digest.as_bytes(),
+            &hex!("9a1b485c0566abe3130bf29cacb9e2108adb6372174f8578021019a2f58c8ab0")
+        );
+    }
+
+    #[test]
+    fn x509_rejects_stale_roots_invalid_usage_and_invalid_presentation_windows() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let x509 = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
         assert_x509_governance_and_usage_rejections(&x509, &limits);
-        assert_x509_disclosure_and_chain_rejections(&x509, &limits);
+        assert_x509_disclosure_and_presentation_rejections(&x509, &limits);
     }
 
     fn assert_zk_x509_trust_anchor_record_roundtrip(
@@ -12606,16 +16483,99 @@ mod tests {
         tampered.trust_store_digest = PrivacyX509TrustStoreDigestV1::new(raw(83));
         anchor_tamperings.push(tampered);
         let mut tampered = trust_anchor;
-        tampered.lifecycle = PrivacyZkX509RecordLifecycleV1::Revoked;
+        tampered.ca_membership_root = PrivacyRootV1::new(raw(84));
         anchor_tamperings.push(tampered);
         for tampered in anchor_tamperings {
-            assert!(tampered.validate().is_err());
+            assert_eq!(
+                tampered.validate(),
+                Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch)
+            );
         }
+        let mut terminal_origin = trust_anchor;
+        terminal_origin.lifecycle = PrivacyZkX509RecordLifecycleV1::Revoked;
+        assert_eq!(
+            terminal_origin.validate(),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::RevokedCaMembershipRootEpochNotHistorical {
+                    record_epoch: 1,
+                    root_epoch: 1,
+                }
+            )
+        );
+        let mut mismatched_root_epoch = trust_anchor;
+        mismatched_root_epoch.ca_membership_root_epoch = trust_anchor.record_epoch + 1;
+        assert_eq!(
+            mismatched_root_epoch.validate(),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::CaMembershipRootEpochMismatch {
+                    record_epoch: trust_anchor.record_epoch,
+                    root_epoch: trust_anchor.record_epoch + 1,
+                }
+            )
+        );
         let mut zero_digest = trust_anchor;
         zero_digest.record_digest = PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32]);
         assert_eq!(
             zero_digest.validate(),
             Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest)
+        );
+        assert_eq!(
+            PrivacyZkX509TrustAnchorRecordV1::new(
+                trust_anchor.trust_anchor_id,
+                1,
+                trust_anchor.trust_store_digest,
+                PrivacyRootV1::new([0; 32]),
+                1,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCaMembershipRoot)
+        );
+        assert_eq!(
+            PrivacyZkX509TrustAnchorRecordV1::new(
+                trust_anchor.trust_anchor_id,
+                1,
+                trust_anchor.trust_store_digest,
+                trust_anchor.ca_membership_root,
+                0,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCaMembershipRootEpoch)
+        );
+        assert_eq!(
+            PrivacyZkX509TrustAnchorRecordV1::new(
+                trust_anchor.trust_anchor_id,
+                1,
+                trust_anchor.trust_store_digest,
+                trust_anchor.ca_membership_root,
+                2,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::CaMembershipRootEpochMismatch {
+                    record_epoch: 1,
+                    root_epoch: 2,
+                }
+            )
+        );
+        assert_eq!(
+            PrivacyZkX509TrustAnchorRecordV1::new(
+                trust_anchor.trust_anchor_id,
+                2,
+                trust_anchor.trust_store_digest,
+                trust_anchor.ca_membership_root,
+                2,
+                Some(trust_anchor.record_digest),
+                PrivacyZkX509RecordLifecycleV1::Revoked,
+            ),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::RevokedCaMembershipRootEpochNotHistorical {
+                    record_epoch: 2,
+                    root_epoch: 2,
+                }
+            )
         );
 
         let mut policy_tamperings = Vec::new();
@@ -12657,6 +16617,237 @@ mod tests {
         assert_zk_x509_trust_anchor_record_roundtrip(trust_anchor);
         assert_zk_x509_certificate_policy_record_roundtrip(&certificate_policy);
         assert_zk_x509_record_tampering_rejected(trust_anchor, &certificate_policy);
+    }
+
+    #[test]
+    fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
+        let origin = zk_x509_crl(
+            ZK_X509_INITIAL_RECORD_EPOCH_V1,
+            100,
+            1_000,
+            101,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        origin
+            .validate_initial()
+            .expect("canonical signed-CRL origin");
+        assert_eq!(
+            origin
+                .compute_record_digest()
+                .expect("recompute signed-CRL digest"),
+            origin.record_digest
+        );
+
+        let encoded = norito::to_bytes(&origin).expect("encode signed-CRL record");
+        let decoded: PrivacyZkX509CrlRecordV1 =
+            norito::decode_from_bytes(&encoded).expect("decode signed-CRL record");
+        assert_eq!(decoded, origin);
+        decoded
+            .validate_initial()
+            .expect("decoded signed-CRL record validates");
+        let json = norito::json::to_json(&origin).expect("encode signed-CRL JSON");
+        let decoded_json: PrivacyZkX509CrlRecordV1 =
+            norito::json::from_json(&json).expect("decode signed-CRL JSON");
+        assert_eq!(decoded_json, origin);
+        let object_prefix = json
+            .strip_suffix('}')
+            .expect("signed-CRL JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyZkX509CrlRecordV1>(&format!(
+                "{object_prefix},\"legacy_crl\":true}}"
+            ))
+            .is_err()
+        );
+
+        let construct = |trust_anchor_id,
+                         certificate_policy_id,
+                         record_epoch,
+                         crl_number,
+                         crl_der_digest,
+                         issuer_spki_digest,
+                         this_update,
+                         next_update,
+                         previous_record_digest,
+                         lifecycle| {
+            PrivacyZkX509CrlRecordV1::new(
+                trust_anchor_id,
+                certificate_policy_id,
+                record_epoch,
+                crl_number,
+                crl_der_digest,
+                issuer_spki_digest,
+                this_update,
+                next_update,
+                previous_record_digest,
+                lifecycle,
+            )
+        };
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                1,
+                1,
+                PrivacyX509CrlDerDigestV1::new([0; 32]),
+                origin.issuer_spki_digest,
+                1_000,
+                1_300,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlDerDigest)
+        );
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                1,
+                1,
+                origin.crl_der_digest,
+                PrivacyX509CrlIssuerSpkiDigestV1::new([0; 32]),
+                1_000,
+                1_300,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlIssuerSpkiDigest)
+        );
+        for (this_update, next_update) in [(1_000, 1_000), (1_001, 1_000)] {
+            assert_eq!(
+                construct(
+                    origin.trust_anchor_id,
+                    origin.certificate_policy_id,
+                    1,
+                    1,
+                    origin.crl_der_digest,
+                    origin.issuer_spki_digest,
+                    this_update,
+                    next_update,
+                    None,
+                    PrivacyZkX509RecordLifecycleV1::Active,
+                ),
+                Err(PrivacyZkX509RecordValidationErrorV1::InvalidCrlValidityWindow)
+            );
+        }
+        let mut tampered = origin;
+        tampered.next_update_unix_seconds += 1;
+        assert_eq!(
+            tampered.validate(),
+            Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch)
+        );
+
+        let rotation = zk_x509_crl(
+            2,
+            102,
+            1_200,
+            103,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        validate_zk_x509_crl_rotation_v1(&origin, &rotation)
+            .expect("canonical signed-CRL rotation");
+        let mut rotation_revocation = zk_x509_crl(
+            3,
+            102,
+            1_200,
+            103,
+            Some(rotation.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        rotation_revocation.crl_number = rotation.crl_number;
+        rotation_revocation.record_digest = rotation_revocation
+            .compute_record_digest()
+            .expect("canonical post-rotation CRL revocation digest");
+        validate_zk_x509_crl_revocation_v1(&rotation, &rotation_revocation)
+            .expect("revocation preserves the most recent complete signed CRL");
+
+        let stale_update = zk_x509_crl(
+            2,
+            102,
+            1_000,
+            103,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&origin, &stale_update),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CrlThisUpdateNotIncreasing)
+        );
+        let mut stale_number = rotation;
+        stale_number.crl_number = origin.crl_number;
+        stale_number.record_digest = stale_number
+            .compute_record_digest()
+            .expect("stale CRLNumber digest");
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&origin, &stale_number),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CrlNumberNotIncreasing)
+        );
+        let same_der = zk_x509_crl(
+            2,
+            100,
+            1_200,
+            103,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&origin, &same_der),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged)
+        );
+
+        let mut issuer_substitution = rotation;
+        issuer_substitution.issuer_spki_digest = PrivacyX509CrlIssuerSpkiDigestV1::new(raw(104));
+        issuer_substitution.record_digest = issuer_substitution
+            .compute_record_digest()
+            .expect("issuer-substitution digest");
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&origin, &issuer_substitution),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CrlIssuerSpkiDigestMismatch)
+        );
+
+        let mut revoked = zk_x509_crl(
+            2,
+            100,
+            1_000,
+            101,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        revoked.crl_number = origin.crl_number;
+        revoked.record_digest = revoked
+            .compute_record_digest()
+            .expect("canonical signed-CRL revocation digest");
+        validate_zk_x509_crl_revocation_v1(&origin, &revoked)
+            .expect("canonical signed-CRL lineage revocation");
+        let after_terminal = zk_x509_crl(
+            3,
+            105,
+            1_400,
+            106,
+            Some(revoked.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&revoked, &after_terminal),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CurrentNotActive)
+        );
+        let mut mutated_revocation = zk_x509_crl(
+            2,
+            100,
+            1_000,
+            107,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        mutated_revocation.crl_number = origin.crl_number;
+        mutated_revocation.record_digest = mutated_revocation
+            .compute_record_digest()
+            .expect("mutated signed-CRL revocation digest");
+        assert_eq!(
+            validate_zk_x509_crl_revocation_v1(&origin, &mutated_revocation),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
+        );
     }
 
     fn assert_zk_x509_policy_caps_and_ordering() {
@@ -12749,6 +16940,49 @@ mod tests {
         );
         validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &anchor_rotation)
             .expect("canonical trust-anchor rotation");
+        let mut digest_only_rotation = anchor_rotation;
+        digest_only_rotation.ca_membership_root = anchor_origin.ca_membership_root;
+        digest_only_rotation.record_digest = digest_only_rotation
+            .compute_record_digest()
+            .expect("digest-only trust-anchor rotation digest");
+        assert_eq!(
+            validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &digest_only_rotation),
+            Err(
+                PrivacyZkX509TransitionValidationErrorV1::TrustStoreDigestChangedWithoutCaMembershipRoot
+            )
+        );
+        let mut root_only_rotation = anchor_rotation;
+        root_only_rotation.trust_store_digest = anchor_origin.trust_store_digest;
+        root_only_rotation.record_digest = root_only_rotation
+            .compute_record_digest()
+            .expect("root-only trust-anchor rotation digest");
+        assert_eq!(
+            validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &root_only_rotation),
+            Err(
+                PrivacyZkX509TransitionValidationErrorV1::CaMembershipRootChangedWithoutTrustStoreDigest
+            )
+        );
+        let rotation_revocation = zk_x509_trust_anchor(
+            3,
+            92,
+            Some(anchor_rotation.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        validate_zk_x509_trust_anchor_revocation_v1(&anchor_rotation, &rotation_revocation)
+            .expect("trust-anchor revocation preserves the latest active CA-root epoch");
+        let mut substituted_historical_root_epoch = rotation_revocation;
+        substituted_historical_root_epoch.ca_membership_root_epoch =
+            anchor_origin.ca_membership_root_epoch;
+        substituted_historical_root_epoch.record_digest = substituted_historical_root_epoch
+            .compute_record_digest()
+            .expect("historical CA-root epoch substitution digest");
+        assert_eq!(
+            validate_zk_x509_trust_anchor_revocation_v1(
+                &anchor_rotation,
+                &substituted_historical_root_epoch,
+            ),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
+        );
         let anchor_noop = zk_x509_trust_anchor(
             2,
             91,
@@ -13318,6 +17552,18 @@ mod tests {
         let decoded: BootleLanternIssuerPolicyV1 =
             norito::decode_from_bytes(&encoded).expect("decode policy");
         assert_eq!(&decoded, record);
+        let json = norito::json::to_json(record).expect("encode policy JSON");
+        let decoded_json: BootleLanternIssuerPolicyV1 =
+            norito::json::from_json(&json).expect("decode policy JSON");
+        assert_eq!(&decoded_json, record);
+        let object_prefix = json
+            .strip_suffix('}')
+            .expect("policy JSON is a top-level object");
+        let unknown_field = format!("{object_prefix},\"legacy_policy_alias\":true}}");
+        assert!(
+            norito::json::from_json::<BootleLanternIssuerPolicyV1>(&unknown_field).is_err(),
+            "unknown JSON fields must not create an alternate first-release policy encoding"
+        );
     }
 
     fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1) {
@@ -13365,6 +17611,12 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix)
+        );
+        invalid = record.clone();
+        invalid.issuer_parameter_digest.0[0] ^= 1;
+        assert_eq!(
+            invalid.validate(),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterDigestMismatch)
         );
     }
 
@@ -13445,15 +17697,16 @@ mod tests {
             .validate_successor(record)
             .expect("strict policy rotation");
 
-        let mut non_increasing = successor.clone();
-        non_increasing.epoch = record.epoch;
-        redigest_bootle_lantern_policy(&mut non_increasing);
+        let mut non_consecutive = successor.clone();
+        non_consecutive.epoch = 3;
+        redigest_bootle_lantern_policy(&mut non_consecutive);
         assert!(matches!(
-            non_increasing.validate_successor(record),
+            non_consecutive.validate_successor(record),
             Err(
-                BootleLanternIssuerPolicyValidationErrorV1::NonIncreasingEpoch {
+                BootleLanternIssuerPolicyValidationErrorV1::NonConsecutiveEpoch {
                     previous: 1,
-                    next: 1
+                    next: 3,
+                    expected: 2
                 }
             )
         ));
@@ -13464,12 +17717,38 @@ mod tests {
             unchanged.validate_successor(record),
             Err(BootleLanternIssuerPolicyValidationErrorV1::UnchangedRotation)
         );
+        let mut revoked = record.clone();
+        revoked.epoch = 2;
+        revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        redigest_bootle_lantern_policy(&mut revoked);
+        revoked
+            .validate_revocation_successor(record)
+            .expect("exact terminal revocation");
+        let mut revocation_with_rotation = revoked.clone();
+        revocation_with_rotation.required_disclosure_bitmap ^= 1;
+        redigest_bootle_lantern_policy(&mut revocation_with_rotation);
+        assert_eq!(
+            revocation_with_rotation.validate_revocation_successor(record),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::RevocationMustPreservePolicy)
+        );
+        assert_eq!(
+            revoked.validate_successor(&revoked),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::PolicyAlreadyRevoked)
+        );
+
         let mut wrong_initial_epoch = record.clone();
         wrong_initial_epoch.epoch = 2;
         redigest_bootle_lantern_policy(&mut wrong_initial_epoch);
         assert_eq!(
             wrong_initial_epoch.validate_initial(),
             Err(BootleLanternIssuerPolicyValidationErrorV1::InvalidInitialEpoch { epoch: 2 })
+        );
+        let mut revoked_initial = record.clone();
+        revoked_initial.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        redigest_bootle_lantern_policy(&mut revoked_initial);
+        assert_eq!(
+            revoked_initial.validate_initial(),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::InitialPolicyMustBeActive)
         );
     }
 
@@ -13609,21 +17888,158 @@ mod tests {
         let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
             unreachable!()
         };
-        statement.input_commitments = vec![commitment(121), commitment(122), commitment(123)];
-        statement.link_tags = vec![nullifier(124), nullifier(125), nullifier(126)];
+        statement.inputs = vec![fcmp_input(121), fcmp_input(122), fcmp_input(123)];
         assert!(matches!(
             fcmp.validate(limits),
-            Err(PrivacyStatementValidationError::TooManyCommitments {
+            Err(PrivacyStatementValidationError::InvalidFcmpInputCount {
                 count: 3,
                 max: FCMP_MAX_INPUTS_V1
             })
         ));
+
+        let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
+        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+            unreachable!()
+        };
+        statement.output_set_root.layers = 0;
+        assert!(matches!(
+            fcmp.validate(&limits),
+            Err(PrivacyStatementValidationError::InvalidFcmpTreeRoot(
+                PrivacyFcmpTreeRootValidationErrorV1::InvalidLayerCount { layers: 0, .. }
+            ))
+        ));
+
+        let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
+        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+            unreachable!()
+        };
+        statement.inputs[0].rerandomization_commitment = [0; 32];
+        assert_eq!(
+            fcmp.validate(&limits),
+            Err(PrivacyStatementValidationError::InvalidFcmpInput {
+                index: 0,
+                source: PrivacyFcmpInputValidationErrorV1::ZeroComponent {
+                    component: PrivacyFcmpInputComponentV1::RerandomizationCommitment,
+                },
+            })
+        );
+
+        for duplicate_key_image in [true, false] {
+            let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
+            let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+                unreachable!()
+            };
+            statement.inputs.push(fcmp_input(141));
+            if duplicate_key_image {
+                statement.inputs[1].key_image = statement.inputs[0].key_image;
+                assert_eq!(
+                    fcmp.validate(&limits),
+                    Err(PrivacyStatementValidationError::DuplicateFcmpKeyImage { index: 1 })
+                );
+            } else {
+                statement.inputs[1].pseudo_out = statement.inputs[0].pseudo_out;
+                assert_eq!(
+                    fcmp.validate(&limits),
+                    Err(PrivacyStatementValidationError::DuplicateFcmpPseudoOut { index: 1 })
+                );
+            }
+        }
+
+        let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
+        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+            unreachable!()
+        };
+        statement.outputs[0].amount_commitment = [0; 32];
+        assert_eq!(
+            fcmp.validate(&limits),
+            Err(PrivacyStatementValidationError::InvalidFcmpOutput {
+                index: 0,
+                source: PrivacyFcmpOutputTupleValidationErrorV1::ZeroComponent {
+                    component: PrivacyFcmpOutputComponentV1::AmountCommitment,
+                },
+            })
+        );
+
+        let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
+        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+            unreachable!()
+        };
+        statement.outputs.push(statement.outputs[0]);
+        statement
+            .encrypted_outputs
+            .push(statement.encrypted_outputs[0].clone());
+        assert_eq!(
+            fcmp.validate(&limits),
+            Err(PrivacyStatementValidationError::DuplicateFcmpOutputId { index: 1 })
+        );
+
+        let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
+        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+            unreachable!()
+        };
+        statement.encrypted_outputs[0].output_id = fcmp_output(222).output_id();
+        assert_eq!(
+            fcmp.validate(&limits),
+            Err(PrivacyStatementValidationError::FcmpEncryptedOutputIdMismatch { index: 0 })
+        );
+
+        let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
+        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+            unreachable!()
+        };
+        statement.encrypted_outputs.clear();
+        assert_eq!(
+            fcmp.validate(&limits),
+            Err(PrivacyStatementValidationError::MissingEncryptedOutput)
+        );
+
+        let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+            unreachable!()
+        };
+        statement.action_digest = PrivacyActionDigestV1::new([0; 32]);
+        assert_eq!(
+            ivm.validate(&limits),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::ActionDigest,
+            })
+        );
+
+        let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+            unreachable!()
+        };
+        statement.action_digest.0[0] ^= 1;
+        assert_eq!(
+            ivm.validate(&limits),
+            Err(PrivacyStatementValidationError::ActionDigestMismatch)
+        );
+
+        let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+            unreachable!()
+        };
+        statement.execution_epoch += 1;
+        statement.action_digest = statement
+            .computed_action_digest()
+            .expect("recompute mismatched-epoch action digest");
+        assert_eq!(
+            ivm.validate(&limits),
+            Err(PrivacyStatementValidationError::EpochBindingMismatch {
+                field: PrivacyEpochFieldV1::Execution,
+                root_epoch: 15,
+                bound_epoch: 16,
+            })
+        );
 
         let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
         let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
             unreachable!()
         };
         statement.nullifiers = vec![nullifier(127), nullifier(128), nullifier(129)];
+        statement.action_digest = statement
+            .computed_action_digest()
+            .expect("recompute oversized-input action digest");
         assert!(matches!(
             ivm.validate(limits),
             Err(PrivacyStatementValidationError::TooManyNullifiers {
@@ -13645,6 +18061,20 @@ mod tests {
             })
         ));
 
+        let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV0);
+        let PrivacyStatementV1::PqMaspStarkV0(statement) = &mut pq else {
+            unreachable!()
+        };
+        statement.authorization_epoch += 1;
+        assert_eq!(
+            pq.validate(&limits),
+            Err(PrivacyStatementValidationError::EpochBindingMismatch {
+                field: PrivacyEpochFieldV1::Authorization,
+                root_epoch: 17,
+                bound_epoch: 18,
+            })
+        );
+
         let mut malformed = statement_for(PrivacyProtocolIdV1::PqMaspStarkV0);
         let PrivacyStatementV1::PqMaspStarkV0(statement) = &mut malformed else {
             unreachable!()
@@ -13662,6 +18092,62 @@ mod tests {
         assert_orchard_count_and_ciphertext_boundaries(&limits);
         assert_orchard_uniqueness_and_balance_boundaries(&limits);
         assert_other_private_transfer_shape_boundaries(&limits);
+    }
+
+    #[test]
+    fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
+        assert_eq!(PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1, 180);
+        assert_eq!(PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, 224);
+
+        let canonical = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &canonical else {
+            unreachable!()
+        };
+        let ciphertext = statement.encrypted_outputs[0].ciphertext.clone();
+        assert_eq!(
+            ciphertext.len(),
+            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1
+        );
+        assert_eq!(
+            ciphertext.get(..4),
+            Some(PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1.as_slice())
+        );
+
+        let mut malformed = Vec::new();
+        let mut truncated = ciphertext.clone();
+        truncated.pop();
+        malformed.push(truncated);
+        let mut suffixed = ciphertext.clone();
+        suffixed.push(0);
+        malformed.push(suffixed);
+        let mut wrong_magic = ciphertext.clone();
+        wrong_magic[0] ^= 1;
+        malformed.push(wrong_magic);
+        let mut zero_nonce = ciphertext.clone();
+        zero_nonce[4..4 + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1].fill(0);
+        malformed.push(zero_nonce);
+        let mut zero_payload = ciphertext;
+        zero_payload[4 + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1..].fill(0);
+        malformed.push(zero_payload);
+
+        for ciphertext in malformed {
+            let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+            let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+                unreachable!()
+            };
+            statement.encrypted_outputs[0].ciphertext = ciphertext;
+            statement.action_digest = statement
+                .computed_action_digest()
+                .expect("recompute malformed-codec action digest");
+            assert_eq!(
+                ivm.validate(&PrivacyConsensusLimitsV1::taira_default()),
+                Err(
+                    PrivacyStatementValidationError::InvalidIvmPrivateEncryptedOutputCodec {
+                        index: 0,
+                    }
+                )
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,2017 @@
+//! Pointwise scalar-bit copy bus for the complete P-256 window schedule.
+//!
+//! The P-256 arithmetic chip decomposes each scalar result into sixteen
+//! little-endian 16-bit limbs.  The window chip consumes 64 big-endian
+//! four-bit nibbles for each of `u1` and `u2`.  This module fixes the conversion
+//! between those layouts and binds every one of the 512 consumed bits directly
+//! to the corresponding committed arithmetic `c` bit.
+//!
+//! Four independently challenged products audit the same fixed-address copy
+//! relation.  Three consecutive factors are packed into one physical row with
+//! explicit intermediate products, so every product transition remains degree
+//! two.  The 513th and final slot is canonical inactive padding.  Deterministic
+//! per-slot equality is also enforced; correctness therefore does not depend
+//! on a probabilistic permutation argument.
+//!
+//! This module remains inactive until the aggregate zk-X509 proof commits the
+//! arithmetic trace and all 128 window traces before sampling these
+//! challenges.
+
+use thiserror::Error;
+
+use super::{
+    p256_air::{
+        P256_ARITHMETIC_ROWS_PER_OPERATION_V1, ZkX509P256AirErrorV1, ZkX509P256ArithmeticTraceV1,
+        ZkX509P256ModulusV1, p256_arithmetic_c_limb_bits_v1,
+    },
+    p256_window_air::{P256WindowAirErrorV1, P256WindowScalarV1, P256WindowTraceV1},
+};
+use crate::privacy_engines::transparent_stark::{
+    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+};
+
+/// Stable descriptor for the inactive first-release scalar-bit copy bus.
+pub(crate) const ZK_X509_P256_SCALAR_BIT_BUS_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-scalar-bit-bus-v2-incompatible:two-verifier-fixed-scalars-u1-then-u2:64-big-endian-four-bit-windows-per-scalar:pointwise-map-to-little-endian-c-limb-bits:scalar-field-c-operations-distinct:deterministic-bit-equality:four-post-arithmetic-and-window-commitment-products:scalar-window-bit-value-tuples:three-factors-per-physical-row:one-canonical-inactive-factor:256-row-canonical-padding:aggregate-base6:aux32:verifier-fixed16:constraints67-degree3:source-side-terminal-binding-required:activation=false";
+
+/// Independent tuple-product lanes.
+pub(crate) const P256_SCALAR_BIT_BUS_LANES_V1: usize = 4;
+/// `beta`, scalar, window, bit-within-window, and value.
+pub(crate) const P256_SCALAR_BIT_BUS_TUPLE_TERMS_V1: usize = 5;
+/// Consecutive low-degree factors packed into one physical row.
+pub(crate) const P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1: usize = 3;
+/// Fixed four-bit windows consumed by each scalar.
+pub(crate) const P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1: usize = 64;
+/// Scalars consumed by ECDSA verification: `u1` and `u2`.
+pub(crate) const P256_SCALAR_BIT_BUS_SCALARS_V1: usize = 2;
+/// Pointwise bit copies in the complete schedule.
+pub(crate) const P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1: usize =
+    P256_SCALAR_BIT_BUS_SCALARS_V1 * P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1 * 4;
+/// Physical rows after packing three factors and adding canonical padding.
+pub(crate) const P256_SCALAR_BIT_BUS_ROWS_V1: usize =
+    P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1.div_ceil(P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1);
+/// Total factor slots, including exactly one inactive slot.
+pub(crate) const P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1: usize =
+    P256_SCALAR_BIT_BUS_ROWS_V1 * P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
+/// Sole padded aggregate trace size.
+pub(crate) const P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1: usize = 256;
+/// Committed arithmetic/window bit copies.
+pub(crate) const P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1: usize = 6;
+/// Two four-state, four-lane product families.
+pub(crate) const P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1: usize = 32;
+/// Verifier-preprocessed slot coordinates and row boundaries.
+pub(crate) const P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1: usize = 16;
+/// Exact fixed-width opened-row constraint inventory.
+pub(crate) const P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1: usize = 67;
+/// Maximum total polynomial degree.
+pub(crate) const P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_DEGREE_V1: u8 = 3;
+
+const P256_SCALAR_BITS_V1: usize = 256;
+const P256_SCALAR_LIMBS_V1: usize = 16;
+const P256_SCALAR_LIMB_BITS_V1: usize = 16;
+const P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1: usize = P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 + 1;
+
+const STARK_ARITHMETIC_BITS: usize = 0;
+const STARK_WINDOW_BITS: usize = STARK_ARITHMETIC_BITS + P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
+const STARK_ARITHMETIC_PRODUCTS: usize = 0;
+const STARK_WINDOW_PRODUCTS: usize = STARK_ARITHMETIC_PRODUCTS
+    + P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 * P256_SCALAR_BIT_BUS_LANES_V1;
+
+const STARK_FIXED_SLOT_WIDTH: usize = 4;
+const STARK_FIXED_SLOT_ACTIVE: usize = 0;
+const STARK_FIXED_SLOT_SCALAR: usize = 1;
+const STARK_FIXED_SLOT_WINDOW: usize = 2;
+const STARK_FIXED_SLOT_BIT: usize = 3;
+const STARK_FIXED_FIRST_ROW: usize =
+    P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 * STARK_FIXED_SLOT_WIDTH;
+const STARK_FIXED_LAST_ACTIVE_ROW: usize = STARK_FIXED_FIRST_ROW + 1;
+const STARK_FIXED_ACTIVE_CONTINUE: usize = STARK_FIXED_LAST_ACTIVE_ROW + 1;
+const STARK_FIXED_PADDING: usize = STARK_FIXED_ACTIVE_CONTINUE + 1;
+
+const _: () = assert!(P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1 == 512);
+const _: () = assert!(P256_SCALAR_BIT_BUS_ROWS_V1 == 171);
+const _: () = assert!(P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 == 513);
+const _: () =
+    assert!(P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 - P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1 == 1);
+const _: () = assert!(P256_SCALAR_LIMBS_V1 * P256_SCALAR_LIMB_BITS_V1 == P256_SCALAR_BITS_V1);
+const _: () = assert!(
+    STARK_WINDOW_BITS + P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1
+        == P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1
+);
+const _: () = assert!(
+    STARK_WINDOW_PRODUCTS + P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 * P256_SCALAR_BIT_BUS_LANES_V1
+        == P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1
+);
+const _: () = assert!(STARK_FIXED_PADDING + 1 == P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1);
+
+/// One verifier-fixed scalar result supplying 64 window nibbles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct P256ScalarBitSourceV1 {
+    /// `u1` or `u2`; sources must be supplied in that order.
+    pub(crate) scalar: P256WindowScalarV1,
+    /// Arithmetic operation whose committed scalar-field `c` is consumed.
+    pub(crate) c_operation: u32,
+}
+
+/// Verifier-regenerated identity for one factor slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum P256ScalarBitBusFixedAccessV1 {
+    /// Canonical product-identity padding.
+    Inactive,
+    /// One big-endian bit in one verifier-positioned scalar nibble.
+    Active {
+        /// `u1` or `u2`.
+        scalar: P256WindowScalarV1,
+        /// Big-endian nibble index, from zero through 63.
+        window: u8,
+        /// Big-endian bit within the nibble, from zero through three.
+        bit: u8,
+    },
+}
+
+/// One tuple-compression lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct P256ScalarBitBusLaneChallengesV1 {
+    /// `beta` followed by coefficients for scalar, window, bit, and value.
+    pub(crate) terms: [F; P256_SCALAR_BIT_BUS_TUPLE_TERMS_V1],
+}
+
+/// Four independently sampled tuple products.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct P256ScalarBitBusChallengesV1 {
+    /// Transcript-separated product lanes.
+    pub(crate) lanes: [P256ScalarBitBusLaneChallengesV1; P256_SCALAR_BIT_BUS_LANES_V1],
+}
+
+impl P256ScalarBitBusChallengesV1 {
+    /// Reject zero, non-canonical, or repeated challenge coordinates.
+    pub(crate) fn validate_v1(self) -> Result<(), P256ScalarBitBusErrorV1> {
+        let mut seen = [F::ZERO; P256_SCALAR_BIT_BUS_LANES_V1 * P256_SCALAR_BIT_BUS_TUPLE_TERMS_V1];
+        let mut count = 0;
+        for lane in self.lanes {
+            for term in lane.terms {
+                if F::canonical(term.0).is_none()
+                    || term == F::ZERO
+                    || seen[..count].contains(&term)
+                {
+                    return Err(P256ScalarBitBusErrorV1::Challenge);
+                }
+                seen[count] = term;
+                count += 1;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One physical AIR row containing three pointwise copy factors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct P256ScalarBitBusRowV1 {
+    /// Verifier-regenerated identities for all three slots.
+    pub(crate) fixed: [P256ScalarBitBusFixedAccessV1; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
+    /// Bits copied from committed arithmetic `c` decomposition cells.
+    pub(crate) arithmetic_bits: [F; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
+    /// Bits copied from committed window selector cells.
+    pub(crate) window_bits: [F; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
+    /// Arithmetic-endpoint products before, between, and after the factors.
+    pub(crate) arithmetic_products:
+        [[F; P256_SCALAR_BIT_BUS_LANES_V1]; P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1],
+    /// Window-endpoint products before, between, and after the factors.
+    pub(crate) window_products:
+        [[F; P256_SCALAR_BIT_BUS_LANES_V1]; P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1],
+}
+
+/// Complete scalar-bit copy trace.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct P256ScalarBitBusTraceV1 {
+    /// Exactly 171 packed rows: 512 active factors and one inactive factor.
+    pub(crate) rows: Vec<P256ScalarBitBusRowV1>,
+}
+
+/// Scalar-bit topology, source, equality, or product failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub(crate) enum P256ScalarBitBusErrorV1 {
+    /// Scalar sources, operation positions, windows, or packed rows are invalid.
+    #[error("zk-X509 P-256 scalar-bit bus topology is invalid")]
+    Topology,
+    /// An arithmetic endpoint is not its committed scalar `c` bit.
+    #[error("zk-X509 P-256 scalar-bit arithmetic source binding is invalid")]
+    ArithmeticSource,
+    /// A window endpoint is not its committed selector bit.
+    #[error("zk-X509 P-256 scalar-bit window source binding is invalid")]
+    WindowSource,
+    /// A bit, padding value, or product encoding is non-canonical.
+    #[error("zk-X509 P-256 scalar-bit bus range is invalid")]
+    Range,
+    /// Transcript challenges are zero, non-canonical, or repeated.
+    #[error("zk-X509 P-256 scalar-bit bus challenges are invalid")]
+    Challenge,
+    /// A pointwise arithmetic/window bit equality is false.
+    #[error("zk-X509 P-256 scalar-bit pointwise equality is invalid")]
+    Equality,
+    /// A product boundary, intermediate state, or transition is invalid.
+    #[error("zk-X509 P-256 scalar-bit product constraint is invalid")]
+    Constraint,
+    /// Arithmetic and window terminal products differ.
+    #[error("zk-X509 P-256 scalar-bit terminal products differ")]
+    Terminal,
+    /// Length or allocation arithmetic exceeded a fixed bound.
+    #[error("zk-X509 P-256 scalar-bit bus resource bound is exceeded")]
+    Resource,
+}
+
+/// Sample product challenges after the arithmetic base commitment and all 128
+/// window base commitments have been absorbed in verifier-fixed order.
+///
+/// The aggregate prover and verifier own commitment absorption.  This function
+/// only performs the post-commitment squeezes and gives every lane/coordinate
+/// an independent domain label.
+pub(crate) fn derive_zk_x509_p256_scalar_bit_bus_challenges_v1(
+    transcript: &mut TransparentTranscriptV1,
+) -> Result<P256ScalarBitBusChallengesV1, TransparentStarkErrorV1> {
+    let labels: [[&[u8]; P256_SCALAR_BIT_BUS_TUPLE_TERMS_V1]; P256_SCALAR_BIT_BUS_LANES_V1] = [
+        [
+            b"zk-x509-p256-scalar-bit-bus-lane0-beta-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane0-scalar-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane0-window-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane0-bit-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane0-value-v1",
+        ],
+        [
+            b"zk-x509-p256-scalar-bit-bus-lane1-beta-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane1-scalar-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane1-window-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane1-bit-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane1-value-v1",
+        ],
+        [
+            b"zk-x509-p256-scalar-bit-bus-lane2-beta-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane2-scalar-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane2-window-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane2-bit-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane2-value-v1",
+        ],
+        [
+            b"zk-x509-p256-scalar-bit-bus-lane3-beta-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane3-scalar-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane3-window-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane3-bit-v1",
+            b"zk-x509-p256-scalar-bit-bus-lane3-value-v1",
+        ],
+    ];
+    let mut lanes = [P256ScalarBitBusLaneChallengesV1 {
+        terms: [F::ZERO; P256_SCALAR_BIT_BUS_TUPLE_TERMS_V1],
+    }; P256_SCALAR_BIT_BUS_LANES_V1];
+    for (lane, lane_labels) in lanes.iter_mut().zip(labels) {
+        for (term, label) in lane.terms.iter_mut().zip(lane_labels) {
+            *term = transcript.challenge_field(label)?;
+        }
+    }
+    Ok(P256ScalarBitBusChallengesV1 { lanes })
+}
+
+/// Convert one big-endian window bit to its arithmetic `c` limb and
+/// little-endian bit position.
+pub(crate) fn p256_scalar_window_bit_to_c_position_v1(
+    window: usize,
+    bit: usize,
+) -> Result<(usize, usize), P256ScalarBitBusErrorV1> {
+    if window >= P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1 || bit >= 4 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    let global_be = window
+        .checked_mul(4)
+        .and_then(|position| position.checked_add(bit))
+        .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+    let bit_le = P256_SCALAR_BITS_V1
+        .checked_sub(global_be + 1)
+        .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+    Ok((
+        bit_le / P256_SCALAR_LIMB_BITS_V1,
+        bit_le % P256_SCALAR_LIMB_BITS_V1,
+    ))
+}
+
+/// Build all 512 fixed-position copies and the one canonical padding slot.
+pub(crate) fn build_zk_x509_p256_scalar_bit_bus_trace_v1(
+    sources: &[P256ScalarBitSourceV1],
+    windows: &[P256WindowTraceV1],
+    arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+    challenges: P256ScalarBitBusChallengesV1,
+) -> Result<P256ScalarBitBusTraceV1, P256ScalarBitBusErrorV1> {
+    challenges.validate_v1()?;
+    let expected = expected_accesses_v1(sources, windows, arithmetic_trace)?;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(P256_SCALAR_BIT_BUS_ROWS_V1)
+        .map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
+    let mut arithmetic_running = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
+    let mut window_running = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
+    for chunk in expected.chunks_exact(P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1) {
+        let mut fixed =
+            [P256ScalarBitBusFixedAccessV1::Inactive; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1];
+        let mut arithmetic_bits = [F::ZERO; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1];
+        let mut window_bits = [F::ZERO; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1];
+        let mut arithmetic_products =
+            [[F::ONE; P256_SCALAR_BIT_BUS_LANES_V1]; P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1];
+        let mut window_products =
+            [[F::ONE; P256_SCALAR_BIT_BUS_LANES_V1]; P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1];
+        arithmetic_products[0] = arithmetic_running;
+        window_products[0] = window_running;
+        for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+            let access = chunk[slot];
+            fixed[slot] = access.fixed;
+            arithmetic_bits[slot] = access.arithmetic_bit;
+            window_bits[slot] = access.window_bit;
+            for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+                arithmetic_running[lane] = arithmetic_running[lane].mul(compress_access_v1(
+                    access.fixed,
+                    access.arithmetic_bit,
+                    challenges.lanes[lane],
+                ));
+                window_running[lane] = window_running[lane].mul(compress_access_v1(
+                    access.fixed,
+                    access.window_bit,
+                    challenges.lanes[lane],
+                ));
+            }
+            arithmetic_products[slot + 1] = arithmetic_running;
+            window_products[slot + 1] = window_running;
+        }
+        rows.push(P256ScalarBitBusRowV1 {
+            fixed,
+            arithmetic_bits,
+            window_bits,
+            arithmetic_products,
+            window_products,
+        });
+    }
+    if rows.len() != P256_SCALAR_BIT_BUS_ROWS_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    let trace = P256ScalarBitBusTraceV1 { rows };
+    trace.validate_v1(sources, windows, arithmetic_trace, challenges)?;
+    Ok(trace)
+}
+
+impl P256ScalarBitBusTraceV1 {
+    /// Validate fixed positions, both source bindings, pointwise equality,
+    /// canonical padding, every intermediate product, and terminal equality.
+    pub(crate) fn validate_v1(
+        &self,
+        sources: &[P256ScalarBitSourceV1],
+        windows: &[P256WindowTraceV1],
+        arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+        challenges: P256ScalarBitBusChallengesV1,
+    ) -> Result<(), P256ScalarBitBusErrorV1> {
+        challenges.validate_v1()?;
+        let expected = expected_accesses_v1(sources, windows, arithmetic_trace)?;
+        if self.rows.len() != P256_SCALAR_BIT_BUS_ROWS_V1 {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        let mut arithmetic_running = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
+        let mut window_running = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
+        for (row_index, row) in self.rows.iter().enumerate() {
+            let first = row_index
+                .checked_mul(P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1)
+                .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+            let expected_chunk = expected
+                .get(first..first + P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1)
+                .ok_or(P256ScalarBitBusErrorV1::Topology)?;
+            let expected_fixed = core::array::from_fn(|slot| expected_chunk[slot].fixed);
+            if row.fixed != expected_fixed {
+                return Err(P256ScalarBitBusErrorV1::Topology);
+            }
+            validate_row_range_v1(row)?;
+            for (slot, access) in expected_chunk.iter().copied().enumerate() {
+                if row.arithmetic_bits[slot] != access.arithmetic_bit {
+                    return Err(P256ScalarBitBusErrorV1::ArithmeticSource);
+                }
+                if row.window_bits[slot] != access.window_bit {
+                    return Err(P256ScalarBitBusErrorV1::WindowSource);
+                }
+                if row.arithmetic_bits[slot] != row.window_bits[slot] {
+                    return Err(P256ScalarBitBusErrorV1::Equality);
+                }
+            }
+            let constraints = evaluate_zk_x509_p256_scalar_bit_bus_row_constraints_v1(
+                expected_fixed,
+                row,
+                core::array::from_fn(|slot| expected_chunk[slot].arithmetic_bit),
+                core::array::from_fn(|slot| expected_chunk[slot].window_bit),
+                arithmetic_running,
+                window_running,
+                challenges,
+            );
+            if constraints.iter().any(|constraint| *constraint != F::ZERO) {
+                return Err(P256ScalarBitBusErrorV1::Constraint);
+            }
+            arithmetic_running = row.arithmetic_products[P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1];
+            window_running = row.window_products[P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1];
+        }
+        let terminal = evaluate_zk_x509_p256_scalar_bit_bus_terminal_constraints_v1(self)?;
+        if terminal.iter().any(|constraint| *constraint != F::ZERO) {
+            return Err(P256ScalarBitBusErrorV1::Terminal);
+        }
+        Ok(())
+    }
+}
+
+/// Low-degree constraints for one packed three-factor row.
+///
+/// `fixed` is verifier-regenerated.  Every slot constrains both bits to be
+/// equal to the supplied cells from the already-committed arithmetic and
+/// window traces, Boolean, and equal to each other.  It then advances each of
+/// both endpoint-product families in every lane by one independently
+/// compressed factor.
+pub(crate) fn evaluate_zk_x509_p256_scalar_bit_bus_row_constraints_v1(
+    fixed: [P256ScalarBitBusFixedAccessV1; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
+    row: &P256ScalarBitBusRowV1,
+    arithmetic_sources: [F; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
+    window_sources: [F; P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
+    expected_arithmetic_before: [F; P256_SCALAR_BIT_BUS_LANES_V1],
+    expected_window_before: [F; P256_SCALAR_BIT_BUS_LANES_V1],
+    challenges: P256ScalarBitBusChallengesV1,
+) -> Vec<F> {
+    let mut constraints = Vec::with_capacity(
+        2 * P256_SCALAR_BIT_BUS_LANES_V1
+            + P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 * (7 + 2 * P256_SCALAR_BIT_BUS_LANES_V1),
+    );
+    for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+        constraints.push(row.arithmetic_products[0][lane].sub(expected_arithmetic_before[lane]));
+        constraints.push(row.window_products[0][lane].sub(expected_window_before[lane]));
+    }
+    for (slot, fixed) in fixed.into_iter().enumerate() {
+        let arithmetic_bit = row.arithmetic_bits[slot];
+        let window_bit = row.window_bits[slot];
+        constraints.push(arithmetic_bit.sub(arithmetic_sources[slot]));
+        constraints.push(window_bit.sub(window_sources[slot]));
+        constraints.push(arithmetic_bit.mul(arithmetic_bit.sub(F::ONE)));
+        constraints.push(window_bit.mul(window_bit.sub(F::ONE)));
+        constraints.push(arithmetic_bit.sub(window_bit));
+        if fixed == P256ScalarBitBusFixedAccessV1::Inactive {
+            constraints.push(arithmetic_bit);
+            constraints.push(window_bit);
+        }
+        for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+            let arithmetic_factor =
+                compress_access_v1(fixed, arithmetic_bit, challenges.lanes[lane]);
+            let window_factor = compress_access_v1(fixed, window_bit, challenges.lanes[lane]);
+            constraints.push(
+                row.arithmetic_products[slot + 1][lane]
+                    .sub(row.arithmetic_products[slot][lane].mul(arithmetic_factor)),
+            );
+            constraints.push(
+                row.window_products[slot + 1][lane]
+                    .sub(row.window_products[slot][lane].mul(window_factor)),
+            );
+        }
+    }
+    constraints
+}
+
+/// Four aggregate boundary constraints equating endpoint products.
+pub(crate) fn evaluate_zk_x509_p256_scalar_bit_bus_terminal_constraints_v1(
+    trace: &P256ScalarBitBusTraceV1,
+) -> Result<[F; P256_SCALAR_BIT_BUS_LANES_V1], P256ScalarBitBusErrorV1> {
+    if trace.rows.len() != P256_SCALAR_BIT_BUS_ROWS_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    let last = trace.rows.last().ok_or(P256ScalarBitBusErrorV1::Topology)?;
+    let arithmetic = last.arithmetic_products[P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1];
+    let window = last.window_products[P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1];
+    Ok(core::array::from_fn(|lane| {
+        arithmetic[lane].sub(window[lane])
+    }))
+}
+
+/// Rectangular aggregate representation of the packed scalar-bit bus.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct P256ScalarBitBusStarkTraceV1 {
+    /// Six committed arithmetic/window bit-copy columns.
+    pub(crate) base: Vec<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]>,
+    /// Twenty-four challenge-dependent product-state columns.
+    pub(crate) aux: Vec<[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1]>,
+}
+
+fn expected_stark_fixed_access_v1(
+    factor: usize,
+) -> Result<P256ScalarBitBusFixedAccessV1, P256ScalarBitBusErrorV1> {
+    if factor >= P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    if factor == P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1 {
+        return Ok(P256ScalarBitBusFixedAccessV1::Inactive);
+    }
+    let bits_per_scalar = P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1
+        .checked_mul(4)
+        .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+    if bits_per_scalar != P256_SCALAR_BITS_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    let scalar_index = factor / P256_SCALAR_BITS_V1;
+    let within_scalar = factor % P256_SCALAR_BITS_V1;
+    Ok(P256ScalarBitBusFixedAccessV1::Active {
+        scalar: expected_scalar_v1(scalar_index)?,
+        window: u8::try_from(within_scalar / 4).map_err(|_| P256ScalarBitBusErrorV1::Resource)?,
+        bit: u8::try_from(within_scalar % 4).map_err(|_| P256ScalarBitBusErrorV1::Resource)?,
+    })
+}
+
+/// Compile the exact verifier-owned numeric preprocessing schedule.
+pub(crate) fn compile_p256_scalar_bit_bus_stark_fixed_rows_v1()
+-> Result<Vec<[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1]>, P256ScalarBitBusErrorV1> {
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
+        .map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
+    for row_index in 0..P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 {
+        rows.push(p256_scalar_bit_bus_stark_fixed_row_v1(
+            row_index,
+            P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1,
+        )?);
+    }
+    Ok(rows)
+}
+
+/// Regenerate one verifier-owned scalar-bit bus fixed row on any shared
+/// power-of-two domain containing the exact 171 logical rows.
+///
+/// This is the production constant-memory provider used by the native
+/// scalar-bit aggregate group.
+pub(crate) fn p256_scalar_bit_bus_stark_fixed_row_v1(
+    row_index: usize,
+    trace_size: usize,
+) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1], P256ScalarBitBusErrorV1> {
+    if trace_size < P256_SCALAR_BIT_BUS_ROWS_V1
+        || !trace_size.is_power_of_two()
+        || row_index >= trace_size
+    {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    let mut fixed = [F::ZERO; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1];
+    if row_index < P256_SCALAR_BIT_BUS_ROWS_V1 {
+        for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+            let factor = row_index
+                .checked_mul(P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1)
+                .and_then(|first| first.checked_add(slot))
+                .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+            if let P256ScalarBitBusFixedAccessV1::Active {
+                scalar,
+                window,
+                bit,
+            } = expected_stark_fixed_access_v1(factor)?
+            {
+                let start = slot * STARK_FIXED_SLOT_WIDTH;
+                fixed[start + STARK_FIXED_SLOT_ACTIVE] = F::ONE;
+                fixed[start + STARK_FIXED_SLOT_SCALAR] = F(match scalar {
+                    P256WindowScalarV1::U1 => 1,
+                    P256WindowScalarV1::U2 => 2,
+                });
+                fixed[start + STARK_FIXED_SLOT_WINDOW] = F(u64::from(window) + 1);
+                fixed[start + STARK_FIXED_SLOT_BIT] = F(u64::from(bit) + 1);
+            }
+        }
+        fixed[STARK_FIXED_FIRST_ROW] = F(u64::from(row_index == 0));
+        fixed[STARK_FIXED_LAST_ACTIVE_ROW] =
+            F(u64::from(row_index + 1 == P256_SCALAR_BIT_BUS_ROWS_V1));
+        fixed[STARK_FIXED_ACTIVE_CONTINUE] =
+            F(u64::from(row_index + 1 < P256_SCALAR_BIT_BUS_ROWS_V1));
+    } else {
+        fixed[STARK_FIXED_PADDING] = F::ONE;
+    }
+    Ok(fixed)
+}
+
+/// Project the verifier-preprocessed selector for the final active packed-bus
+/// row at an arbitrary aggregate-domain opening.
+pub(crate) const fn p256_scalar_bit_bus_stark_last_active_selector_v1(
+    fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
+) -> F {
+    fixed[STARK_FIXED_LAST_ACTIVE_ROW]
+}
+
+/// Convert the typed bus rows to the sole padded aggregate layout.
+pub(crate) fn build_p256_scalar_bit_bus_stark_trace_v1(
+    trace: &P256ScalarBitBusTraceV1,
+) -> Result<P256ScalarBitBusStarkTraceV1, P256ScalarBitBusErrorV1> {
+    if trace.rows.len() != P256_SCALAR_BIT_BUS_ROWS_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    let mut base = Vec::new();
+    let mut aux = Vec::new();
+    base.try_reserve_exact(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
+        .map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
+    aux.try_reserve_exact(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
+        .map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
+    for (row_index, row) in trace.rows.iter().enumerate() {
+        for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+            let factor = row_index
+                .checked_mul(P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1)
+                .and_then(|first| first.checked_add(slot))
+                .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+            if row.fixed[slot] != expected_stark_fixed_access_v1(factor)? {
+                return Err(P256ScalarBitBusErrorV1::Topology);
+            }
+        }
+        let mut base_row = [F::ZERO; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1];
+        base_row
+            [STARK_ARITHMETIC_BITS..STARK_ARITHMETIC_BITS + P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1]
+            .copy_from_slice(&row.arithmetic_bits);
+        base_row[STARK_WINDOW_BITS..STARK_WINDOW_BITS + P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1]
+            .copy_from_slice(&row.window_bits);
+        let mut aux_row = [F::ZERO; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1];
+        for state in 0..P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 {
+            for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+                aux_row[STARK_ARITHMETIC_PRODUCTS + state * P256_SCALAR_BIT_BUS_LANES_V1 + lane] =
+                    row.arithmetic_products[state][lane];
+                aux_row[STARK_WINDOW_PRODUCTS + state * P256_SCALAR_BIT_BUS_LANES_V1 + lane] =
+                    row.window_products[state][lane];
+            }
+        }
+        base.push(base_row);
+        aux.push(aux_row);
+    }
+    base.resize(
+        P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1,
+        [F::ZERO; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
+    );
+    aux.resize(
+        P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1,
+        [F::ZERO; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
+    );
+    Ok(P256ScalarBitBusStarkTraceV1 { base, aux })
+}
+
+fn stark_scalar_bit_factor_v1(
+    fixed_slot: &[F],
+    value: F,
+    challenge: P256ScalarBitBusLaneChallengesV1,
+) -> Result<F, P256ScalarBitBusErrorV1> {
+    let fixed_slot: &[F; STARK_FIXED_SLOT_WIDTH] = fixed_slot
+        .try_into()
+        .map_err(|_| P256ScalarBitBusErrorV1::Topology)?;
+    let active = fixed_slot[STARK_FIXED_SLOT_ACTIVE];
+    let terms = challenge.terms;
+    let compressed = terms[0]
+        .add(terms[1].mul(fixed_slot[STARK_FIXED_SLOT_SCALAR]))
+        .add(terms[2].mul(fixed_slot[STARK_FIXED_SLOT_WINDOW]))
+        .add(terms[3].mul(fixed_slot[STARK_FIXED_SLOT_BIT]))
+        .add(terms[4].mul(value));
+    Ok(F::ONE.add(active.mul(compressed.sub(F::ONE))))
+}
+
+/// Arithmetic and window product terminals in one opened packed-bus
+/// auxiliary row.
+///
+/// The aggregate verifier opens this projection at the verifier-fixed final
+/// logical row; no proof-supplied row index is accepted by the terminal
+/// registration.
+pub(crate) fn p256_scalar_bit_bus_opened_terminals_v1(
+    aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
+) -> [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
+    let final_state = (P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1) * P256_SCALAR_BIT_BUS_LANES_V1;
+    [
+        core::array::from_fn(|lane| aux[STARK_ARITHMETIC_PRODUCTS + final_state + lane]),
+        core::array::from_fn(|lane| aux[STARK_WINDOW_PRODUCTS + final_state + lane]),
+    ]
+}
+
+/// Evaluate the packed scalar-bit bus on the aggregate extension domain.
+///
+/// The terminal equality here binds the two bus copies. Source-side products
+/// over the arithmetic and window commitments remain a separate required
+/// adapter and activation gate.
+pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
+    current: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
+    next: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
+    current_aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
+    next_aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
+    fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
+    challenges: P256ScalarBitBusChallengesV1,
+) -> Result<Vec<F>, P256ScalarBitBusErrorV1> {
+    challenges.validate_v1()?;
+    if current
+        .iter()
+        .chain(next)
+        .chain(current_aux)
+        .chain(next_aux)
+        .chain(fixed)
+        .any(|value| F::canonical(value.0).is_none())
+    {
+        return Err(P256ScalarBitBusErrorV1::Range);
+    }
+    let mut residues = Vec::with_capacity(P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1);
+    for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+        let arithmetic_bit = current[STARK_ARITHMETIC_BITS + slot];
+        let window_bit = current[STARK_WINDOW_BITS + slot];
+        let fixed_start = slot * STARK_FIXED_SLOT_WIDTH;
+        let fixed_slot = &fixed[fixed_start..fixed_start + STARK_FIXED_SLOT_WIDTH];
+        let inactive = F::ONE.sub(fixed_slot[STARK_FIXED_SLOT_ACTIVE]);
+        residues.push(arithmetic_bit.mul(arithmetic_bit.sub(F::ONE)));
+        residues.push(window_bit.mul(window_bit.sub(F::ONE)));
+        residues.push(arithmetic_bit.sub(window_bit));
+        residues.push(inactive.mul(arithmetic_bit));
+        residues.push(inactive.mul(window_bit));
+        for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+            let arithmetic_before =
+                STARK_ARITHMETIC_PRODUCTS + slot * P256_SCALAR_BIT_BUS_LANES_V1 + lane;
+            let arithmetic_after = arithmetic_before + P256_SCALAR_BIT_BUS_LANES_V1;
+            let window_before = STARK_WINDOW_PRODUCTS + slot * P256_SCALAR_BIT_BUS_LANES_V1 + lane;
+            let window_after = window_before + P256_SCALAR_BIT_BUS_LANES_V1;
+            let arithmetic_factor =
+                stark_scalar_bit_factor_v1(fixed_slot, arithmetic_bit, challenges.lanes[lane])?;
+            let window_factor =
+                stark_scalar_bit_factor_v1(fixed_slot, window_bit, challenges.lanes[lane])?;
+            residues.push(
+                current_aux[arithmetic_after]
+                    .sub(current_aux[arithmetic_before].mul(arithmetic_factor)),
+            );
+            residues
+                .push(current_aux[window_after].sub(current_aux[window_before].mul(window_factor)));
+        }
+    }
+
+    for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+        residues.push(
+            fixed[STARK_FIXED_FIRST_ROW]
+                .mul(current_aux[STARK_ARITHMETIC_PRODUCTS + lane].sub(F::ONE)),
+        );
+        residues.push(
+            fixed[STARK_FIXED_FIRST_ROW].mul(current_aux[STARK_WINDOW_PRODUCTS + lane].sub(F::ONE)),
+        );
+        residues.push(fixed[STARK_FIXED_ACTIVE_CONTINUE].mul(
+            next_aux[STARK_ARITHMETIC_PRODUCTS + lane].sub(
+                current_aux[STARK_ARITHMETIC_PRODUCTS
+                    + (P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1) * P256_SCALAR_BIT_BUS_LANES_V1
+                    + lane],
+            ),
+        ));
+        residues.push(fixed[STARK_FIXED_ACTIVE_CONTINUE].mul(
+            next_aux[STARK_WINDOW_PRODUCTS + lane].sub(
+                current_aux[STARK_WINDOW_PRODUCTS
+                    + (P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1) * P256_SCALAR_BIT_BUS_LANES_V1
+                    + lane],
+            ),
+        ));
+        residues.push(
+            fixed[STARK_FIXED_LAST_ACTIVE_ROW].mul(
+                current_aux[STARK_ARITHMETIC_PRODUCTS
+                    + (P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1) * P256_SCALAR_BIT_BUS_LANES_V1
+                    + lane]
+                    .sub(
+                        current_aux[STARK_WINDOW_PRODUCTS
+                            + (P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1)
+                                * P256_SCALAR_BIT_BUS_LANES_V1
+                            + lane],
+                    ),
+            ),
+        );
+        residues
+            .push(fixed[STARK_FIXED_PADDING].mul(current_aux[STARK_ARITHMETIC_PRODUCTS + lane]));
+        residues.push(fixed[STARK_FIXED_PADDING].mul(current_aux[STARK_WINDOW_PRODUCTS + lane]));
+    }
+    if residues.len() != P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    Ok(residues)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExpectedAccessV1 {
+    fixed: P256ScalarBitBusFixedAccessV1,
+    arithmetic_bit: F,
+    window_bit: F,
+}
+
+impl ExpectedAccessV1 {
+    const fn inactive() -> Self {
+        Self {
+            fixed: P256ScalarBitBusFixedAccessV1::Inactive,
+            arithmetic_bit: F::ZERO,
+            window_bit: F::ZERO,
+        }
+    }
+}
+
+fn expected_accesses_v1(
+    sources: &[P256ScalarBitSourceV1],
+    windows: &[P256WindowTraceV1],
+    arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+) -> Result<Vec<ExpectedAccessV1>, P256ScalarBitBusErrorV1> {
+    validate_sources_v1(sources, arithmetic_trace)?;
+    if windows.len() != P256_SCALAR_BIT_BUS_SCALARS_V1 * P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+
+    let mut c_bits = [[[F::ZERO; P256_SCALAR_LIMB_BITS_V1]; P256_SCALAR_LIMBS_V1];
+        P256_SCALAR_BIT_BUS_SCALARS_V1];
+    for (scalar_index, source) in sources.iter().copied().enumerate() {
+        let operation =
+            usize::try_from(source.c_operation).map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
+        for (limb, target) in c_bits[scalar_index].iter_mut().enumerate() {
+            *target = p256_arithmetic_c_limb_bits_v1(arithmetic_trace, operation, limb)
+                .map_err(map_arithmetic_error_v1)?;
+        }
+    }
+
+    let mut expected = Vec::new();
+    expected
+        .try_reserve_exact(P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1)
+        .map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
+    for (scalar_index, scalar_c_bits) in c_bits.iter().enumerate() {
+        let scalar = expected_scalar_v1(scalar_index)?;
+        for window in 0..P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1 {
+            let window_index = scalar_index
+                .checked_mul(P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1)
+                .and_then(|index| index.checked_add(window))
+                .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+            let trace = windows
+                .get(window_index)
+                .ok_or(P256ScalarBitBusErrorV1::Topology)?;
+            trace
+                .validate_for_v1(
+                    scalar,
+                    u8::try_from(window).map_err(|_| P256ScalarBitBusErrorV1::Resource)?,
+                )
+                .map_err(map_window_error_v1)?;
+            for bit in 0..4 {
+                let (limb, limb_bit) = p256_scalar_window_bit_to_c_position_v1(window, bit)?;
+                expected.push(ExpectedAccessV1 {
+                    fixed: P256ScalarBitBusFixedAccessV1::Active {
+                        scalar,
+                        window: u8::try_from(window)
+                            .map_err(|_| P256ScalarBitBusErrorV1::Resource)?,
+                        bit: u8::try_from(bit).map_err(|_| P256ScalarBitBusErrorV1::Resource)?,
+                    },
+                    arithmetic_bit: scalar_c_bits[limb][limb_bit],
+                    window_bit: trace.bit_v1(bit).map_err(map_window_error_v1)?,
+                });
+            }
+        }
+    }
+    if expected.len() != P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    expected.push(ExpectedAccessV1::inactive());
+    Ok(expected)
+}
+
+fn validate_sources_v1(
+    sources: &[P256ScalarBitSourceV1],
+    arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+) -> Result<(), P256ScalarBitBusErrorV1> {
+    if sources.len() != P256_SCALAR_BIT_BUS_SCALARS_V1
+        || sources[0].scalar != P256WindowScalarV1::U1
+        || sources[1].scalar != P256WindowScalarV1::U2
+        || sources[0].c_operation == sources[1].c_operation
+    {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    arithmetic_trace
+        .validate()
+        .map_err(map_arithmetic_error_v1)?;
+    for source in sources {
+        let operation =
+            usize::try_from(source.c_operation).map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
+        let row = operation
+            .checked_mul(P256_ARITHMETIC_ROWS_PER_OPERATION_V1)
+            .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+        let fixed = arithmetic_trace
+            .fixed
+            .get(row)
+            .ok_or(P256ScalarBitBusErrorV1::Topology)?;
+        if fixed.operation != source.c_operation
+            || fixed.coefficient != 0
+            || fixed.modulus != ZkX509P256ModulusV1::ScalarField
+        {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+    }
+    Ok(())
+}
+
+fn validate_row_range_v1(row: &P256ScalarBitBusRowV1) -> Result<(), P256ScalarBitBusErrorV1> {
+    if row
+        .arithmetic_bits
+        .iter()
+        .chain(row.window_bits.iter())
+        .chain(row.arithmetic_products.iter().flatten())
+        .chain(row.window_products.iter().flatten())
+        .any(|value| F::canonical(value.0).is_none())
+    {
+        return Err(P256ScalarBitBusErrorV1::Range);
+    }
+    for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+        let arithmetic_bit = row.arithmetic_bits[slot];
+        let window_bit = row.window_bits[slot];
+        if ![F::ZERO, F::ONE].contains(&arithmetic_bit)
+            || ![F::ZERO, F::ONE].contains(&window_bit)
+            || (row.fixed[slot] == P256ScalarBitBusFixedAccessV1::Inactive
+                && (arithmetic_bit != F::ZERO || window_bit != F::ZERO))
+        {
+            return Err(P256ScalarBitBusErrorV1::Range);
+        }
+        if let P256ScalarBitBusFixedAccessV1::Active { window, bit, .. } = row.fixed[slot]
+            && (usize::from(window) >= P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1 || bit >= 4)
+        {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+    }
+    Ok(())
+}
+
+fn compress_access_v1(
+    fixed: P256ScalarBitBusFixedAccessV1,
+    value: F,
+    challenges: P256ScalarBitBusLaneChallengesV1,
+) -> F {
+    let P256ScalarBitBusFixedAccessV1::Active {
+        scalar,
+        window,
+        bit,
+    } = fixed
+    else {
+        return F::ONE;
+    };
+    let terms = challenges.terms;
+    terms[0]
+        .add(terms[1].mul(F(match scalar {
+            P256WindowScalarV1::U1 => 1,
+            P256WindowScalarV1::U2 => 2,
+        })))
+        .add(terms[2].mul(F(u64::from(window) + 1)))
+        .add(terms[3].mul(F(u64::from(bit) + 1)))
+        .add(terms[4].mul(value))
+}
+
+const fn expected_scalar_v1(index: usize) -> Result<P256WindowScalarV1, P256ScalarBitBusErrorV1> {
+    match index {
+        0 => Ok(P256WindowScalarV1::U1),
+        1 => Ok(P256WindowScalarV1::U2),
+        _ => Err(P256ScalarBitBusErrorV1::Topology),
+    }
+}
+
+fn map_arithmetic_error_v1(error: ZkX509P256AirErrorV1) -> P256ScalarBitBusErrorV1 {
+    match error {
+        ZkX509P256AirErrorV1::Topology => P256ScalarBitBusErrorV1::Topology,
+        ZkX509P256AirErrorV1::Allocation => P256ScalarBitBusErrorV1::Resource,
+        _ => P256ScalarBitBusErrorV1::ArithmeticSource,
+    }
+}
+
+fn map_window_error_v1(error: P256WindowAirErrorV1) -> P256ScalarBitBusErrorV1 {
+    match error {
+        P256WindowAirErrorV1::Topology | P256WindowAirErrorV1::Index => {
+            P256ScalarBitBusErrorV1::Topology
+        }
+        P256WindowAirErrorV1::Allocation => P256ScalarBitBusErrorV1::Resource,
+        P256WindowAirErrorV1::ExternalRange | P256WindowAirErrorV1::Constraint => {
+            P256ScalarBitBusErrorV1::WindowSource
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::OnceLock;
+
+    use super::*;
+    use crate::privacy_engines::zk_x509::{
+        p256_air::{
+            ZkX509P256ArithmeticKindV1, ZkX509P256ArithmeticOperationV1,
+            build_zk_x509_p256_arithmetic_trace_v1,
+        },
+        p256_window_air::{
+            P256_WINDOW_CANDIDATES_V1, P256WindowPointV1, build_p256_window_trace_v1,
+        },
+    };
+
+    struct FixtureV1 {
+        values: [[u8; 32]; P256_SCALAR_BIT_BUS_SCALARS_V1],
+        operations: [ZkX509P256ArithmeticOperationV1; P256_SCALAR_BIT_BUS_SCALARS_V1],
+        sources: [P256ScalarBitSourceV1; P256_SCALAR_BIT_BUS_SCALARS_V1],
+        arithmetic: ZkX509P256ArithmeticTraceV1,
+        windows: Vec<P256WindowTraceV1>,
+        challenges: P256ScalarBitBusChallengesV1,
+        trace: P256ScalarBitBusTraceV1,
+    }
+
+    fn fixture_v1() -> &'static FixtureV1 {
+        static FIXTURE: OnceLock<FixtureV1> = OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let values = [
+                core::array::from_fn(|index| if index % 2 == 0 { 0x55 } else { 0xc3 }),
+                core::array::from_fn(|index| if index % 2 == 0 { 0xa5 } else { 0x3c }),
+            ];
+            let operations = core::array::from_fn(|index| ZkX509P256ArithmeticOperationV1 {
+                kind: ZkX509P256ArithmeticKindV1::Add,
+                modulus: ZkX509P256ModulusV1::ScalarField,
+                a: values[index],
+                b: [0; 32],
+                c: values[index],
+            });
+            let arithmetic = build_zk_x509_p256_arithmetic_trace_v1(&operations)
+                .expect("two canonical scalar results");
+            let sources = [
+                P256ScalarBitSourceV1 {
+                    scalar: P256WindowScalarV1::U1,
+                    c_operation: 0,
+                },
+                P256ScalarBitSourceV1 {
+                    scalar: P256WindowScalarV1::U2,
+                    c_operation: 1,
+                },
+            ];
+            let mut windows = Vec::with_capacity(
+                P256_SCALAR_BIT_BUS_SCALARS_V1 * P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1,
+            );
+            for (scalar_index, scalar) in [P256WindowScalarV1::U1, P256WindowScalarV1::U2]
+                .into_iter()
+                .enumerate()
+            {
+                for window in 0..P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1 {
+                    windows.push(
+                        build_p256_window_trace_v1(
+                            scalar,
+                            window as u8,
+                            table_v1(),
+                            bits_for_window_v1(values[scalar_index], window),
+                        )
+                        .expect("canonical window trace"),
+                    );
+                }
+            }
+            let challenges = challenges_v1();
+            let trace = build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &sources,
+                &windows,
+                &arithmetic,
+                challenges,
+            )
+            .expect("complete scalar-bit bus");
+            FixtureV1 {
+                values,
+                operations,
+                sources,
+                arithmetic,
+                windows,
+                challenges,
+                trace,
+            }
+        })
+    }
+
+    fn table_v1() -> [P256WindowPointV1; P256_WINDOW_CANDIDATES_V1] {
+        core::array::from_fn(|candidate| P256WindowPointV1 {
+            x_be: coordinate_v1(candidate as u8, 0x11),
+            y_be: coordinate_v1(candidate as u8, 0x53),
+            z_be: coordinate_v1(candidate as u8, 0x97),
+        })
+    }
+
+    fn coordinate_v1(candidate: u8, domain: u8) -> [u8; 32] {
+        core::array::from_fn(|index| {
+            domain
+                .wrapping_add(candidate.wrapping_mul(17))
+                .wrapping_add((index as u8).wrapping_mul(29))
+        })
+    }
+
+    fn bits_for_window_v1(value: [u8; 32], window: usize) -> [u8; 4] {
+        let byte = value[window / 2];
+        let nibble = if window.is_multiple_of(2) {
+            byte >> 4
+        } else {
+            byte & 0x0f
+        };
+        core::array::from_fn(|bit| (nibble >> (3 - bit)) & 1)
+    }
+
+    fn challenges_v1() -> P256ScalarBitBusChallengesV1 {
+        P256ScalarBitBusChallengesV1 {
+            lanes: core::array::from_fn(|lane| P256ScalarBitBusLaneChallengesV1 {
+                terms: core::array::from_fn(|term| {
+                    F(17 + (lane * P256_SCALAR_BIT_BUS_TUPLE_TERMS_V1 + term) as u64)
+                }),
+            }),
+        }
+    }
+
+    fn slot_v1(trace: &P256ScalarBitBusTraceV1, ordinal: usize) -> (&P256ScalarBitBusRowV1, usize) {
+        (
+            &trace.rows[ordinal / P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
+            ordinal % P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1,
+        )
+    }
+
+    fn rebuild_products_v1(
+        trace: &mut P256ScalarBitBusTraceV1,
+        challenges: P256ScalarBitBusChallengesV1,
+    ) {
+        let mut arithmetic_running = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
+        let mut window_running = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
+        for row in &mut trace.rows {
+            row.arithmetic_products[0] = arithmetic_running;
+            row.window_products[0] = window_running;
+            for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+                for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+                    arithmetic_running[lane] = arithmetic_running[lane].mul(compress_access_v1(
+                        row.fixed[slot],
+                        row.arithmetic_bits[slot],
+                        challenges.lanes[lane],
+                    ));
+                    window_running[lane] = window_running[lane].mul(compress_access_v1(
+                        row.fixed[slot],
+                        row.window_bits[slot],
+                        challenges.lanes[lane],
+                    ));
+                }
+                row.arithmetic_products[slot + 1] = arithmetic_running;
+                row.window_products[slot + 1] = window_running;
+            }
+        }
+    }
+
+    fn flip_bit_v1(bit: F) -> F {
+        F::ONE.sub(bit)
+    }
+
+    fn post_commitment_transcript_v1(
+        arithmetic_commitment: [u8; 32],
+        window_commitments: &[[u8; 32]; 128],
+    ) -> TransparentTranscriptV1 {
+        let mut transcript =
+            TransparentTranscriptV1::new(b"p256-scalar-bit-bus-test", &[0x31; 32], &[0x72; 32])
+                .expect("test transcript");
+        transcript
+            .absorb(
+                b"zk-x509-p256-arithmetic-base-commitment-v1",
+                &[&arithmetic_commitment],
+            )
+            .expect("arithmetic commitment");
+        for (index, commitment) in window_commitments.iter().enumerate() {
+            transcript
+                .absorb(
+                    b"zk-x509-p256-window-base-commitment-v1",
+                    &[&(index as u32).to_be_bytes(), commitment],
+                )
+                .expect("window commitment");
+        }
+        transcript
+    }
+
+    fn numeric_rejects_v1(
+        base: &[[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]],
+        aux: &[[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1]],
+        fixed: &[[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1]],
+        challenges: P256ScalarBitBusChallengesV1,
+    ) -> bool {
+        if base.len() != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
+            || aux.len() != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
+            || fixed.len() != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
+        {
+            return true;
+        }
+        (0..P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1).any(|row| {
+            let next = (row + 1) % P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1;
+            match evaluate_p256_scalar_bit_bus_stark_residues_v1(
+                &base[row],
+                &base[next],
+                &aux[row],
+                &aux[next],
+                &fixed[row],
+                challenges,
+            ) {
+                Ok(residues) => {
+                    residues.len() != P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1
+                        || residues.iter().any(|residue| *residue != F::ZERO)
+                }
+                Err(_) => true,
+            }
+        })
+    }
+
+    #[test]
+    fn numeric_fixed_evaluator_matches_all_512_copies_and_canonical_padding() {
+        let fixture = fixture_v1();
+        let stark = build_p256_scalar_bit_bus_stark_trace_v1(&fixture.trace)
+            .expect("rectangular scalar-bit bus");
+        let fixed =
+            compile_p256_scalar_bit_bus_stark_fixed_rows_v1().expect("canonical fixed schedule");
+        assert_eq!(stark.base.len(), P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1);
+        assert_eq!(stark.aux.len(), P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1);
+        assert_eq!(fixed.len(), P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1);
+        assert!(!numeric_rejects_v1(
+            &stark.base,
+            &stark.aux,
+            &fixed,
+            fixture.challenges,
+        ));
+
+        for factor in 0..P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 {
+            let row = factor / P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
+            let slot = factor % P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
+            let start = slot * STARK_FIXED_SLOT_WIDTH;
+            match expected_stark_fixed_access_v1(factor).expect("in-range factor") {
+                P256ScalarBitBusFixedAccessV1::Inactive => {
+                    assert_eq!(
+                        fixed[row][start..start + STARK_FIXED_SLOT_WIDTH],
+                        [F::ZERO; STARK_FIXED_SLOT_WIDTH],
+                    );
+                }
+                P256ScalarBitBusFixedAccessV1::Active {
+                    scalar,
+                    window,
+                    bit,
+                } => {
+                    assert_eq!(fixed[row][start + STARK_FIXED_SLOT_ACTIVE], F::ONE);
+                    assert_eq!(
+                        fixed[row][start + STARK_FIXED_SLOT_SCALAR],
+                        F(match scalar {
+                            P256WindowScalarV1::U1 => 1,
+                            P256WindowScalarV1::U2 => 2,
+                        }),
+                    );
+                    assert_eq!(
+                        fixed[row][start + STARK_FIXED_SLOT_WINDOW],
+                        F(u64::from(window) + 1),
+                    );
+                    assert_eq!(
+                        fixed[row][start + STARK_FIXED_SLOT_BIT],
+                        F(u64::from(bit) + 1),
+                    );
+                }
+            }
+        }
+        for row in fixed.iter().skip(P256_SCALAR_BIT_BUS_ROWS_V1) {
+            assert_eq!(row[STARK_FIXED_PADDING], F::ONE);
+            assert!(
+                row[..STARK_FIXED_PADDING]
+                    .iter()
+                    .all(|value| *value == F::ZERO)
+            );
+        }
+        assert_eq!(
+            p256_scalar_bit_bus_stark_last_active_selector_v1(
+                &fixed[P256_SCALAR_BIT_BUS_ROWS_V1 - 1],
+            ),
+            F::ONE
+        );
+        assert_eq!(
+            p256_scalar_bit_bus_stark_last_active_selector_v1(&fixed[0]),
+            F::ZERO
+        );
+        assert_eq!(
+            p256_scalar_bit_bus_stark_last_active_selector_v1(&fixed[P256_SCALAR_BIT_BUS_ROWS_V1],),
+            F::ZERO
+        );
+        assert_eq!(
+            compile_p256_scalar_bit_bus_stark_fixed_rows_v1(),
+            Ok(fixed),
+            "verifier preprocessing must be deterministic",
+        );
+    }
+
+    #[test]
+    fn numeric_evaluator_binds_every_active_and_padding_witness_column() {
+        let fixture = fixture_v1();
+        let stark = build_p256_scalar_bit_bus_stark_trace_v1(&fixture.trace)
+            .expect("rectangular scalar-bit bus");
+        let fixed =
+            compile_p256_scalar_bit_bus_stark_fixed_rows_v1().expect("canonical fixed schedule");
+        let active_row = 73;
+        let padding_row = P256_SCALAR_BIT_BUS_ROWS_V1 + 11;
+
+        for column in 0..P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
+            let mut changed = stark.base.clone();
+            changed[active_row][column] = changed[active_row][column].add(F::ONE);
+            assert!(
+                numeric_rejects_v1(&changed, &stark.aux, &fixed, fixture.challenges),
+                "unbound active base column {column}",
+            );
+
+            let mut changed = stark.base.clone();
+            changed[padding_row][column] = changed[padding_row][column].add(F::ONE);
+            assert!(
+                numeric_rejects_v1(&changed, &stark.aux, &fixed, fixture.challenges),
+                "unbound padding base column {column}",
+            );
+        }
+        for column in 0..P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1 {
+            let mut changed = stark.aux.clone();
+            changed[active_row][column] = changed[active_row][column].add(F::ONE);
+            assert!(
+                numeric_rejects_v1(&stark.base, &changed, &fixed, fixture.challenges),
+                "unbound active auxiliary column {column}",
+            );
+
+            let mut changed = stark.aux.clone();
+            changed[padding_row][column] = changed[padding_row][column].add(F::ONE);
+            assert!(
+                numeric_rejects_v1(&stark.base, &changed, &fixed, fixture.challenges),
+                "unbound padding auxiliary column {column}",
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_evaluator_rejects_schedule_terminal_challenge_and_range_attacks() {
+        let fixture = fixture_v1();
+        let stark = build_p256_scalar_bit_bus_stark_trace_v1(&fixture.trace)
+            .expect("rectangular scalar-bit bus");
+        let fixed =
+            compile_p256_scalar_bit_bus_stark_fixed_rows_v1().expect("canonical fixed schedule");
+
+        let mut reordered = fixed.clone();
+        reordered.swap(37, 38);
+        assert!(numeric_rejects_v1(
+            &stark.base,
+            &stark.aux,
+            &reordered,
+            fixture.challenges,
+        ));
+
+        let mut substituted = fixed.clone();
+        substituted[19][STARK_FIXED_SLOT_WINDOW] =
+            substituted[19][STARK_FIXED_SLOT_WINDOW].add(F::ONE);
+        assert!(numeric_rejects_v1(
+            &stark.base,
+            &stark.aux,
+            &substituted,
+            fixture.challenges,
+        ));
+
+        let mut terminal = stark.aux.clone();
+        let last = P256_SCALAR_BIT_BUS_ROWS_V1 - 1;
+        let terminal_column = STARK_WINDOW_PRODUCTS
+            + (P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1) * P256_SCALAR_BIT_BUS_LANES_V1
+            + 2;
+        terminal[last][terminal_column] = terminal[last][terminal_column].add(F::ONE);
+        assert!(numeric_rejects_v1(
+            &stark.base,
+            &terminal,
+            &fixed,
+            fixture.challenges,
+        ));
+
+        let mut bad_challenges = fixture.challenges;
+        bad_challenges.lanes[0].terms[0] = F::ZERO;
+        assert!(numeric_rejects_v1(
+            &stark.base,
+            &stark.aux,
+            &fixed,
+            bad_challenges,
+        ));
+
+        let current_row = 8;
+        let next_row = current_row + 1;
+        let noncanonical = F(u64::MAX);
+        for opening in 0..5 {
+            let mut current_base = stark.base[current_row];
+            let mut next_base = stark.base[next_row];
+            let mut current_aux = stark.aux[current_row];
+            let mut next_aux = stark.aux[next_row];
+            let mut fixed_row = fixed[current_row];
+            match opening {
+                0 => current_base[0] = noncanonical,
+                1 => next_base[0] = noncanonical,
+                2 => current_aux[0] = noncanonical,
+                3 => next_aux[0] = noncanonical,
+                4 => fixed_row[0] = noncanonical,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                evaluate_p256_scalar_bit_bus_stark_residues_v1(
+                    &current_base,
+                    &next_base,
+                    &current_aux,
+                    &next_aux,
+                    &fixed_row,
+                    fixture.challenges,
+                ),
+                Err(P256ScalarBitBusErrorV1::Range),
+                "non-canonical opening group {opening}",
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_copy_bus_alone_cannot_replace_source_side_commitment_binding() {
+        let fixture = fixture_v1();
+        let mut coordinated = fixture.trace.clone();
+        let row = 19;
+        let slot = 1;
+        let replacement = flip_bit_v1(coordinated.rows[row].arithmetic_bits[slot]);
+        coordinated.rows[row].arithmetic_bits[slot] = replacement;
+        coordinated.rows[row].window_bits[slot] = replacement;
+        rebuild_products_v1(&mut coordinated, fixture.challenges);
+
+        let stark = build_p256_scalar_bit_bus_stark_trace_v1(&coordinated)
+            .expect("internally consistent coordinated copy");
+        let fixed =
+            compile_p256_scalar_bit_bus_stark_fixed_rows_v1().expect("canonical fixed schedule");
+        assert!(
+            !numeric_rejects_v1(&stark.base, &stark.aux, &fixed, fixture.challenges),
+            "the copy bus only proves equality between its two committed copies",
+        );
+        assert_eq!(
+            coordinated.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::ArithmeticSource),
+            "activation must remain gated on algebraic source-side products",
+        );
+        assert!(
+            ZK_X509_P256_SCALAR_BIT_BUS_DESCRIPTOR_V1
+                .windows(b"source-side-terminal-binding-required".len())
+                .any(|window| window == b"source-side-terminal-binding-required"),
+        );
+    }
+
+    #[test]
+    fn complete_schedule_roundtrips_with_exact_mapping_and_one_padding_slot() {
+        let fixture = fixture_v1();
+        fixture
+            .trace
+            .validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            )
+            .expect("complete pointwise copy");
+        assert_eq!(P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1, 512);
+        assert_eq!(P256_SCALAR_BIT_BUS_ROWS_V1, 171);
+        assert_eq!(P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1, 513);
+        assert_eq!(p256_scalar_window_bit_to_c_position_v1(0, 0), Ok((15, 15)));
+        assert_eq!(p256_scalar_window_bit_to_c_position_v1(63, 3), Ok((0, 0)));
+        assert_eq!(
+            p256_scalar_window_bit_to_c_position_v1(64, 0),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        );
+        assert_eq!(
+            p256_scalar_window_bit_to_c_position_v1(0, 4),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        );
+
+        for scalar in 0..P256_SCALAR_BIT_BUS_SCALARS_V1 {
+            for global_be in 0..P256_SCALAR_BITS_V1 {
+                let ordinal = scalar * P256_SCALAR_BITS_V1 + global_be;
+                let (row, slot) = slot_v1(&fixture.trace, ordinal);
+                let byte = fixture.values[scalar][global_be / 8];
+                let expected = F(u64::from((byte >> (7 - global_be % 8)) & 1));
+                assert_eq!(row.arithmetic_bits[slot], expected, "arithmetic {ordinal}");
+                assert_eq!(row.window_bits[slot], expected, "window {ordinal}");
+                let (limb, bit) =
+                    p256_scalar_window_bit_to_c_position_v1(global_be / 4, global_be % 4)
+                        .expect("in-range mapping");
+                assert_eq!(limb * 16 + bit, 255 - global_be);
+            }
+        }
+
+        let (last, padding_slot) = slot_v1(&fixture.trace, P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1);
+        assert_eq!(padding_slot, 2);
+        assert_eq!(
+            last.fixed[padding_slot],
+            P256ScalarBitBusFixedAccessV1::Inactive
+        );
+        assert_eq!(last.arithmetic_bits[padding_slot], F::ZERO);
+        assert_eq!(last.window_bits[padding_slot], F::ZERO);
+        assert_eq!(
+            last.arithmetic_products[padding_slot],
+            last.arithmetic_products[padding_slot + 1]
+        );
+        assert_eq!(
+            last.window_products[padding_slot],
+            last.window_products[padding_slot + 1]
+        );
+        assert_eq!(
+            evaluate_zk_x509_p256_scalar_bit_bus_terminal_constraints_v1(&fixture.trace),
+            Ok([F::ZERO; P256_SCALAR_BIT_BUS_LANES_V1])
+        );
+    }
+
+    #[test]
+    fn missing_duplicate_extra_and_reordered_windows_fail_closed() {
+        let fixture = fixture_v1();
+
+        let mut windows = fixture.windows.clone();
+        windows.pop();
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &fixture.sources,
+                &windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+
+        let mut windows = fixture.windows.clone();
+        windows.push(fixture.windows[0].clone());
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &fixture.sources,
+                &windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+
+        let mut windows = fixture.windows.clone();
+        windows[1] = windows[0].clone();
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &fixture.sources,
+                &windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+
+        let mut windows = fixture.windows.clone();
+        windows.swap(31, 32);
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &fixture.sources,
+                &windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+
+        let mut windows = fixture.windows.clone();
+        windows.swap(63, 64);
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &fixture.sources,
+                &windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+    }
+
+    #[test]
+    fn source_operations_are_exact_ordered_distinct_scalar_field_results() {
+        let fixture = fixture_v1();
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &fixture.sources[..1],
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+
+        let mut sources = fixture.sources;
+        sources.swap(0, 1);
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+
+        let mut sources = fixture.sources;
+        sources[1].c_operation = sources[0].c_operation;
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+
+        let mut sources = fixture.sources;
+        sources[1].c_operation = u32::MAX;
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+
+        let operations = [
+            ZkX509P256ArithmeticOperationV1 {
+                modulus: ZkX509P256ModulusV1::BaseField,
+                ..fixture.operations[0]
+            },
+            fixture.operations[1],
+        ];
+        let arithmetic = build_zk_x509_p256_arithmetic_trace_v1(&operations)
+            .expect("valid mixed-modulus arithmetic");
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        ));
+    }
+
+    #[test]
+    fn valid_but_inconsistent_window_bits_fail_deterministic_equality() {
+        let fixture = fixture_v1();
+        let mut windows = fixture.windows.clone();
+        let mut bits = bits_for_window_v1(fixture.values[0], 0);
+        bits[0] ^= 1;
+        windows[0] = build_p256_window_trace_v1(P256WindowScalarV1::U1, 0, table_v1(), bits)
+            .expect("internally valid but inconsistent window");
+        assert!(matches!(
+            build_zk_x509_p256_scalar_bit_bus_trace_v1(
+                &fixture.sources,
+                &windows,
+                &fixture.arithmetic,
+                fixture.challenges
+            ),
+            Err(P256ScalarBitBusErrorV1::Equality)
+        ));
+    }
+
+    #[test]
+    fn either_endpoint_or_coordinated_endpoint_mutation_remains_source_bound() {
+        let fixture = fixture_v1();
+        let row_index = 19;
+        let slot = 1;
+
+        let mut attacked = fixture.trace.clone();
+        attacked.rows[row_index].arithmetic_bits[slot] =
+            flip_bit_v1(attacked.rows[row_index].arithmetic_bits[slot]);
+        rebuild_products_v1(&mut attacked, fixture.challenges);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::ArithmeticSource)
+        );
+
+        let mut attacked = fixture.trace.clone();
+        attacked.rows[row_index].window_bits[slot] =
+            flip_bit_v1(attacked.rows[row_index].window_bits[slot]);
+        rebuild_products_v1(&mut attacked, fixture.challenges);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::WindowSource)
+        );
+
+        let mut attacked = fixture.trace.clone();
+        let flipped = flip_bit_v1(attacked.rows[row_index].arithmetic_bits[slot]);
+        attacked.rows[row_index].arithmetic_bits[slot] = flipped;
+        attacked.rows[row_index].window_bits[slot] = flipped;
+        rebuild_products_v1(&mut attacked, fixture.challenges);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::ArithmeticSource)
+        );
+    }
+
+    #[test]
+    fn metadata_order_shape_padding_and_noncanonical_attacks_fail_closed() {
+        let fixture = fixture_v1();
+
+        let mut attacked = fixture.trace.clone();
+        attacked.rows[0].fixed[0] = P256ScalarBitBusFixedAccessV1::Active {
+            scalar: P256WindowScalarV1::U2,
+            window: 0,
+            bit: 0,
+        };
+        rebuild_products_v1(&mut attacked, fixture.challenges);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        );
+
+        let mut attacked = fixture.trace.clone();
+        attacked.rows.swap(0, 1);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        );
+
+        let mut attacked = fixture.trace.clone();
+        attacked.rows.pop();
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        );
+
+        let mut attacked = fixture.trace.clone();
+        attacked.rows.push(fixture.trace.rows[0]);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        );
+
+        let last = P256_SCALAR_BIT_BUS_ROWS_V1 - 1;
+        let padding = P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 - 1;
+        let mut attacked = fixture.trace.clone();
+        attacked.rows[last].arithmetic_bits[padding] = F::ONE;
+        attacked.rows[last].window_bits[padding] = F::ONE;
+        rebuild_products_v1(&mut attacked, fixture.challenges);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::Range)
+        );
+
+        let mut attacked = fixture.trace.clone();
+        attacked.rows[last].fixed[padding] = P256ScalarBitBusFixedAccessV1::Active {
+            scalar: P256WindowScalarV1::U2,
+            window: 63,
+            bit: 3,
+        };
+        rebuild_products_v1(&mut attacked, fixture.challenges);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology)
+        );
+
+        let mut attacked = fixture.trace.clone();
+        attacked.rows[7].arithmetic_products[2][1] = F(u64::MAX);
+        assert_eq!(
+            attacked.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::Range)
+        );
+    }
+
+    #[test]
+    fn every_endpoint_value_equality_and_intermediate_product_state_is_constrained() {
+        let fixture = fixture_v1();
+        for row_index in 0..P256_SCALAR_BIT_BUS_ROWS_V1 {
+            let row = fixture.trace.rows[row_index];
+            let arithmetic_before = if row_index == 0 {
+                [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1]
+            } else {
+                fixture.trace.rows[row_index - 1].arithmetic_products
+                    [P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1]
+            };
+            let window_before = if row_index == 0 {
+                [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1]
+            } else {
+                fixture.trace.rows[row_index - 1].window_products
+                    [P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1]
+            };
+            assert!(
+                evaluate_zk_x509_p256_scalar_bit_bus_row_constraints_v1(
+                    row.fixed,
+                    &row,
+                    row.arithmetic_bits,
+                    row.window_bits,
+                    arithmetic_before,
+                    window_before,
+                    fixture.challenges,
+                )
+                .iter()
+                .all(|constraint| *constraint == F::ZERO),
+                "honest row {row_index}"
+            );
+
+            for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+                if row.fixed[slot] == P256ScalarBitBusFixedAccessV1::Inactive {
+                    continue;
+                }
+                let mut changed = row;
+                changed.arithmetic_bits[slot] = flip_bit_v1(changed.arithmetic_bits[slot]);
+                assert!(
+                    evaluate_zk_x509_p256_scalar_bit_bus_row_constraints_v1(
+                        row.fixed,
+                        &changed,
+                        row.arithmetic_bits,
+                        row.window_bits,
+                        arithmetic_before,
+                        window_before,
+                        fixture.challenges,
+                    )
+                    .iter()
+                    .any(|constraint| *constraint != F::ZERO),
+                    "arithmetic value row {row_index} slot {slot}"
+                );
+
+                let mut changed = row;
+                changed.window_bits[slot] = flip_bit_v1(changed.window_bits[slot]);
+                assert!(
+                    evaluate_zk_x509_p256_scalar_bit_bus_row_constraints_v1(
+                        row.fixed,
+                        &changed,
+                        row.arithmetic_bits,
+                        row.window_bits,
+                        arithmetic_before,
+                        window_before,
+                        fixture.challenges,
+                    )
+                    .iter()
+                    .any(|constraint| *constraint != F::ZERO),
+                    "window value row {row_index} slot {slot}"
+                );
+            }
+
+            for endpoint in 0..2 {
+                for state in 0..P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 {
+                    for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+                        let mut changed = row;
+                        let products = if endpoint == 0 {
+                            &mut changed.arithmetic_products
+                        } else {
+                            &mut changed.window_products
+                        };
+                        products[state][lane] = products[state][lane].add(F::ONE);
+                        assert!(
+                            evaluate_zk_x509_p256_scalar_bit_bus_row_constraints_v1(
+                                row.fixed,
+                                &changed,
+                                row.arithmetic_bits,
+                                row.window_bits,
+                                arithmetic_before,
+                                window_before,
+                                fixture.challenges,
+                            )
+                            .iter()
+                            .any(|constraint| *constraint != F::ZERO),
+                            "endpoint {endpoint} row {row_index} state {state} lane {lane}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_and_source_trace_attacks_are_detected_independently() {
+        let fixture = fixture_v1();
+        let mut attacked = fixture.trace.clone();
+        let last = attacked.rows.last_mut().expect("last row");
+        last.window_products[P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1][2] =
+            last.window_products[P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1][2].add(F::ONE);
+        let terminal = evaluate_zk_x509_p256_scalar_bit_bus_terminal_constraints_v1(&attacked)
+            .expect("terminal shape");
+        assert_ne!(terminal[2], F::ZERO);
+
+        let mut arithmetic = fixture.arithmetic.clone();
+        arithmetic.base[0][0] = arithmetic.base[0][0].add(F::ONE);
+        assert_eq!(
+            fixture.trace.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::ArithmeticSource)
+        );
+
+        let mut windows = fixture.windows.clone();
+        windows[0].base[0][0] = windows[0].base[0][0].add(F::ONE);
+        assert_eq!(
+            fixture.trace.validate_v1(
+                &fixture.sources,
+                &windows,
+                &fixture.arithmetic,
+                fixture.challenges,
+            ),
+            Err(P256ScalarBitBusErrorV1::WindowSource)
+        );
+    }
+
+    #[test]
+    fn challenge_validation_and_post_commitment_transcript_separation_are_exact() {
+        let fixture = fixture_v1();
+        fixture.challenges.validate_v1().expect("test challenges");
+
+        let mut bad = fixture.challenges;
+        bad.lanes[0].terms[0] = F::ZERO;
+        assert_eq!(bad.validate_v1(), Err(P256ScalarBitBusErrorV1::Challenge));
+
+        let mut bad = fixture.challenges;
+        bad.lanes[1].terms[3] = F(u64::MAX);
+        assert_eq!(bad.validate_v1(), Err(P256ScalarBitBusErrorV1::Challenge));
+
+        let mut bad = fixture.challenges;
+        bad.lanes[2] = bad.lanes[0];
+        assert_eq!(bad.validate_v1(), Err(P256ScalarBitBusErrorV1::Challenge));
+
+        let mut bad = fixture.challenges;
+        bad.lanes[0].terms[4] = bad.lanes[0].terms[3];
+        assert_eq!(bad.validate_v1(), Err(P256ScalarBitBusErrorV1::Challenge));
+
+        let mut wrong_but_well_formed = fixture.challenges;
+        wrong_but_well_formed.lanes[1].terms[4] = F(1_001);
+        wrong_but_well_formed
+            .validate_v1()
+            .expect("well-formed replacement challenge");
+        assert_eq!(
+            fixture.trace.validate_v1(
+                &fixture.sources,
+                &fixture.windows,
+                &fixture.arithmetic,
+                wrong_but_well_formed,
+            ),
+            Err(P256ScalarBitBusErrorV1::Constraint)
+        );
+
+        let arithmetic_commitment = [0x81; 32];
+        let window_commitments: [[u8; 32]; 128] =
+            core::array::from_fn(|index| core::array::from_fn(|byte| (index + byte) as u8));
+        let mut first = post_commitment_transcript_v1(arithmetic_commitment, &window_commitments);
+        let first_challenges = derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut first)
+            .expect("post-commitment challenges");
+        first_challenges
+            .validate_v1()
+            .expect("separated transcript challenges");
+
+        let mut replay = post_commitment_transcript_v1(arithmetic_commitment, &window_commitments);
+        assert_eq!(
+            derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut replay)
+                .expect("deterministic replay"),
+            first_challenges
+        );
+
+        let mut changed_windows = window_commitments;
+        changed_windows[91][7] ^= 1;
+        let mut changed = post_commitment_transcript_v1(arithmetic_commitment, &changed_windows);
+        assert_ne!(
+            derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut changed)
+                .expect("changed commitment challenges"),
+            first_challenges
+        );
+
+        let mut changed = post_commitment_transcript_v1([0x82; 32], &window_commitments);
+        assert_ne!(
+            derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut changed)
+                .expect("changed arithmetic commitment challenges"),
+            first_challenges
+        );
+
+        let mut bare =
+            TransparentTranscriptV1::new(b"p256-scalar-bit-bus-test", &[0x31; 32], &[0x72; 32])
+                .expect("bare transcript");
+        assert_ne!(
+            derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut bare)
+                .expect("premature challenges"),
+            first_challenges
+        );
+    }
+}

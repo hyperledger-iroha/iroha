@@ -31,9 +31,13 @@ constitution are not active until implemented and separately enacted.
   alter eligible voters. Ballot admission and live/final tallying fail closed
   on a non-member or a lock that differs from the retained rules.
 - Every validation-fee proposal fingerprints and retains its exact
-  `plain_electorate_rules`. Ballots use the retained asset, amount, duration,
-  conviction, turnout, approval threshold, member cap, and citizen gate even
-  if live governance configuration later changes. The typed
+  `plain_electorate_rules`. Ballots use the retained asset, bond escrow, slash
+  receiver, amount, duration, conviction, turnout, approval threshold, member
+  cap, and citizen gate even if live governance configuration later changes.
+  Lock, expiry-release, slash, and restitution transfers are atomic and retain
+  the lock on any custody mismatch or transfer failure. Unregistering retained
+  custody accounts, asset definitions, or their domains is rejected even
+  before the first ballot while the proposal is pending or approved. The typed
   `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft` route derives
   these immutable fields and rejects duplicate effective ballots; clients
   supply only the owner and closed AYE/NAY/ABSTAIN direction.

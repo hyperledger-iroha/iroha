@@ -1,18 +1,27 @@
 //! Generates PoR, PoTR, repair, and governance DAG fixtures.
 //!
-//! Run without arguments to update the checked-in fixture tree, or pass
-//! `--output-dir PATH` to publish beneath an isolated fixture root.
+//! Pass exactly one of `--write` or `--check` for the checked-in fixture tree.
+//! An isolated `--output-dir PATH` remains an implicit write for the fixture
+//! parity workflow, and may also be paired with an explicit mode.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env,
     error::Error,
     ffi::OsString,
-    fs::{self, File},
-    io,
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Write as _},
     path::{Component, Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
 #[cfg(unix)]
 use std::os::{fd::AsRawFd as _, unix::fs::MetadataExt as _};
 
@@ -424,7 +433,41 @@ fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 #[derive(Debug, Eq, PartialEq)]
 struct Args {
     fixtures_root: PathBuf,
+    mode: Mode,
     help: bool,
+}
+
+const MANAGED_DIRECTORIES: [&str; 6] = [
+    "governance",
+    "moderation",
+    "por",
+    "potr",
+    "reference_sdk",
+    "repair",
+];
+const INPUT_DIRECTORIES: [&str; 5] = [
+    "appeal_finance",
+    "orderbook",
+    "pdp",
+    "provider_admission",
+    "replication_order",
+];
+const ROOT_INVENTORY: &str = "reference_sdk_validation_inventory_v1.json";
+const PUBLICATION_LOCK: &str = ".generate_por_fixtures.lock";
+// Closed-set tripwire: changing the generator's path inventory must be an
+// explicit source change, never an accidental side effect of regeneration.
+const EXPECTED_MANAGED_FIXTURE_COUNT: usize = 55;
+const MAX_FIXTURE_BYTES: u64 = 8 << 20;
+const MAX_TOTAL_FIXTURE_BYTES: u64 = 64 << 20;
+const MAX_PATH_BYTES: usize = 4 << 10;
+const MAX_PATH_COMPONENTS: usize = 64;
+const MAX_TEMP_ATTEMPTS: u64 = 64;
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mode {
+    Check,
+    Write,
 }
 
 #[derive(Clone, norito::JsonSerialize)]
@@ -522,14 +565,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         print_usage();
         return Ok(());
     }
-    generate_fixtures(&args.fixtures_root)
+    if args.mode == Mode::Check {
+        ensure_no_publication_lock(&args.fixtures_root)?;
+    }
+    let rendered = render_managed_fixtures(&args.fixtures_root)?;
+    match args.mode {
+        Mode::Check => {
+            ensure_generation_inputs_match(&args.fixtures_root, &rendered.inputs)?;
+            check_managed_fixtures(&args.fixtures_root, &rendered.managed)?;
+            ensure_generation_inputs_match(&args.fixtures_root, &rendered.inputs)?;
+            ensure_no_publication_lock(&args.fixtures_root)
+        }
+        Mode::Write => {
+            publish_managed_fixtures(&args.fixtures_root, &rendered.managed, &rendered.inputs)
+        }
+    }
 }
 
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn Error>> {
+    const USAGE: &str = "usage: generate_por_fixtures (--write | --check) [--output-dir PATH] \
+         (exactly one mode is required unless --output-dir implies --write)";
+
     let args = args.into_iter().collect::<Vec<_>>();
     if args.len() == 1 && matches!(args[0].to_str(), Some("--help" | "-h")) {
         return Ok(Args {
             fixtures_root: PathBuf::from(DEFAULT_FIXTURES_ROOT),
+            mode: Mode::Write,
             help: true,
         });
     }
@@ -541,9 +602,20 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn 
     }
 
     let mut fixtures_root = None;
+    let mut mode = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--write") => {
+                if mode.replace(Mode::Write).is_some() {
+                    return Err(USAGE.into());
+                }
+            }
+            Some("--check") => {
+                if mode.replace(Mode::Check).is_some() {
+                    return Err(USAGE.into());
+                }
+            }
             Some("--output-dir") => {
                 if fixtures_root.is_some() {
                     return Err("`--output-dir` may be specified only once".into());
@@ -576,13 +648,21 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn 
                 validate_output_dir(&path)?;
                 fixtures_root = Some(path);
             }
-            Some(other) => return Err(format!("unrecognized argument `{other}`").into()),
-            None => return Err("arguments must be valid UTF-8".into()),
+            Some(other) => {
+                return Err(format!("{USAGE}; unrecognized argument `{other}`").into());
+            }
+            None => return Err(format!("{USAGE}; arguments must be valid UTF-8").into()),
         }
     }
 
+    let mode = match (mode, fixtures_root.is_some()) {
+        (Some(mode), _) => mode,
+        (None, true) => Mode::Write,
+        (None, false) => return Err(USAGE.into()),
+    };
     Ok(Args {
         fixtures_root: fixtures_root.unwrap_or_else(|| PathBuf::from(DEFAULT_FIXTURES_ROOT)),
+        mode,
         help: false,
     })
 }
@@ -609,10 +689,11 @@ fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
 
 fn print_usage() {
     println!(
-        "Usage: generate_por_fixtures [--output-dir PATH]\n\
+        "Usage: generate_por_fixtures (--write | --check) [--output-dir PATH]\n\
          \n\
          Generate the canonical SoraFS PoR, PoTR, repair, governance, moderation,\n\
          ValidationOutcomeV1, and signed reference-SDK inventory fixtures.\n\
+         An isolated --output-dir without a mode implies --write.\n\
          PATH must be an existing, complete, non-symlink sorafs_manifest tree."
     );
 }
@@ -1008,9 +1089,9 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
             format!("generated governance DAG fixture failed validation: {outcome:?}").into(),
         );
     }
-    fs::write(
-        gov_dir.join("dag_head_validation_outcome_v1.json"),
-        format!("{}\n", to_string_pretty(&outcome)?),
+    write_new_regular_file(
+        &gov_dir.join("dag_head_validation_outcome_v1.json"),
+        format!("{}\n", to_string_pretty(&outcome)?).as_bytes(),
     )?;
 
     let mut bad_block_signature = blocks[0].clone();
@@ -1098,8 +1179,8 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
 
     let mut trailing_block_bytes = block_bytes[0].clone();
     trailing_block_bytes.push(0);
-    fs::write(
-        gov_dir.join("dag_block_trailing_bytes_v1.to"),
+    write_new_regular_file(
+        &gov_dir.join("dag_block_trailing_bytes_v1.to"),
         &trailing_block_bytes,
     )?;
     let outcome = sorafs_manifest::validate_governance_dag_block_bytes(
@@ -1141,6 +1222,1409 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
     write_reference_sdk_fixture_inventory(fixtures_root)?;
 
     Ok(())
+}
+
+fn ensure_no_publication_lock(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
+    match fs::symlink_metadata(fixtures_root.join(PUBLICATION_LOCK)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(format!(
+            "fixture verification is blocked by publication lock `{PUBLICATION_LOCK}`"
+        )
+        .into()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+struct RenderedFixtureSet {
+    managed: BTreeMap<PathBuf, Vec<u8>>,
+    inputs: BTreeMap<PathBuf, Vec<u8>>,
+}
+
+fn render_managed_fixtures(fixtures_root: &Path) -> Result<RenderedFixtureSet, Box<dyn Error>> {
+    ensure_existing_real_directory(fixtures_root)?;
+    let fixtures_parent = fixtures_root
+        .parent()
+        .ok_or("fixture root must have a parent directory")?;
+    ensure_existing_real_directory(fixtures_parent)?;
+    let inputs = read_generation_input_map(fixtures_root)?;
+    let staging = TemporaryDirectory::create(fixtures_parent, ".generate_por_fixtures.render")?;
+    for directory in INPUT_DIRECTORIES {
+        ensure_real_directory(&staging.path().join(directory))?;
+    }
+    for directory in MANAGED_DIRECTORIES {
+        ensure_real_directory(&staging.path().join(directory))?;
+    }
+    ensure_real_directory(&staging.path().join("repair/negative"))?;
+    for (relative, bytes) in &inputs {
+        let destination = staging.path().join(relative);
+        if let Some(parent) = destination.parent() {
+            ensure_real_directory(parent)?;
+        }
+        write_new_regular_file(&destination, bytes)?;
+    }
+    generate_fixtures(staging.path())?;
+    ensure_generation_inputs_match(fixtures_root, &inputs)?;
+    let managed = read_rendered_fixture_map(staging.path())?;
+    validate_fixture_map(&managed)?;
+    Ok(RenderedFixtureSet { managed, inputs })
+}
+
+fn validate_fixture_map(fixtures: &BTreeMap<PathBuf, Vec<u8>>) -> Result<(), Box<dyn Error>> {
+    if fixtures.len() != EXPECTED_MANAGED_FIXTURE_COUNT {
+        return Err(format!(
+            "managed fixture count must remain exactly {EXPECTED_MANAGED_FIXTURE_COUNT}, got {}",
+            fixtures.len()
+        )
+        .into());
+    }
+    if !fixtures.contains_key(Path::new(ROOT_INVENTORY)) {
+        return Err(format!("managed fixtures must include `{ROOT_INVENTORY}`").into());
+    }
+    for directory in MANAGED_DIRECTORIES {
+        if !fixtures.keys().any(|path| path.starts_with(directory)) {
+            return Err(format!(
+                "managed fixtures must include at least one output beneath `{directory}`"
+            )
+            .into());
+        }
+    }
+    let mut total_bytes = 0_u64;
+    for (relative, bytes) in fixtures {
+        validate_managed_relative_path(relative)?;
+        let byte_length = u64::try_from(bytes.len())?;
+        if byte_length > MAX_FIXTURE_BYTES {
+            return Err(format!(
+                "managed fixture `{}` exceeds the {MAX_FIXTURE_BYTES}-byte bound",
+                relative.display()
+            )
+            .into());
+        }
+        total_bytes = total_bytes
+            .checked_add(byte_length)
+            .ok_or("managed fixture byte total overflowed")?;
+    }
+    if total_bytes > MAX_TOTAL_FIXTURE_BYTES {
+        return Err(format!(
+            "managed fixtures exceed the {MAX_TOTAL_FIXTURE_BYTES}-byte aggregate bound"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_managed_relative_path(path: &Path) -> Result<(), Box<dyn Error>> {
+    use std::path::Component;
+
+    if path.as_os_str().len() > MAX_PATH_BYTES || path.is_absolute() {
+        return Err(format!(
+            "managed fixture path `{}` must be bounded and relative",
+            path.display()
+        )
+        .into());
+    }
+    let components = path.components().collect::<Vec<_>>();
+    if components.is_empty()
+        || components.len() > 4
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "managed fixture path `{}` contains traversal or lies outside the closed layout",
+            path.display()
+        )
+        .into());
+    }
+    if path == Path::new(ROOT_INVENTORY) {
+        return Ok(());
+    }
+    let Some(Component::Normal(first)) = path.components().next() else {
+        return Err("managed fixture path lacks a normal first component".into());
+    };
+    if !MANAGED_DIRECTORIES
+        .iter()
+        .any(|directory| first == std::ffi::OsStr::new(directory))
+        || !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("json" | "to")
+        )
+    {
+        return Err(format!(
+            "managed fixture path `{}` lies outside the closed generated layout",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn read_rendered_fixture_map(
+    staging_root: &Path,
+) -> Result<BTreeMap<PathBuf, Vec<u8>>, Box<dyn Error>> {
+    let expected_top_level = INPUT_DIRECTORIES
+        .into_iter()
+        .chain(MANAGED_DIRECTORIES)
+        .map(OsString::from)
+        .chain([OsString::from(ROOT_INVENTORY)])
+        .collect::<BTreeSet<_>>();
+    let actual_top_level = sorted_directory_entries(staging_root)?
+        .into_iter()
+        .map(|entry| entry.file_name())
+        .collect::<BTreeSet<_>>();
+    if actual_top_level != expected_top_level {
+        return Err(format!(
+            "fixture renderer produced an unexpected top-level layout (expected={expected_top_level:?}, actual={actual_top_level:?})"
+        )
+        .into());
+    }
+
+    let mut fixtures = BTreeMap::new();
+    for directory in MANAGED_DIRECTORIES {
+        collect_rendered_files(staging_root, &staging_root.join(directory), &mut fixtures)?;
+    }
+    let inventory_path = staging_root.join(ROOT_INVENTORY);
+    fixtures.insert(
+        PathBuf::from(ROOT_INVENTORY),
+        read_regular_file(&inventory_path)?,
+    );
+    Ok(fixtures)
+}
+
+fn collect_rendered_files(
+    root: &Path,
+    directory: &Path,
+    fixtures: &mut BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), Box<dyn Error>> {
+    ensure_existing_real_directory(directory)?;
+    for entry in sorted_directory_entries(directory)? {
+        let path = entry.path();
+        let relative = path.strip_prefix(root)?.to_path_buf();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "rendered fixture entry `{}` must not be a symlink",
+                relative.display()
+            )
+            .into());
+        }
+        if metadata.is_dir() {
+            collect_rendered_files(root, &path, fixtures)?;
+        } else if metadata.is_file() {
+            ensure_single_hard_link(&metadata, &path)?;
+            validate_managed_relative_path(&relative)?;
+            if fixtures
+                .insert(relative.clone(), read_regular_file(&path)?)
+                .is_some()
+            {
+                return Err(format!(
+                    "renderer produced duplicate fixture path `{}`",
+                    relative.display()
+                )
+                .into());
+            }
+        } else {
+            return Err(format!(
+                "rendered fixture entry `{}` must be a regular file or directory",
+                relative.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn check_managed_fixtures(
+    fixtures_root: &Path,
+    fixtures: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), Box<dyn Error>> {
+    validate_fixture_map(fixtures)?;
+    let expected_paths = fixtures.keys().cloned().collect::<BTreeSet<_>>();
+    let actual_paths = scan_managed_fixture_paths(fixtures_root, &expected_paths)?;
+    if actual_paths != expected_paths {
+        let missing = expected_paths
+            .difference(&actual_paths)
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        return Err(format!("managed fixture path set differs; missing={missing:?}").into());
+    }
+
+    let mut differing = Vec::new();
+    for (relative, expected) in fixtures {
+        if read_regular_file(&fixtures_root.join(relative))? != *expected {
+            differing.push(relative.display().to_string());
+        }
+    }
+    if !differing.is_empty() {
+        return Err(format!(
+            "managed fixture bytes differ from deterministic generation: {differing:?}"
+        )
+        .into());
+    }
+    let final_paths = scan_managed_fixture_paths(fixtures_root, &expected_paths)?;
+    if final_paths != actual_paths {
+        return Err("managed fixture layout changed during verification".into());
+    }
+    Ok(())
+}
+
+fn scan_managed_fixture_paths(
+    fixtures_root: &Path,
+    expected_paths: &BTreeSet<PathBuf>,
+) -> Result<BTreeSet<PathBuf>, Box<dyn Error>> {
+    ensure_existing_real_directory(fixtures_root)?;
+    let expected_directories = expected_fixture_directories(expected_paths);
+    let mut actual_paths = BTreeSet::new();
+    let mut unexpected = BTreeSet::new();
+    for directory in MANAGED_DIRECTORIES {
+        let path = fixtures_root.join(directory);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(format!(
+                        "managed fixture root `{directory}` must be a real directory"
+                    )
+                    .into());
+                }
+                scan_managed_directory(
+                    fixtures_root,
+                    &path,
+                    expected_paths,
+                    &expected_directories,
+                    &mut actual_paths,
+                    &mut unexpected,
+                )?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    let inventory = fixtures_root.join(ROOT_INVENTORY);
+    match fs::symlink_metadata(&inventory) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "managed root inventory `{ROOT_INVENTORY}` must be a regular non-symlink file"
+                )
+                .into());
+            }
+            ensure_single_hard_link(&metadata, &inventory)?;
+            actual_paths.insert(PathBuf::from(ROOT_INVENTORY));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    if !unexpected.is_empty() {
+        return Err(format!(
+            "managed fixture directories contain unexpected entries: {:?}",
+            unexpected
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+        )
+        .into());
+    }
+    Ok(actual_paths)
+}
+
+fn expected_fixture_directories(expected_paths: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
+    let mut directories = MANAGED_DIRECTORIES
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<BTreeSet<_>>();
+    for path in expected_paths {
+        let mut parent = path.parent();
+        while let Some(directory) = parent {
+            if directory.as_os_str().is_empty() {
+                break;
+            }
+            directories.insert(directory.to_path_buf());
+            parent = directory.parent();
+        }
+    }
+    directories
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_managed_directory(
+    fixtures_root: &Path,
+    directory: &Path,
+    expected_paths: &BTreeSet<PathBuf>,
+    expected_directories: &BTreeSet<PathBuf>,
+    actual_paths: &mut BTreeSet<PathBuf>,
+    unexpected: &mut BTreeSet<PathBuf>,
+) -> Result<(), Box<dyn Error>> {
+    for entry in sorted_directory_entries(directory)? {
+        let path = entry.path();
+        let relative = path.strip_prefix(fixtures_root)?.to_path_buf();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "managed fixture entry `{}` must not be a symlink",
+                relative.display()
+            )
+            .into());
+        }
+        if metadata.is_dir() {
+            if expected_directories.contains(&relative) {
+                scan_managed_directory(
+                    fixtures_root,
+                    &path,
+                    expected_paths,
+                    expected_directories,
+                    actual_paths,
+                    unexpected,
+                )?;
+            } else {
+                unexpected.insert(relative);
+            }
+        } else if metadata.is_file() {
+            ensure_single_hard_link(&metadata, &path)?;
+            if is_managed_readme(&relative) {
+                continue;
+            }
+            if expected_paths.contains(&relative) {
+                actual_paths.insert(relative);
+            } else {
+                unexpected.insert(relative);
+            }
+        } else {
+            return Err(format!(
+                "managed fixture entry `{}` must be a regular file or directory",
+                relative.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn is_managed_readme(relative: &Path) -> bool {
+    MANAGED_DIRECTORIES
+        .iter()
+        .any(|directory| relative == Path::new(directory).join("README.md"))
+}
+
+fn read_generation_input_map(
+    fixtures_root: &Path,
+) -> Result<BTreeMap<PathBuf, Vec<u8>>, Box<dyn Error>> {
+    let mut inputs = BTreeMap::new();
+    for directory in INPUT_DIRECTORIES {
+        collect_generation_inputs(fixtures_root, &fixtures_root.join(directory), &mut inputs)?;
+    }
+    let mut total_bytes = 0_u64;
+    for bytes in inputs.values() {
+        total_bytes = total_bytes
+            .checked_add(u64::try_from(bytes.len())?)
+            .ok_or("generation input byte total overflowed")?;
+    }
+    if total_bytes > MAX_TOTAL_FIXTURE_BYTES {
+        return Err(format!(
+            "generation inputs exceed the {MAX_TOTAL_FIXTURE_BYTES}-byte aggregate bound"
+        )
+        .into());
+    }
+    Ok(inputs)
+}
+
+fn collect_generation_inputs(
+    fixtures_root: &Path,
+    directory: &Path,
+    inputs: &mut BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), Box<dyn Error>> {
+    ensure_existing_real_directory(directory)?;
+    for entry in sorted_directory_entries(directory)? {
+        let path = entry.path();
+        let relative = path.strip_prefix(fixtures_root)?.to_path_buf();
+        validate_output_path(&relative)?;
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "generation input `{}` must not be a symlink",
+                relative.display()
+            )
+            .into());
+        }
+        if metadata.is_dir() {
+            collect_generation_inputs(fixtures_root, &path, inputs)?;
+        } else if metadata.is_file() {
+            ensure_single_hard_link(&metadata, &path)?;
+            if inputs
+                .insert(relative.clone(), read_regular_file(&path)?)
+                .is_some()
+            {
+                return Err(format!("duplicate generation input `{}`", relative.display()).into());
+            }
+        } else {
+            return Err(format!(
+                "generation input `{}` must be a regular file or directory",
+                relative.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn ensure_generation_inputs_match(
+    fixtures_root: &Path,
+    expected: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), Box<dyn Error>> {
+    let actual = read_generation_input_map(fixtures_root)?;
+    if &actual == expected {
+        Ok(())
+    } else {
+        Err("generation inputs changed while rendering or publishing fixtures".into())
+    }
+}
+
+fn sorted_directory_entries(directory: &Path) -> Result<Vec<fs::DirEntry>, Box<dyn Error>> {
+    let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    Ok(entries)
+}
+
+fn ensure_real_directory(path: &Path) -> Result<(), Box<dyn Error>> {
+    validate_output_path(path)?;
+    if path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => ensure_directory_metadata(&metadata, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .ok_or("fixture directory must have a parent")?;
+            ensure_real_directory(parent)?;
+            match fs::create_dir(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            let metadata = fs::symlink_metadata(path)?;
+            ensure_directory_metadata(&metadata, path)?;
+            sync_directory(parent)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn ensure_existing_real_directory(path: &Path) -> Result<(), Box<dyn Error>> {
+    validate_output_path(path)?;
+    if path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent()
+        && parent != path
+        && !parent.as_os_str().is_empty()
+    {
+        ensure_existing_real_directory(parent)?;
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    ensure_directory_metadata(&metadata, path)
+}
+
+fn validate_output_path(path: &Path) -> Result<(), Box<dyn Error>> {
+    if path.as_os_str().len() > MAX_PATH_BYTES {
+        return Err(format!("path `{}` exceeds the byte bound", path.display()).into());
+    }
+    let mut component_count = 0_usize;
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(format!("path `{}` contains parent traversal", path.display()).into());
+        }
+        component_count += 1;
+    }
+    if component_count > MAX_PATH_COMPONENTS {
+        return Err(format!("path `{}` exceeds the component bound", path.display()).into());
+    }
+    Ok(())
+}
+
+fn ensure_directory_metadata(metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!("`{}` must be a real directory", path.display()).into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileIdentity {
+    volume: u64,
+    file: u64,
+}
+
+#[cfg(unix)]
+fn file_identity(metadata: &fs::Metadata, _path: &Path) -> Result<FileIdentity, Box<dyn Error>> {
+    Ok(FileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity, Box<dyn Error>> {
+    Ok(FileIdentity {
+        volume: u64::from(
+            metadata.volume_serial_number().ok_or_else(|| {
+                format!("could not read volume identity for `{}`", path.display())
+            })?,
+        ),
+        file: metadata
+            .file_index()
+            .ok_or_else(|| format!("could not read file identity for `{}`", path.display()))?,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(_metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity, Box<dyn Error>> {
+    Err(format!(
+        "fixture publication cannot authenticate file identity on this platform: `{}`",
+        path.display()
+    )
+    .into())
+}
+
+#[cfg(unix)]
+fn ensure_single_hard_link(metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
+    if metadata.nlink() != 1 {
+        return Err(format!(
+            "fixture file `{}` must have exactly one hard link",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn ensure_single_hard_link(metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
+    if metadata.number_of_links() != Some(1) {
+        return Err(format!(
+            "fixture file `{}` must have exactly one hard link",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn ensure_single_hard_link(_metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
+    Err(format!(
+        "fixture publication cannot authenticate hard links on this platform: `{}`",
+        path.display()
+    )
+    .into())
+}
+
+#[derive(Clone)]
+struct FileSnapshot {
+    identity: FileIdentity,
+    bytes: Vec<u8>,
+}
+
+fn read_regular_file(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
+    Ok(read_regular_file_snapshot(path)?.bytes)
+}
+
+fn read_regular_file_snapshot(path: &Path) -> Result<FileSnapshot, Box<dyn Error>> {
+    let before = fs::symlink_metadata(path)?;
+    validate_regular_metadata(&before, path)?;
+    if before.len() > MAX_FIXTURE_BYTES {
+        return Err(format!(
+            "fixture file `{}` exceeds the {MAX_FIXTURE_BYTES}-byte bound",
+            path.display()
+        )
+        .into());
+    }
+    let before_identity = file_identity(&before, path)?;
+    let file = File::open(path)?;
+    let opened = file.metadata()?;
+    validate_regular_metadata(&opened, path)?;
+    if file_identity(&opened, path)? != before_identity {
+        return Err(format!(
+            "fixture file `{}` changed identity while opening",
+            path.display()
+        )
+        .into());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(opened.len())?);
+    file.take(MAX_FIXTURE_BYTES + 1).read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len())? > MAX_FIXTURE_BYTES
+        || u64::try_from(bytes.len())? != opened.len()
+    {
+        return Err(format!(
+            "fixture file `{}` changed length while reading",
+            path.display()
+        )
+        .into());
+    }
+    let after = fs::symlink_metadata(path)?;
+    validate_regular_metadata(&after, path)?;
+    if file_identity(&after, path)? != before_identity || after.len() != opened.len() {
+        return Err(format!("fixture file `{}` changed while reading", path.display()).into());
+    }
+    Ok(FileSnapshot {
+        identity: before_identity,
+        bytes,
+    })
+}
+
+fn validate_regular_metadata(metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "fixture file `{}` must be a regular non-symlink file",
+            path.display()
+        )
+        .into());
+    }
+    ensure_single_hard_link(metadata, path)
+}
+
+fn write_new_regular_file(path: &Path, bytes: &[u8]) -> Result<FileIdentity, Box<dyn Error>> {
+    if u64::try_from(bytes.len())? > MAX_FIXTURE_BYTES {
+        return Err(format!(
+            "fixture file `{}` exceeds the {MAX_FIXTURE_BYTES}-byte bound",
+            path.display()
+        )
+        .into());
+    }
+    let parent = path
+        .parent()
+        .ok_or("fixture output file must have a parent")?;
+    ensure_existing_real_directory(parent)?;
+    let parent_before = file_identity(&fs::symlink_metadata(parent)?, parent)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o644);
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(0o644))?;
+    let created = file.metadata()?;
+    validate_regular_metadata(&created, path)?;
+    let identity = file_identity(&created, path)?;
+    let mut cleanup = TemporaryFileGuard::new(path.to_path_buf(), identity);
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    let metadata = file.metadata()?;
+    validate_regular_metadata(&metadata, path)?;
+    if file_identity(&metadata, path)? != identity {
+        return Err(format!(
+            "fixture output `{}` changed identity while writing",
+            path.display()
+        )
+        .into());
+    }
+    drop(file);
+    let parent_after = file_identity(&fs::symlink_metadata(parent)?, parent)?;
+    if parent_after != parent_before {
+        return Err(format!(
+            "fixture output parent `{}` changed during publication",
+            parent.display()
+        )
+        .into());
+    }
+    let published = fs::symlink_metadata(path)?;
+    validate_regular_metadata(&published, path)?;
+    if file_identity(&published, path)? != identity {
+        return Err(format!(
+            "fixture output `{}` changed identity after writing",
+            path.display()
+        )
+        .into());
+    }
+    sync_directory(parent)?;
+    cleanup.disarm();
+    Ok(identity)
+}
+
+fn sync_directory(path: &Path) -> Result<(), Box<dyn Error>> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+struct TemporaryFileGuard {
+    path: Option<PathBuf>,
+    identity: FileIdentity,
+}
+
+impl TemporaryFileGuard {
+    fn new(path: PathBuf, identity: FileIdentity) -> Self {
+        Self {
+            path: Some(path),
+            identity,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for TemporaryFileGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                return;
+            };
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && file_identity(&metadata, &path).ok() == Some(self.identity)
+                && fs::remove_file(&path).is_ok()
+                && let Some(parent) = path.parent()
+            {
+                let _ = sync_directory(parent);
+            }
+        }
+    }
+}
+
+struct TemporaryDirectory {
+    path: PathBuf,
+    parent: PathBuf,
+    identity: FileIdentity,
+    cleanup: bool,
+}
+
+impl TemporaryDirectory {
+    fn create(parent: &Path, prefix: &str) -> Result<Self, Box<dyn Error>> {
+        ensure_existing_real_directory(parent)?;
+        for _ in 0..MAX_TEMP_ATTEMPTS {
+            let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = parent.join(format!("{prefix}.{}.{}", std::process::id(), sequence));
+            match fs::create_dir(&path) {
+                Ok(()) => {
+                    let metadata = fs::symlink_metadata(&path)?;
+                    ensure_directory_metadata(&metadata, &path)?;
+                    let identity = file_identity(&metadata, &path)?;
+                    sync_directory(parent)?;
+                    return Ok(Self {
+                        path,
+                        parent: parent.to_path_buf(),
+                        identity,
+                        cleanup: true,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(format!("could not allocate private fixture staging directory for `{prefix}`").into())
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn preserve(&mut self) {
+        self.cleanup = false;
+    }
+}
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        if !self.cleanup {
+            return;
+        }
+        let Ok(metadata) = fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || file_identity(&metadata, &self.path).ok() != Some(self.identity)
+        {
+            return;
+        }
+        if fs::remove_dir_all(&self.path).is_ok() {
+            let _ = sync_directory(&self.parent);
+        }
+    }
+}
+
+struct PublicationLock {
+    path: PathBuf,
+    parent: PathBuf,
+    identity: FileIdentity,
+    release: bool,
+}
+
+impl PublicationLock {
+    fn acquire(fixtures_root: &Path) -> Result<Self, Box<dyn Error>> {
+        ensure_existing_real_directory(fixtures_root)?;
+        let path = fixtures_root.join(PUBLICATION_LOCK);
+        let identity =
+            write_new_regular_file(&path, format!("pid={}\n", std::process::id()).as_bytes())
+                .map_err(|error| {
+                    format!(
+                        "could not acquire exclusive fixture publication lock `{}`: {error}",
+                        path.display()
+                    )
+                })?;
+        Ok(Self {
+            path,
+            parent: fixtures_root.to_path_buf(),
+            identity,
+            release: true,
+        })
+    }
+
+    fn preserve(&mut self) {
+        self.release = false;
+    }
+}
+
+impl Drop for PublicationLock {
+    fn drop(&mut self) {
+        if !self.release {
+            return;
+        }
+        let Ok(metadata) = fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || ensure_single_hard_link(&metadata, &self.path).is_err()
+            || file_identity(&metadata, &self.path).ok() != Some(self.identity)
+        {
+            return;
+        }
+        if fs::remove_file(&self.path).is_ok() {
+            let _ = sync_directory(&self.parent);
+        }
+    }
+}
+
+struct CreatedDirectoryGuard {
+    directories: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl CreatedDirectoryGuard {
+    fn create(
+        fixtures_root: &Path,
+        expected_paths: &BTreeSet<PathBuf>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut expected_directories = expected_fixture_directories(expected_paths)
+            .into_iter()
+            .collect::<Vec<_>>();
+        expected_directories.sort_by_key(|path| path.components().count());
+        let mut created = Vec::new();
+        for relative in expected_directories {
+            validate_managed_directory_path(&relative)?;
+            let path = fixtures_root.join(relative);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) => ensure_directory_metadata(&metadata, &path)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let parent = path
+                        .parent()
+                        .ok_or("managed fixture directory must have a parent")?;
+                    ensure_existing_real_directory(parent)?;
+                    fs::create_dir(&path)?;
+                    let metadata = fs::symlink_metadata(&path)?;
+                    ensure_directory_metadata(&metadata, &path)?;
+                    sync_directory(parent)?;
+                    created.push(path);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(Self {
+            directories: created,
+            committed: false,
+        })
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for CreatedDirectoryGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for directory in self.directories.iter().rev() {
+            if fs::remove_dir(directory).is_ok()
+                && let Some(parent) = directory.parent()
+            {
+                let _ = sync_directory(parent);
+            }
+        }
+    }
+}
+
+fn validate_managed_directory_path(path: &Path) -> Result<(), Box<dyn Error>> {
+    use std::path::Component;
+
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err("managed fixture directory must be non-empty and relative".into());
+    }
+    let components = path.components().collect::<Vec<_>>();
+    if components.len() > 3
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "managed fixture directory `{}` lies outside the closed layout",
+            path.display()
+        )
+        .into());
+    }
+    let Some(Component::Normal(first)) = path.components().next() else {
+        return Err("managed fixture directory lacks a normal first component".into());
+    };
+    if !MANAGED_DIRECTORIES
+        .iter()
+        .any(|directory| first == std::ffi::OsStr::new(directory))
+    {
+        return Err(format!(
+            "managed fixture directory `{}` lies outside a generated root",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublicationState {
+    Prepared,
+    OriginalMoved,
+    Published,
+}
+
+struct PublicationEntry {
+    relative: PathBuf,
+    expected: Vec<u8>,
+    original: Option<FileSnapshot>,
+    staged_path: PathBuf,
+    backup_path: PathBuf,
+    staged_identity: FileIdentity,
+    state: PublicationState,
+}
+
+struct PublicationRollbackGuard<'a> {
+    fixtures_root: &'a Path,
+    entries: &'a mut [PublicationEntry],
+    transaction: &'a mut TemporaryDirectory,
+    publication_lock: &'a mut PublicationLock,
+    committed: bool,
+}
+
+impl<'a> PublicationRollbackGuard<'a> {
+    fn new(
+        fixtures_root: &'a Path,
+        entries: &'a mut [PublicationEntry],
+        transaction: &'a mut TemporaryDirectory,
+        publication_lock: &'a mut PublicationLock,
+    ) -> Self {
+        Self {
+            fixtures_root,
+            entries,
+            transaction,
+            publication_lock,
+            committed: false,
+        }
+    }
+
+    fn entries_mut(&mut self) -> &mut [PublicationEntry] {
+        self.entries
+    }
+
+    fn rollback(&mut self) -> Result<(), Box<dyn Error>> {
+        let result = rollback_entries(self.fixtures_root, self.entries);
+        self.committed = true;
+        if result.is_err() {
+            self.transaction.preserve();
+            self.publication_lock.preserve();
+        }
+        result
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+
+    fn recovery_path(&self) -> &Path {
+        self.transaction.path()
+    }
+}
+
+impl Drop for PublicationRollbackGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed && rollback_entries(self.fixtures_root, self.entries).is_err() {
+            self.transaction.preserve();
+            self.publication_lock.preserve();
+        }
+    }
+}
+
+fn publish_managed_fixtures(
+    fixtures_root: &Path,
+    fixtures: &BTreeMap<PathBuf, Vec<u8>>,
+    generation_inputs: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), Box<dyn Error>> {
+    validate_fixture_map(fixtures)?;
+    let mut publication_lock = PublicationLock::acquire(fixtures_root)?;
+    ensure_generation_inputs_match(fixtures_root, generation_inputs)?;
+    let expected_paths = fixtures.keys().cloned().collect::<BTreeSet<_>>();
+    let mut created_directories = CreatedDirectoryGuard::create(fixtures_root, &expected_paths)?;
+    let actual_paths = scan_managed_fixture_paths(fixtures_root, &expected_paths)?;
+    let mut originals = BTreeMap::new();
+    for relative in &actual_paths {
+        originals.insert(
+            relative.clone(),
+            read_regular_file_snapshot(&fixtures_root.join(relative))?,
+        );
+    }
+
+    let mut changed = fixtures
+        .iter()
+        .filter(|(relative, expected)| {
+            originals
+                .get(*relative)
+                .is_none_or(|snapshot| snapshot.bytes.as_slice() != expected.as_slice())
+        })
+        .map(|(relative, expected)| (relative.clone(), expected.clone()))
+        .collect::<Vec<_>>();
+    // The signed release-wide inventory is the commit marker. Publishing it
+    // last makes interruption fail closed under the old bindings; rollback
+    // visits it first before restoring any earlier payload.
+    changed.sort_by_key(|(relative, _)| relative == Path::new(ROOT_INVENTORY));
+    if changed.is_empty() {
+        check_managed_fixtures(fixtures_root, fixtures)?;
+        ensure_generation_inputs_match(fixtures_root, generation_inputs)?;
+        created_directories.commit();
+        return Ok(());
+    }
+
+    let fixtures_parent = fixtures_root
+        .parent()
+        .ok_or("fixture root must have a parent directory")?;
+    let mut transaction =
+        TemporaryDirectory::create(fixtures_parent, ".generate_por_fixtures.publish")?;
+    let new_dir = transaction.path().join("new");
+    let old_dir = transaction.path().join("old");
+    ensure_real_directory(&new_dir)?;
+    ensure_real_directory(&old_dir)?;
+
+    let mut entries = Vec::with_capacity(changed.len());
+    for (index, (relative, expected)) in changed.into_iter().enumerate() {
+        let staged_path = new_dir.join(format!("{index:04}.fixture"));
+        let backup_path = old_dir.join(format!("{index:04}.fixture"));
+        let staged_identity = write_new_regular_file(&staged_path, &expected)?;
+        entries.push(PublicationEntry {
+            original: originals.remove(&relative),
+            relative,
+            expected,
+            staged_path,
+            backup_path,
+            staged_identity,
+            state: PublicationState::Prepared,
+        });
+    }
+    sync_directory(&new_dir)?;
+    sync_directory(&old_dir)?;
+    sync_directory(transaction.path())?;
+
+    let mut rollback_guard = PublicationRollbackGuard::new(
+        fixtures_root,
+        &mut entries,
+        &mut transaction,
+        &mut publication_lock,
+    );
+    let publication = publish_entries(fixtures_root, rollback_guard.entries_mut())
+        .and_then(|()| check_managed_fixtures(fixtures_root, fixtures))
+        .and_then(|()| ensure_generation_inputs_match(fixtures_root, generation_inputs));
+    if let Err(error) = publication {
+        let rollback = rollback_guard.rollback();
+        return match rollback {
+            Ok(()) => Err(format!(
+                "fixture publication failed and was rolled back without partial managed results: {error}"
+            )
+            .into()),
+            Err(rollback_error) => {
+                let recovery_path = rollback_guard.recovery_path().display().to_string();
+                Err(format!(
+                    "fixture publication failed ({error}); rollback also failed ({rollback_error}); preserved recovery transaction `{}` and publication lock",
+                    recovery_path
+                )
+                .into())
+            }
+        };
+    }
+
+    rollback_guard.commit();
+    drop(rollback_guard);
+    created_directories.commit();
+    Ok(())
+}
+
+fn publish_entries(
+    fixtures_root: &Path,
+    entries: &mut [PublicationEntry],
+) -> Result<(), Box<dyn Error>> {
+    publish_entries_with_hook(fixtures_root, entries, |_| Ok(()))
+}
+
+fn publish_entries_with_hook(
+    fixtures_root: &Path,
+    entries: &mut [PublicationEntry],
+    mut before_entry: impl FnMut(usize) -> Result<(), Box<dyn Error>>,
+) -> Result<(), Box<dyn Error>> {
+    for (index, entry) in entries.iter_mut().enumerate() {
+        before_entry(index)?;
+        let destination = fixtures_root.join(&entry.relative);
+        match &entry.original {
+            Some(original) => {
+                let current = read_regular_file_snapshot(&destination)?;
+                if current.identity != original.identity || current.bytes != original.bytes {
+                    return Err(format!(
+                        "managed fixture `{}` changed after publication planning",
+                        entry.relative.display()
+                    )
+                    .into());
+                }
+                entry.state = PublicationState::OriginalMoved;
+                move_regular_file_no_replace(&destination, &entry.backup_path, original.identity)?;
+            }
+            None => ensure_path_absent(&destination)?,
+        }
+
+        entry.state = PublicationState::Published;
+        move_regular_file_no_replace(&entry.staged_path, &destination, entry.staged_identity)?;
+        let published = read_regular_file_snapshot(&destination)?;
+        if published.identity != entry.staged_identity || published.bytes != entry.expected {
+            return Err(format!(
+                "published fixture `{}` failed identity or byte verification",
+                entry.relative.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn rollback_entries(
+    fixtures_root: &Path,
+    entries: &mut [PublicationEntry],
+) -> Result<(), Box<dyn Error>> {
+    let mut errors = Vec::new();
+    for entry in entries.iter_mut().rev() {
+        if let Err(error) = rollback_entry(fixtures_root, entry) {
+            errors.push(format!(
+                "reconcile `{}` with its pre-publication snapshot: {error}",
+                entry.relative.display()
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; ").into())
+    }
+}
+
+fn rollback_entry(
+    fixtures_root: &Path,
+    entry: &mut PublicationEntry,
+) -> Result<(), Box<dyn Error>> {
+    let destination = fixtures_root.join(&entry.relative);
+    let mut destination_snapshot = read_optional_regular_file_snapshot(&destination)?;
+    if destination_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.identity == entry.staged_identity)
+    {
+        ensure_path_absent(&entry.staged_path)?;
+        move_regular_file_no_replace(&destination, &entry.staged_path, entry.staged_identity)?;
+        destination_snapshot = None;
+    }
+    let staged = read_optional_regular_file_snapshot(&entry.staged_path)?
+        .ok_or("staged replacement is missing during rollback")?;
+    if staged.identity != entry.staged_identity || staged.bytes != entry.expected {
+        return Err("staged replacement changed identity or bytes during rollback".into());
+    }
+
+    match &entry.original {
+        Some(original) => match destination_snapshot {
+            Some(current)
+                if current.identity == original.identity && current.bytes == original.bytes =>
+            {
+                ensure_path_absent(&entry.backup_path)?;
+            }
+            None => {
+                let backup = read_regular_file_snapshot(&entry.backup_path)?;
+                if backup.identity != original.identity || backup.bytes != original.bytes {
+                    return Err("original backup changed identity or bytes".into());
+                }
+                move_regular_file_no_replace(&entry.backup_path, &destination, original.identity)?;
+                let restored = read_regular_file_snapshot(&destination)?;
+                if restored.identity != original.identity || restored.bytes != original.bytes {
+                    return Err("restored original changed identity or bytes".into());
+                }
+            }
+            Some(_) => {
+                return Err("destination contains neither the staged nor original fixture".into());
+            }
+        },
+        None => {
+            if destination_snapshot.is_some() {
+                return Err("new fixture destination remains occupied during rollback".into());
+            }
+            ensure_path_absent(&entry.backup_path)?;
+        }
+    }
+    entry.state = PublicationState::Prepared;
+    Ok(())
+}
+
+fn read_optional_regular_file_snapshot(
+    path: &Path,
+) -> Result<Option<FileSnapshot>, Box<dyn Error>> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => read_regular_file_snapshot(path).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn ensure_path_absent(path: &Path) -> Result<(), Box<dyn Error>> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(format!(
+            "refusing to replace unplanned fixture target `{}`",
+            path.display()
+        )
+        .into()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn move_regular_file_no_replace(
+    source: &Path,
+    destination: &Path,
+    expected_identity: FileIdentity,
+) -> Result<(), Box<dyn Error>> {
+    let source_parent = source
+        .parent()
+        .ok_or("fixture move source must have a parent")?;
+    let destination_parent = destination
+        .parent()
+        .ok_or("fixture move destination must have a parent")?;
+    ensure_existing_real_directory(source_parent)?;
+    ensure_existing_real_directory(destination_parent)?;
+    let source_metadata = fs::symlink_metadata(source)?;
+    validate_regular_metadata(&source_metadata, source)?;
+    if file_identity(&source_metadata, source)? != expected_identity {
+        return Err(format!(
+            "fixture move source `{}` changed identity",
+            source.display()
+        )
+        .into());
+    }
+    ensure_path_absent(destination)?;
+
+    fs::hard_link(source, destination)?;
+    let destination_metadata = fs::symlink_metadata(destination)?;
+    if destination_metadata.file_type().is_symlink()
+        || !destination_metadata.is_file()
+        || file_identity(&destination_metadata, destination)? != expected_identity
+        || hard_link_count(&destination_metadata)? != 2
+    {
+        remove_matching_path(destination, expected_identity);
+        return Err(format!(
+            "fixture move destination `{}` failed hard-link identity verification",
+            destination.display()
+        )
+        .into());
+    }
+    if let Err(error) = fs::remove_file(source) {
+        remove_matching_path(destination, expected_identity);
+        return Err(error.into());
+    }
+    let destination_metadata = fs::symlink_metadata(destination)?;
+    if let Err(error) =
+        validate_regular_metadata(&destination_metadata, destination).and_then(|()| {
+            if file_identity(&destination_metadata, destination)? == expected_identity {
+                Ok(())
+            } else {
+                Err("fixture move destination identity changed after unlink".into())
+            }
+        })
+    {
+        let _ = restore_failed_move(source, destination, expected_identity);
+        return Err(error);
+    }
+    sync_directory(source_parent)?;
+    if destination_parent != source_parent {
+        sync_directory(destination_parent)?;
+    }
+    Ok(())
+}
+
+fn restore_failed_move(
+    source: &Path,
+    destination: &Path,
+    expected_identity: FileIdentity,
+) -> Result<(), Box<dyn Error>> {
+    ensure_path_absent(source)?;
+    fs::hard_link(destination, source)?;
+    let restored = fs::symlink_metadata(source)?;
+    if restored.file_type().is_symlink()
+        || !restored.is_file()
+        || file_identity(&restored, source)? != expected_identity
+    {
+        remove_matching_path(source, expected_identity);
+        return Err("could not authenticate restored fixture move source".into());
+    }
+    fs::remove_file(destination)?;
+    let restored = fs::symlink_metadata(source)?;
+    validate_regular_metadata(&restored, source)?;
+    let source_parent = source
+        .parent()
+        .ok_or("restored fixture source must have a parent")?;
+    let destination_parent = destination
+        .parent()
+        .ok_or("restored fixture destination must have a parent")?;
+    sync_directory(source_parent)?;
+    if destination_parent != source_parent {
+        sync_directory(destination_parent)?;
+    }
+    Ok(())
+}
+
+fn remove_matching_path(path: &Path, expected_identity: FileIdentity) {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.is_file()
+        && !metadata.file_type().is_symlink()
+        && file_identity(&metadata, path).ok() == Some(expected_identity)
+    {
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[cfg(unix)]
+fn hard_link_count(metadata: &fs::Metadata) -> Result<u64, Box<dyn Error>> {
+    Ok(metadata.nlink())
+}
+
+#[cfg(windows)]
+fn hard_link_count(metadata: &fs::Metadata) -> Result<u64, Box<dyn Error>> {
+    metadata
+        .number_of_links()
+        .map(u64::from)
+        .ok_or_else(|| "could not read fixture hard-link count".into())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn hard_link_count(_metadata: &fs::Metadata) -> Result<u64, Box<dyn Error>> {
+    Err("fixture publication cannot authenticate hard links on this platform".into())
 }
 
 fn sign_governance_log_node_mldsa(
@@ -1349,9 +2833,9 @@ where
     T: NoritoSerialize,
 {
     let bytes = norito::to_bytes(value)?;
-    fs::write(base_path.with_extension("to"), &bytes)?;
+    write_new_regular_file(&base_path.with_extension("to"), &bytes)?;
     let json = to_string_pretty(&json_value)?;
-    fs::write(base_path.with_extension("json"), json)?;
+    write_new_regular_file(&base_path.with_extension("json"), json.as_bytes())?;
     Ok(())
 }
 
@@ -1366,7 +2850,7 @@ fn write_expected_success_validation_outcome(
         )
         .into());
     }
-    fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
+    write_new_regular_file(path, format!("{}\n", to_string_pretty(outcome)?).as_bytes())?;
     Ok(())
 }
 
@@ -1382,7 +2866,7 @@ fn write_expected_validation_outcome(
         )
         .into());
     }
-    fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
+    write_new_regular_file(path, format!("{}\n", to_string_pretty(outcome)?).as_bytes())?;
     Ok(())
 }
 
@@ -1590,15 +3074,15 @@ fn write_governance_sdk_fixture_inventory(gov_dir: &Path) -> Result<(), Box<dyn 
             signature_hex,
         },
     };
-    fs::write(
-        gov_dir.join("sdk_validation_inventory_v1.json"),
-        format!("{}\n", to_string_pretty(&inventory)?),
+    write_new_regular_file(
+        &gov_dir.join("sdk_validation_inventory_v1.json"),
+        format!("{}\n", to_string_pretty(&inventory)?).as_bytes(),
     )?;
     Ok(())
 }
 
 fn governance_sdk_fixture_binding(path: &Path) -> Result<(u64, String), Box<dyn Error>> {
-    let bytes = fs::read(path)?;
+    let bytes = read_regular_file(path)?;
     Ok((u64::try_from(bytes.len())?, encode(sha256(&bytes))))
 }
 
@@ -1836,7 +3320,7 @@ fn write_reference_sdk_bundle_outcomes(
     for (path, specs, now, expected_status, expected_code) in scenarios {
         let bytes = specs
             .iter()
-            .map(|(_, path)| fs::read(fixtures_root.join(path)))
+            .map(|(_, path)| read_regular_file(&fixtures_root.join(path)))
             .collect::<Result<Vec<_>, _>>()?;
         let payloads = specs
             .iter()
@@ -1854,9 +3338,9 @@ fn write_reference_sdk_bundle_outcomes(
             )
             .into());
         }
-        fs::write(
-            output_dir.join(path),
-            format!("{}\n", to_string_pretty(&outcome)?),
+        write_new_regular_file(
+            &output_dir.join(path),
+            format!("{}\n", to_string_pretty(&outcome)?).as_bytes(),
         )?;
     }
     Ok(())
@@ -2718,9 +4202,9 @@ fn write_reference_sdk_fixture_inventory(fixtures_root: &Path) -> Result<(), Box
             signature_hex,
         },
     };
-    fs::write(
-        fixtures_root.join("reference_sdk_validation_inventory_v1.json"),
-        format!("{}\n", to_string_pretty(&inventory)?),
+    write_new_regular_file(
+        &fixtures_root.join("reference_sdk_validation_inventory_v1.json"),
+        format!("{}\n", to_string_pretty(&inventory)?).as_bytes(),
     )?;
     Ok(())
 }
@@ -3366,6 +4850,7 @@ fn governance_dag_head_json(head: &GovernanceDagHeadV1) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn parse<const N: usize>(args: [&str; N]) -> Result<Args, String> {
         parse_args(args.map(OsString::from)).map_err(|error| error.to_string())
@@ -3376,13 +4861,21 @@ mod tests {
     }
 
     #[test]
-    fn output_dir_defaults_to_checked_in_fixture_root() {
-        assert_eq!(
-            parse([]).expect("default arguments"),
-            Args {
-                fixtures_root: PathBuf::from(DEFAULT_FIXTURES_ROOT),
-                help: false,
-            }
+    fn explicit_modes_default_to_checked_in_fixture_root() {
+        for (argument, mode) in [("--write", Mode::Write), ("--check", Mode::Check)] {
+            assert_eq!(
+                parse([argument]).expect("explicit mode"),
+                Args {
+                    fixtures_root: PathBuf::from(DEFAULT_FIXTURES_ROOT),
+                    mode,
+                    help: false,
+                }
+            );
+        }
+        assert!(
+            parse([])
+                .expect_err("default root requires a mode")
+                .contains("exactly one mode is required")
         );
     }
 
@@ -3393,6 +4886,7 @@ mod tests {
                 .expect("absolute temporary fixture root"),
             Args {
                 fixtures_root: PathBuf::from("/tmp/sorafs-fixtures/pass-1"),
+                mode: Mode::Write,
                 help: false,
             }
         );
@@ -3401,6 +4895,7 @@ mod tests {
                 .expect("relative temporary fixture root"),
             Args {
                 fixtures_root: PathBuf::from("target/sorafs-fixtures/pass-2"),
+                mode: Mode::Write,
                 help: false,
             }
         );
@@ -3422,9 +4917,10 @@ mod tests {
             .expect_err("duplicate output root"),
             "`--output-dir` may be specified only once"
         );
-        assert_eq!(
-            parse(["--output-dir=target/pass-1"]).expect_err("joined value"),
-            "unrecognized argument `--output-dir=target/pass-1`"
+        assert!(
+            parse(["--output-dir=target/pass-1"])
+                .expect_err("joined value")
+                .contains("unrecognized argument `--output-dir=target/pass-1`")
         );
     }
 
@@ -3459,14 +4955,34 @@ mod tests {
     }
 
     #[test]
+    fn managed_fixture_paths_reject_traversal_and_open_layouts() {
+        for path in [
+            "../por/a.to",
+            "por/../../a.to",
+            "/por/a.to",
+            "unmanaged/a.to",
+            "por/a.txt",
+        ] {
+            validate_managed_relative_path(Path::new(path))
+                .expect_err("path outside the closed layout must be rejected");
+        }
+        for path in ["../por", "/por", "unmanaged", "por/a/b/c"] {
+            validate_managed_directory_path(Path::new(path))
+                .expect_err("directory outside the closed layout must be rejected");
+        }
+    }
+
+    #[test]
     fn output_dir_rejects_unknown_and_non_utf8_arguments() {
-        assert_eq!(
-            parse(["fixtures/sorafs_manifest"]).expect_err("positional path"),
-            "unrecognized argument `fixtures/sorafs_manifest`"
+        assert!(
+            parse(["fixtures/sorafs_manifest"])
+                .expect_err("positional path")
+                .contains("unrecognized argument `fixtures/sorafs_manifest`")
         );
-        assert_eq!(
-            parse(["--unknown"]).expect_err("unknown option"),
-            "unrecognized argument `--unknown`"
+        assert!(
+            parse(["--unknown"])
+                .expect_err("unknown option")
+                .contains("unrecognized argument `--unknown`")
         );
 
         #[cfg(unix)]
@@ -3476,7 +4992,7 @@ mod tests {
             let error = parse_args([OsString::from_vec(vec![0xff])])
                 .expect_err("non-UTF-8 option")
                 .to_string();
-            assert_eq!(error, "arguments must be valid UTF-8");
+            assert!(error.contains("arguments must be valid UTF-8"));
 
             let error = parse_args([
                 OsString::from("--output-dir"),
@@ -3495,6 +5011,7 @@ mod tests {
                 parse([flag]).expect("standalone help"),
                 Args {
                     fixtures_root: PathBuf::from(DEFAULT_FIXTURES_ROOT),
+                    mode: Mode::Write,
                     help: true,
                 }
             );
@@ -3574,6 +5091,86 @@ mod tests {
                 .expect_err("path substitution must be reported")
                 .to_string()
                 .contains("changed identity")
+        );
+    }
+
+    #[test]
+    fn multi_file_publication_failure_restores_every_original() {
+        let temporary = tempdir().expect("create publication transaction root");
+        let temporary_root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonicalize publication transaction root");
+        let fixture_root = temporary_root.join("fixtures");
+        let staging = temporary_root.join("staging");
+        let backup = temporary_root.join("backup");
+        ensure_real_directory(&fixture_root).expect("create fixture root");
+        ensure_real_directory(&fixture_root.join("por")).expect("create managed directory");
+        ensure_real_directory(&staging).expect("create staging directory");
+        ensure_real_directory(&backup).expect("create backup directory");
+
+        let relative_a = PathBuf::from("por/a.to");
+        let relative_b = PathBuf::from("por/b.to");
+        let destination_a = fixture_root.join(&relative_a);
+        let destination_b = fixture_root.join(&relative_b);
+        write_new_regular_file(&destination_a, b"old-a").expect("write original a");
+        write_new_regular_file(&destination_b, b"old-b").expect("write original b");
+        let original_a = read_regular_file_snapshot(&destination_a).expect("snapshot original a");
+        let original_b = read_regular_file_snapshot(&destination_b).expect("snapshot original b");
+
+        let staged_a = staging.join("a.to");
+        let staged_b = staging.join("b.to");
+        let staged_a_identity =
+            write_new_regular_file(&staged_a, b"new-a").expect("stage replacement a");
+        let staged_b_identity =
+            write_new_regular_file(&staged_b, b"new-b").expect("stage replacement b");
+        assert_ne!(
+            staged_a_identity, staged_b_identity,
+            "independent staged files must have independent identities"
+        );
+
+        let mut entries = [
+            PublicationEntry {
+                relative: relative_a,
+                expected: b"new-a".to_vec(),
+                original: Some(original_a),
+                staged_path: staged_a,
+                backup_path: backup.join("a.to"),
+                staged_identity: staged_a_identity,
+                state: PublicationState::Prepared,
+            },
+            PublicationEntry {
+                relative: relative_b,
+                expected: b"new-b".to_vec(),
+                original: Some(original_b),
+                staged_path: staged_b,
+                backup_path: backup.join("b.to"),
+                staged_identity: staged_b_identity,
+                state: PublicationState::Prepared,
+            },
+        ];
+        publish_entries_with_hook(&fixture_root, &mut entries, |index| {
+            if index == 1 {
+                Err("injected failure before second fixture".into())
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("injected second-entry failure must stop publication");
+        rollback_entries(&fixture_root, &mut entries)
+            .expect("transaction rollback must restore every original");
+
+        assert_eq!(
+            read_regular_file(&destination_a).expect("read restored a"),
+            b"old-a".to_vec()
+        );
+        assert_eq!(
+            read_regular_file(&destination_b).expect("read restored b"),
+            b"old-b".to_vec()
+        );
+        assert_eq!(
+            entries.iter().map(|entry| entry.state).collect::<Vec<_>>(),
+            vec![PublicationState::Prepared, PublicationState::Prepared]
         );
     }
 }

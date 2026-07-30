@@ -1029,7 +1029,7 @@ mod codec_tests {
                 dm::ValidationFail::InternalError("x".into()),
             ))
         };
-        let result = signed::TransactionResult(result_inner);
+        let result = signed::TransactionResult::new(result_inner);
         let result_hash = transaction::TransactionResult::hash_from_inner(&result.0);
 
         query::CommittedTransaction {
@@ -1839,7 +1839,7 @@ mod committed_tx_predicate_tests {
                 dm::ValidationFail::InternalError("x".into()),
             ))
         };
-        let result = signed::TransactionResult(result_inner);
+        let result = signed::TransactionResult::new(result_inner);
         let result_hash = TransactionResult::hash_from_inner(&result.0);
 
         query::CommittedTransaction {
@@ -2006,9 +2006,9 @@ mod committed_tx_predicate_tests {
         };
         let entry = TransactionEntrypoint::Time(time_entry);
         let result = if ok {
-            signed::TransactionResult(Ok(DataTriggerSequence::default()))
+            signed::TransactionResult::new(Ok(DataTriggerSequence::default()))
         } else {
-            signed::TransactionResult(Err(TransactionRejectionReason::Validation(
+            signed::TransactionResult::new(Err(TransactionRejectionReason::Validation(
                 dm::ValidationFail::NotPermitted("no".into()),
             )))
         };

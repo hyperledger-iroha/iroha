@@ -114,7 +114,7 @@ readonly toolchain_copy="${invocation_dir}/formal-toolchain.tsv"
 readonly tlaps_resource_jsonl_copy="${invocation_dir}/tlaps_resource.jsonl"
 readonly tlaps_resource_summary_copy="${invocation_dir}/tlaps_resource_summary.json"
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
-readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness mutations, bounded TLC, trace replay, and production Verus"
+readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness/liveness-ownership/historical-discovery-rank mutations, bounded TLC, trace replay, and production Verus"
 readonly source_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
 cross_tool_obligations="$(
   python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \

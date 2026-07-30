@@ -18831,6 +18831,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"seiyaku_name":"__kotodama_quantity_ratio_round"}"#,
             #"{"seiyaku_name":"__kotodama_decimal_to_int_trunc"}"#,
             #"{"seiyaku_name":"__kotodama_decimal_to_int_round"}"#,
+            #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, amount>"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"Amount: quantity"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount: quantity>"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"Transfer{value: Result<int, Amount: quantity>}"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"Transfer{amount: Amount}"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"Amount{amount: quantity}"}]}"#,
             #"{"code_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#,
             #"{"code_hash":"hash:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#ABA2"}"#,
             #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#0000"}"#,
@@ -18858,6 +18865,456 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     from: Data(payload.utf8)
                 ),
                 "accepted noncanonical manifest payload: \(payload)"
+            )
+        }
+    }
+
+    func testContractManifestAllowsAmountAsStructFieldIdentifier() throws {
+        let payload =
+            #"{"states":[{"name":"Balances","type_name":"Transfer{amount: quantity}"}]}"#
+        let manifest = try JSONDecoder().decode(
+            ToriiContractManifest.self,
+            from: Data(payload.utf8)
+        )
+
+        XCTAssertEqual(manifest.states?.first?.typeName, "Transfer{amount: quantity}")
+        let encoded = try JSONEncoder().encode(manifest)
+        let decoded = try JSONDecoder().decode(ToriiContractManifest.self, from: encoded)
+        XCTAssertEqual(decoded.states?.first?.typeName, "Transfer{amount: quantity}")
+    }
+
+    func testContractManifestStateTypesUseExactCanonicalV1Grammar() throws {
+        func decode(_ typeName: String) throws -> ToriiContractManifest {
+            let data = try JSONSerialization.data(
+                withJSONObject: [
+                    "states": [
+                        ["name": "Balances", "type_name": typeName],
+                    ],
+                ]
+            )
+            return try JSONDecoder().decode(ToriiContractManifest.self, from: data)
+        }
+
+        let scalarTypes = [
+            "int", "decimal", "quantity", "bool", "string", "bytes", "DataSpaceId",
+            "AccountId", "AssetDefinitionId", "AssetId", "NftId", "DomainId", "Name", "Json",
+        ]
+        let stateMapKeyTypes = scalarTypes.filter { $0 != "Json" }
+        let canonical = scalarTypes + stateMapKeyTypes.map {
+            "StateMap<\($0), quantity>"
+        } + [
+            "(int, decimal)",
+            "Option<Result<quantity, string>>",
+            "List<Transfer{amount: quantity}, 64>",
+            "StateMap<AccountId, Transfer{amount: quantity}>",
+            "StateMap<Name, Transfer{amount: quantity, memo: Option<string>}>",
+        ]
+        for typeName in canonical {
+            let manifest = try decode(typeName)
+            XCTAssertEqual(manifest.states?.first?.typeName, typeName)
+            XCTAssertNoThrow(try JSONEncoder().encode(manifest))
+        }
+
+        let noncanonical = [
+            "Amount",
+            "amount",
+            "Transfer{amount: amount}",
+            "Transfer{amount:: quantity}",
+            "Transfer{amount:quantity}",
+            "Transfer{amount:  quantity}",
+            "Transfer {amount: quantity}",
+            "Transfer{}",
+            "Transfer{amount: quantity, amount: int}",
+            "Transfer{__kotodama_link_amount: quantity}",
+            "(int)",
+            "(int,decimal)",
+            "Option<quantity",
+            "Transfer{amount: Option<quantity>}}",
+            "Option<StateMap<AccountId, quantity>>",
+            "StateMap<AccountId, StateMap<Name, quantity>>",
+            "StateMap<Json, quantity>",
+            "StateMap<AccountId , quantity>",
+            "StateMap<AccountId,quantity>",
+            "List<quantity, 0>",
+            "List<quantity, 01>",
+            "List<quantity, 65>",
+            "Trаnsfer{amount: quantity}",
+            "Transfer{amount: quаntity}",
+        ]
+        for typeName in noncanonical {
+            XCTAssertThrowsError(try decode(typeName), "accepted state type \(typeName)")
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiContractStateDescriptor(name: "Balances", typeName: typeName)
+                ),
+                "encoded state type \(typeName)"
+            )
+        }
+    }
+
+    func testContractManifestStateTypeParserEnforcesDepthAndNodeBudgets() throws {
+        func decode(_ typeName: String) throws -> ToriiContractManifest {
+            let data = try JSONSerialization.data(
+                withJSONObject: [
+                    "states": [
+                        ["name": "Balances", "type_name": typeName],
+                    ],
+                ]
+            )
+            return try JSONDecoder().decode(ToriiContractManifest.self, from: data)
+        }
+
+        let maximumDepth = String(repeating: "Option<", count: 255)
+            + "int"
+            + String(repeating: ">", count: 255)
+        XCTAssertNoThrow(try decode(maximumDepth))
+        let excessiveDepth = "Option<" + maximumDepth + ">"
+        XCTAssertThrowsError(try decode(excessiveDepth))
+        let maximumMapValueDepth = String(repeating: "Option<", count: 254)
+            + "int"
+            + String(repeating: ">", count: 254)
+        XCTAssertNoThrow(try decode("StateMap<AccountId, \(maximumMapValueDepth)>"))
+        XCTAssertThrowsError(try decode("StateMap<AccountId, \(maximumDepth)>"))
+
+        let maximumNodes = "("
+            + Array(repeating: "int", count: 255).joined(separator: ", ")
+            + ")"
+        XCTAssertNoThrow(try decode(maximumNodes))
+        XCTAssertNoThrow(try decode("StateMap<AccountId, \(maximumNodes)>"))
+        let excessiveNodes = String(maximumNodes.dropLast()) + ", int)"
+        XCTAssertThrowsError(try decode(excessiveNodes))
+        XCTAssertThrowsError(try decode("StateMap<AccountId, \(excessiveNodes)>"))
+    }
+
+    func testContractManifestDynamicAccessHintsUseExactV1Policy() throws {
+        func payload(
+            baseKey: String = "state:Balances",
+            keyType: String = "AccountId",
+            boundKind: String = "take",
+            maxKeys: Int = 1,
+            includeUnknown: Bool = false,
+            stateName: String = "Balances",
+            stateKeyType: String? = nil
+        ) throws -> Data {
+            var dynamicHint: [String: Any] = [
+                "base_key": baseKey,
+                "key_type": keyType,
+                "bound_kind": boundKind,
+                "max_keys": maxKeys,
+            ]
+            if includeUnknown {
+                dynamicHint["unknown"] = true
+            }
+            return try JSONSerialization.data(withJSONObject: [
+                "access_set_hints": [
+                    "read_keys": [],
+                    "write_keys": [],
+                    "dynamic_reads": [dynamicHint],
+                    "dynamic_writes": [],
+                ],
+                "states": [
+                    [
+                        "name": stateName,
+                        "type_name": "StateMap<\(stateKeyType ?? keyType), quantity>",
+                    ],
+                ],
+            ])
+        }
+
+        func decode(
+            baseKey: String = "state:Balances",
+            keyType: String = "AccountId",
+            boundKind: String = "take",
+            maxKeys: Int = 1,
+            includeUnknown: Bool = false,
+            stateName: String = "Balances",
+            stateKeyType: String? = nil
+        ) throws -> ToriiContractDynamicAccessHint {
+            let manifest = try JSONDecoder().decode(
+                ToriiContractManifest.self,
+                from: payload(
+                    baseKey: baseKey,
+                    keyType: keyType,
+                    boundKind: boundKind,
+                    maxKeys: maxKeys,
+                    includeUnknown: includeUnknown,
+                    stateName: stateName,
+                    stateKeyType: stateKeyType
+                )
+            )
+            return try XCTUnwrap(manifest.accessSetHints?.dynamicReads.first)
+        }
+
+        let keyTypes = [
+            "int",
+            "decimal",
+            "quantity",
+            "bool",
+            "string",
+            "bytes",
+            "DataSpaceId",
+            "AccountId",
+            "AssetDefinitionId",
+            "AssetId",
+            "NftId",
+            "DomainId",
+            "Name",
+        ]
+        for keyType in keyTypes {
+            XCTAssertEqual(try decode(keyType: keyType).keyType, keyType)
+            XCTAssertNoThrow(
+                try JSONEncoder().encode(
+                    ToriiContractDynamicAccessHint(
+                        baseKey: "state:Balances",
+                        keyType: keyType,
+                        boundKind: "range",
+                        maxKeys: 64
+                    )
+                )
+            )
+        }
+        for boundKind in ["range", "take"] {
+            XCTAssertEqual(try decode(boundKind: boundKind).boundKind, boundKind)
+        }
+        for baseKey in ["state:Balances", "state:amount"] {
+            let stateName = baseKey == "state:amount" ? "amount" : "Balances"
+            XCTAssertEqual(
+                try decode(baseKey: baseKey, stateName: stateName).baseKey,
+                baseKey
+            )
+            XCTAssertNoThrow(
+                try JSONEncoder().encode(
+                    ToriiContractDynamicAccessHint(
+                        baseKey: baseKey,
+                        keyType: "AccountId",
+                        boundKind: "take",
+                        maxKeys: 1
+                    )
+                )
+            )
+        }
+        for maxKeys in [1, 64] {
+            XCTAssertEqual(try decode(maxKeys: maxKeys).maxKeys, UInt32(maxKeys))
+        }
+
+        let invalidBaseKeys = [
+            "",
+            "state:",
+            "state:*",
+            "state:Balances.more",
+            "state:Balances:Other",
+            "state:state:Balances",
+            "state:match",
+            "state:StateMap",
+            "state:__kotodama_link_Balances",
+            "state: Balances",
+            "state:Balances ",
+            "state:Бalances",
+            "states:Balances",
+            "Balances",
+            "state:amount.more",
+        ]
+        for baseKey in invalidBaseKeys {
+            XCTAssertThrowsError(try decode(baseKey: baseKey))
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiContractDynamicAccessHint(
+                        baseKey: baseKey,
+                        keyType: "AccountId",
+                        boundKind: "take",
+                        maxKeys: 1
+                    )
+                )
+            )
+        }
+
+        let invalidKeyTypes = [
+            "",
+            "Json",
+            "Int",
+            "Amount",
+            "amount",
+            "AccountID",
+            "Transfer",
+            "StateMap",
+            "StateMap<AccountId, quantity>",
+            " AccountId",
+            "AccountId ",
+            "АccountId",
+        ]
+        for keyType in invalidKeyTypes {
+            XCTAssertThrowsError(try decode(keyType: keyType))
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiContractDynamicAccessHint(
+                        baseKey: "state:Balances",
+                        keyType: keyType,
+                        boundKind: "take",
+                        maxKeys: 1
+                    )
+                )
+            )
+        }
+
+        for boundKind in ["", "Range", "Take", "all", "prefix", "range ", " take"] {
+            XCTAssertThrowsError(try decode(boundKind: boundKind))
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiContractDynamicAccessHint(
+                        baseKey: "state:Balances",
+                        keyType: "AccountId",
+                        boundKind: boundKind,
+                        maxKeys: 1
+                    )
+                )
+            )
+        }
+        for maxKeys in [-1, 0, 65, 4_294_967_296] {
+            XCTAssertThrowsError(try decode(maxKeys: maxKeys))
+        }
+        for maxKeys in [UInt32(0), UInt32(65), UInt32.max] {
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiContractDynamicAccessHint(
+                        baseKey: "state:Balances",
+                        keyType: "AccountId",
+                        boundKind: "take",
+                        maxKeys: maxKeys
+                    )
+                )
+            )
+        }
+        XCTAssertThrowsError(try decode(includeUnknown: true))
+    }
+
+    func testContractManifestDynamicAccessHintsResolveExactDeclaredStateMaps() throws {
+        let canonical = ToriiContractDynamicAccessHint(
+            baseKey: "state:Balances",
+            keyType: "AccountId",
+            boundKind: "take",
+            maxKeys: 1
+        )
+
+        func manifest(
+            reads: [ToriiContractDynamicAccessHint],
+            writes: [ToriiContractDynamicAccessHint],
+            stateName: String = "Balances",
+            stateType: String = "StateMap<AccountId, quantity>"
+        ) -> ToriiContractManifest {
+            ToriiContractManifest(
+                accessSetHints: ToriiContractAccessSetHints(
+                    dynamicReads: reads,
+                    dynamicWrites: writes
+                ),
+                states: [
+                    ToriiContractStateDescriptor(name: stateName, typeName: stateType),
+                ]
+            )
+        }
+
+        func payload(_ value: ToriiContractManifest) throws -> Data {
+            let reads = value.accessSetHints?.dynamicReads ?? []
+            let writes = value.accessSetHints?.dynamicWrites ?? []
+            func render(_ hint: ToriiContractDynamicAccessHint) -> [String: Any] {
+                [
+                    "base_key": hint.baseKey,
+                    "key_type": hint.keyType,
+                    "bound_kind": hint.boundKind,
+                    "max_keys": hint.maxKeys,
+                ]
+            }
+            return try JSONSerialization.data(withJSONObject: [
+                "access_set_hints": [
+                    "read_keys": [],
+                    "write_keys": [],
+                    "dynamic_reads": reads.map(render),
+                    "dynamic_writes": writes.map(render),
+                ],
+                "states": (value.states ?? []).map {
+                    ["name": $0.name, "type_name": $0.typeName]
+                },
+            ])
+        }
+
+        let malformed = [
+            manifest(reads: [canonical, canonical], writes: []),
+            manifest(reads: [], writes: [canonical, canonical]),
+            manifest(
+                reads: [
+                    ToriiContractDynamicAccessHint(
+                        baseKey: "state:Missing",
+                        keyType: "AccountId",
+                        boundKind: "take",
+                        maxKeys: 1
+                    ),
+                ],
+                writes: []
+            ),
+            manifest(reads: [canonical], writes: [], stateType: "quantity"),
+            manifest(
+                reads: [
+                    ToriiContractDynamicAccessHint(
+                        baseKey: "state:Balances",
+                        keyType: "Name",
+                        boundKind: "take",
+                        maxKeys: 1
+                    ),
+                ],
+                writes: []
+            ),
+        ]
+        for value in malformed {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiContractManifest.self, from: payload(value))
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(value))
+        }
+
+        let amount = ToriiContractDynamicAccessHint(
+            baseKey: "state:amount",
+            keyType: "AccountId",
+            boundKind: "range",
+            maxKeys: 64
+        )
+        let accepted = manifest(
+            reads: [amount],
+            writes: [amount],
+            stateName: "amount"
+        )
+        let decoded = try JSONDecoder().decode(
+            ToriiContractManifest.self,
+            from: payload(accepted)
+        )
+        XCTAssertEqual(decoded.accessSetHints?.dynamicReads.first?.baseKey, "state:amount")
+        XCTAssertNoThrow(try JSONEncoder().encode(accepted))
+    }
+
+    func testContractManifestRejectsRetiredErrorNamespaces() throws {
+        for retired in ["Amount", "amount"] {
+            let errorPayload =
+                #"{"error_codes":[{"namespace":""#
+                + retired
+                + #"","name":"Denied","code":7}]}"#
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractManifest.self,
+                    from: Data(errorPayload.utf8)
+                )
+            ) { error in
+                XCTAssertTrue(
+                    String(describing: error).contains("namespace"),
+                    "missing error namespace diagnostic: \(error)"
+                )
+            }
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiContractErrorCodeDescriptor(
+                        namespace: retired,
+                        name: "Denied",
+                        code: 7
+                    )
+                ),
+                "encoded retired error namespace \(retired)"
             )
         }
     }

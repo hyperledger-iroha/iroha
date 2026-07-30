@@ -963,7 +963,7 @@ pub(in crate::zk) mod output_membership_v4 {
 }
 
 fn canonical_poseidon_digest<T: Encode>(value: &T) -> Result<[u8; 32], String> {
-    let bytes = norito::to_bytes(value)
+    let bytes = norito::encode_canonical(value)
         .map_err(|err| format!("failed to encode Kagemusha V4 binding value: {err}"))?;
     Ok(iroha_zkp_halo2::poseidon::hash_bytes(&bytes))
 }
@@ -1344,7 +1344,7 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
     ) -> Result<Self, String> {
         candidate.validate().map_err(|error| error.to_string())?;
         let candidate_sha256 = candidate.sha256().map_err(|error| error.to_string())?;
-        let manifest_bytes = norito::to_bytes(&candidate.manifest).map_err(|error| {
+        let manifest_bytes = norito::encode_canonical(&candidate.manifest).map_err(|error| {
             format!("failed to encode Kagemusha V4 candidate manifest: {error}")
         })?;
         let manifest_sha256: [u8; 32] = Sha256::digest(manifest_bytes).into();
@@ -2386,6 +2386,24 @@ mod tests {
             .validate_public_binding()
             .expect("structurally valid V4 bundle");
         bundle
+    }
+
+    #[test]
+    fn v4_binding_digest_ignores_ambient_norito_layout() {
+        let statement = init_statement();
+        let expected = canonical_poseidon_digest(&statement).expect("canonical statement digest");
+        let canonical = norito::encode_canonical(&statement).expect("canonical statement frame");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&statement).expect("alternate-layout statement frame"),
+            canonical
+        );
+        assert_eq!(
+            canonical_poseidon_digest(&statement).expect("ambient-independent statement digest"),
+            expected
+        );
     }
 
     #[test]

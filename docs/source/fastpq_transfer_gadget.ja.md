@@ -2,7 +2,7 @@
 lang: ja
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T10:01:27.059307+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount` (共有 RNS 分解を備えた範囲ガジェット)。
      - `from_balance_after = from_balance_before - amount`。
      - `to_balance_after = to_balance_before + amount`。
-   - カスタム ゲートにパックされるため、3 つの式すべてが 1 つの行グループを消費します。2. **ポセイドンコミットメントブロック**
+   - カスタム ゲートにパックされるため、3 つの式すべてが 1 つの行グループを消費します。
+
+2. **ポセイドンコミットメントブロック**
    - 他のガジェットですでに使用されている共有ポセイドン ルックアップ テーブルを使用して `poseidon_preimage_digest` を再計算します。トレースには転送ごとのポセイドン弾はありません。
 
 3. **マークル パス ブロック**
@@ -96,7 +98,9 @@ struct TransferDeltaTranscript {
 5. **バッチ ループ**
    - プログラムは、`transfer_asset` ビルダーのループの前に `transfer_v1_batch_begin()` を呼び出し、その後で `transfer_v1_batch_end()` を呼び出します。スコープがアクティブである間、ホストは各転送をバッファリングし、単一の `TransferAssetBatch` として再生し、バッチごとに 1 回 Poseidon/SMT コンテキストを再利用します。デルタを追加するたびに、算術演算と 2 つのリーフ チェックのみが追加されます。トランスクリプト デコーダはマルチデルタ バッチを受け入れ、それらを `TransferGadgetInput::deltas` として表示するようになりました。これにより、プランナーは Norito を再読み取りせずに証人をフォールドできるようになります。すでに Norito ペイロードを持っているコントラクト (CLI/SDK など) は、`transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` を呼び出すことでスコープを完全にスキップでき、1 つの syscall で完全にエンコードされたバッチをホストに渡します。
 
-# 主催者と証明者の変更|レイヤー |変更点 |
+# 主催者と証明者の変更
+
+|レイヤー |変更点 |
 |------|-----------|
 | `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) を追加して、プログラムが中間 ISI を発行せずに複数の `transfer_v1` システムコールを一括処理できるようにするとともに、`transfer_v1_batch_apply` (`0x2B`)事前にエンコードされたバッチの場合。 |
 | `ivm::host` とテスト |コア/デフォルト ホストはスコープがアクティブな間 `transfer_v1` をバッチ追加として扱い、`SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` を表面化し、モック WSV ホストはコミット前にエントリをバッファするため、回帰テストで決定的なバランスを確認できます。更新情報。【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713]【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```発行された JSON は、`iroha_cli audit witness` がデフォルトで発行するようになった FASTPQ バッチ アーティファクトをミラーリングします (抑制するには `--no-fastpq-batches` を渡します)。そのため、プランナーの変更を検証するときに、`scripts/fastpq/check_row_usage.py` と CI ゲートは合成実行を以前のスナップショットと比較できます。
+```
+
+発行された JSON は、`iroha_cli audit witness` がデフォルトで発行するようになった FASTPQ バッチ アーティファクトをミラーリングします (抑制するには `--no-fastpq-batches` を渡します)。そのため、プランナーの変更を検証するときに、`scripts/fastpq/check_row_usage.py` と CI ゲートは合成実行を以前のスナップショットと比較できます。
 
 # 展開計画
 

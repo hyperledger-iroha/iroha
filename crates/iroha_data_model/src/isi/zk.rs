@@ -301,219 +301,6 @@ impl Shield {
 }
 
 isi! {
-    /// Register an on-chain ZK-ACE identity commitment for transparent-transfer authorization.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct RegisterZkAceIdentityCommitment {
-        /// Asset definition the authorization policy applies to.
-        pub asset: AssetDefinitionId,
-        /// ZK-ACE identity commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub identity_commitment: [u8; 32],
-        /// Policy hash bound to the identity.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub policy_hash: [u8; 32],
-        /// Source accounts this identity commitment may authorize.
-        pub allowed_accounts: Vec<AccountId>,
-        /// Action class authorized by this identity record.
-        pub action_class: String,
-        /// Domain separation tag used by the prover.
-        pub domain_tag: String,
-        /// Verifying key for ZK-ACE authorization proofs.
-        pub verifier_key: crate::proof::VerifyingKeyId,
-    }
-}
-
-impl crate::seal::Instruction for RegisterZkAceIdentityCommitment {}
-impl RegisterZkAceIdentityCommitment {
-    /// Construct a new identity-commitment registration.
-    pub fn new(
-        asset: AssetDefinitionId,
-        identity_commitment: [u8; 32],
-        policy_hash: [u8; 32],
-        allowed_accounts: Vec<AccountId>,
-        action_class: String,
-        domain_tag: String,
-        verifier_key: crate::proof::VerifyingKeyId,
-    ) -> Self {
-        Self {
-            asset,
-            identity_commitment,
-            policy_hash,
-            allowed_accounts,
-            action_class,
-            domain_tag,
-            verifier_key,
-        }
-    }
-}
-
-isi! {
-    /// Rotate an active ZK-ACE identity commitment to a replacement commitment.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct RotateZkAceIdentityCommitment {
-        /// Asset definition the authorization policy applies to.
-        pub asset: AssetDefinitionId,
-        /// Currently active identity commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub old_identity_commitment: [u8; 32],
-        /// Replacement identity commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub new_identity_commitment: [u8; 32],
-        /// Policy hash for the replacement identity record.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub policy_hash: [u8; 32],
-        /// Source accounts the replacement identity commitment may authorize.
-        pub allowed_accounts: Vec<AccountId>,
-        /// Action class authorized by the replacement record.
-        pub action_class: String,
-        /// Domain separation tag used by the prover.
-        pub domain_tag: String,
-        /// Verifying key for replacement ZK-ACE authorization proofs.
-        pub verifier_key: crate::proof::VerifyingKeyId,
-    }
-}
-
-impl crate::seal::Instruction for RotateZkAceIdentityCommitment {}
-impl RotateZkAceIdentityCommitment {
-    /// Construct a new identity-commitment rotation.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        asset: AssetDefinitionId,
-        old_identity_commitment: [u8; 32],
-        new_identity_commitment: [u8; 32],
-        policy_hash: [u8; 32],
-        allowed_accounts: Vec<AccountId>,
-        action_class: String,
-        domain_tag: String,
-        verifier_key: crate::proof::VerifyingKeyId,
-    ) -> Self {
-        Self {
-            asset,
-            old_identity_commitment,
-            new_identity_commitment,
-            policy_hash,
-            allowed_accounts,
-            action_class,
-            domain_tag,
-            verifier_key,
-        }
-    }
-}
-
-isi! {
-    /// Revoke an active ZK-ACE identity commitment.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct RevokeZkAceIdentityCommitment {
-        /// Asset definition the authorization policy applies to.
-        pub asset: AssetDefinitionId,
-        /// Identity commitment to revoke.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub identity_commitment: [u8; 32],
-        /// Optional reason/audit digest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
-        pub reason_hash: Option<[u8; 32]>,
-    }
-}
-
-impl crate::seal::Instruction for RevokeZkAceIdentityCommitment {}
-impl RevokeZkAceIdentityCommitment {
-    /// Construct a new identity-commitment revocation.
-    pub fn new(
-        asset: AssetDefinitionId,
-        identity_commitment: [u8; 32],
-        reason_hash: Option<[u8; 32]>,
-    ) -> Self {
-        Self {
-            asset,
-            identity_commitment,
-            reason_hash,
-        }
-    }
-}
-
-isi! {
-    /// Submit a ZK-ACE-authorized transparent asset transfer.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct SubmitZkAceAuthorizedTransfer {
-        /// Source account authorized by the ZK-ACE proof.
-        pub from: AccountId,
-        /// Destination account.
-        pub to: AccountId,
-        /// Transparent asset definition.
-        pub asset: AssetDefinitionId,
-        /// Transparent amount.
-        pub amount: Quantity,
-        /// Identity commitment being authorized.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub identity_commitment: [u8; 32],
-        /// Digest of the visible action fields.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub tx_digest: [u8; 32],
-        /// Chain id bound into the action.
-        pub chain_id: ChainId,
-        /// Domain separation tag.
-        pub domain_tag: String,
-        /// Action class.
-        pub action_class: String,
-        /// Replay-prevention nullifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub replay_nullifier: [u8; 32],
-        /// Policy hash expected on the identity record.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub policy_hash: [u8; 32],
-        /// STARK/FRI proof attachment.
-        pub proof: crate::proof::ProofAttachment,
-    }
-}
-
-impl crate::seal::Instruction for SubmitZkAceAuthorizedTransfer {}
-impl SubmitZkAceAuthorizedTransfer {
-    /// Construct a new ZK-ACE-authorized transparent transfer.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        from: AccountId,
-        to: AccountId,
-        asset: AssetDefinitionId,
-        amount: impl Into<Quantity>,
-        identity_commitment: [u8; 32],
-        tx_digest: [u8; 32],
-        chain_id: ChainId,
-        domain_tag: String,
-        action_class: String,
-        replay_nullifier: [u8; 32],
-        policy_hash: [u8; 32],
-        proof: crate::proof::ProofAttachment,
-    ) -> Self {
-        Self {
-            from,
-            to,
-            asset,
-            amount: amount.into(),
-            identity_commitment,
-            tx_digest,
-            chain_id,
-            domain_tag,
-            action_class,
-            replay_nullifier,
-            policy_hash,
-            proof,
-        }
-    }
-}
-
-isi! {
     /// Private-to-private transfer within a shielded ledger.
     #[cfg_attr(
         feature = "json",
@@ -677,6 +464,73 @@ impl Unshield {
 
 // --- ZK Voting ---
 
+/// Maximum number of options admitted by the first-release election ABI.
+///
+/// This matches the V1 bounded-list capacity used by Kotodama and the IVM ABI.
+pub const MAX_ELECTION_OPTIONS_V1: u32 = 64;
+
+/// A malformed first-release election shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ElectionShapeV1Error {
+    /// An election declared no options.
+    #[error("election options {actual} are below the minimum of {minimum}")]
+    NoOptions {
+        /// Minimum admitted option count.
+        minimum: usize,
+        /// Declared option count.
+        actual: usize,
+    },
+    /// An election exceeded the first-release option cap.
+    #[error("election options {actual} exceed the V1 maximum of {maximum}")]
+    TooManyOptions {
+        /// Maximum admitted option count.
+        maximum: usize,
+        /// Declared option count.
+        actual: usize,
+    },
+    /// The stored or submitted tally did not contain one counter per option.
+    #[error("election tally length {actual} does not match option count {expected}")]
+    TallyLengthMismatch {
+        /// Declared option count after V1 validation.
+        expected: usize,
+        /// Number of counters in the tally.
+        actual: usize,
+    },
+}
+
+/// Validate a first-release election option count and return its allocation length.
+pub fn validate_election_options_v1(options: u32) -> Result<usize, ElectionShapeV1Error> {
+    let options = options as usize;
+    if options == 0 {
+        return Err(ElectionShapeV1Error::NoOptions {
+            minimum: 1,
+            actual: options,
+        });
+    }
+    if options > MAX_ELECTION_OPTIONS_V1 as usize {
+        return Err(ElectionShapeV1Error::TooManyOptions {
+            maximum: MAX_ELECTION_OPTIONS_V1 as usize,
+            actual: options,
+        });
+    }
+    Ok(options)
+}
+
+/// Validate that a tally contains exactly one counter per valid V1 election option.
+pub fn validate_election_tally_v1(
+    options: u32,
+    tally_len: usize,
+) -> Result<usize, ElectionShapeV1Error> {
+    let expected = validate_election_options_v1(options)?;
+    if tally_len != expected {
+        return Err(ElectionShapeV1Error::TallyLengthMismatch {
+            expected,
+            actual: tally_len,
+        });
+    }
+    Ok(expected)
+}
+
 isi! {
     /// Create an anonymous election.
     #[cfg_attr(
@@ -837,48 +691,6 @@ impl_zk_decode_from_slice!(Shield {
     enc_payload: ConfidentialEncryptedPayload,
 });
 
-impl_zk_decode_from_slice!(RegisterZkAceIdentityCommitment {
-    asset: AssetDefinitionId,
-    identity_commitment: [u8; 32],
-    policy_hash: [u8; 32],
-    allowed_accounts: Vec<AccountId>,
-    action_class: String,
-    domain_tag: String,
-    verifier_key: crate::proof::VerifyingKeyId,
-});
-
-impl_zk_decode_from_slice!(RotateZkAceIdentityCommitment {
-    asset: AssetDefinitionId,
-    old_identity_commitment: [u8; 32],
-    new_identity_commitment: [u8; 32],
-    policy_hash: [u8; 32],
-    allowed_accounts: Vec<AccountId>,
-    action_class: String,
-    domain_tag: String,
-    verifier_key: crate::proof::VerifyingKeyId,
-});
-
-impl_zk_decode_from_slice!(RevokeZkAceIdentityCommitment {
-    asset: AssetDefinitionId,
-    identity_commitment: [u8; 32],
-    reason_hash: Option<[u8; 32]>,
-});
-
-impl_zk_decode_from_slice!(SubmitZkAceAuthorizedTransfer {
-    from: AccountId,
-    to: AccountId,
-    asset: AssetDefinitionId,
-    amount: Quantity,
-    identity_commitment: [u8; 32],
-    tx_digest: [u8; 32],
-    chain_id: ChainId,
-    domain_tag: String,
-    action_class: String,
-    replay_nullifier: [u8; 32],
-    policy_hash: [u8; 32],
-    proof: crate::proof::ProofAttachment,
-});
-
 impl_zk_decode_from_slice!(ZkTransfer {
     asset: AssetDefinitionId,
     inputs: Vec<[u8; 32]>,
@@ -939,6 +751,49 @@ mod tests {
     use norito::core::{DecodeFromSlice, NoritoSerialize as _};
 
     use super::*;
+
+    #[test]
+    fn election_shape_v1_enforces_option_and_tally_boundaries() {
+        assert_eq!(
+            validate_election_options_v1(0),
+            Err(ElectionShapeV1Error::NoOptions {
+                minimum: 1,
+                actual: 0,
+            })
+        );
+        assert_eq!(validate_election_options_v1(1), Ok(1));
+        assert_eq!(
+            validate_election_options_v1(MAX_ELECTION_OPTIONS_V1),
+            Ok(MAX_ELECTION_OPTIONS_V1 as usize)
+        );
+        assert_eq!(
+            validate_election_options_v1(MAX_ELECTION_OPTIONS_V1 + 1),
+            Err(ElectionShapeV1Error::TooManyOptions {
+                maximum: MAX_ELECTION_OPTIONS_V1 as usize,
+                actual: MAX_ELECTION_OPTIONS_V1 as usize + 1,
+            })
+        );
+
+        assert_eq!(validate_election_tally_v1(1, 1), Ok(1));
+        assert_eq!(
+            validate_election_tally_v1(MAX_ELECTION_OPTIONS_V1, 64),
+            Ok(64)
+        );
+        assert_eq!(
+            validate_election_tally_v1(MAX_ELECTION_OPTIONS_V1, 0),
+            Err(ElectionShapeV1Error::TallyLengthMismatch {
+                expected: MAX_ELECTION_OPTIONS_V1 as usize,
+                actual: 0,
+            })
+        );
+        assert_eq!(
+            validate_election_tally_v1(MAX_ELECTION_OPTIONS_V1, 65),
+            Err(ElectionShapeV1Error::TallyLengthMismatch {
+                expected: MAX_ELECTION_OPTIONS_V1 as usize,
+                actual: MAX_ELECTION_OPTIONS_V1 as usize + 1,
+            })
+        );
+    }
     use crate::{
         domain::DomainId,
         name::Name,
@@ -1050,44 +905,6 @@ mod tests {
             Quantity::from(1_000_u32),
             [0x11; 32],
             encrypted_payload(),
-        ));
-        assert_slice_roundtrip(RegisterZkAceIdentityCommitment::new(
-            asset.clone(),
-            [0x51; 32],
-            [0x52; 32],
-            vec![account(1)],
-            "transfer".to_owned(),
-            "iroha-zk-ace-v1".to_owned(),
-            verifying_key("zk-ace"),
-        ));
-        assert_slice_roundtrip(RotateZkAceIdentityCommitment::new(
-            asset.clone(),
-            [0x51; 32],
-            [0x53; 32],
-            [0x52; 32],
-            vec![account(1), account(2)],
-            "transfer".to_owned(),
-            "iroha-zk-ace-v1".to_owned(),
-            verifying_key("zk-ace-rotated"),
-        ));
-        assert_slice_roundtrip(RevokeZkAceIdentityCommitment::new(
-            asset.clone(),
-            [0x53; 32],
-            Some([0x54; 32]),
-        ));
-        assert_slice_roundtrip(SubmitZkAceAuthorizedTransfer::new(
-            account(1),
-            account(2),
-            asset.clone(),
-            Quantity::from(17_u32),
-            [0x53; 32],
-            [0x55; 32],
-            ChainId::from("zk-ace-test"),
-            "iroha-zk-ace-v1".to_owned(),
-            "transfer".to_owned(),
-            [0x56; 32],
-            [0x52; 32],
-            proof.clone(),
         ));
         assert_slice_roundtrip(ZkTransfer::new(
             asset.clone(),
@@ -1203,56 +1020,6 @@ mod tests {
                 asset.clone(),
                 [0x44; 32],
                 verifying_key("asset-hidden-transfer"),
-            ),
-        );
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<RegisterZkAceIdentityCommitment>(),
-            RegisterZkAceIdentityCommitment::new(
-                asset.clone(),
-                [0x51; 32],
-                [0x52; 32],
-                vec![account(1)],
-                "transfer".to_owned(),
-                "iroha-zk-ace-v1".to_owned(),
-                verifying_key("zk-ace"),
-            ),
-        );
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<RotateZkAceIdentityCommitment>(),
-            RotateZkAceIdentityCommitment::new(
-                asset.clone(),
-                [0x51; 32],
-                [0x53; 32],
-                [0x52; 32],
-                vec![account(1)],
-                "transfer".to_owned(),
-                "iroha-zk-ace-v1".to_owned(),
-                verifying_key("zk-ace-rotated"),
-            ),
-        );
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<RevokeZkAceIdentityCommitment>(),
-            RevokeZkAceIdentityCommitment::new(asset.clone(), [0x53; 32], Some([0x54; 32])),
-        );
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<SubmitZkAceAuthorizedTransfer>(),
-            SubmitZkAceAuthorizedTransfer::new(
-                account(1),
-                account(2),
-                asset.clone(),
-                Quantity::from(17_u32),
-                [0x53; 32],
-                [0x55; 32],
-                ChainId::from("zk-ace-test"),
-                "iroha-zk-ace-v1".to_owned(),
-                "transfer".to_owned(),
-                [0x56; 32],
-                [0x52; 32],
-                proof_attachment(),
             ),
         );
         assert_registry_decodes(

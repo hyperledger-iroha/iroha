@@ -24,6 +24,37 @@ use blake3::hash as blake3_hash;
 use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
+use iroha_core::{
+    privacy_engines::{
+        bootle_lantern::{
+            prove_bound_presentation_v1, relation::BootleLanternPresentationWitnessV1,
+            ring::ApplicationPolynomialV1,
+        },
+        jindo::{
+            JindoPrivacyActionTransactionContextV1, JindoPrivacyActionWitnessV1,
+            build_signed_privacy_action_v1,
+        },
+        p256::{CompressedPointV1, SecretScalarV1, TranscriptBindingV1},
+        vega::{
+            VegaMdlConsensusBindingV1, VegaMdlWitnessV1, derive_device_authentication_digest_v1,
+            prove_mdl_figure9_v1,
+        },
+        verange::{
+            VeRangeBitLengthV1, VeRangeParametersV1, VeRangeType1BatchStatementV1, commit,
+            prove_batch,
+        },
+        zk_ams::{
+            ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_RING_SIZES_V1,
+            ZkAmsBatchCredentialWitnessV1, ZkAmsSeedSecretV1, prove_zk_ams_batch_admission_v1,
+            sign_zk_ams_provision_statement_v1, zk_ams_generator_digest_v1, zk_ams_key_image_v1,
+            zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
+        },
+    },
+    privacy_profiles::{
+        CompiledPrivacyProfileV1, committed_privacy_capability_snapshot_v1,
+        compiled_privacy_profile_v1,
+    },
+};
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId,
     PrivateKey, PublicKey, Signature, derive_keyset_from_slice, ed25519_parse_signature,
@@ -46,19 +77,28 @@ use iroha_data_model::{
     block::{
         BlockHeader,
         consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
+        decode_framed_signed_block,
     },
     confidential::ConfidentialEncryptedPayload,
     consensus::{
         CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash,
     },
     domain::prelude::{Domain, DomainId},
-    escrow::EscrowId,
+    escrow::{
+        AssetEscrowRecord, ConditionalEscrowCondition, ConditionalEscrowValue, EscrowId,
+        hash_conditional_escrow_evidence_digest,
+    },
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue, Revoke,
-        SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
-        SetAssetTransferFreeze, SetKeyValue, SetParameter, Transfer, Unregister,
-        escrow::{CancelAssetLock, DrawdownAssetLock, ExpireAssetLock, OpenAssetLock},
+        BatchMode, Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue,
+        Revoke, SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
+        SetAssetTransferFreeze, SetKeyValue, SetParameter, Transfer, TransferAssetBatch,
+        TransferAssetBatchEntry, Unregister,
+        escrow::{
+            AttestEscrowCondition, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
+            ExpireConditionalEscrow, OpenAssetLock, OpenConditionalEscrow,
+        },
+        privacy::SubmitPrivacyProofV1,
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
@@ -67,9 +107,8 @@ use iroha_data_model::{
         smart_contract_code::CommitContractDeployment,
         sorafs::{CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder},
         zk::{
-            AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAceIdentityCommitment,
-            RegisterZkAsset, RevokeZkAceIdentityCommitment, RotateZkAceIdentityCommitment, Shield,
-            SubmitZkAceAuthorizedTransfer, Unshield, VerifyProof, ZkAssetMode, ZkTransfer,
+            AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAsset, Shield, Unshield,
+            VerifyProof, ZkAssetMode, ZkTransfer,
         },
     },
     metadata::Metadata,
@@ -84,7 +123,38 @@ use iroha_data_model::{
     peer::PeerId,
     permission::Permission,
     prelude::{AccountId, ChainId},
+    privacy::{
+        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAttributeValueV1,
+        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1,
+        IrohaZkAmsStatementV1, PRIVACY_BRIDGE_ABI_VERSION_V1,
+        PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1, PrivacyCapabilitySnapshotV1, PrivacyChallengeV1,
+        PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyCredentialDocumentTypeV1,
+        PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyP256PointV1, PrivacyPolicyDigestV1,
+        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
+        PrivacyProtocolIdV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
+        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVeRangeBitLengthV1,
+        PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
+        PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsActionV1,
+        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
+        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
+        PrivacyZkAmsSubjectCommitmentV1, VeRangeTransparentRangeStatementV1,
+        VegaExistingCredentialStatementV1, ZK_AMS_PHC_VERSION_V1,
+        validate_privacy_capability_archive_v1, zk_ams_issuer_policy_record_digest_v1,
+        zk_ams_registry_record_digest_v1,
+    },
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    query::{
+        ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
+        SingularQueryBox,
+        dsl::{CompoundPredicate, SelectorTuple},
+        escrow::prelude::{FindAssetEscrowById, FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
+        parameters::QueryParams,
+    },
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{ContractAddress, ContractAlias},
@@ -107,11 +177,6 @@ use iroha_data_model::{
         Trigger, TriggerId,
         action::{Action as TriggerAction, Repeats},
     },
-    zk::{
-        OpenVerifyEnvelope, ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-        ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        ZkAcePublicInputsV1, ZkAceWitnessV1,
-    },
 };
 use iroha_primitives::{
     json::Json,
@@ -127,6 +192,7 @@ use iroha_torii_shared::{
     connect_sdk,
 };
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
+use iroha_zkp_halo2::vega::{VegaMdlProverConfigV1, ZkAmsMaskedProverConfigV1};
 use norito::{codec, codec::DecodeAll, decode_from_bytes, json, json::JsonSerialize};
 use pyo3::{
     Bound, FromPyObject, create_exception,
@@ -191,6 +257,10 @@ use sorafs_orchestrator::{
 use tokio::runtime::Runtime;
 use url::{Host, Url};
 use x25519_dalek::StaticSecret;
+use zk_ace_prover::{
+    ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1, ZkAcePrivacyWitnessV1,
+    build_signed_zk_ace_privacy_transfer_v1,
+};
 
 /// Raised when a non-Ed25519 key is passed to an Ed25519-only helper.
 const ERR_EXPECTED_ED25519: &str = "expected Ed25519 key material";
@@ -862,45 +932,6 @@ fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     Ok(trimmed.to_owned())
 }
 
-fn py_account_id_list(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<AccountId>> {
-    let items = if let Ok(items) = value.cast::<PyList>() {
-        items.iter().collect::<Vec<_>>()
-    } else if let Ok(items) = value.cast::<PyTuple>() {
-        items.iter().collect::<Vec<_>>()
-    } else {
-        return Err(PyTypeError::new_err(format!(
-            "{context} must be a list or tuple"
-        )));
-    };
-    if items.is_empty() {
-        return Err(PyValueError::new_err(format!(
-            "{context} must be non-empty"
-        )));
-    }
-    if items.len() > iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS {
-        return Err(PyValueError::new_err(format!(
-            "{context} must contain at most {} accounts",
-            iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS
-        )));
-    }
-    let mut accounts = Vec::with_capacity(items.len());
-    let mut seen = HashSet::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
-        let text = py_text(item, &format!("{context}[{index}]"))?;
-        let account = parse_account_id(&text).map_err(|err| {
-            PyValueError::new_err(format!("invalid {context}[{index}] `{text}`: {err}"))
-        })?;
-        if !seen.insert(account.clone()) {
-            return Err(PyValueError::new_err(format!(
-                "{context}[{index}] duplicates an earlier account"
-            )));
-        }
-        accounts.push(account);
-    }
-    accounts.sort();
-    Ok(accounts)
-}
-
 fn py_bytes_or_hex(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
     if let Ok(text) = value.extract::<String>() {
         return parse_hex_bytes_py(&text, context);
@@ -1016,439 +1047,12 @@ fn parse_zk_asset_mode(value: Option<&str>) -> PyResult<ZkAssetMode> {
     }
 }
 
-fn parse_zk_ace_action(value: Option<&str>, context: &str) -> PyResult<String> {
-    let action = value
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .unwrap_or(ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER);
-    if action != ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER {
-        return Err(PyValueError::new_err(format!(
-            "{context} must be {ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER}"
-        )));
-    }
-    Ok(action.to_owned())
-}
-
-fn parse_zk_ace_domain_tag(value: Option<&str>, context: &str) -> PyResult<String> {
-    let domain_tag = value
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .unwrap_or(ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG);
-    if domain_tag != ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG {
-        return Err(PyValueError::new_err(format!(
-            "{context} must be {ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG}"
-        )));
-    }
-    Ok(domain_tag.to_owned())
-}
-
-fn parse_zk_ace_verifying_key_id_py(
-    value: &Bound<'_, PyAny>,
-    context: &str,
-) -> PyResult<VerifyingKeyId> {
-    let vk = parse_required_verifying_key_id_py(Some(value), context)?;
-    if vk.backend != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
-        return Err(PyValueError::new_err(format!(
-            "{context}.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
-        )));
-    }
-    Ok(vk)
-}
-
-fn parse_optional_zk_ace_verifying_key_id_py(
-    value: Option<&Bound<'_, PyAny>>,
-    context: &str,
-) -> PyResult<VerifyingKeyId> {
-    match value {
-        Some(value) if !value.is_none() => parse_zk_ace_verifying_key_id_py(value, context),
-        _ => Ok(zk_ace_prover::zk_ace_verifier_key_id(
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-        )),
-    }
-}
-
-fn ensure_zk_ace_proof_attachment(
-    proof: ProofAttachment,
-    context: &str,
-) -> PyResult<ProofAttachment> {
-    if proof.backend != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
-        return Err(PyValueError::new_err(format!(
-            "{context}.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
-        )));
-    }
-    if proof.vk_ref.backend != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
-        return Err(PyValueError::new_err(format!(
-            "{context}.vk_ref.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
-        )));
-    }
-    Ok(proof)
-}
-
-fn zk_ace_proof_attachment_json_value(attachment: &ProofAttachment) -> PyResult<json::Value> {
-    let mut vk_ref = json::Map::new();
-    vk_ref.insert(
-        "backend".to_owned(),
-        json::Value::String(attachment.vk_ref.backend.as_str().to_owned()),
-    );
-    vk_ref.insert(
-        "name".to_owned(),
-        json::Value::String(attachment.vk_ref.name.clone()),
-    );
-
-    let mut proof = json::Map::new();
-    proof.insert(
-        "backend".to_owned(),
-        json::Value::String(attachment.backend.as_str().to_owned()),
-    );
-    proof.insert("verifying_key_ref".to_owned(), json::Value::Object(vk_ref));
-    proof.insert(
-        "proof_b64".to_owned(),
-        json::Value::String(BASE64.encode(&attachment.proof.bytes)),
-    );
-    proof.insert(
-        "stark_fri_parameters".to_owned(),
-        zk_ace_stark_fri_parameters_json_value()?,
-    );
-    if let Some(commitment) = attachment.vk_commitment {
-        proof.insert(
-            "verifying_key_commitment".to_owned(),
-            json::Value::String(hex_encode(commitment)),
-        );
-    }
-    if let Some(envelope_hash) = attachment.envelope_hash {
-        proof.insert(
-            "envelope_hash".to_owned(),
-            json::Value::String(hex_encode(envelope_hash)),
-        );
-    }
-    Ok(json::Value::Object(proof))
-}
-
-fn zk_ace_public_inputs_json_value(
-    public_inputs: &ZkAcePublicInputsV1,
-    from_account_literal: &str,
-    to_account_literal: &str,
-) -> PyResult<json::Value> {
-    let mut verifier_key = json::Map::new();
-    verifier_key.insert(
-        "backend".to_owned(),
-        json::Value::String(public_inputs.verifier_key_id.backend.as_str().to_owned()),
-    );
-    verifier_key.insert(
-        "name".to_owned(),
-        json::Value::String(public_inputs.verifier_key_id.name.clone()),
-    );
-
-    let mut value = json::Map::new();
-    value.insert(
-        "version".to_owned(),
-        json::to_value(&1u8).map_err(|err| {
-            PyValueError::new_err(format!("serialize public input version: {err}"))
-        })?,
-    );
-    value.insert(
-        "identity_commitment".to_owned(),
-        json::Value::String(hex_encode(public_inputs.identity_commitment)),
-    );
-    value.insert(
-        "tx_digest".to_owned(),
-        json::Value::String(hex_encode(public_inputs.tx_digest)),
-    );
-    value.insert(
-        "authorization_digest".to_owned(),
-        json::Value::String(hex_encode(public_inputs.authorization_digest)),
-    );
-    value.insert(
-        "chain_id".to_owned(),
-        json::Value::String(public_inputs.chain_id.to_string()),
-    );
-    value.insert(
-        "domain_tag".to_owned(),
-        json::Value::String(public_inputs.domain_tag.clone()),
-    );
-    value.insert(
-        "action_class".to_owned(),
-        json::Value::String(public_inputs.action_class.clone()),
-    );
-    value.insert(
-        "replay_nullifier".to_owned(),
-        json::Value::String(hex_encode(public_inputs.replay_nullifier)),
-    );
-    value.insert(
-        "policy_hash".to_owned(),
-        json::Value::String(hex_encode(public_inputs.policy_hash)),
-    );
-    value.insert(
-        "from".to_owned(),
-        json::Value::String(from_account_literal.trim().to_owned()),
-    );
-    value.insert(
-        "to".to_owned(),
-        json::Value::String(to_account_literal.trim().to_owned()),
-    );
-    value.insert(
-        "asset".to_owned(),
-        json::Value::String(public_inputs.asset.to_string()),
-    );
-    value.insert(
-        "amount".to_owned(),
-        json::to_value(&public_inputs.amount)
-            .map_err(|err| PyValueError::new_err(format!("serialize public amount: {err}")))?,
-    );
-    value.insert(
-        "verifier_key_id".to_owned(),
-        json::Value::Object(verifier_key),
-    );
-    Ok(json::Value::Object(value))
-}
-
-fn zk_ace_stark_fri_parameters_json_value() -> PyResult<json::Value> {
-    let params = zk_ace_prover::zk_ace_stark_fri_params_v1();
-    let blowup_factor = 1u64
-        .checked_shl(u32::from(params.blowup_log2))
-        .ok_or_else(|| PyValueError::new_err("invalid ZK-ACE STARK/FRI blowup factor"))?;
-    let max_reductions = params.n_log2;
-    let mut value = json::Map::new();
-    value.insert(
-        "version".to_owned(),
-        json::to_value(&params.version)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI version: {err}")))?,
-    );
-    value.insert(
-        "n_log2".to_owned(),
-        json::to_value(&params.n_log2)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI n_log2: {err}")))?,
-    );
-    value.insert(
-        "blowup_log2".to_owned(),
-        json::to_value(&params.blowup_log2)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI blowup_log2: {err}")))?,
-    );
-    value.insert(
-        "blowup_factor".to_owned(),
-        json::to_value(&blowup_factor)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI blowup: {err}")))?,
-    );
-    value.insert(
-        "fold_arity".to_owned(),
-        json::to_value(&params.fold_arity)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI fold_arity: {err}")))?,
-    );
-    value.insert(
-        "arity".to_owned(),
-        json::to_value(&params.fold_arity)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI arity: {err}")))?,
-    );
-    value.insert(
-        "queries".to_owned(),
-        json::to_value(&params.queries)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI queries: {err}")))?,
-    );
-    value.insert(
-        "max_reductions".to_owned(),
-        json::to_value(&max_reductions)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI reductions: {err}")))?,
-    );
-    value.insert(
-        "merkle_arity".to_owned(),
-        json::to_value(&params.merkle_arity)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI merkle_arity: {err}")))?,
-    );
-    value.insert(
-        "hash_fn".to_owned(),
-        json::to_value(&params.hash_fn)
-            .map_err(|err| PyValueError::new_err(format!("serialize FRI hash_fn: {err}")))?,
-    );
-    value.insert(
-        "domain_tag".to_owned(),
-        json::Value::String(params.domain_tag),
-    );
-    Ok(json::Value::Object(value))
-}
-
-fn zk_ace_authorization_json(
-    public_inputs: &ZkAcePublicInputsV1,
-    proof: &ProofAttachment,
-    public_inputs_bytes: &[u8],
-    from_account_literal: &str,
-    to_account_literal: &str,
-) -> PyResult<String> {
-    let mut root = json::Map::new();
-    root.insert(
-        "public_inputs".to_owned(),
-        zk_ace_public_inputs_json_value(public_inputs, from_account_literal, to_account_literal)?,
-    );
-    root.insert(
-        "proof".to_owned(),
-        zk_ace_proof_attachment_json_value(proof)?,
-    );
-    root.insert(
-        "identity_commitment".to_owned(),
-        json::Value::String(hex_encode(public_inputs.identity_commitment)),
-    );
-    root.insert(
-        "tx_digest".to_owned(),
-        json::Value::String(hex_encode(public_inputs.tx_digest)),
-    );
-    root.insert(
-        "authorization_digest".to_owned(),
-        json::Value::String(hex_encode(public_inputs.authorization_digest)),
-    );
-    root.insert(
-        "replay_nullifier".to_owned(),
-        json::Value::String(hex_encode(public_inputs.replay_nullifier)),
-    );
-    root.insert(
-        "policy_hash".to_owned(),
-        json::Value::String(hex_encode(public_inputs.policy_hash)),
-    );
-    root.insert(
-        "verifier_key_id".to_owned(),
-        json::Value::String(format!(
-            "{}:{}",
-            public_inputs.verifier_key_id.backend.as_str(),
-            public_inputs.verifier_key_id.name
-        )),
-    );
-    root.insert(
-        "authorization_proof_bytes".to_owned(),
-        json::to_value(&proof.proof.bytes.len())
-            .map_err(|err| PyValueError::new_err(format!("serialize proof bytes: {err}")))?,
-    );
-    root.insert(
-        "authorization_public_input_bytes".to_owned(),
-        json::to_value(&public_inputs_bytes.len())
-            .map_err(|err| PyValueError::new_err(format!("serialize public input bytes: {err}")))?,
-    );
-    root.insert(
-        "replay_nullifier_bytes".to_owned(),
-        json::to_value(&32usize)
-            .map_err(|err| PyValueError::new_err(format!("serialize nullifier bytes: {err}")))?,
-    );
-    json::to_string(&json::Value::Object(root))
-        .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE authorization: {err}")))
-}
-
-fn decode_zk_ace_authorized_transfer_archive(
-    bytes: &[u8],
-) -> PyResult<SubmitZkAceAuthorizedTransfer> {
-    let mut transfer_input = bytes;
-    if let Ok(transfer) = SubmitZkAceAuthorizedTransfer::decode_all(&mut transfer_input) {
-        return Ok(transfer);
-    }
-    if let Ok(transfer) = decode_from_bytes::<SubmitZkAceAuthorizedTransfer>(bytes) {
-        return Ok(transfer);
-    }
-
-    let mut instruction_input = bytes;
-    let instruction_box =
-        if let Ok(instruction_box) = InstructionBox::decode_all(&mut instruction_input) {
-            instruction_box
-        } else {
-            decode_from_bytes::<InstructionBox>(bytes).map_err(|err| {
-                PyValueError::new_err(format!(
-                    "failed to decode ZK-ACE authorized transfer archive: {err}"
-                ))
-            })?
-        };
-    let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction_box;
-    instruction_ref
-        .as_any()
-        .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
-        .cloned()
-        .ok_or_else(|| {
-            PyValueError::new_err("instruction archive is not SubmitZkAceAuthorizedTransfer")
-        })
-}
-
-#[pyfunction]
-#[pyo3(name = "zk_ace_authorized_transfer_digest_check")]
-fn zk_ace_authorized_transfer_digest_check_py(
-    py: Python<'_>,
-    instruction_archive_hex: &str,
-) -> PyResult<Py<PyDict>> {
-    let bytes = parse_hex_bytes_py(instruction_archive_hex, "instruction_archive_hex")?;
-    let transfer = decode_zk_ace_authorized_transfer_archive(&bytes)?;
-    let proof_amount = (transfer.amount().scale() == 0)
-        .then(|| transfer.amount().as_numeric().try_mantissa_u128())
-        .flatten()
-        .ok_or_else(|| {
-            PyValueError::new_err("instruction amount must be an exact scale-0 u128 proof scalar")
-        })?;
-    let expected_tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
-        transfer.from(),
-        transfer.to(),
-        transfer.asset(),
-        proof_amount,
-        transfer.chain_id(),
-        transfer.action_class().trim(),
-        transfer.policy_hash(),
-    );
-
-    let proof_envelope: OpenVerifyEnvelope = decode_from_bytes(&transfer.proof().proof.bytes)
-        .map_err(|err| {
-            PyValueError::new_err(format!("failed to decode ZK-ACE proof envelope: {err}"))
-        })?;
-    let proof_public_inputs: ZkAcePublicInputsV1 = decode_from_bytes(&proof_envelope.public_inputs)
-        .map_err(|err| {
-            PyValueError::new_err(format!("failed to decode ZK-ACE public inputs: {err}"))
-        })?;
-
-    let result = PyDict::new(py);
-    result.set_item("from", transfer.from().to_string())?;
-    result.set_item("to", transfer.to().to_string())?;
-    result.set_item("asset", transfer.asset().to_string())?;
-    result.set_item("amount", transfer.amount().to_string())?;
-    result.set_item("chain_id", transfer.chain_id().to_string())?;
-    result.set_item("domain_tag", transfer.domain_tag())?;
-    result.set_item("action_class", transfer.action_class())?;
-    result.set_item(
-        "identity_commitment",
-        hex_encode(transfer.identity_commitment()),
-    )?;
-    result.set_item("tx_digest", hex_encode(transfer.tx_digest()))?;
-    result.set_item("expected_tx_digest", hex_encode(expected_tx_digest))?;
-    result.set_item(
-        "tx_digest_matches",
-        *transfer.tx_digest() == expected_tx_digest,
-    )?;
-    result.set_item("replay_nullifier", hex_encode(transfer.replay_nullifier()))?;
-    result.set_item("policy_hash", hex_encode(transfer.policy_hash()))?;
-    result.set_item(
-        "proof_public_tx_digest",
-        hex_encode(proof_public_inputs.tx_digest),
-    )?;
-    result.set_item(
-        "proof_public_tx_digest_matches_instruction",
-        proof_public_inputs.tx_digest == *transfer.tx_digest(),
-    )?;
-    result.set_item("proof_public_from", proof_public_inputs.from.to_string())?;
-    result.set_item("proof_public_to", proof_public_inputs.to.to_string())?;
-    result.set_item("proof_public_asset", proof_public_inputs.asset.to_string())?;
-    result.set_item(
-        "proof_public_amount",
-        proof_public_inputs.amount.to_string(),
-    )?;
-    result.set_item(
-        "proof_public_fields_match_instruction",
-        proof_public_inputs.from == *transfer.from()
-            && proof_public_inputs.to == *transfer.to()
-            && proof_public_inputs.asset == *transfer.asset()
-            && proof_public_inputs.amount == proof_amount
-            && proof_public_inputs.chain_id == *transfer.chain_id()
-            && proof_public_inputs.action_class == transfer.action_class().trim()
-            && proof_public_inputs.policy_hash == *transfer.policy_hash(),
-    )?;
-    Ok(result.unbind())
-}
-
 fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
     value.trim().parse::<u128>().map_err(|err| {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
     })
 }
 
-#[cfg(test)]
 fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
     if value.is_empty()
         || value.len() > 39
@@ -5582,49 +5186,6 @@ fn decode_transaction_receipt_json_py(receipt_bytes: &[u8]) -> PyResult<String> 
         .map_err(|err| PyValueError::new_err(format!("failed to serialize receipt: {err}")))
 }
 
-#[pyfunction]
-#[pyo3(name = "zk_ace_verifying_key_registration_payload_v1")]
-fn zk_ace_verifying_key_registration_payload_v1_py(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1).map_err(|err| {
-        PyValueError::new_err(format!(
-            "failed to build ZK-ACE verifying-key registration payload: {err}"
-        ))
-    })?;
-    let key_bytes = record
-        .key
-        .as_ref()
-        .ok_or_else(|| {
-            PyValueError::new_err("ZK-ACE verifying-key record is missing inline key bytes")
-        })?
-        .bytes
-        .clone();
-    let payload = PyDict::new(py);
-    payload.set_item(
-        "backend",
-        iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-    )?;
-    payload.set_item(
-        "name",
-        iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-    )?;
-    payload.set_item("version", record.version)?;
-    payload.set_item("circuit_id", record.circuit_id)?;
-    payload.set_item(
-        "public_inputs_schema_hash_hex",
-        hex_encode(record.public_inputs_schema_hash),
-    )?;
-    payload.set_item("curve", record.curve)?;
-    payload.set_item("vk_len", record.vk_len)?;
-    payload.set_item("max_proof_bytes", record.max_proof_bytes)?;
-    payload.set_item("commitment_hex", hex_encode(record.commitment))?;
-    if let Some(gas_schedule_id) = record.gas_schedule_id {
-        payload.set_item("gas_schedule_id", gas_schedule_id)?;
-    }
-    payload.set_item("vk_bytes", BASE64.encode(&key_bytes))?;
-    payload.set_item("status", "Active")?;
-    Ok(payload.into_any().unbind())
-}
-
 fn confidential_vk_registration_payload_py(
     py: Python<'_>,
     record: iroha_data_model::proof::VerifyingKeyRecord,
@@ -5706,78 +5267,6 @@ fn confidential_unshield_v3_verifying_key_registration_payload_v1_py(
         iroha_core::zk::ZK_BACKEND_HALO2_IPA,
         "confidential_unshield_v3",
         "confidential unshield v3",
-    )
-}
-
-#[pyfunction]
-#[pyo3(name = "zk_ace_build_transfer_authorization_v1", signature = (
-    from_account_id,
-    to_account_id,
-    asset_definition_id,
-    amount,
-    chain_id,
-    identity_root,
-    identity_blinding,
-    replay_secret,
-    policy_hash,
-    verifier_key_id = None,
-    vk_commitment = None
-))]
-#[allow(clippy::too_many_arguments)]
-fn zk_ace_build_transfer_authorization_v1_py(
-    from_account_id: &str,
-    to_account_id: &str,
-    asset_definition_id: &str,
-    amount: &str,
-    chain_id: &str,
-    identity_root: &Bound<'_, PyAny>,
-    identity_blinding: &Bound<'_, PyAny>,
-    replay_secret: &Bound<'_, PyAny>,
-    policy_hash: &Bound<'_, PyAny>,
-    verifier_key_id: Option<&Bound<'_, PyAny>>,
-    vk_commitment: Option<&Bound<'_, PyAny>>,
-) -> PyResult<String> {
-    let from = parse_account_id(from_account_id)?;
-    let to = parse_account_id(to_account_id)?;
-    let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        PyValueError::new_err(format!(
-            "invalid asset definition id `{asset_definition_id}`: {err}"
-        ))
-    })?;
-    let amount = parse_u128_text(amount, "amount")?;
-    let chain_id = parse_chain_id(chain_id)?;
-    let witness = ZkAceWitnessV1 {
-        identity_root: py_non_zero_fixed_array::<32>(identity_root, "identity_root")?,
-        identity_blinding: py_non_zero_fixed_array::<32>(identity_blinding, "identity_blinding")?,
-        replay_secret: py_non_zero_fixed_array::<32>(replay_secret, "replay_secret")?,
-    };
-    let policy_hash = py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?;
-    let verifier_key_id =
-        parse_optional_zk_ace_verifying_key_id_py(verifier_key_id, "verifier_key_id")?;
-    let vk_commitment = match vk_commitment {
-        Some(value) if !value.is_none() => py_fixed_array::<32>(value, "vk_commitment")?,
-        _ => zk_ace_prover::zk_ace_verifying_key_commitment_v1().map_err(|err| {
-            PyValueError::new_err(format!("failed to build ZK-ACE verifier commitment: {err}"))
-        })?,
-    };
-    let authorization = zk_ace_prover::build_zk_ace_transfer_authorization_v1(
-        from,
-        to,
-        asset,
-        amount,
-        chain_id,
-        witness,
-        policy_hash,
-        verifier_key_id,
-        vk_commitment,
-    )
-    .map_err(|err| PyValueError::new_err(format!("failed to build ZK-ACE proof: {err}")))?;
-    zk_ace_authorization_json(
-        &authorization.public_inputs,
-        &authorization.proof,
-        &authorization.public_inputs_bytes,
-        from_account_id,
-        to_account_id,
     )
 }
 
@@ -7236,149 +6725,6 @@ mod tests {
             "payload/checksum tampering must be rejected"
         );
     }
-
-    #[test]
-    fn zk_ace_json_exports_native_stark_fri_parameters() {
-        let parameters =
-            zk_ace_stark_fri_parameters_json_value().expect("serialize ZK-ACE FRI parameters");
-        let object = parameters
-            .as_object()
-            .expect("ZK-ACE FRI parameters are an object");
-
-        assert_eq!(
-            object.get("queries").and_then(json::Value::as_u64),
-            Some(24)
-        );
-        assert_eq!(
-            object.get("blowup_factor").and_then(json::Value::as_u64),
-            Some(8)
-        );
-        assert_eq!(object.get("arity").and_then(json::Value::as_u64), Some(2));
-        assert_eq!(
-            object.get("fold_arity").and_then(json::Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            object.get("max_reductions").and_then(json::Value::as_u64),
-            Some(10)
-        );
-        assert_eq!(
-            object.get("domain_tag").and_then(json::Value::as_str),
-            Some("iroha:zk-ace:stark-fri:v0")
-        );
-    }
-
-    #[test]
-    fn zk_ace_verifier_key_registration_payload_matches_native_record() {
-        let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1)
-            .expect("native ZK-ACE verifier-key record");
-        let key = record.key.as_ref().expect("record carries key bytes");
-
-        ensure_python();
-        Python::attach(|py| {
-            let raw = zk_ace_verifying_key_registration_payload_v1_py(py)
-                .expect("serialize ZK-ACE verifier-key registration payload");
-            let object = raw
-                .bind(py)
-                .cast::<PyDict>()
-                .expect("ZK-ACE verifier-key payload is a dict");
-            let get_str = |key: &str| -> String {
-                object
-                    .get_item(key)
-                    .expect("read ZK-ACE payload field")
-                    .unwrap_or_else(|| panic!("missing ZK-ACE payload field `{key}`"))
-                    .extract()
-                    .unwrap_or_else(|_| panic!("ZK-ACE payload field `{key}` is a string"))
-            };
-
-            assert_eq!(get_str("backend"), ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND);
-            assert_eq!(
-                get_str("name"),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
-            );
-            assert_eq!(
-                get_str("circuit_id"),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
-            );
-            assert_eq!(
-                get_str("public_inputs_schema_hash_hex"),
-                hex_encode(record.public_inputs_schema_hash)
-            );
-            assert_eq!(get_str("commitment_hex"), hex_encode(record.commitment));
-            assert_eq!(get_str("vk_bytes"), BASE64.encode(&key.bytes));
-            assert_eq!(get_str("status"), "Active");
-        });
-    }
-
-    #[test]
-    fn zk_ace_public_inputs_json_uses_hex_and_submitted_account_literals() {
-        let from_literal = taira_i105_from_seed(0x72);
-        let to_literal = taira_i105_from_seed(0x73);
-        let from = parse_account_id(&from_literal).expect("from account parses");
-        let to = parse_account_id(&to_literal).expect("to account parses");
-        let asset =
-            AssetDefinitionId::from_str("7MBRDd8cGFBZkFGdDMwV7S6FPwbw").expect("asset parses");
-        let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
-            [0x11; 32],
-            [0x22; 32],
-            [0x22; 32],
-            ChainId::from_str("fc56984b-2be7-431d-840e-21514d1883f0").expect("chain id parses"),
-            [0x33; 32],
-            [0x44; 32],
-            from,
-            to,
-            asset,
-            123,
-            zk_ace_prover::zk_ace_verifier_key_id(
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            ),
-        );
-
-        let projected = zk_ace_public_inputs_json_value(&public_inputs, &from_literal, &to_literal)
-            .expect("serialize public inputs");
-        let object = projected
-            .as_object()
-            .expect("ZK-ACE public inputs are an object");
-
-        assert_eq!(
-            object
-                .get("identity_commitment")
-                .and_then(json::Value::as_str),
-            Some("1111111111111111111111111111111111111111111111111111111111111111")
-        );
-        assert_eq!(
-            object.get("tx_digest").and_then(json::Value::as_str),
-            Some("2222222222222222222222222222222222222222222222222222222222222222")
-        );
-        assert_eq!(
-            object
-                .get("authorization_digest")
-                .and_then(json::Value::as_str),
-            Some("2222222222222222222222222222222222222222222222222222222222222222")
-        );
-        assert_eq!(
-            object.get("replay_nullifier").and_then(json::Value::as_str),
-            Some("3333333333333333333333333333333333333333333333333333333333333333")
-        );
-        assert_eq!(
-            object.get("policy_hash").and_then(json::Value::as_str),
-            Some("4444444444444444444444444444444444444444444444444444444444444444")
-        );
-        assert_eq!(
-            object.get("from").and_then(json::Value::as_str),
-            Some(from_literal.as_str())
-        );
-        assert_eq!(
-            object.get("to").and_then(json::Value::as_str),
-            Some(to_literal.as_str())
-        );
-        assert_eq!(
-            object.get("amount").and_then(json::Value::as_u64),
-            Some(123)
-        );
-    }
-
-    #[test]
     fn seed_derivation_pyfunctions_use_checked_backend_derivation() {
         ensure_python();
         let seed = b"python checked seed derivation";
@@ -7468,3812 +6814,18 @@ mod tests {
         }
     }
 
-    fn privacy_request(
-        algorithm_id: &str,
-        entrypoint: &str,
-        proof: Vec<u8>,
-    ) -> PrivacyProofRequestV1 {
-        let vk_backend = privacy_algorithm_entry(algorithm_id)
-            .map(|entry| entry.backend_family)
-            .unwrap_or("unknown");
-        let vk_name = privacy_algorithm_entry(algorithm_id)
-            .map(privacy_canonical_vk_ref_name)
-            .unwrap_or_else(|| "vk_unknown".to_owned());
-        PrivacyProofRequestV1 {
-            algorithm_id: algorithm_id.to_owned(),
-            entrypoint: entrypoint.to_owned(),
-            vk_ref: format!("{vk_backend}:{vk_name}"),
-            public_inputs: b"public-inputs".to_vec(),
-            witness: b"secret-witness".to_vec(),
-            proof,
-        }
-    }
-
-    fn public_privacy_request_archive(request: &PrivacyProofRequestV1) -> Vec<u8> {
-        let mut archive = norito::to_bytes(request).expect("encode privacy request");
-        assert!(
-            privacy_patch_archive_repeated_schema_byte(&mut archive, PRIVACY_REQUEST_SCHEMA_BYTE),
-            "privacy request archive must carry a complete Norito schema hash slot"
-        );
-        archive
-    }
-
-    fn normalize_privacy_public_archive_for_decode<T>(bytes: &mut [u8])
-    where
-        T: norito::NoritoSerialize,
-    {
-        if [
-            PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
-            PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
-            PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE,
-        ]
-        .into_iter()
-        .any(|schema_byte| privacy_archive_has_repeated_schema_byte(bytes, schema_byte))
-        {
-            assert!(
-                privacy_patch_archive_schema_hash(
-                    bytes,
-                    <T as norito::NoritoSerialize>::schema_hash()
-                ),
-                "privacy archive must carry a complete Norito schema hash slot"
-            );
-        }
-    }
-
-    fn adversarial_privacy_request_archives() -> Vec<(&'static str, Vec<u8>)> {
-        let request = privacy_request(
-            "orchard-halo2-actions-v1",
-            "buildOrchardActionBundleProofV1",
-            b"candidate-proof".to_vec(),
-        );
-        let valid = public_privacy_request_archive(&request);
-        assert!(
-            valid.len() > 40,
-            "privacy request fixture must include a Norito V1 frame header"
-        );
-
-        let mut bad_magic = valid.clone();
-        bad_magic[0] ^= 0x80;
-        let mut bad_version = valid.clone();
-        bad_version[4] ^= 0x01;
-        let mut bad_schema = valid.clone();
-        bad_schema[6] ^= 0x01;
-        let mut bad_compression = valid.clone();
-        bad_compression[22] ^= 0x01;
-        let mut bad_payload_length = valid.clone();
-        bad_payload_length[30] ^= 0x40;
-        let mut bad_crc = valid.clone();
-        bad_crc[31] ^= 0x01;
-        let mut bad_flags = valid.clone();
-        bad_flags[39] |= 0x80;
-        let mut payload_tamper = valid.clone();
-        let payload_last = payload_tamper
-            .len()
-            .checked_sub(1)
-            .expect("non-empty privacy request archive");
-        payload_tamper[payload_last] ^= 0x01;
-
-        vec![
-            ("truncated-header", valid[..39].to_vec()),
-            ("truncated-payload", valid[..valid.len() - 1].to_vec()),
-            ("bad-magic", bad_magic),
-            ("bad-version", bad_version),
-            ("bad-schema", bad_schema),
-            ("bad-compression", bad_compression),
-            ("bad-payload-length", bad_payload_length),
-            ("bad-crc", bad_crc),
-            ("bad-flags", bad_flags),
-            ("payload-tamper", payload_tamper),
-        ]
-    }
-
-    fn assert_malformed_privacy_request_result(result: &PrivacyProofResultV1, case: &str) {
-        assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
-        assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
-        assert_eq!(
-            result.error_code, PRIVACY_FFI_ERROR_MALFORMED_NORITO,
-            "{case}"
-        );
-        assert_eq!(result.message, "malformed Norito V1 privacy proof request");
-        assert!(result.algorithm_id.is_empty(), "{case}");
-        assert!(result.entrypoint.is_empty(), "{case}");
-        assert!(result.vk_ref.is_empty(), "{case}");
-        assert!(result.public_inputs.is_empty(), "{case}");
-        assert!(result.proof.is_empty(), "{case}");
-        assert!(!result.verified, "{case}");
-    }
-
-    fn assert_unreflected_invalid_privacy_request_result(
-        result: &PrivacyProofResultV1,
-        message_fragment: &str,
-        case: &str,
-    ) {
-        assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
-        assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
-        assert_eq!(
-            result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "{case}"
-        );
-        assert!(
-            result.message.contains(message_fragment),
-            "{case}: {}",
-            result.message
-        );
-        assert!(result.algorithm_id.is_empty(), "{case}");
-        assert!(result.entrypoint.is_empty(), "{case}");
-        assert!(result.vk_ref.is_empty(), "{case}");
-        assert!(result.public_inputs.is_empty(), "{case}");
-        assert!(result.proof.is_empty(), "{case}");
-        assert!(!result.verified, "{case}");
-    }
-
-    fn assert_subslice_absent(haystack: &[u8], needle: &[u8], context: &str) {
-        assert!(
-            !needle.is_empty(),
-            "privacy witness marker must be non-empty"
-        );
-        assert!(
-            !haystack
-                .windows(needle.len())
-                .any(|window| window == needle),
-            "{context} leaked privacy witness bytes",
-        );
-    }
-
-    fn assert_privacy_result_does_not_serialize_witness(
-        result: &PrivacyProofResultV1,
-        witness: &[u8],
-    ) {
-        assert!(
-            result.proof.is_empty(),
-            "failed privacy result must not carry a proof"
-        );
-        assert_subslice_absent(result.message.as_bytes(), witness, "privacy result message");
-        let encoded = norito::to_bytes(result).expect("encode privacy result");
-        assert_subslice_absent(&encoded, witness, "Norito privacy result archive");
-    }
-
-    fn privacy_catalog_entry_for_test(
-        id: &'static str,
-        proof_family: &'static str,
-        backend_family: &'static str,
-        sdk_entrypoints: &'static [&'static str],
-        planned_entrypoints: &'static [&'static str],
-    ) -> PrivacyAlgorithmEntry {
-        PrivacyAlgorithmEntry {
-            id,
-            proof_family,
-            backend_family,
-            sdk_entrypoints,
-            planned_entrypoints,
-        }
-    }
-
     #[test]
-    fn privacy_algorithm_catalog_is_unique_portable_and_disjoint() {
-        assert!(privacy_algorithm_catalog_invariants_hold());
+    fn privacy_capability_snapshot_is_the_exact_closed_registry() {
+        let snapshot = privacy_capabilities();
+        snapshot.validate().expect("canonical capability snapshot");
+        assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);
         assert!(
-            PRIVACY_ALGORITHM_ENTRIES
+            snapshot
+                .protocols
                 .iter()
-                .all(|entry| entry.planned_entrypoints.is_empty()),
-            "catalog invariant test must keep required privacy proof builders exported",
+                .map(|row| row.protocol_id)
+                .eq(PrivacyProtocolIdV1::ALL)
         );
-        assert!(
-            PRIVACY_ALGORITHM_ENTRIES.iter().any(|entry| entry
-                .sdk_entrypoints
-                .iter()
-                .any(|entrypoint| privacy_entrypoint_is_explicit_dev_fixture(entrypoint))),
-            "catalog invariant test must cover explicit DevFixture rows",
-        );
-        assert!(privacy_required_production_plan_rows_are_present(
-            PRIVACY_ALGORITHM_ENTRIES
-        ));
-        assert_eq!(PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.len(), 16);
-        assert_eq!(PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS.len(), 0);
-        assert!(
-            PRIVACY_ALGORITHM_ENTRIES
-                .iter()
-                .filter(|entry| privacy_algorithm_entry_is_component(entry))
-                .all(
-                    |entry| !privacy_entrypoints_include_ledger_mutation(entry.sdk_entrypoints)
-                        && !privacy_entrypoints_include_ledger_mutation(entry.planned_entrypoints)
-                ),
-            "component privacy rows must remain proof-only",
-        );
-        assert!(
-            PRIVACY_ALGORITHM_ENTRIES
-                .iter()
-                .filter(|entry| privacy_algorithm_entry_is_research_target(entry))
-                .all(|entry| entry.sdk_entrypoints.is_empty()
-                    && !entry.planned_entrypoints.is_empty()),
-            "research privacy rows must keep executable SDK entrypoints planned-only",
-        );
-    }
-
-    #[test]
-    fn privacy_algorithm_catalog_rejects_missing_verifier_key_name_mappings() {
-        assert!(
-            PRIVACY_ALGORITHM_ENTRIES
-                .iter()
-                .all(privacy_catalog_vk_ref_name_is_registered),
-            "every catalog row must have an explicit verifier-key name mapping",
-        );
-        assert!(
-            !privacy_algorithm_catalog_vk_ref_names_have_duplicates(PRIVACY_ALGORITHM_ENTRIES),
-            "catalog verifier-key names must be unique",
-        );
-
-        const EMPTY: &[&str] = &[];
-        const PLANNED_PROOF: &[&str] = &["buildUnmappedPrivacyProofV1"];
-        let unmapped = privacy_catalog_entry_for_test(
-            "unmapped-mainnet-privacy-row-v1",
-            "halo2-ipa-pasta",
-            "halo2-ipa-pasta",
-            EMPTY,
-            PLANNED_PROOF,
-        );
-
-        assert!(!privacy_catalog_vk_ref_name_is_registered(&unmapped));
-        assert!(
-            !privacy_algorithm_catalog_entries_are_valid(&[unmapped]),
-            "unmapped verifier-key names must fail catalog admission",
-        );
-    }
-
-    #[test]
-    fn privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels() {
-        const SDK_ALPHA: &[&str] = &["buildAlphaProof"];
-        const SDK_BETA: &[&str] = &["buildBetaProof"];
-        const SDK_DUPLICATE: &[&str] = &["buildAlphaProof", "buildAlphaProof"];
-        const SDK_EMPTY: &[&str] = &[""];
-        const SDK_DELIMITED: &[&str] = &["buildAlphaProof:shadow"];
-        const SDK_HYPHENATED: &[&str] = &["build-AlphaProof"];
-        const SDK_LEADING_UNDERSCORE: &[&str] = &["_buildAlphaProof"];
-        const SDK_TRAILING_UNDERSCORE: &[&str] = &["buildAlphaProof_"];
-        const SDK_DOTTED_LEADING_UNDERSCORE: &[&str] = &["Iroha._Privacy.buildAlphaProof"];
-        const SDK_DOTTED_TRAILING_UNDERSCORE: &[&str] = &["Iroha.Privacy_.buildAlphaProof"];
-        const SDK_DOLLAR: &[&str] = &["build$AlphaProof"];
-        const SDK_UNPORTABLE: &[&str] = &["build Alpha Proof"];
-        const SDK_MAINNET_READY: &[&str] = &["buildMainnetReadyProof"];
-        const PLANNED_ALPHA: &[&str] = &["buildAlphaProof"];
-        const PLANNED_BETA: &[&str] = &["verifyBetaProof"];
-        const PLANNED_EMPTY: &[&str] = &[""];
-        const PLANNED_AUDIT_SIGNOFF: &[&str] = &["buildAuditSignoffProof"];
-
-        let duplicate_ids = [
-            privacy_catalog_entry_for_test(
-                "confidential-transfer-v2",
-                "halo2-ipa-pasta",
-                "halo2-ipa-pasta",
-                SDK_ALPHA,
-                PLANNED_BETA,
-            ),
-            privacy_catalog_entry_for_test(
-                "confidential-transfer-v2",
-                "stark-fri",
-                "stark-fri",
-                SDK_BETA,
-                PLANNED_BETA,
-            ),
-        ];
-        assert!(
-            !privacy_algorithm_catalog_entries_are_valid(&duplicate_ids),
-            "duplicate algorithm IDs must be rejected",
-        );
-        assert!(
-            PRIVACY_ALGORITHM_ENTRIES.iter().all(|entry| {
-                !privacy_exposed_label_claims_production_readiness(entry.id)
-                    && !privacy_exposed_label_claims_production_readiness(entry.proof_family)
-                    && !privacy_exposed_label_claims_production_readiness(entry.backend_family)
-                    && entry.sdk_entrypoints.iter().all(|entrypoint| {
-                        !privacy_exposed_label_claims_production_readiness(entrypoint)
-                    })
-                    && entry.planned_entrypoints.iter().all(|entrypoint| {
-                        !privacy_exposed_label_claims_production_readiness(entrypoint)
-                    })
-            }),
-            "native privacy catalog must not expose production-ready/mainnet/audit claim labels",
-        );
-        for label in [
-            "mainnet-ready-row",
-            "claimed-production",
-            "audited-production",
-            "externally-audited",
-            "buildAuditSignoffProof",
-            "buildS.e.c.u.r.i.t.yReviewPassedProof",
-        ] {
-            assert!(
-                privacy_exposed_label_claims_production_readiness(label),
-                "{label} must be treated as a production/audit readiness claim",
-            );
-        }
-
-        for (case, entry) in [
-            (
-                "unportable algorithm id",
-                privacy_catalog_entry_for_test(
-                    "bad/../algorithm",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "delimited algorithm id",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2:shadow",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "uppercase algorithm id",
-                privacy_catalog_entry_for_test(
-                    "Confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "leading underscore algorithm id",
-                privacy_catalog_entry_for_test(
-                    "_confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "leading hyphen algorithm id",
-                privacy_catalog_entry_for_test(
-                    "-confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "trailing underscore algorithm id",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2_",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "trailing hyphen algorithm id",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2-",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "unportable proof family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2 ipa pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "uppercase proof family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "Halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "delimited proof family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2:ipa:pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "empty proof-family segment",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2//ipa",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "leading slash proof family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "/halo2",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "leading hyphen proof family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "-halo2",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "trailing slash proof family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2/",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "trailing hyphen proof family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "unportable backend family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2/ipa/pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "delimited backend family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2:ipa:pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "uppercase backend family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "Halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "leading separator backend family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "-halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "trailing separator backend family",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta.",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "duplicate sdk entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DUPLICATE,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "sdk planned overlap",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_ALPHA,
-                ),
-            ),
-            (
-                "unportable entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_UNPORTABLE,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "delimited entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DELIMITED,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "hyphenated entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_HYPHENATED,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "leading underscore entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_LEADING_UNDERSCORE,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "trailing underscore entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_TRAILING_UNDERSCORE,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "dotted leading underscore entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DOTTED_LEADING_UNDERSCORE,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "dotted trailing underscore entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DOTTED_TRAILING_UNDERSCORE,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "dollar entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DOLLAR,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "empty sdk entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_EMPTY,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "empty planned entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_EMPTY,
-                ),
-            ),
-            (
-                "proof-family production-ready claim",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-production-ready",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "backend-family audit-signoff claim",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "audit-signoff-pasta",
-                    SDK_ALPHA,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "sdk entrypoint mainnet-ready claim",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_MAINNET_READY,
-                    PLANNED_BETA,
-                ),
-            ),
-            (
-                "planned entrypoint audit-signoff claim",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_AUDIT_SIGNOFF,
-                ),
-            ),
-        ] {
-            assert!(
-                !privacy_algorithm_catalog_entries_are_valid(&[entry]),
-                "{case} must be rejected",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows() {
-        const HELPER_ONLY_PLANNED: &[&str] = &["deriveOrchardWitness"];
-        const PROOF_HELPER_ONLY_PLANNED: &[&str] = &["buildAnonymousPgcProofEnvelope"];
-
-        let missing_required: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES
-            .iter()
-            .copied()
-            .filter(|entry| entry.id != "anonymous-pgc-k-out-of-n-v1")
-            .collect();
-        assert!(
-            !privacy_required_production_plan_rows_are_present(&missing_required),
-            "missing required production plan rows must be rejected",
-        );
-
-        let mut duplicate_required: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        let duplicate = *PRIVACY_ALGORITHM_ENTRIES
-            .iter()
-            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-            .expect("required production plan row");
-        duplicate_required.push(duplicate);
-        assert!(
-            !privacy_required_production_plan_rows_are_present(&duplicate_required),
-            "duplicate required production plan rows must be rejected",
-        );
-
-        let mut wrong_backend: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        wrong_backend
-            .iter_mut()
-            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-            .expect("required production plan row")
-            .backend_family = "wrong-backend";
-        assert!(
-            !privacy_required_production_plan_rows_are_present(&wrong_backend),
-            "required production plan backend drift must be rejected",
-        );
-
-        let mut wrong_proof: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        wrong_proof
-            .iter_mut()
-            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-            .expect("required production plan row")
-            .proof_family = "wrong-proof";
-        assert!(
-            !privacy_required_production_plan_rows_are_present(&wrong_proof),
-            "required production plan proof-family drift must be rejected",
-        );
-
-        let mut missing_planned: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        {
-            let entry = missing_planned
-                .iter_mut()
-                .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-                .expect("required production plan row");
-            entry.sdk_entrypoints = &[];
-            entry.planned_entrypoints = &[];
-        }
-        assert!(
-            !privacy_required_production_plan_rows_are_present(&missing_planned),
-            "required production plan rows must keep production proof builders",
-        );
-
-        let mut helper_only_planned: Vec<PrivacyAlgorithmEntry> =
-            PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        {
-            let entry = helper_only_planned
-                .iter_mut()
-                .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-                .expect("required production plan row");
-            entry.sdk_entrypoints = &[];
-            entry.planned_entrypoints = HELPER_ONLY_PLANNED;
-        }
-        assert!(
-            !privacy_required_production_plan_rows_are_present(&helper_only_planned),
-            "required production plan rows must reject helper-only planned entrypoints",
-        );
-
-        let mut proof_helper_only_planned: Vec<PrivacyAlgorithmEntry> =
-            PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        {
-            let entry = proof_helper_only_planned
-                .iter_mut()
-                .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-                .expect("required production plan row");
-            entry.sdk_entrypoints = &[];
-            entry.planned_entrypoints = PROOF_HELPER_ONLY_PLANNED;
-        }
-        assert!(
-            !privacy_required_production_plan_rows_are_present(&proof_helper_only_planned),
-            "required production plan rows must reject proof-helper planned entrypoints",
-        );
-    }
-
-    #[test]
-    fn privacy_algorithm_catalog_rejects_adversarial_fixture_and_local_verifier_entrypoints() {
-        const SDK_ALPHA: &[&str] = &["buildShapeCommitment"];
-        const SDK_IMPLICIT_FIXTURE: &[&str] = &["buildMockProof"];
-        const SDK_LOCAL_ONLY: &[&str] = &["verifyShapeProofLocally"];
-        const SDK_LOCAL_SUFFIX: &[&str] = &["verifyShapeProofLocal"];
-        const SDK_LOCAL_VERIFIER_SUFFIX: &[&str] = &["verifyShapeProofLocalVerifier"];
-        const SDK_DEV_ONLY: &[&str] = &["buildShapeDevProofFixture"];
-        const SDK_DEV_AND_LOCAL: &[&str] =
-            &["buildShapeDevProofFixture", "verifyShapeProofLocally"];
-        const PLANNED_PROOF: &[&str] = &["buildShapeProductionProofV1"];
-        const PLANNED_FIXTURE: &[&str] = &["buildShapeDevProofFixture"];
-        const PLANNED_LOCAL: &[&str] = &["verifyShapeProofLocally"];
-        const PLANNED_LOCAL_SUFFIX: &[&str] = &["verifyShapeProofLocal"];
-        const PLANNED_LOCAL_VERIFIER_SUFFIX: &[&str] = &["verifyShapeProofLocalVerifier"];
-        const PLANNED_INSTRUCTION: &[&str] = &["buildShapeProductionInstruction"];
-        const PLANNED_PROOF_HELPER: &[&str] = &["buildShapeProofEnvelope"];
-
-        for (case, entry) in [
-            (
-                "planned fixture entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_FIXTURE,
-                ),
-            ),
-            (
-                "planned local verifier",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_LOCAL,
-                ),
-            ),
-            (
-                "planned local verifier short suffix",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_LOCAL_SUFFIX,
-                ),
-            ),
-            (
-                "planned local verifier alias suffix",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_LOCAL_VERIFIER_SUFFIX,
-                ),
-            ),
-            (
-                "implicit fixture sdk entrypoint",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_IMPLICIT_FIXTURE,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "local verifier without DevFixture",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_LOCAL_ONLY,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "local verifier short suffix without DevFixture",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_LOCAL_SUFFIX,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "local verifier alias suffix without DevFixture",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_LOCAL_VERIFIER_SUFFIX,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "DevFixture without local verifier",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DEV_ONLY,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "DevFixture without planned production proof",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DEV_AND_LOCAL,
-                    PLANNED_INSTRUCTION,
-                ),
-            ),
-            (
-                "DevFixture with proof helper only",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DEV_AND_LOCAL,
-                    PLANNED_PROOF_HELPER,
-                ),
-            ),
-        ] {
-            assert!(
-                !privacy_algorithm_catalog_entries_are_valid(&[entry]),
-                "{case} must be rejected",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_algorithm_catalog_rejects_component_ledger_mutation_entrypoints() {
-        const SDK_PROOF_COMPONENT: &[&str] = &[
-            "buildRangeCommitment",
-            "buildVeRangeDevProofFixture",
-            "buildVeRangeProofEnvelope",
-            "buildVeRangeProofV1",
-            "verifyVeRangeProofLocally",
-            "verifyVeRangeProofV1",
-        ];
-        const SDK_INSTRUCTION: &[&str] = &["buildVeRangeInstruction"];
-        const SDK_QUALIFIED_INSTRUCTION: &[&str] = &["Iroha.Privacy.buildVeRangeInstruction"];
-        const PLANNED_PROOF: &[&str] = &["buildVeRangeProofV1"];
-        const PLANNED_TRANSACTION: &[&str] = &["buildVeRangeTransaction"];
-        const PLANNED_SUBMIT: &[&str] = &["buildSubmitVeRangeProof"];
-
-        for (case, entry) in [
-            (
-                "component sdk instruction",
-                privacy_catalog_entry_for_test(
-                    "verange-transparent-range-v1",
-                    "verange-transparent-range",
-                    "verange",
-                    SDK_INSTRUCTION,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "component qualified sdk instruction",
-                privacy_catalog_entry_for_test(
-                    "verange-transparent-range-v1",
-                    "verange-transparent-range",
-                    "verange",
-                    SDK_QUALIFIED_INSTRUCTION,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "component planned transaction",
-                privacy_catalog_entry_for_test(
-                    "verange-transparent-range-v1",
-                    "verange-transparent-range",
-                    "verange",
-                    SDK_PROOF_COMPONENT,
-                    PLANNED_TRANSACTION,
-                ),
-            ),
-            (
-                "component planned submit",
-                privacy_catalog_entry_for_test(
-                    "verange-transparent-range-v1",
-                    "verange-transparent-range",
-                    "verange",
-                    SDK_PROOF_COMPONENT,
-                    PLANNED_SUBMIT,
-                ),
-            ),
-        ] {
-            assert!(
-                !privacy_algorithm_catalog_entries_are_valid(&[entry]),
-                "{case} must be rejected",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_algorithm_catalog_rejects_planned_ledger_mutation_without_production_proof_builder()
-    {
-        const SDK_ALPHA: &[&str] = &["buildShapeCommitment"];
-        const SDK_DEV_AND_LOCAL: &[&str] =
-            &["buildShapeDevProofFixture", "verifyShapeProofLocally"];
-        const PLANNED_INSTRUCTION: &[&str] = &["buildShapeTransferInstruction"];
-        const PLANNED_TRANSACTION: &[&str] = &["buildShapeAuthorizedTransaction"];
-        const PLANNED_SUBMIT_PROOF: &[&str] = &["buildSubmitShapeProof"];
-        const PLANNED_PROOF_AND_INSTRUCTION: &[&str] =
-            &["buildShapeProofV1", "buildShapeTransferInstruction"];
-
-        assert!(privacy_algorithm_catalog_entries_are_valid(&[
-            privacy_catalog_entry_for_test(
-                "confidential-transfer-v2",
-                "halo2-ipa-pasta",
-                "halo2-ipa-pasta",
-                SDK_ALPHA,
-                PLANNED_PROOF_AND_INSTRUCTION,
-            )
-        ]));
-
-        for (case, entry) in [
-            (
-                "planned instruction without production proof",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_INSTRUCTION,
-                ),
-            ),
-            (
-                "planned transaction without production proof",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_TRANSACTION,
-                ),
-            ),
-            (
-                "submit proof name without separate production proof",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_ALPHA,
-                    PLANNED_SUBMIT_PROOF,
-                ),
-            ),
-            (
-                "dev fixture and local verifier without planned production proof",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_DEV_AND_LOCAL,
-                    PLANNED_INSTRUCTION,
-                ),
-            ),
-        ] {
-            assert!(
-                !privacy_algorithm_catalog_entries_are_valid(&[entry]),
-                "{case} must be rejected",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_algorithm_catalog_rejects_unpaired_or_generic_sdk_ledger_mutations() {
-        const EMPTY: &[&str] = &[];
-        const SDK_GENERIC_TRANSACTION: &[&str] = &["buildTransaction"];
-        const SDK_GENERIC_SUBMIT_QUALIFIED: &[&str] = &["Iroha.Privacy.submitSignedTransaction"];
-        const SDK_TYPED_INSTRUCTION: &[&str] = &["buildShapeTransferInstruction"];
-        const SDK_TYPED_INSTRUCTION_WITH_PROOF: &[&str] =
-            &["buildShapeProofV1", "buildShapeTransferInstruction"];
-        const SDK_UNTYPED_SUBMIT_PROOF: &[&str] = &["buildSubmitShapeProof"];
-        const SDK_PROOF: &[&str] = &["buildShapeProofV1"];
-        const PLANNED_PROOF: &[&str] = &["buildShapeProofV1"];
-        const PLANNED_GENERIC_SUBMIT: &[&str] = &["submitSignedTransaction"];
-        const PLANNED_UNTYPED_SUBMIT_PROOF: &[&str] = &["buildSubmitShapeProof"];
-
-        assert!(privacy_algorithm_catalog_entries_are_valid(&[
-            privacy_catalog_entry_for_test(
-                "transparent-transfer",
-                "none",
-                "none",
-                SDK_GENERIC_TRANSACTION,
-                EMPTY,
-            )
-        ]));
-        assert!(privacy_algorithm_catalog_entries_are_valid(&[
-            privacy_catalog_entry_for_test(
-                "confidential-transfer-v2",
-                "halo2-ipa-pasta",
-                "halo2-ipa-pasta",
-                SDK_TYPED_INSTRUCTION_WITH_PROOF,
-                EMPTY,
-            )
-        ]));
-        assert!(privacy_algorithm_catalog_entries_are_valid(&[
-            privacy_catalog_entry_for_test(
-                "confidential-transfer-v2",
-                "halo2-ipa-pasta",
-                "halo2-ipa-pasta",
-                SDK_TYPED_INSTRUCTION,
-                PLANNED_PROOF,
-            )
-        ]));
-
-        for (case, entry) in [
-            (
-                "proofed sdk instruction without proof",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_TYPED_INSTRUCTION,
-                    EMPTY,
-                ),
-            ),
-            (
-                "proofed sdk generic transaction",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_GENERIC_TRANSACTION,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "proofed qualified sdk generic submit",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_GENERIC_SUBMIT_QUALIFIED,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "proofed sdk untyped submit proof",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_UNTYPED_SUBMIT_PROOF,
-                    PLANNED_PROOF,
-                ),
-            ),
-            (
-                "proofed planned generic submit",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_PROOF,
-                    PLANNED_GENERIC_SUBMIT,
-                ),
-            ),
-            (
-                "proofed planned untyped submit proof",
-                privacy_catalog_entry_for_test(
-                    "confidential-transfer-v2",
-                    "halo2-ipa-pasta",
-                    "halo2-ipa-pasta",
-                    SDK_PROOF,
-                    PLANNED_UNTYPED_SUBMIT_PROOF,
-                ),
-            ),
-        ] {
-            assert!(
-                !privacy_algorithm_catalog_entries_are_valid(&[entry]),
-                "{case} must be rejected",
-            );
-        }
-    }
-
-    const PRIVACY_TEST_PRODUCTION_CHAIN_ID: &str = "boi-privacy-4peer-chain";
-    const PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID: &str = "boi-privacy-4peer-localnet-2026-01-02";
-    const PRIVACY_TEST_PRODUCTION_LOCALNET_PEER_IDS: [&str; 4] = [
-        "boi-privacy-peer-1@localnet",
-        "boi-privacy-peer-2@localnet",
-        "boi-privacy-peer-3@localnet",
-        "boi-privacy-peer-4@localnet",
-    ];
-    const PRIVACY_TEST_PRODUCTION_HASH: &str =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const PRIVACY_TEST_PRODUCTION_REVIEW_HASH: &str =
-        "sha256:83268575c055765e8a539e389d313339e3c9a3d05e39fc194150ae50343a5ad2";
-    const PRIVACY_TEST_PRODUCTION_FUZZ_HASH: &str =
-        "sha256:e2ea5102828f10c7e82b91588300fd5b1f0614678d99e440fc426b178d5b2060";
-    const PRIVACY_TEST_PRODUCTION_PERFORMANCE_HASH: &str =
-        "sha256:3858ad956e9f8d030c9db4b9f7bbc2e5d1eaf92ddc3b3c9a1cd2df937b15b237";
-    const PRIVACY_TEST_UPPERCASE_PRODUCTION_HASH: &str =
-        "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-    const PRIVACY_TEST_PRODUCTION_SMOKE_HASH: &str =
-        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const PRIVACY_TEST_PRODUCTION_REPLAY_HASH: &str =
-        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    const PRIVACY_TEST_PRODUCTION_RESTART_REPLAY_HASH: &str =
-        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-    const PRIVACY_TEST_PRODUCTION_STATE_RECOVERY_HASH: &str =
-        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_SHIELD_HASH: &str =
-        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_HOP_PROOF_HASH: &str =
-        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_HASH: &str =
-        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_VERIFY_HASH: &str =
-        "sha256:3333333333333333333333333333333333333333333333333333333333333333";
-    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_HASH: &str =
-        "sha256:4444444444444444444444444444444444444444444444444444444444444444";
-    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_VERIFY_HASH: &str =
-        "sha256:5555555555555555555555555555555555555555555555555555555555555555";
-    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_UNSHIELD_HASH: &str =
-        "sha256:6666666666666666666666666666666666666666666666666666666666666666";
-    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_REDEEM_HASH: &str =
-        "sha256:7777777777777777777777777777777777777777777777777777777777777777";
-    const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str = "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const PRIVACY_TEST_UPPERCASE_PRODUCTION_SIGNATURE: &str = "ed25519:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-
-    fn privacy_test_production_entrypoints(entry: &PrivacyAlgorithmEntry) -> Vec<&'static str> {
-        entry
-            .sdk_entrypoints
-            .iter()
-            .chain(entry.planned_entrypoints.iter())
-            .copied()
-            .filter(|entrypoint| {
-                !privacy_entrypoint_is_dev_fixture(entrypoint)
-                    && !privacy_entrypoint_is_local_verifier(entrypoint)
-            })
-            .fold(Vec::new(), |mut acc, entrypoint| {
-                if !acc.iter().any(|existing| existing == &entrypoint) {
-                    acc.push(entrypoint);
-                }
-                acc
-            })
-    }
-
-    fn privacy_test_gate_evidence(
-        entry: &PrivacyAlgorithmEntry,
-    ) -> Vec<PrivacyProductionGateEvidenceV1> {
-        PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-            .iter()
-            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
-            .map(|(key, _)| PrivacyProductionGateEvidenceV1 {
-                key,
-                artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
-            })
-            .collect()
-    }
-
-    fn privacy_test_sdk_exports(entrypoints: &[&'static str]) -> Vec<PrivacyProductionSdkExportV1> {
-        PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
-            .iter()
-            .map(|surface| PrivacyProductionSdkExportV1 {
-                surface,
-                entrypoints: entrypoints.to_vec(),
-            })
-            .collect()
-    }
-
-    fn privacy_test_sdk_parity_artifacts() -> Vec<PrivacyProductionSdkParityArtifactV1> {
-        PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
-            .iter()
-            .flat_map(|kind| {
-                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
-                    .iter()
-                    .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
-                        kind,
-                        surface,
-                        artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
-                    })
-            })
-            .collect()
-    }
-
-    fn privacy_test_review_scope(
-        entry: &PrivacyAlgorithmEntry,
-        sdk_entrypoints: &[&'static str],
-    ) -> PrivacyProductionReviewScopeV1 {
-        PrivacyProductionReviewScopeV1 {
-            version: PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION,
-            algorithm_id: entry.id,
-            chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
-            verifier_key_id: privacy_expected_verifier_key_id(entry),
-            proof_family: entry.proof_family,
-            public_inputs_schema: privacy_expected_public_inputs_schema(entry),
-            sdk_entrypoints: sdk_entrypoints.to_vec(),
-            required_state: privacy_expected_required_state(entry).to_vec(),
-            fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_FUZZ_HASH,
-            performance_artifact_hash: PRIVACY_TEST_PRODUCTION_PERFORMANCE_HASH,
-            localnet_run_id: PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID,
-        }
-    }
-
-    fn privacy_test_evidence_row(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionEvidenceRowV1 {
-        let sdk_entrypoints = privacy_test_production_entrypoints(entry);
-        PrivacyProductionEvidenceRowV1 {
-            algorithm_id: entry.id,
-            chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
-            reviewer_identity: "boi-crypto-reviewer-1",
-            review_artifact_hash: PRIVACY_TEST_PRODUCTION_REVIEW_HASH,
-            review_artifact_signature: PRIVACY_TEST_PRODUCTION_SIGNATURE,
-            review_scope: privacy_test_review_scope(entry, &sdk_entrypoints),
-            verifier_key_id: privacy_expected_verifier_key_id(entry),
-            proof_family: entry.proof_family,
-            public_inputs_schema: privacy_expected_public_inputs_schema(entry),
-            sdk_entrypoints: sdk_entrypoints.clone(),
-            sdk_exports: privacy_test_sdk_exports(&sdk_entrypoints),
-            sdk_parity_artifacts: privacy_test_sdk_parity_artifacts(),
-            required_state: privacy_expected_required_state(entry).to_vec(),
-            fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_FUZZ_HASH,
-            performance_artifact_hash: PRIVACY_TEST_PRODUCTION_PERFORMANCE_HASH,
-            localnet_acceptance: PrivacyProductionLocalnetEvidenceV1 {
-                run_id: PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID,
-                target: PRIVACY_PRODUCTION_LOCALNET_TARGET,
-                peer_count: PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT,
-                peer_ids: PRIVACY_TEST_PRODUCTION_LOCALNET_PEER_IDS,
-                chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
-                smoke_passed: true,
-                smoke_tx_hash: PRIVACY_TEST_PRODUCTION_SMOKE_HASH,
-                lifecycle_passed: true,
-                lifecycle_shield_tx_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_SHIELD_HASH,
-                lifecycle_hop_proof_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_HOP_PROOF_HASH,
-                lifecycle_recursive_init_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_HASH,
-                lifecycle_recursive_init_verify_hash:
-                    PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_VERIFY_HASH,
-                lifecycle_recursive_append_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_HASH,
-                lifecycle_recursive_append_verify_hash:
-                    PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_VERIFY_HASH,
-                lifecycle_unshield_proof_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_UNSHIELD_HASH,
-                lifecycle_redeem_tx_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_REDEEM_HASH,
-                replay_rejected: true,
-                replay_rejection_hash: PRIVACY_TEST_PRODUCTION_REPLAY_HASH,
-                restart_persistence_checked: true,
-                restart_replay_rejected: true,
-                restart_replay_rejection_hash: PRIVACY_TEST_PRODUCTION_RESTART_REPLAY_HASH,
-                state_recovery_passed: true,
-                state_recovery_hash: PRIVACY_TEST_PRODUCTION_STATE_RECOVERY_HASH,
-            },
-            gate_evidence: privacy_test_gate_evidence(entry),
-        }
-    }
-
-    fn assert_zk_ace_evidence_rejected<F>(case: &str, mutate: F)
-    where
-        F: FnOnce(&mut PrivacyProductionEvidenceRowV1),
-    {
-        let entry =
-            privacy_algorithm_entry("zk-ace-pq-authorization-v0").expect("ZK-ACE catalog row");
-        let mut row = privacy_test_evidence_row(entry);
-        mutate(&mut row);
-
-        assert!(
-            !privacy_production_evidence_row_is_valid(
-                &row,
-                entry,
-                Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID)
-            ),
-            "{case} evidence row must be rejected before capability admission",
-        );
-        let capabilities = privacy_capabilities_with_production_evidence(
-            &[row],
-            Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
-        );
-        let zk_ace = capabilities
-            .algorithms
-            .iter()
-            .find(|algorithm| algorithm.algorithm_id == entry.id)
-            .expect("ZK-ACE capability row");
-        assert!(
-            !zk_ace.production_ready,
-            "{case} must keep ZK-ACE fail-closed",
-        );
-        assert!(
-            !zk_ace.production_gate.ready,
-            "{case} gate must fail closed"
-        );
-    }
-
-    fn assert_privacy_evidence_rejected_for_all_rows<F>(case: &str, mutate: F)
-    where
-        F: Fn(&mut PrivacyProductionEvidenceRowV1),
-    {
-        for entry in PRIVACY_ALGORITHM_ENTRIES {
-            let mut row = privacy_test_evidence_row(entry);
-            mutate(&mut row);
-
-            assert!(
-                !privacy_production_evidence_row_is_valid(
-                    &row,
-                    entry,
-                    Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID)
-                ),
-                "{case} evidence row must be rejected before capability admission for {}",
-                entry.id,
-            );
-            let capabilities = privacy_capabilities_with_production_evidence(
-                &[row],
-                Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
-            );
-            let algorithm = capabilities
-                .algorithms
-                .iter()
-                .find(|algorithm| algorithm.algorithm_id == entry.id)
-                .expect("privacy capability row");
-            assert!(
-                !algorithm.production_ready,
-                "{case} must keep {} fail-closed",
-                entry.id,
-            );
-            assert!(
-                !algorithm.production_gate.ready,
-                "{case} gate must fail closed for {}",
-                entry.id,
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_capabilities_are_norito_v1_and_fail_closed() {
-        let capabilities = privacy_capabilities();
-        let encoded = norito::to_bytes(&capabilities).expect("encode capabilities");
-        let decoded: PrivacyCapabilitiesV1 =
-            norito::decode_from_bytes(&encoded).expect("decode capabilities");
-
-        assert!(privacy_capabilities_invariants_hold(&decoded));
-        assert_eq!(decoded.version, PRIVACY_FFI_VERSION_V1);
-        assert_eq!(decoded.gate_version, PRIVACY_PRODUCTION_GATE_VERSION);
-        assert_eq!(
-            decoded.algorithms.len(),
-            PRIVACY_ALGORITHM_ENTRIES.len(),
-            "all cataloged privacy algorithms must be represented",
-        );
-        assert!(
-            decoded
-                .algorithms
-                .iter()
-                .any(|entry| entry.algorithm_id == "orchard-halo2-actions-v1"),
-        );
-        let transparent = decoded
-            .algorithms
-            .iter()
-            .find(|algorithm| algorithm.algorithm_id == "transparent-transfer")
-            .expect("transparent transfer native capability must be advertised");
-        let transparent_entry = privacy_algorithm_entry("transparent-transfer")
-            .expect("transparent transfer catalog row");
-        assert_eq!(
-            transparent.production_gate.required_gates,
-            privacy_required_production_gate_keys(transparent_entry),
-            "transparent transfer must advertise only baseline transfer production gates",
-        );
-        assert!(
-            !transparent
-                .production_gate
-                .required_gates
-                .iter()
-                .any(|key| PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS
-                    .contains(&key.as_str())),
-            "transparent transfer must not require proof-only gates",
-        );
-        assert!(
-            !transparent.production_gate.missing.iter().any(|missing| {
-                missing == "real proving engine is not registered"
-                    || missing == "real verifier is not registered"
-                    || missing == "witness privacy checks are incomplete"
-                    || missing == "verifier fuzzing gate is incomplete"
-            }),
-            "transparent transfer must not report waived proof-only gates as missing",
-        );
-        let zk_ace = decoded
-            .algorithms
-            .iter()
-            .find(|algorithm| algorithm.algorithm_id == "zk-ace-pq-authorization-v0")
-            .expect("ZK-ACE native capability must be advertised");
-        assert_eq!(zk_ace.proof_family, "stark/fri/sha256-goldilocks");
-        assert_eq!(zk_ace.backend_family, "stark-fri");
-        assert!(
-            !zk_ace.production_ready,
-            "ZK-ACE native capability must not become production-ready only because its verifier backend is allowlisted",
-        );
-        assert!(!zk_ace.production_gate.ready);
-        assert!(zk_ace.production_gate.audit_references.is_empty());
-        assert!(zk_ace.production_gate.gates.iter().all(|gate| !gate.passed));
-        let zk_ace_entry =
-            privacy_algorithm_entry("zk-ace-pq-authorization-v0").expect("ZK-ACE catalog row");
-        assert_eq!(
-            zk_ace.production_gate.required_gates,
-            privacy_required_production_gate_keys(zk_ace_entry),
-            "ZK-ACE must require the full production proof gate set",
-        );
-        assert!(
-            zk_ace
-                .production_gate
-                .missing
-                .iter()
-                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE)
-        );
-        assert!(
-            zk_ace
-                .production_gate
-                .missing
-                .iter()
-                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST)
-        );
-        for algorithm in decoded.algorithms {
-            assert!(!algorithm.production_ready);
-            assert!(!algorithm.production_gate.ready);
-            assert!(algorithm.production_gate.audit_references.is_empty());
-            assert!(
-                algorithm
-                    .production_gate
-                    .missing
-                    .iter()
-                    .any(|missing| missing.contains("internal cryptographic review")),
-            );
-            assert!(
-                algorithm
-                    .production_gate
-                    .gates
-                    .iter()
-                    .all(|gate| !gate.passed),
-            );
-            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
-                .expect("privacy capability row must be cataloged");
-            assert_eq!(
-                algorithm.production_gate.required_gates,
-                privacy_required_production_gate_keys(entry),
-                "native privacy required production gates drifted for {}",
-                algorithm.algorithm_id,
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_capabilities_accept_exact_internal_evidence_for_all_rows() {
-        let evidence = PRIVACY_ALGORITHM_ENTRIES
-            .iter()
-            .map(privacy_test_evidence_row)
-            .collect::<Vec<_>>();
-
-        let capabilities = privacy_capabilities_with_production_evidence(
-            &evidence,
-            Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
-        );
-
-        assert!(privacy_capabilities_invariants_hold(&capabilities));
-        assert_eq!(
-            capabilities.algorithms.len(),
-            PRIVACY_ALGORITHM_ENTRIES.len()
-        );
-        assert!(
-            capabilities
-                .algorithms
-                .iter()
-                .all(|algorithm| algorithm.production_ready && algorithm.production_gate.ready),
-            "all rows with exact internal evidence must be admitted",
-        );
-
-        for algorithm in &capabilities.algorithms {
-            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
-                .expect("production-ready capability row must be cataloged");
-            assert!(algorithm.planned_entrypoints.is_empty());
-            assert_eq!(
-                algorithm.sdk_entrypoints,
-                privacy_expected_production_sdk_entrypoints(entry),
-                "production capabilities must expose the complete filtered SDK surface for {}",
-                algorithm.algorithm_id,
-            );
-            assert!(algorithm.production_gate.missing.is_empty());
-            assert_eq!(
-                algorithm.production_gate.required_gates,
-                privacy_required_production_gate_keys(entry),
-            );
-            assert_eq!(algorithm.production_gate.audit_references.len(), 19);
-            for status in &algorithm.production_gate.gates {
-                assert_eq!(
-                    status.passed,
-                    !privacy_production_gate_requirement_is_waived(entry, &status.key),
-                    "ready gate status drifted for {} / {}",
-                    algorithm.algorithm_id,
-                    status.key,
-                );
-            }
-        }
-
-        let transparent = capabilities
-            .algorithms
-            .iter()
-            .find(|algorithm| algorithm.algorithm_id == "transparent-transfer")
-            .expect("transparent transfer capability");
-        for waived_key in PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS {
-            assert!(
-                !transparent
-                    .production_gate
-                    .required_gates
-                    .iter()
-                    .any(|required| required == waived_key),
-                "transparent transfer must keep proof-only gate {waived_key} waived",
-            );
-            assert!(
-                transparent
-                    .production_gate
-                    .gates
-                    .iter()
-                    .any(|status| status.key == *waived_key && !status.passed),
-                "transparent transfer must not mark proof-only gate {waived_key} passed",
-            );
-        }
-
-        let zk_ace = capabilities
-            .algorithms
-            .iter()
-            .find(|algorithm| algorithm.algorithm_id == "zk-ace-pq-authorization-v0")
-            .expect("ZK-ACE capability");
-        let mut reused_ready_hash = zk_ace.clone();
-        let reused_review_hash = reused_ready_hash.production_gate.audit_references[2]
-            .strip_prefix("review_artifact_hash:")
-            .expect("review hash audit reference")
-            .to_owned();
-        reused_ready_hash.production_gate.audit_references[4] =
-            format!("fuzz_artifact_hash:{reused_review_hash}");
-        assert!(
-            !privacy_capability_invariants_hold(&reused_ready_hash),
-            "ready gate invariants must reject review/fuzz hash reuse",
-        );
-        assert!(
-            zk_ace
-                .sdk_entrypoints
-                .contains(&"buildZkAceAuthorizationProofV1".to_owned())
-        );
-        assert!(
-            zk_ace
-                .sdk_entrypoints
-                .contains(&"buildZkAceAuthorizedTransferInstruction".to_owned())
-        );
-    }
-
-    #[test]
-    fn privacy_production_evidence_rejects_adversarial_zk_ace_bindings() {
-        assert_zk_ace_evidence_rejected("wrong chain", |row| {
-            row.chain_id = "boi-privacy-other-4peer-chain";
-        });
-        assert_zk_ace_evidence_rejected("mock chain marker", |row| {
-            row.chain_id = "mock-privacy-4peer-chain";
-        });
-        assert_zk_ace_evidence_rejected("wrong verifier key", |row| {
-            row.verifier_key_id = "shadow_zk_ace_verifier";
-        });
-        assert_zk_ace_evidence_rejected("mutated public input schema", |row| {
-            row.public_inputs_schema = Some("identity_commitment,tx_digest,chain_id");
-        });
-        assert_zk_ace_evidence_rejected("dev fixture entrypoint", |row| {
-            row.sdk_entrypoints.push("buildZkAceDevProofFixture");
-        });
-        assert_zk_ace_evidence_rejected("local verifier entrypoint", |row| {
-            row.sdk_entrypoints.push("verifyZkAceProofLocally");
-        });
-        assert_zk_ace_evidence_rejected("missing SDK export surface", |row| {
-            row.sdk_exports.pop();
-        });
-        assert_zk_ace_evidence_rejected("mismatched SDK export entrypoint", |row| {
-            row.sdk_exports[3]
-                .entrypoints
-                .push("buildShadowZkAceProductionProof");
-        });
-        assert_zk_ace_evidence_rejected("dev fixture SDK export", |row| {
-            row.sdk_exports[2]
-                .entrypoints
-                .push("buildZkAceDevProofFixture");
-        });
-        assert_zk_ace_evidence_rejected("missing SDK parity artifact", |row| {
-            row.sdk_parity_artifacts.pop();
-        });
-        assert_zk_ace_evidence_rejected("wrong SDK parity artifact kind", |row| {
-            row.sdk_parity_artifacts[0].kind = "fixture_vectors";
-        });
-        assert_zk_ace_evidence_rejected("bad SDK parity artifact hash", |row| {
-            row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
-        });
-        assert_zk_ace_evidence_rejected("reused review fuzz artifact hash", |row| {
-            row.review_artifact_hash = row.fuzz_artifact_hash;
-        });
-        assert_zk_ace_evidence_rejected("three-peer localnet downgrade", |row| {
-            row.localnet_acceptance.peer_count = 3;
-        });
-        assert_zk_ace_evidence_rejected("duplicate localnet peer id", |row| {
-            row.localnet_acceptance.peer_ids[3] = row.localnet_acceptance.peer_ids[0];
-        });
-        assert_zk_ace_evidence_rejected("wrong localnet chain", |row| {
-            row.localnet_acceptance.chain_id = "boi-privacy-other-4peer-chain";
-        });
-        assert_zk_ace_evidence_rejected("bad localnet smoke hash", |row| {
-            row.localnet_acceptance.smoke_tx_hash = "sha256:not-a-hex-digest";
-        });
-        assert_zk_ace_evidence_rejected("localnet lifecycle failure", |row| {
-            row.localnet_acceptance.lifecycle_passed = false;
-        });
-        assert_zk_ace_evidence_rejected("bad localnet lifecycle shield hash", |row| {
-            row.localnet_acceptance.lifecycle_shield_tx_hash = "sha256:not-a-hex-digest";
-        });
-        assert_zk_ace_evidence_rejected("reused localnet lifecycle hash", |row| {
-            row.localnet_acceptance.lifecycle_redeem_tx_hash =
-                row.localnet_acceptance.lifecycle_unshield_proof_hash;
-        });
-        assert_zk_ace_evidence_rejected("reused localnet replay hash", |row| {
-            row.localnet_acceptance.replay_rejection_hash = row.localnet_acceptance.smoke_tx_hash;
-        });
-        assert_zk_ace_evidence_rejected("reused fuzz localnet artifact hash", |row| {
-            row.fuzz_artifact_hash = row.localnet_acceptance.smoke_tx_hash;
-            row.review_scope.fuzz_artifact_hash = row.fuzz_artifact_hash;
-        });
-        assert_zk_ace_evidence_rejected("replay acceptance", |row| {
-            row.localnet_acceptance.replay_rejected = false;
-        });
-        assert_zk_ace_evidence_rejected("restart replay acceptance", |row| {
-            row.localnet_acceptance.restart_replay_rejected = false;
-        });
-        assert_zk_ace_evidence_rejected("mock localnet run", |row| {
-            row.localnet_acceptance.run_id = "mock-privacy-4peer-localnet-2026-01-02";
-        });
-        assert_zk_ace_evidence_rejected("missing production gate evidence", |row| {
-            row.gate_evidence.pop();
-        });
-        assert_zk_ace_evidence_rejected("duplicated production gate evidence", |row| {
-            row.gate_evidence.push(row.gate_evidence[0]);
-        });
-        assert_zk_ace_evidence_rejected("bad review artifact hash", |row| {
-            row.review_artifact_hash = "sha256:not-a-hex-digest";
-        });
-        assert_zk_ace_evidence_rejected("uppercase review artifact hash", |row| {
-            row.review_artifact_hash = PRIVACY_TEST_UPPERCASE_PRODUCTION_HASH;
-        });
-        assert_zk_ace_evidence_rejected("unsigned review artifact", |row| {
-            row.review_artifact_signature = "ed25519:bbbb";
-        });
-        assert_zk_ace_evidence_rejected("uppercase review artifact signature", |row| {
-            row.review_artifact_signature = PRIVACY_TEST_UPPERCASE_PRODUCTION_SIGNATURE;
-        });
-        assert_zk_ace_evidence_rejected("mock reviewer identity", |row| {
-            row.reviewer_identity = "mock-crypto-reviewer";
-        });
-        assert_zk_ace_evidence_rejected("missing required state", |row| {
-            row.required_state.pop();
-        });
-        assert_zk_ace_evidence_rejected("wrong review scope algorithm", |row| {
-            row.review_scope.algorithm_id = "transparent-transfer";
-        });
-        assert_zk_ace_evidence_rejected("wrong review scope chain", |row| {
-            row.review_scope.chain_id = "boi-privacy-other-4peer-chain";
-        });
-        assert_zk_ace_evidence_rejected("wrong review scope verifier key", |row| {
-            row.review_scope.verifier_key_id = "shadow_zk_ace_verifier";
-        });
-        assert_zk_ace_evidence_rejected("mutated review scope public input schema", |row| {
-            row.review_scope.public_inputs_schema = Some("identity_commitment,tx_digest,chain_id");
-        });
-        assert_zk_ace_evidence_rejected("missing review scope SDK entrypoint", |row| {
-            row.review_scope.sdk_entrypoints.pop();
-        });
-        assert_zk_ace_evidence_rejected("dev fixture review scope SDK entrypoint", |row| {
-            row.review_scope
-                .sdk_entrypoints
-                .push("buildZkAceDevProofFixture");
-        });
-        assert_zk_ace_evidence_rejected("missing review scope required state", |row| {
-            row.review_scope.required_state.pop();
-        });
-        assert_zk_ace_evidence_rejected("bad review scope fuzz hash", |row| {
-            row.review_scope.fuzz_artifact_hash = "sha256:not-a-hex-digest";
-        });
-        assert_zk_ace_evidence_rejected("bad review scope performance hash", |row| {
-            row.review_scope.performance_artifact_hash = "sha256:not-a-hex-digest";
-        });
-        assert_zk_ace_evidence_rejected("mock review scope localnet run", |row| {
-            row.review_scope.localnet_run_id = "mock-privacy-4peer-localnet-2026-01-02";
-        });
-    }
-
-    #[test]
-    fn privacy_production_evidence_rejects_adversarial_bindings_for_all_rows() {
-        assert_privacy_evidence_rejected_for_all_rows("wrong algorithm", |row| {
-            row.algorithm_id = "shadow-privacy-row-v1";
-            row.review_scope.algorithm_id = "shadow-privacy-row-v1";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("wrong chain", |row| {
-            row.chain_id = "boi-privacy-other-4peer-chain";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("mock chain marker", |row| {
-            row.chain_id = "mock-privacy-4peer-chain";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("wrong verifier key", |row| {
-            row.verifier_key_id = "shadow_verifier_key";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("mutated public input schema", |row| {
-            row.public_inputs_schema = Some("mutated_public_inputs");
-        });
-        assert_privacy_evidence_rejected_for_all_rows("extra SDK entrypoint", |row| {
-            row.sdk_entrypoints.push("buildShadowProof");
-        });
-        assert_privacy_evidence_rejected_for_all_rows("dev fixture entrypoint", |row| {
-            row.sdk_entrypoints.push("buildShadowDevFixture");
-        });
-        assert_privacy_evidence_rejected_for_all_rows("local verifier entrypoint", |row| {
-            row.sdk_entrypoints.push("verifyShadowProofLocally");
-        });
-        assert_privacy_evidence_rejected_for_all_rows("missing SDK export surface", |row| {
-            row.sdk_exports.pop();
-        });
-        assert_privacy_evidence_rejected_for_all_rows("mismatched SDK export entrypoint", |row| {
-            row.sdk_exports[0].entrypoints.push("buildShadowProof");
-        });
-        assert_privacy_evidence_rejected_for_all_rows("dev fixture SDK export", |row| {
-            row.sdk_exports[0].entrypoints.push("buildShadowDevFixture");
-        });
-        assert_privacy_evidence_rejected_for_all_rows("missing SDK parity artifact", |row| {
-            row.sdk_parity_artifacts.pop();
-        });
-        assert_privacy_evidence_rejected_for_all_rows("wrong SDK parity artifact kind", |row| {
-            row.sdk_parity_artifacts[0].kind = "fixture_vectors";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("bad SDK parity artifact hash", |row| {
-            row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("reused review fuzz artifact hash", |row| {
-            row.review_artifact_hash = row.fuzz_artifact_hash;
-        });
-        assert_privacy_evidence_rejected_for_all_rows("three-peer localnet downgrade", |row| {
-            row.localnet_acceptance.peer_count = 3;
-        });
-        assert_privacy_evidence_rejected_for_all_rows("duplicate localnet peer id", |row| {
-            row.localnet_acceptance.peer_ids[3] = row.localnet_acceptance.peer_ids[0];
-        });
-        assert_privacy_evidence_rejected_for_all_rows("wrong localnet chain", |row| {
-            row.localnet_acceptance.chain_id = "boi-privacy-other-4peer-chain";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("localnet smoke failure", |row| {
-            row.localnet_acceptance.smoke_passed = false;
-        });
-        assert_privacy_evidence_rejected_for_all_rows("bad localnet smoke hash", |row| {
-            row.localnet_acceptance.smoke_tx_hash = "sha256:not-a-hex-digest";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("localnet lifecycle failure", |row| {
-            row.localnet_acceptance.lifecycle_passed = false;
-        });
-        assert_privacy_evidence_rejected_for_all_rows(
-            "bad localnet lifecycle append hash",
-            |row| {
-                row.localnet_acceptance.lifecycle_recursive_append_hash = "sha256:not-a-hex-digest";
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows(
-            "reused localnet lifecycle proof hash",
-            |row| {
-                row.localnet_acceptance.lifecycle_hop_proof_hash =
-                    row.localnet_acceptance.lifecycle_shield_tx_hash;
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows("replay acceptance", |row| {
-            row.localnet_acceptance.replay_rejected = false;
-        });
-        assert_privacy_evidence_rejected_for_all_rows("reused localnet replay hash", |row| {
-            row.localnet_acceptance.replay_rejection_hash = row.localnet_acceptance.smoke_tx_hash;
-        });
-        assert_privacy_evidence_rejected_for_all_rows(
-            "reused fuzz localnet artifact hash",
-            |row| {
-                row.fuzz_artifact_hash = row.localnet_acceptance.smoke_tx_hash;
-                row.review_scope.fuzz_artifact_hash = row.fuzz_artifact_hash;
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows("restart persistence omitted", |row| {
-            row.localnet_acceptance.restart_persistence_checked = false;
-        });
-        assert_privacy_evidence_rejected_for_all_rows("restart replay acceptance", |row| {
-            row.localnet_acceptance.restart_replay_rejected = false;
-        });
-        assert_privacy_evidence_rejected_for_all_rows("state recovery omitted", |row| {
-            row.localnet_acceptance.state_recovery_passed = false;
-        });
-        assert_privacy_evidence_rejected_for_all_rows("mock localnet run", |row| {
-            row.localnet_acceptance.run_id = "mock-privacy-4peer-localnet-2026-01-02";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("missing production gate evidence", |row| {
-            row.gate_evidence.pop();
-        });
-        assert_privacy_evidence_rejected_for_all_rows(
-            "duplicated production gate evidence",
-            |row| {
-                row.gate_evidence.push(row.gate_evidence[0]);
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows("bad review artifact hash", |row| {
-            row.review_artifact_hash = "sha256:not-a-hex-digest";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("uppercase review artifact hash", |row| {
-            row.review_artifact_hash = PRIVACY_TEST_UPPERCASE_PRODUCTION_HASH;
-        });
-        assert_privacy_evidence_rejected_for_all_rows("unsigned review artifact", |row| {
-            row.review_artifact_signature = "ed25519:bbbb";
-        });
-        assert_privacy_evidence_rejected_for_all_rows(
-            "uppercase review artifact signature",
-            |row| {
-                row.review_artifact_signature = PRIVACY_TEST_UPPERCASE_PRODUCTION_SIGNATURE;
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows("mock reviewer identity", |row| {
-            row.reviewer_identity = "mock-crypto-reviewer";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("required state mismatch", |row| {
-            row.required_state.push("shadow unchecked state");
-        });
-        assert_privacy_evidence_rejected_for_all_rows("wrong review scope algorithm", |row| {
-            row.review_scope.algorithm_id = "shadow-privacy-row-v1";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("wrong review scope chain", |row| {
-            row.review_scope.chain_id = "boi-privacy-other-4peer-chain";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("wrong review scope verifier key", |row| {
-            row.review_scope.verifier_key_id = "shadow_verifier_key";
-        });
-        assert_privacy_evidence_rejected_for_all_rows(
-            "mutated review scope public input schema",
-            |row| {
-                row.review_scope.public_inputs_schema = Some("mutated_public_inputs");
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows(
-            "missing review scope SDK entrypoint",
-            |row| {
-                row.review_scope.sdk_entrypoints.pop();
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows(
-            "dev fixture review scope SDK entrypoint",
-            |row| {
-                row.review_scope
-                    .sdk_entrypoints
-                    .push("buildShadowDevFixture");
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows(
-            "review scope required state mismatch",
-            |row| {
-                row.review_scope
-                    .required_state
-                    .push("shadow unchecked state");
-            },
-        );
-        assert_privacy_evidence_rejected_for_all_rows("bad review scope fuzz hash", |row| {
-            row.review_scope.fuzz_artifact_hash = "sha256:not-a-hex-digest";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("bad review scope performance hash", |row| {
-            row.review_scope.performance_artifact_hash = "sha256:not-a-hex-digest";
-        });
-        assert_privacy_evidence_rejected_for_all_rows("mock review scope localnet run", |row| {
-            row.review_scope.localnet_run_id = "mock-privacy-4peer-localnet-2026-01-02";
-        });
-    }
-
-    #[test]
-    fn privacy_production_evidence_rejects_missing_and_duplicate_rows() {
-        let entry =
-            privacy_algorithm_entry("zk-ace-pq-authorization-v0").expect("ZK-ACE catalog row");
-        let row = privacy_test_evidence_row(entry);
-
-        let no_chain_capabilities = privacy_capabilities_with_production_evidence(&[row], None);
-        let zk_ace = no_chain_capabilities
-            .algorithms
-            .iter()
-            .find(|algorithm| algorithm.algorithm_id == entry.id)
-            .expect("ZK-ACE capability row");
-        assert!(
-            !zk_ace.production_ready,
-            "evidence cannot admit production readiness without expected chain binding",
-        );
-
-        let duplicate_capabilities = privacy_capabilities_with_production_evidence(
-            &[
-                privacy_test_evidence_row(entry),
-                privacy_test_evidence_row(entry),
-            ],
-            Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
-        );
-        let duplicate_zk_ace = duplicate_capabilities
-            .algorithms
-            .iter()
-            .find(|algorithm| algorithm.algorithm_id == entry.id)
-            .expect("ZK-ACE capability row");
-        assert!(
-            !duplicate_zk_ace.production_ready,
-            "duplicate valid evidence rows must not admit readiness",
-        );
-    }
-
-    #[test]
-    fn privacy_production_evidence_rejects_missing_chain_and_duplicates_for_all_rows() {
-        for entry in PRIVACY_ALGORITHM_ENTRIES {
-            let row = privacy_test_evidence_row(entry);
-
-            let no_chain_capabilities =
-                privacy_capabilities_with_production_evidence(std::slice::from_ref(&row), None);
-            let no_chain_algorithm = no_chain_capabilities
-                .algorithms
-                .iter()
-                .find(|algorithm| algorithm.algorithm_id == entry.id)
-                .expect("privacy capability row");
-            assert!(
-                !no_chain_algorithm.production_ready,
-                "evidence cannot admit {} without expected chain binding",
-                entry.id,
-            );
-
-            let duplicate_capabilities = privacy_capabilities_with_production_evidence(
-                &[row.clone(), row],
-                Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
-            );
-            let duplicate_algorithm = duplicate_capabilities
-                .algorithms
-                .iter()
-                .find(|algorithm| algorithm.algorithm_id == entry.id)
-                .expect("privacy capability row");
-            assert!(
-                !duplicate_algorithm.production_ready,
-                "duplicate valid evidence rows must not admit {}",
-                entry.id,
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_native_archives_use_public_schema_hashes() {
-        Python::initialize();
-        let mut capabilities_archive = Python::attach(|py| {
-            let output = privacy_capabilities_v1_py(py).expect("encode privacy capabilities");
-            output.bind(py).as_bytes().to_vec()
-        });
-        assert!(
-            privacy_archive_has_repeated_schema_byte(
-                &capabilities_archive,
-                PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
-            ),
-            "capabilities output must use the public privacy capabilities schema"
-        );
-        normalize_privacy_public_archive_for_decode::<PrivacyCapabilitiesV1>(
-            &mut capabilities_archive,
-        );
-        let capabilities: PrivacyCapabilitiesV1 =
-            norito::decode_from_bytes(&capabilities_archive).expect("decode capabilities");
-        assert!(privacy_capabilities_invariants_hold(&capabilities));
-
-        let build_request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: b"secret witness".to_vec(),
-            proof: Vec::new(),
-        };
-        let build_request_archive = public_privacy_request_archive(&build_request);
-        assert!(
-            privacy_archive_has_repeated_schema_byte(
-                &build_request_archive,
-                PRIVACY_REQUEST_SCHEMA_BYTE,
-            ),
-            "build request must use the public privacy request schema"
-        );
-        let mut build_archive = Python::attach(|py| {
-            let output =
-                privacy_build_proof_v1_py(py, &build_request_archive).expect("encode build result");
-            output.bind(py).as_bytes().to_vec()
-        });
-        assert!(
-            privacy_archive_has_repeated_schema_byte(
-                &build_archive,
-                PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
-            ),
-            "build output must use the public privacy build-result schema"
-        );
-        normalize_privacy_public_archive_for_decode::<PrivacyProofResultV1>(&mut build_archive);
-        let build_result: PrivacyProofResultV1 =
-            norito::decode_from_bytes(&build_archive).expect("decode build result");
-        assert_eq!(
-            build_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
-        );
-
-        let verify_request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: Vec::new(),
-            proof: b"secret proof".to_vec(),
-        };
-        let verify_request_archive = public_privacy_request_archive(&verify_request);
-        assert!(
-            privacy_archive_has_repeated_schema_byte(
-                &verify_request_archive,
-                PRIVACY_REQUEST_SCHEMA_BYTE,
-            ),
-            "verify request must use the public privacy request schema"
-        );
-        let mut verify_archive = Python::attach(|py| {
-            let output = privacy_verify_proof_v1_py(py, &verify_request_archive)
-                .expect("encode verify result");
-            output.bind(py).as_bytes().to_vec()
-        });
-        assert!(
-            privacy_archive_has_repeated_schema_byte(
-                &verify_archive,
-                PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE,
-            ),
-            "verify output must use the public privacy verify-result schema"
-        );
-        normalize_privacy_public_archive_for_decode::<PrivacyProofResultV1>(&mut verify_archive);
-        let verify_result: PrivacyProofResultV1 =
-            norito::decode_from_bytes(&verify_archive).expect("decode verify result");
-        assert_eq!(
-            verify_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
-        );
-    }
-
-    #[test]
-    fn python_confidential_native_builders_reject_empty_vk_backend_before_proving() {
-        Python::initialize();
-        Python::attach(|py| {
-            let spend_key = PyBytes::new(py, &[0x11; Hash::LENGTH]);
-            let empty_list = PyList::empty(py);
-            let root_hint = PyBytes::new(py, &[0x22; Hash::LENGTH]);
-            let vk_bytes = PyBytes::new(py, &[0x33; Hash::LENGTH]);
-            let asset_definition_id = AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").expect("domain id"),
-                "xor".parse().expect("asset definition name"),
-            )
-            .to_string();
-
-            let transfer_err = build_confidential_transfer_proof_v2_py(
-                py,
-                "wonderland",
-                &asset_definition_id,
-                spend_key.as_any(),
-                empty_list.as_any(),
-                empty_list.as_any(),
-                empty_list.as_any(),
-                root_hint.as_any(),
-                " ",
-                "confidential_transfer_v2",
-                vk_bytes.as_any(),
-            )
-            .expect_err("empty transfer vk backend must reject before proving");
-            let transfer_message = py_err_message(transfer_err);
-            assert!(
-                transfer_message.contains("vk_backend must be non-empty"),
-                "unexpected transfer error: {transfer_message}",
-            );
-
-            let public_amount = PyString::new(py, "0");
-            let unshield_err = build_confidential_unshield_proof_v3_py(
-                py,
-                "wonderland",
-                &asset_definition_id,
-                spend_key.as_any(),
-                empty_list.as_any(),
-                empty_list.as_any(),
-                empty_list.as_any(),
-                public_amount.as_any(),
-                root_hint.as_any(),
-                " ",
-                "confidential_unshield_v3",
-                vk_bytes.as_any(),
-            )
-            .expect_err("empty unshield vk backend must reject before proving");
-            let unshield_message = py_err_message(unshield_err);
-            assert!(
-                unshield_message.contains("vk_backend must be non-empty"),
-                "unexpected unshield error: {unshield_message}",
-            );
-        });
-    }
-
-    #[test]
-    fn privacy_public_schema_request_archives_reject_operation_confusion() {
-        let proof_marker = b"forged-public-build-proof-shadow";
-        let build_shadow = privacy_request(
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            proof_marker.to_vec(),
-        );
-        let build_archive = public_privacy_request_archive(&build_shadow);
-        assert!(
-            privacy_archive_has_repeated_schema_byte(&build_archive, PRIVACY_REQUEST_SCHEMA_BYTE),
-            "build-shadow request must use the public privacy request schema"
-        );
-
-        let build_result =
-            privacy_result_for_request_archive(&build_archive, PrivacyProofOperationV1::Build);
-
-        assert_eq!(build_result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert!(build_result.message.contains("build"));
-        assert!(build_result.message.contains("proof"));
-        assert!(build_result.message.contains("must not include"));
-        assert!(build_result.proof.is_empty());
-        assert!(!build_result.verified);
-        assert_subslice_absent(
-            build_result.message.as_bytes(),
-            proof_marker,
-            "public-schema build-shadow result message",
-        );
-
-        let witness_marker = b"forged-public-verify-witness-shadow";
-        let mut verify_shadow = privacy_request(
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            b"candidate-proof".to_vec(),
-        );
-        verify_shadow.witness = witness_marker.to_vec();
-        let verify_archive = public_privacy_request_archive(&verify_shadow);
-        assert!(
-            privacy_archive_has_repeated_schema_byte(&verify_archive, PRIVACY_REQUEST_SCHEMA_BYTE),
-            "verify-shadow request must use the public privacy request schema"
-        );
-
-        let verify_result =
-            privacy_result_for_request_archive(&verify_archive, PrivacyProofOperationV1::Verify);
-
-        assert_eq!(verify_result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert!(verify_result.message.contains("verify"));
-        assert!(verify_result.message.contains("witness"));
-        assert!(verify_result.message.contains("must not include"));
-        assert_privacy_result_does_not_serialize_witness(&verify_result, witness_marker);
-
-        let mut missing_witness = privacy_request(
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            Vec::new(),
-        );
-        missing_witness.witness.clear();
-        let missing_witness_archive = public_privacy_request_archive(&missing_witness);
-        let missing_witness_result = privacy_result_for_request_archive(
-            &missing_witness_archive,
-            PrivacyProofOperationV1::Build,
-        );
-        assert_eq!(
-            missing_witness_result.error_code,
-            PRIVACY_FFI_ERROR_INVALID_REQUEST
-        );
-        assert!(missing_witness_result.message.contains("witness"));
-        assert!(missing_witness_result.message.contains("must include"));
-
-        let mut missing_proof = privacy_request(
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            Vec::new(),
-        );
-        missing_proof.witness.clear();
-        let missing_proof_archive = public_privacy_request_archive(&missing_proof);
-        let missing_proof_result = privacy_result_for_request_archive(
-            &missing_proof_archive,
-            PrivacyProofOperationV1::Verify,
-        );
-        assert_eq!(
-            missing_proof_result.error_code,
-            PRIVACY_FFI_ERROR_INVALID_REQUEST
-        );
-        assert!(missing_proof_result.message.contains("proof"));
-        assert!(missing_proof_result.message.contains("must include"));
-    }
-
-    #[test]
-    fn privacy_request_archives_reject_private_rust_schema_hashes() {
-        let request = privacy_request(
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            Vec::new(),
-        );
-        let private_archive = norito::to_bytes(&request).expect("encode private privacy request");
-        assert!(
-            !privacy_archive_has_repeated_schema_byte(
-                &private_archive,
-                PRIVACY_REQUEST_SCHEMA_BYTE
-            ),
-            "private Rust request schema must not masquerade as the public FFI request schema",
-        );
-
-        for operation in [
-            PrivacyProofOperationV1::Build,
-            PrivacyProofOperationV1::Verify,
-        ] {
-            let result = privacy_result_for_request_archive(&private_archive, operation);
-            assert_malformed_privacy_request_result(&result, "private-rust-schema");
-        }
-    }
-
-    #[test]
-    fn privacy_capabilities_result_invariants_are_fail_closed() {
-        let capabilities = privacy_capabilities();
-
-        assert!(privacy_capabilities_invariants_hold(&capabilities));
-        assert!(capabilities.algorithms.iter().all(|algorithm| {
-            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
-                .expect("privacy capability row must be cataloged");
-            !algorithm.production_ready
-                && privacy_production_gate_invariants_hold(&algorithm.production_gate, entry)
-        }));
-    }
-
-    #[test]
-    fn privacy_capability_invariants_reject_forged_production_readiness() {
-        let base = privacy_capabilities()
-            .algorithms
-            .into_iter()
-            .next()
-            .expect("privacy capabilities include algorithms");
-
-        let mut production_ready = base.clone();
-        production_ready.production_ready = true;
-        assert!(
-            !privacy_capability_invariants_hold(&production_ready),
-            "production_ready = true must be rejected",
-        );
-
-        let mut gate_ready = base.clone();
-        gate_ready.production_gate.ready = true;
-        assert!(
-            !privacy_capability_invariants_hold(&gate_ready),
-            "production_gate.ready = true must be rejected",
-        );
-
-        let mut passed_gate = base.clone();
-        passed_gate.production_gate.gates[0].passed = true;
-        assert!(
-            !privacy_capability_invariants_hold(&passed_gate),
-            "passed production gate status must be rejected",
-        );
-
-        let mut unknown_gate = base.clone();
-        unknown_gate.production_gate.gates[0].key = "shadow_gate".to_owned();
-        assert!(
-            !privacy_capability_invariants_hold(&unknown_gate),
-            "unknown production gate keys must be rejected",
-        );
-
-        let mut unportable_gate = base.clone();
-        unportable_gate.production_gate.gates[0].key = "shadow gate".to_owned();
-        assert!(
-            !privacy_capability_invariants_hold(&unportable_gate),
-            "unportable production gate keys must be rejected",
-        );
-
-        let mut shuffled_gate_order = base.clone();
-        shuffled_gate_order.production_gate.gates.swap(0, 1);
-        assert!(
-            !privacy_capability_invariants_hold(&shuffled_gate_order),
-            "shuffled production gate key order must be rejected",
-        );
-
-        let mut forged_audit = base.clone();
-        forged_audit
-            .production_gate
-            .audit_references
-            .push("audit://forged".to_owned());
-        assert!(
-            !privacy_capability_invariants_hold(&forged_audit),
-            "forged audit references must be rejected",
-        );
-
-        let mut missing_audit = base.clone();
-        missing_audit
-            .production_gate
-            .missing
-            .retain(|missing| missing != "internal cryptographic review signoff is missing");
-        assert!(
-            !privacy_capability_invariants_hold(&missing_audit),
-            "removed internal-review evidence must be rejected",
-        );
-
-        let mut missing_engine = base.clone();
-        missing_engine
-            .production_gate
-            .missing
-            .retain(|missing| missing != PRIVACY_PRODUCTION_GATE_MISSING_ENGINE);
-        assert!(
-            !privacy_capability_invariants_hold(&missing_engine),
-            "removed production-engine evidence must be rejected",
-        );
-
-        let mut missing_allowlist = base.clone();
-        missing_allowlist
-            .production_gate
-            .missing
-            .retain(|missing| missing != PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST);
-        assert!(
-            !privacy_capability_invariants_hold(&missing_allowlist),
-            "removed allowlist evidence must be rejected",
-        );
-
-        let mut shuffled_missing_reasons = base.clone();
-        shuffled_missing_reasons.production_gate.missing.swap(0, 1);
-        assert!(
-            !privacy_capability_invariants_hold(&shuffled_missing_reasons),
-            "shuffled production-gate missing reasons must be rejected",
-        );
-
-        let mut forged_missing_reason = base.clone();
-        forged_missing_reason
-            .production_gate
-            .missing
-            .push("internal cryptographic review signoff passed without evidence".to_owned());
-        assert!(
-            !privacy_capability_invariants_hold(&forged_missing_reason),
-            "unknown production-gate missing reasons must be rejected",
-        );
-
-        let mut duplicate_gate = base.clone();
-        duplicate_gate
-            .production_gate
-            .gates
-            .push(duplicate_gate.production_gate.gates[0].clone());
-        assert!(
-            !privacy_capability_invariants_hold(&duplicate_gate),
-            "duplicate production gate keys must be rejected",
-        );
-
-        let mut missing_required_gate = base.clone();
-        missing_required_gate.production_gate.required_gates.clear();
-        assert!(
-            !privacy_capability_invariants_hold(&missing_required_gate),
-            "missing required production gate keys must be rejected",
-        );
-
-        let mut duplicate_required_gate = base.clone();
-        duplicate_required_gate
-            .production_gate
-            .required_gates
-            .push(duplicate_required_gate.production_gate.required_gates[0].clone());
-        assert!(
-            !privacy_capability_invariants_hold(&duplicate_required_gate),
-            "duplicate required production gate keys must be rejected",
-        );
-
-        let mut unknown_required_gate = base.clone();
-        unknown_required_gate.production_gate.required_gates[0] = "shadow_gate".to_owned();
-        assert!(
-            !privacy_capability_invariants_hold(&unknown_required_gate),
-            "unknown required production gate keys must be rejected",
-        );
-
-        let mut unportable_required_gate = base.clone();
-        unportable_required_gate.production_gate.required_gates[0] = "shadow gate".to_owned();
-        assert!(
-            !privacy_capability_invariants_hold(&unportable_required_gate),
-            "unportable required production gate keys must be rejected",
-        );
-
-        let mut forged_waived_required_gate = base.clone();
-        forged_waived_required_gate
-            .production_gate
-            .required_gates
-            .insert(0, "real_proving".to_owned());
-        assert!(
-            !privacy_capability_invariants_hold(&forged_waived_required_gate),
-            "transparent-transfer waived proof gates must not be reintroduced as required",
-        );
-
-        let mut extra_entrypoint = base.clone();
-        extra_entrypoint
-            .sdk_entrypoints
-            .push("buildShadowProductionProof".to_owned());
-        assert!(
-            !privacy_capability_invariants_hold(&extra_entrypoint),
-            "forged SDK entrypoints must be rejected",
-        );
-
-        let mut production_ready_proof_family = base.clone();
-        production_ready_proof_family.proof_family = "halo2-production-ready".to_owned();
-        assert!(
-            !privacy_capability_invariants_hold(&production_ready_proof_family),
-            "production-ready proof-family labels must be rejected",
-        );
-
-        for (case, proof_family) in [
-            ("uppercase proof family", "Halo2-ipa-pasta"),
-            ("delimited proof family", "halo2:ipa:pasta"),
-            ("empty proof-family segment", "halo2//ipa"),
-            ("leading slash proof family", "/halo2"),
-            ("leading hyphen proof family", "-halo2"),
-            ("trailing slash proof family", "halo2/"),
-            ("trailing hyphen proof family", "halo2-"),
-        ] {
-            let mut forged_proof_family = base.clone();
-            forged_proof_family.proof_family = proof_family.to_owned();
-            assert!(
-                !privacy_capability_invariants_hold(&forged_proof_family),
-                "{case} must be rejected"
-            );
-        }
-
-        let mut audit_signoff_backend = base.clone();
-        audit_signoff_backend.backend_family = "audit-signoff-pasta".to_owned();
-        assert!(
-            !privacy_capability_invariants_hold(&audit_signoff_backend),
-            "audit-signoff backend labels must be rejected",
-        );
-
-        let mut mainnet_ready_entrypoint = base.clone();
-        mainnet_ready_entrypoint
-            .sdk_entrypoints
-            .push("buildMainnetReadyProof".to_owned());
-        assert!(
-            !privacy_capability_invariants_hold(&mainnet_ready_entrypoint),
-            "mainnet-ready executable entrypoints must be rejected",
-        );
-
-        let mut claimed_mainnet_algorithm = base.clone();
-        claimed_mainnet_algorithm.algorithm_id = "claimed-mainnet-row".to_owned();
-        assert!(
-            !privacy_capability_invariants_hold(&claimed_mainnet_algorithm),
-            "claimed-mainnet algorithm labels must be rejected",
-        );
-
-        let mut audit_claim_planned_entrypoint = base.clone();
-        audit_claim_planned_entrypoint
-            .planned_entrypoints
-            .push("buildClaimedAuditProof".to_owned());
-        assert!(
-            !privacy_capability_invariants_hold(&audit_claim_planned_entrypoint),
-            "claimed-audit planned entrypoints must be rejected",
-        );
-    }
-
-    #[test]
-    fn privacy_capabilities_invariants_reject_bad_versions_and_duplicate_rows() {
-        let base = privacy_capabilities();
-
-        let mut bad_version = base.clone();
-        bad_version.version = PRIVACY_FFI_VERSION_V1 + 1;
-        assert!(
-            !privacy_capabilities_invariants_hold(&bad_version),
-            "bad capabilities version must be rejected",
-        );
-
-        let mut bad_gate_version = base.clone();
-        bad_gate_version.gate_version = "privacy-production-gate-v2".to_owned();
-        assert!(
-            !privacy_capabilities_invariants_hold(&bad_gate_version),
-            "bad production gate version must be rejected",
-        );
-
-        let mut shuffled_row_order = base.clone();
-        shuffled_row_order.algorithms.swap(0, 1);
-        assert!(
-            !privacy_capabilities_invariants_hold(&shuffled_row_order),
-            "shuffled algorithm capability rows must be rejected",
-        );
-
-        let mut duplicate_row = base.clone();
-        let duplicate = duplicate_row.algorithms[0].clone();
-        duplicate_row.algorithms.push(duplicate);
-        assert!(
-            !privacy_capabilities_invariants_hold(&duplicate_row),
-            "duplicate algorithm capability rows must be rejected",
-        );
-    }
-
-    #[test]
-    fn privacy_request_archive_size_boundaries_are_fail_closed() {
-        assert!(privacy_request_archive_out_of_bounds(0));
-        assert!(!privacy_request_archive_out_of_bounds(1));
-        assert!(!privacy_request_archive_out_of_bounds(
-            PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
-        ));
-        assert!(privacy_request_archive_out_of_bounds(
-            PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1
-        ));
-    }
-
-    #[test]
-    fn privacy_request_rejects_oversized_text_fields_without_reflection() {
-        let oversized = "x".repeat(PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES + 1);
-        for field in ["algorithm_id", "entrypoint", "vk_ref"] {
-            let mut request = privacy_request(
-                "confidential-transfer-v2",
-                "buildConfidentialTransferProofV2",
-                Vec::new(),
-            );
-            match field {
-                "algorithm_id" => request.algorithm_id = oversized.clone(),
-                "entrypoint" => request.entrypoint = oversized.clone(),
-                "vk_ref" => request.vk_ref = oversized.clone(),
-                _ => unreachable!("unexpected privacy request field"),
-            }
-
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_unreflected_invalid_privacy_request_result(&result, "maximum length", field);
-            assert!(
-                !norito::to_bytes(&result)
-                    .expect("encode privacy result")
-                    .windows(oversized.len())
-                    .any(|window| window == oversized.as_bytes()),
-                "{field} was reflected in the encoded privacy result",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_request_rejects_control_text_fields_without_reflection() {
-        for (field, value) in [
-            ("algorithm_id", "confidential-transfer-v2\nforged"),
-            ("entrypoint", "buildConfidentialTransferProofV2\rforged"),
-            ("vk_ref", "vk:test\tforged"),
-        ] {
-            let mut request = privacy_request(
-                "confidential-transfer-v2",
-                "buildConfidentialTransferProofV2",
-                Vec::new(),
-            );
-            match field {
-                "algorithm_id" => request.algorithm_id = value.to_owned(),
-                "entrypoint" => request.entrypoint = value.to_owned(),
-                "vk_ref" => request.vk_ref = value.to_owned(),
-                _ => unreachable!("unexpected privacy request field"),
-            }
-
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_unreflected_invalid_privacy_request_result(&result, "control characters", field);
-        }
-    }
-
-    #[test]
-    fn privacy_request_rejects_non_ascii_text_fields_without_reflection() {
-        let marker = "unicode-text-never-echo";
-        for (field, value) in [
-            (
-                "algorithm_id",
-                format!("confidential-transfer-v2{marker}\u{200B}"),
-            ),
-            (
-                "entrypoint",
-                format!("buildConfidentialTransferProofV2{marker}\u{2060}"),
-            ),
-            ("vk_ref", format!("vk:test{marker}\u{FF1A}spoof")),
-        ] {
-            let mut request = privacy_request(
-                "confidential-transfer-v2",
-                "buildConfidentialTransferProofV2",
-                Vec::new(),
-            );
-            match field {
-                "algorithm_id" => request.algorithm_id = value,
-                "entrypoint" => request.entrypoint = value,
-                "vk_ref" => request.vk_ref = value,
-                _ => unreachable!("unexpected privacy request field"),
-            }
-
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_unreflected_invalid_privacy_request_result(&result, "printable ASCII", field);
-            let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert!(
-                !encoded
-                    .windows(marker.len())
-                    .any(|window| window == marker.as_bytes()),
-                "{field} was reflected in the encoded privacy result",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_request_rejects_unportable_text_fields_without_reflection() {
-        let marker = "punctuation-text-never-echo";
-        for (field, value) in [
-            ("algorithm_id", format!("confidential-transfer-v2 {marker}")),
-            (
-                "entrypoint",
-                format!("buildConfidentialTransferProofV2\"{marker}\""),
-            ),
-            ("vk_ref", format!("vk:test/../{marker}")),
-        ] {
-            let mut request = privacy_request(
-                "confidential-transfer-v2",
-                "buildConfidentialTransferProofV2",
-                Vec::new(),
-            );
-            match field {
-                "algorithm_id" => request.algorithm_id = value,
-                "entrypoint" => request.entrypoint = value,
-                "vk_ref" => request.vk_ref = value,
-                _ => unreachable!("unexpected privacy request field"),
-            }
-
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_unreflected_invalid_privacy_request_result(
-                &result,
-                "portable identifier",
-                field,
-            );
-            let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert!(
-                !encoded
-                    .windows(marker.len())
-                    .any(|window| window == marker.as_bytes()),
-                "{field} was reflected in the encoded privacy result",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_request_rejects_invalid_catalog_shapes_without_reflection() {
-        let marker = "catalog-shape-text-never-echo";
-        for (field, value) in [
-            ("algorithm_id", format!("confidential-transfer-v2:{marker}")),
-            ("algorithm_id", format!("Confidential-transfer-v2{marker}")),
-            ("algorithm_id", format!("confidential.transfer.v2{marker}")),
-            ("algorithm_id", format!("_confidential-transfer-v2{marker}")),
-            ("algorithm_id", format!("-confidential-transfer-v2{marker}")),
-            (
-                "algorithm_id",
-                format!("confidential-transfer-v2-{marker}_"),
-            ),
-            (
-                "algorithm_id",
-                format!("confidential-transfer-v2-{marker}-"),
-            ),
-            (
-                "entrypoint",
-                format!("buildConfidentialTransferProofV2:{marker}"),
-            ),
-            (
-                "entrypoint",
-                format!("build-ConfidentialTransferProofV2{marker}"),
-            ),
-            (
-                "entrypoint",
-                format!("_buildConfidentialTransferProofV2{marker}"),
-            ),
-            (
-                "entrypoint",
-                format!("buildConfidentialTransferProofV2_{marker}"),
-            ),
-            (
-                "entrypoint",
-                format!("Iroha._Privacy.buildConfidentialTransferProofV2{marker}"),
-            ),
-            (
-                "entrypoint",
-                format!("Iroha.Privacy_.buildConfidentialTransferProofV2{marker}"),
-            ),
-        ] {
-            let mut request = privacy_request(
-                "confidential-transfer-v2",
-                "buildConfidentialTransferProofV2",
-                Vec::new(),
-            );
-            match field {
-                "algorithm_id" => request.algorithm_id = value,
-                "entrypoint" => request.entrypoint = value,
-                _ => unreachable!("unexpected privacy request field"),
-            }
-
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_unreflected_invalid_privacy_request_result(
-                &result,
-                "catalog identifier shapes",
-                field,
-            );
-            let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert_subslice_absent(&encoded, marker.as_bytes(), "catalog-shape failure result");
-        }
-    }
-
-    #[test]
-    fn privacy_request_rejects_empty_required_text_fields_without_reflection() {
-        for field in ["algorithm_id", "entrypoint", "vk_ref"] {
-            let mut request = privacy_request(
-                "confidential-transfer-v2",
-                "buildConfidentialTransferProofV2",
-                Vec::new(),
-            );
-            request.public_inputs = b"public".to_vec();
-            let witness = b"required-text-field-witness-never-echo";
-            request.witness = witness.to_vec();
-            match field {
-                "algorithm_id" => request.algorithm_id.clear(),
-                "entrypoint" => request.entrypoint.clear(),
-                "vk_ref" => request.vk_ref.clear(),
-                _ => unreachable!("unexpected privacy request field"),
-            }
-
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-            let message_fragment = match field {
-                "vk_ref" => "non-empty vk_ref",
-                _ => "non-empty algorithm_id and entrypoint",
-            };
-
-            assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{field}");
-            assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{field}");
-            assert_eq!(
-                result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "{field}"
-            );
-            assert!(result.message.contains(message_fragment), "{field}");
-            assert_eq!(result.public_inputs, b"public", "{field}");
-            assert!(result.proof.is_empty(), "{field}");
-            assert!(!result.verified, "{field}");
-            if field == "algorithm_id" {
-                assert!(result.algorithm_id.is_empty(), "{field}");
-            } else {
-                assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{field}");
-            }
-            if field == "entrypoint" {
-                assert!(result.entrypoint.is_empty(), "{field}");
-            } else {
-                assert_eq!(
-                    result.entrypoint, "buildConfidentialTransferProofV2",
-                    "{field}"
-                );
-            }
-            if field == "vk_ref" {
-                assert!(result.vk_ref.is_empty(), "{field}");
-            }
-            let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert_subslice_absent(&encoded, witness, "empty required field failure result");
-        }
-    }
-
-    #[test]
-    fn privacy_request_rejects_exposed_production_claims_without_reflection() {
-        for (field, value) in [
-            ("algorithm_id", "forged-mainnet-ready-algorithm"),
-            ("algorithm_id", "claimed-mainnet-algorithm"),
-            ("entrypoint", "buildAuditSignoffProof"),
-            ("entrypoint", "buildClaimedAuditProof"),
-            ("entrypoint", "buildS.e.c.u.r.i.t.yReviewPassedProof"),
-            (
-                "vk_ref",
-                "halo2-ipa-pasta:externally-audited-confidential-transfer",
-            ),
-            (
-                "vk_ref",
-                "halo2-ipa-pasta:audit-claim-confidential-transfer",
-            ),
-        ] {
-            let mut request = privacy_request(
-                "confidential-transfer-v2",
-                "buildConfidentialTransferProofV2",
-                Vec::new(),
-            );
-            match field {
-                "algorithm_id" => request.algorithm_id = value.to_owned(),
-                "entrypoint" => request.entrypoint = value.to_owned(),
-                "vk_ref" => request.vk_ref = value.to_owned(),
-                _ => unreachable!("unexpected privacy request field"),
-            }
-
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_unreflected_invalid_privacy_request_result(
-                &result,
-                "production/mainnet/audit readiness",
-                field,
-            );
-            let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert!(
-                !encoded
-                    .windows(value.len())
-                    .any(|window| window == value.as_bytes()),
-                "{field} was reflected in the encoded privacy result",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_request_rejects_oversized_public_inputs_without_reflection() {
-        let mut request = privacy_request(
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            Vec::new(),
-        );
-        request.public_inputs = vec![0xA5; PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES + 1];
-
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_unreflected_invalid_privacy_request_result(&result, "public_inputs", "public");
-    }
-
-    #[test]
-    fn privacy_request_rejects_oversized_witness_without_reflection() {
-        let marker = b"oversized-witness-never-echo";
-        let mut oversized = vec![0xA5; PRIVACY_REQUEST_WITNESS_MAX_BYTES + 1];
-        oversized[..marker.len()].copy_from_slice(marker);
-        let mut request = privacy_request(
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            Vec::new(),
-        );
-        request.witness = oversized;
-
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_unreflected_invalid_privacy_request_result(&result, "witness", "witness");
-        let encoded = norito::to_bytes(&result).expect("encode privacy result");
-        assert!(
-            !encoded.windows(marker.len()).any(|window| window == marker),
-            "oversized witness marker was reflected in the encoded privacy result",
-        );
-    }
-
-    #[test]
-    fn privacy_request_rejects_oversized_proof_without_reflection() {
-        let marker = b"oversized-proof-never-echo";
-        let mut oversized = vec![0xA7; PRIVACY_REQUEST_PROOF_MAX_BYTES + 1];
-        oversized[..marker.len()].copy_from_slice(marker);
-        let mut request = privacy_request(
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            oversized,
-        );
-        request.witness.clear();
-
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Verify);
-
-        assert_unreflected_invalid_privacy_request_result(&result, "proof", "proof");
-        let encoded = norito::to_bytes(&result).expect("encode privacy result");
-        assert!(
-            !encoded.windows(marker.len()).any(|window| window == marker),
-            "oversized proof marker was reflected in the encoded privacy result",
-        );
-    }
-
-    #[test]
-    fn privacy_native_availability_probe_rejects_with_malformed_error() {
-        for operation in [
-            PrivacyProofOperationV1::Build,
-            PrivacyProofOperationV1::Verify,
-        ] {
-            let result = privacy_result_for_request_archive(
-                PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
-                operation,
-            );
-
-            assert_eq!(result.version, PRIVACY_FFI_VERSION_V1);
-            assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR);
-            assert_eq!(result.error_code, PRIVACY_FFI_ERROR_MALFORMED_NORITO);
-            assert_eq!(result.message, "malformed Norito V1 privacy proof request");
-            assert!(result.algorithm_id.is_empty());
-            assert!(result.entrypoint.is_empty());
-            assert!(result.vk_ref.is_empty());
-            assert!(result.public_inputs.is_empty());
-            assert!(result.proof.is_empty());
-            assert!(!result.verified);
-        }
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_malformed_norito() {
-        let result =
-            privacy_result_for_request_archive(b"not norito", PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.version, PRIVACY_FFI_VERSION_V1);
-        assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR);
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_MALFORMED_NORITO);
-        assert!(!result.verified);
-        assert!(result.proof.is_empty());
-        assert!(result.public_inputs.is_empty());
-    }
-
-    #[test]
-    fn privacy_proof_entrypoints_reject_adversarial_norito_frames() {
-        for (case, malformed) in adversarial_privacy_request_archives() {
-            for operation in [
-                PrivacyProofOperationV1::Build,
-                PrivacyProofOperationV1::Verify,
-            ] {
-                let result = privacy_result_for_request_archive(&malformed, operation);
-                assert_malformed_privacy_request_result(&result, case);
-            }
-        }
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_missing_request_fields() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: String::new(),
-            entrypoint: String::new(),
-            vk_ref: String::new(),
-            public_inputs: b"public".to_vec(),
-            witness: b"secret".to_vec(),
-            proof: b"proof".to_vec(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.public_inputs, b"public");
-        assert!(result.proof.is_empty());
-        assert!(!result.message.contains("secret"));
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_unknown_algorithm() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "adversarial-shadow-row".to_owned(),
-            entrypoint: "buildAdversarialShadowProof".to_owned(),
-            vk_ref: "vk:test".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: b"secret".to_vec(),
-            proof: Vec::new(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM);
-        assert_eq!(result.algorithm_id, "adversarial-shadow-row");
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_failure_results_never_serialize_witness_material() {
-        let witness = b"python-host-witness-never-echo-5a7c91";
-
-        let unsupported = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "adversarial-shadow-row".to_owned(),
-                entrypoint: "buildAdversarialShadowProof".to_owned(),
-                vk_ref: "vk:test".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: witness.to_vec(),
-                proof: Vec::new(),
-            },
-            PrivacyProofOperationV1::Build,
-        );
-        assert_eq!(
-            unsupported.error_code,
-            PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
-        );
-        assert_privacy_result_does_not_serialize_witness(&unsupported, witness);
-
-        let bad_entrypoint = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "orchard-halo2-actions-v1".to_owned(),
-                entrypoint: "buildAdversarialProof".to_owned(),
-                vk_ref: "halo2-ipa-orchard:vk_orchard_actions_v1".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: witness.to_vec(),
-                proof: Vec::new(),
-            },
-            PrivacyProofOperationV1::Build,
-        );
-        assert_eq!(bad_entrypoint.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,);
-        assert_privacy_result_does_not_serialize_witness(&bad_entrypoint, witness);
-
-        let missing_vk = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: String::new(),
-                public_inputs: b"public".to_vec(),
-                witness: witness.to_vec(),
-                proof: Vec::new(),
-            },
-            PrivacyProofOperationV1::Build,
-        );
-        assert_eq!(missing_vk.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_privacy_result_does_not_serialize_witness(&missing_vk, witness);
-
-        let wrong_vk_backend = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: "groth16-bls12-377:confidential_transfer_v2".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: witness.to_vec(),
-                proof: Vec::new(),
-            },
-            PrivacyProofOperationV1::Build,
-        );
-        assert_eq!(
-            wrong_vk_backend.error_code,
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-        );
-        assert_privacy_result_does_not_serialize_witness(&wrong_vk_backend, witness);
-
-        let wrong_vk_name = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: "halo2-ipa-pasta:vk_test".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: witness.to_vec(),
-                proof: Vec::new(),
-            },
-            PrivacyProofOperationV1::Build,
-        );
-        assert_eq!(wrong_vk_name.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,);
-        assert_privacy_result_does_not_serialize_witness(&wrong_vk_name, witness);
-
-        let empty_public_inputs = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-                public_inputs: Vec::new(),
-                witness: witness.to_vec(),
-                proof: Vec::new(),
-            },
-            PrivacyProofOperationV1::Build,
-        );
-        assert_eq!(
-            empty_public_inputs.error_code,
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-        );
-        assert_privacy_result_does_not_serialize_witness(&empty_public_inputs, witness);
-
-        let disabled_build = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: witness.to_vec(),
-                proof: Vec::new(),
-            },
-            PrivacyProofOperationV1::Build,
-        );
-        assert_eq!(
-            disabled_build.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
-        );
-        assert_privacy_result_does_not_serialize_witness(&disabled_build, witness);
-
-        let disabled_verify = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: Vec::new(),
-                proof: b"candidate proof".to_vec(),
-            },
-            PrivacyProofOperationV1::Verify,
-        );
-        assert_eq!(
-            disabled_verify.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
-        );
-        assert_privacy_result_does_not_serialize_witness(&disabled_verify, witness);
-
-        let witness_shadow_verify = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: witness.to_vec(),
-                proof: b"candidate proof".to_vec(),
-            },
-            PrivacyProofOperationV1::Verify,
-        );
-        assert_eq!(
-            witness_shadow_verify.error_code,
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-        );
-        assert_privacy_result_does_not_serialize_witness(&witness_shadow_verify, witness);
-    }
-
-    #[test]
-    fn privacy_failure_results_preserve_error_invariants_without_proof_reflection() {
-        let proof_marker = b"python-host-proof-never-echo-c61e";
-
-        let build_shadow_result = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: b"secret witness".to_vec(),
-                proof: proof_marker.to_vec(),
-            },
-            PrivacyProofOperationV1::Build,
-        );
-
-        let disabled_verify_result = privacy_result_for_request(
-            PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: Vec::new(),
-                proof: proof_marker.to_vec(),
-            },
-            PrivacyProofOperationV1::Verify,
-        );
-
-        for (case, result) in [
-            ("build-proof-shadow", build_shadow_result),
-            ("disabled-verify-proof", disabled_verify_result),
-        ] {
-            assert!(
-                privacy_failure_result_invariants_hold(&result),
-                "{case}: {result:?}",
-            );
-            assert!(
-                !result
-                    .message
-                    .as_bytes()
-                    .windows(proof_marker.len())
-                    .any(|window| window == proof_marker),
-                "{case} reflected proof bytes in the privacy result message",
-            );
-            let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert!(
-                !encoded
-                    .windows(proof_marker.len())
-                    .any(|window| window == proof_marker),
-                "{case} reflected proof bytes in the encoded privacy result",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_unknown_entrypoint_for_known_algorithm() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "orchard-halo2-actions-v1".to_owned(),
-            entrypoint: "buildAdversarialProof".to_owned(),
-            vk_ref: "halo2-ipa-orchard:vk_orchard_actions_v1".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: b"secret".to_vec(),
-            proof: Vec::new(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.algorithm_id, "orchard-halo2-actions-v1");
-        assert_eq!(result.entrypoint, "buildAdversarialProof");
-        assert!(result.message.contains("entrypoint"));
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_not_ready_entrypoint_after_request_validation() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "orchard-halo2-actions-v1".to_owned(),
-            entrypoint: "buildOrchardActionBundleProofV1".to_owned(),
-            vk_ref: "halo2-ipa-orchard:vk_orchard_actions_v1".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: b"not-ready-entrypoint-witness-must-not-echo".to_vec(),
-            proof: Vec::new(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_PRODUCTION_DISABLED);
-        assert_eq!(result.algorithm_id, "orchard-halo2-actions-v1");
-        assert_eq!(result.entrypoint, "buildOrchardActionBundleProofV1");
-        assert!(!result.message.contains("vk_ref"));
-        assert!(!result.message.contains("witness"));
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_empty_vk_ref() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: String::new(),
-            public_inputs: b"public".to_vec(),
-            witness: b"secret".to_vec(),
-            proof: Vec::new(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert!(result.message.contains("vk_ref"));
-        assert!(result.proof.is_empty());
-        assert!(!result.message.contains("secret"));
-    }
-
-    #[test]
-    fn privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection() {
-        let marker = "vkrefshapeneverecho";
-        for (case, vk_ref) in [
-            (
-                "missing-separator",
-                format!("halo2-ipa-pasta-confidential_transfer_v2-{marker}"),
-            ),
-            ("empty-vk-name", "halo2-ipa-pasta:".to_owned()),
-            (
-                "extra-separator",
-                format!("halo2-ipa-pasta:confidential_transfer_v2:{marker}"),
-            ),
-            (
-                "delimited-backend",
-                format!("halo2:ipa:confidential_transfer_v2_{marker}"),
-            ),
-            (
-                "uppercase-backend",
-                format!("Halo2-ipa-pasta:confidential_transfer_v2_{marker}"),
-            ),
-            (
-                "leading-separator-backend",
-                format!("-halo2-ipa-pasta:confidential_transfer_v2_{marker}"),
-            ),
-            (
-                "trailing-separator-backend",
-                format!("halo2-ipa-pasta.:confidential_transfer_v2_{marker}"),
-            ),
-            (
-                "dotted-backend-alias",
-                format!("halo2.ipa.pasta-{marker}:confidential_transfer_v2"),
-            ),
-            (
-                "underscored-backend-alias",
-                format!("halo2_ipa_pasta_{marker}:confidential_transfer_v2"),
-            ),
-            (
-                "repeated-backend-separator",
-                format!("halo2--ipa-pasta-{marker}:confidential_transfer_v2"),
-            ),
-            (
-                "uppercase-vk-name",
-                format!("halo2-ipa-pasta:Confidential_transfer_v2_{marker}"),
-            ),
-            (
-                "dotted-vk-name",
-                format!("halo2-ipa-pasta:confidential.transfer.v2_{marker}"),
-            ),
-            (
-                "dashed-vk-name",
-                format!("halo2-ipa-pasta:confidential-transfer-v2-{marker}"),
-            ),
-            (
-                "leading-underscore-vk-name",
-                format!("halo2-ipa-pasta:_confidential_transfer_v2_{marker}"),
-            ),
-            (
-                "trailing-underscore-vk-name",
-                format!("halo2-ipa-pasta:confidential_transfer_v2_{marker}_"),
-            ),
-            (
-                "repeated-underscore-vk-name",
-                format!("halo2-ipa-pasta:confidential_transfer__v2_{marker}"),
-            ),
-        ] {
-            let request = PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref,
-                public_inputs: b"public".to_vec(),
-                witness: b"secret witness".to_vec(),
-                proof: Vec::new(),
-            };
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
-            let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert_subslice_absent(
-                &encoded,
-                marker.as_bytes(),
-                "malformed vk_ref failure result",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection() {
-        let marker = "vk-ref-order-never-echo";
-        for (case, algorithm_id, entrypoint, vk_ref) in [
-            (
-                "unsupported-algorithm",
-                "future-privacy-row",
-                "buildFuturePrivacyProof",
-                format!("halo2-ipa-pasta:Bad_vk_name_{marker}"),
-            ),
-            (
-                "not-ready-entrypoint",
-                "pq-masp-stark-v0",
-                "buildPqMaspStarkTransferProofV0",
-                format!("stark-fri:bad.vk.name_{marker}"),
-            ),
-            (
-                "unregistered-entrypoint",
-                "confidential-transfer-v2",
-                "buildUnregisteredPrivacyProof",
-                format!("halo2-ipa-pasta:bad-vk-name-{marker}"),
-            ),
-            (
-                "non-proof-entrypoint",
-                "verange-transparent-range-v1",
-                "buildRangeCommitment",
-                format!("verange:_bad_vk_name_{marker}"),
-            ),
-        ] {
-            let mut request = privacy_request(algorithm_id, entrypoint, Vec::new());
-            request.vk_ref = vk_ref;
-
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
-            let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert_subslice_absent(
-                &encoded,
-                marker.as_bytes(),
-                "vk_ref validation-order failure result",
-            );
-        }
-    }
-
-    #[test]
-    fn privacy_proof_ffi_rejects_wrong_backend_vk_ref_before_production_gate() {
-        let (case, vk_ref) = (
-            "wrong-backend",
-            "groth16-bls12-377:confidential_transfer_v2",
-        );
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: vk_ref.to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: b"secret witness".to_vec(),
-            proof: Vec::new(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(
-            result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "{case}",
-        );
-        assert!(
-            result.message.contains("vk_ref backend"),
-            "{case}: {}",
-            result.message,
-        );
-        assert!(result.message.contains("backend family"), "{case}");
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{case}");
-        assert_eq!(result.vk_ref, vk_ref, "{case}");
-        assert_eq!(result.public_inputs, b"public", "{case}");
-        assert!(result.proof.is_empty(), "{case}");
-        assert!(!result.verified, "{case}");
-    }
-
-    #[test]
-    fn privacy_proof_ffi_rejects_wrong_vk_ref_name_before_production_gate() {
-        for (case, vk_ref) in [
-            ("generic-vk-name", "halo2-ipa-pasta:vk_test"),
-            (
-                "foreign-algorithm-vk-name",
-                "halo2-ipa-pasta:confidential_unshield_v3",
-            ),
-            (
-                "legacy-vk-prefix",
-                "halo2-ipa-pasta:vk_confidential_transfer_v2",
-            ),
-        ] {
-            let request = PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: vk_ref.to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: b"secret witness".to_vec(),
-                proof: Vec::new(),
-            };
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-            assert_eq!(
-                result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "{case}",
-            );
-            assert!(
-                result.message.contains("vk_ref name"),
-                "{case}: {}",
-                result.message,
-            );
-            assert!(result.message.contains("algorithm verifier key"), "{case}");
-            assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{case}");
-            assert_eq!(result.vk_ref, vk_ref, "{case}");
-            assert_eq!(result.public_inputs, b"public", "{case}");
-            assert!(result.proof.is_empty(), "{case}");
-            assert!(!result.verified, "{case}");
-        }
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_empty_public_inputs_before_production_gate() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: Vec::new(),
-            witness: b"secret witness".to_vec(),
-            proof: Vec::new(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert_eq!(result.entrypoint, "buildConfidentialTransferProofV2");
-        assert!(result.message.contains("public_inputs"));
-        assert!(result.message.contains("non-empty"));
-        assert!(result.public_inputs.is_empty());
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_verify_proof_rejects_empty_public_inputs_before_production_gate() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: Vec::new(),
-            witness: Vec::new(),
-            proof: b"proof bytes".to_vec(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Verify);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert_eq!(result.entrypoint, "buildConfidentialTransferProofV2");
-        assert!(result.message.contains("public_inputs"));
-        assert!(result.message.contains("non-empty"));
-        assert!(result.public_inputs.is_empty());
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_missing_witness_before_production_gate() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: Vec::new(),
-            proof: Vec::new(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert!(result.message.contains("witness"));
-        assert!(result.message.contains("build"));
-        assert!(result.message.contains("must include"));
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_proof_shadow_before_production_gate() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: b"secret witness".to_vec(),
-            proof: b"forged-build-proof-shadow".to_vec(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert!(result.message.contains("build"));
-        assert!(result.message.contains("proof"));
-        assert!(result.message.contains("must not include"));
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_proof_ffi_rejects_non_proof_sdk_entrypoints_before_production_gate() {
-        for (case, operation, mut request) in [
-            (
-                "build-commitment-helper",
-                PrivacyProofOperationV1::Build,
-                privacy_request(
-                    "verange-transparent-range-v1",
-                    "buildRangeCommitment",
-                    Vec::new(),
-                ),
-            ),
-            (
-                "build-envelope-helper",
-                PrivacyProofOperationV1::Build,
-                privacy_request(
-                    "verange-transparent-range-v1",
-                    "buildVeRangeProofEnvelope",
-                    Vec::new(),
-                ),
-            ),
-            (
-                "verify-proof-envelope-helper",
-                PrivacyProofOperationV1::Verify,
-                privacy_request(
-                    "verange-transparent-range-v1",
-                    "buildVeRangeProofEnvelope",
-                    b"candidate-proof".to_vec(),
-                ),
-            ),
-            (
-                "build-instruction-helper",
-                PrivacyProofOperationV1::Build,
-                privacy_request(
-                    "confidential-transfer-v2",
-                    "buildZkTransferInstruction",
-                    Vec::new(),
-                ),
-            ),
-        ] {
-            if operation == PrivacyProofOperationV1::Verify {
-                request.witness.clear();
-            }
-            let result = privacy_result_for_request(request, operation);
-
-            assert_eq!(
-                result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "{case}",
-            );
-            assert!(
-                result.message.contains("production proof builder"),
-                "{case}: {}",
-                result.message,
-            );
-            assert_eq!(result.public_inputs, b"public-inputs", "{case}");
-            assert!(result.proof.is_empty(), "{case}");
-            assert!(!result.verified, "{case}");
-        }
-    }
-
-    #[test]
-    fn privacy_verify_proof_rejects_missing_proof_before_production_gate() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: Vec::new(),
-            proof: Vec::new(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Verify);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert!(result.message.contains("proof"));
-        assert!(result.message.contains("verify"));
-        assert!(result.message.contains("must include"));
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_verify_proof_rejects_witness_shadow_before_production_gate() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: b"forged-verify-witness-shadow".to_vec(),
-            proof: b"candidate proof".to_vec(),
-        };
-        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Verify);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert!(result.message.contains("verify"));
-        assert!(result.message.contains("witness"));
-        assert!(result.message.contains("must not include"));
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-    }
-
-    #[test]
-    fn privacy_build_proof_rejects_supported_algorithm_until_gate_passes() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: b"secret witness".to_vec(),
-            proof: Vec::new(),
-        };
-        let archive = public_privacy_request_archive(&request);
-        let result = privacy_result_for_request_archive(&archive, PrivacyProofOperationV1::Build);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_PRODUCTION_DISABLED);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert_eq!(result.entrypoint, "buildConfidentialTransferProofV2");
-        assert_eq!(result.vk_ref, "halo2-ipa-pasta:confidential_transfer_v2");
-        assert_eq!(result.public_inputs, b"public");
-        for fragment in [
-            "exact protocol implementation",
-            "real proving",
-            "real verification",
-            "chain admission",
-            "cross-SDK parity",
-            "wallet/state support",
-            "witness privacy checks",
-            "deterministic tests",
-            "negative/adversarial tests",
-            "replay/nullifier rejection tests",
-            "fuzzing",
-            "parser fuzzing",
-            "verifier fuzzing",
-            "performance gates",
-            "internal cryptographic review",
-            "real protocol engine",
-            "Iroha production allowlist",
-        ] {
-            assert!(
-                result.message.contains(fragment),
-                "production-disabled message missing {fragment}: {}",
-                result.message
-            );
-        }
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-        assert!(!result.message.contains("secret"));
-
-        let zk_ace_request = privacy_request(
-            "zk-ace-pq-authorization-v0",
-            "buildZkAceAuthorizationProofV1",
-            Vec::new(),
-        );
-        let zk_ace_archive = public_privacy_request_archive(&zk_ace_request);
-        let zk_ace_result =
-            privacy_result_for_request_archive(&zk_ace_archive, PrivacyProofOperationV1::Build);
-
-        assert_eq!(
-            zk_ace_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
-        );
-        assert_eq!(zk_ace_result.algorithm_id, "zk-ace-pq-authorization-v0");
-        assert_eq!(zk_ace_result.entrypoint, "buildZkAceAuthorizationProofV1");
-        assert_eq!(zk_ace_result.vk_ref, "stark-fri:zk_ace_pq_authorization_v0");
-        assert_eq!(zk_ace_result.public_inputs, b"public-inputs");
-        assert!(zk_ace_result.message.contains("Iroha production allowlist"));
-        assert!(zk_ace_result.proof.is_empty());
-        assert!(!zk_ace_result.verified);
-        assert!(!zk_ace_result.message.contains("secret-witness"));
-    }
-
-    #[test]
-    fn privacy_verify_proof_rejects_supported_algorithm_until_gate_passes() {
-        let request = PrivacyProofRequestV1 {
-            algorithm_id: "confidential-transfer-v2".to_owned(),
-            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
-            public_inputs: b"public".to_vec(),
-            witness: Vec::new(),
-            proof: b"candidate proof".to_vec(),
-        };
-        let archive = public_privacy_request_archive(&request);
-        let result = privacy_result_for_request_archive(&archive, PrivacyProofOperationV1::Verify);
-
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_PRODUCTION_DISABLED);
-        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
-        assert_eq!(result.entrypoint, "buildConfidentialTransferProofV2");
-        assert_eq!(result.public_inputs, b"public");
-        for fragment in [
-            "exact protocol implementation",
-            "real proving",
-            "real verification",
-            "chain admission",
-            "cross-SDK parity",
-            "wallet/state support",
-            "witness privacy checks",
-            "deterministic tests",
-            "negative/adversarial tests",
-            "replay/nullifier rejection tests",
-            "fuzzing",
-            "parser fuzzing",
-            "verifier fuzzing",
-            "performance gates",
-            "internal cryptographic review",
-            "real protocol engine",
-            "Iroha production allowlist",
-        ] {
-            assert!(
-                result.message.contains(fragment),
-                "production-disabled message missing {fragment}: {}",
-                result.message
-            );
-        }
-        assert!(result.proof.is_empty());
-        assert!(!result.verified);
-        assert!(!result.message.contains("secret"));
-
-        let mut zk_ace_request = privacy_request(
-            "zk-ace-pq-authorization-v0",
-            "buildZkAceAuthorizationProofV1",
-            b"candidate-zk-ace-proof".to_vec(),
-        );
-        zk_ace_request.witness.clear();
-        let zk_ace_archive = public_privacy_request_archive(&zk_ace_request);
-        let zk_ace_result =
-            privacy_result_for_request_archive(&zk_ace_archive, PrivacyProofOperationV1::Verify);
-
-        assert_eq!(
-            zk_ace_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
-        );
-        assert_eq!(zk_ace_result.algorithm_id, "zk-ace-pq-authorization-v0");
-        assert_eq!(zk_ace_result.entrypoint, "buildZkAceAuthorizationProofV1");
-        assert_eq!(zk_ace_result.vk_ref, "stark-fri:zk_ace_pq_authorization_v0");
-        assert_eq!(zk_ace_result.public_inputs, b"public-inputs");
-        assert!(zk_ace_result.message.contains("Iroha production allowlist"));
-        assert!(zk_ace_result.proof.is_empty());
-        assert!(!zk_ace_result.verified);
-        assert!(!zk_ace_result.message.contains("candidate-zk-ace-proof"));
     }
 
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
@@ -11558,8 +7110,761 @@ mod tests {
     }
 
     #[test]
-    fn privacy_bridge_abi_version_python_function_is_additive_seven() {
-        assert_eq!(privacy_bridge_abi_version_py(), 7);
+    fn privacy_bridge_abi_version_python_function_matches_first_release() {
+        assert_eq!(privacy_bridge_abi_version_py(), 21);
+    }
+
+    #[test]
+    fn privacy_capability_python_validator_calls_the_shared_typed_boundary() {
+        let archive =
+            norito::encode_canonical(&privacy_capabilities()).expect("canonical capabilities");
+        assert_eq!(
+            privacy_validate_capabilities_v1_py(&archive),
+            iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+        );
+        let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("one-byte fake");
+        one_byte_fake[6..22].copy_from_slice(&archive[6..22]);
+        assert_ne!(
+            privacy_validate_capabilities_v1_py(&one_byte_fake),
+            iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+        );
+    }
+
+    #[test]
+    fn jindo_python_result_separates_classification_from_ledger_effect() {
+        assert_eq!(
+            JINDO_ACTION_EXECUTION_CLASSIFICATION_V1,
+            "action_verification_and_finality_only"
+        );
+        assert_eq!(jindo_action_ledger_effect_v1(), None);
+    }
+
+    #[test]
+    fn jindo_python_owned_witness_buffers_are_explicitly_erased() {
+        let mut witness = ZeroizingJindoWitnessBytes(vec![
+            vec![vec![0xA5; 32], vec![0x5A; 32]],
+            vec![vec![0x3C; 32]],
+        ]);
+        witness.erase();
+        assert!(witness.0.iter().flatten().flatten().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn zk_ace_python_result_and_witness_boundary_is_exact() {
+        assert_eq!(
+            ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1,
+            "authorization_action"
+        );
+        assert_eq!(
+            ZK_ACE_TRANSFER_LEDGER_EFFECT_V1,
+            "zk_ace_transparent_transfer"
+        );
+
+        let mut witness = ZeroizingZkAceWitnessBytes {
+            identity_root: vec![0x11; 32],
+            identity_blinding: vec![0x22; 32],
+            replay_secret: vec![0x33; 32],
+        };
+        witness.erase();
+        assert!(witness.identity_root.iter().all(|byte| *byte == 0));
+        assert!(witness.identity_blinding.iter().all(|byte| *byte == 0));
+        assert!(witness.replay_secret.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn zk_ace_python_policy_archive_is_canonical_and_self_authenticating() {
+        use iroha_data_model::privacy::{
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyIdV1,
+            PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordDigestV1,
+        };
+
+        let source = sample_account(0x51);
+        let witness = ZkAcePrivacyWitnessV1::try_new([0x11; 32], [0x22; 32], [0x33; 32])
+            .expect("valid ZK-ACE policy witness");
+        let policy = PrivacyZkAcePolicyRecordV1::new(
+            PrivacyPolicyIdV1::new([0x41; 32]),
+            witness.identity_commitment_v1(),
+            PrivacyPolicyDigestV1::new([0x42; 32]),
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
+            AssetDefinitionId::from_str("7MBRDd8cGFBZkFGdDMwV7S6FPwbw")
+                .expect("fixture asset definition"),
+            vec![source],
+            PrivacyZkAcePolicyLifecycleV1::Active,
+        )
+        .expect("valid canonical ZK-ACE policy");
+        let archive = norito::encode_canonical(&policy).expect("canonical policy archive");
+        assert_eq!(
+            python_zk_ace_policy_v1(&archive).expect("canonical policy accepted"),
+            policy
+        );
+
+        for malformed in [
+            Vec::new(),
+            vec![0xA5],
+            vec![0xA5; ZK_ACE_POLICY_ARCHIVE_MAX_BYTES_V1 + 1],
+        ] {
+            assert!(python_zk_ace_policy_v1(&malformed).is_err());
+        }
+
+        let mut trailing = archive.clone();
+        trailing.push(0);
+        assert!(
+            python_zk_ace_policy_v1(&trailing).is_err(),
+            "trailing archive bytes must not be accepted"
+        );
+
+        let mut digest_tampered = policy;
+        digest_tampered.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0x7F; 32]);
+        let digest_tampered_archive =
+            norito::encode_canonical(&digest_tampered).expect("encode tampered policy");
+        assert!(
+            python_zk_ace_policy_v1(&digest_tampered_archive).is_err(),
+            "a canonical wire with a substituted self-digest must fail"
+        );
+    }
+
+    #[test]
+    fn zk_ace_python_builder_rejects_secret_shapes_before_proving() {
+        use iroha_data_model::privacy::{
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyIdV1,
+            PrivacyZkAcePolicyLifecycleV1,
+        };
+
+        ensure_python();
+        let authority = canonical_i105_from_seed(0x51);
+        let destination = canonical_i105_from_seed(0x52);
+        let source = parse_account_id(&authority).expect("authority account parses");
+        let witness = ZkAcePrivacyWitnessV1::try_new([0x11; 32], [0x22; 32], [0x33; 32])
+            .expect("valid ZK-ACE policy witness");
+        let policy = PrivacyZkAcePolicyRecordV1::new(
+            PrivacyPolicyIdV1::new([0x41; 32]),
+            witness.identity_commitment_v1(),
+            PrivacyPolicyDigestV1::new([0x42; 32]),
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
+            AssetDefinitionId::from_str("7MBRDd8cGFBZkFGdDMwV7S6FPwbw")
+                .expect("fixture asset definition"),
+            vec![source],
+            PrivacyZkAcePolicyLifecycleV1::Active,
+        )
+        .expect("valid canonical ZK-ACE policy");
+        let policy_archive = norito::encode_canonical(&policy).expect("canonical policy archive");
+
+        Python::attach(|py| {
+            for (identity_root, identity_blinding, replay_secret, expected) in [
+                (
+                    vec![0x11; 31],
+                    vec![0x22; 32],
+                    vec![0x33; 32],
+                    "identity_root must be exactly 32 bytes",
+                ),
+                (
+                    vec![0x11; 32],
+                    vec![0x22; 33],
+                    vec![0x33; 32],
+                    "identity_blinding must be exactly 32 bytes",
+                ),
+                (
+                    vec![0x11; 32],
+                    vec![0x22; 32],
+                    vec![0x33; 0],
+                    "replay_secret must be exactly 32 bytes",
+                ),
+                (
+                    vec![0; 32],
+                    vec![0x22; 32],
+                    vec![0x33; 32],
+                    "identity root witness must be non-zero",
+                ),
+            ] {
+                let mut builder =
+                    TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                        .expect("builder constructs");
+                let error = builder
+                    .sign_privacy_zk_ace_transfer_action_v1(
+                        py,
+                        &[0x51; 32],
+                        &[0xA5; 32],
+                        &policy_archive,
+                        &authority,
+                        &destination,
+                        "1",
+                        identity_root,
+                        identity_blinding,
+                        replay_secret,
+                    )
+                    .err()
+                    .expect("invalid witness must fail before proof construction");
+                assert!(
+                    error.to_string().contains(expected),
+                    "expected {expected:?}, got {error}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn component_python_results_separate_classification_from_ledger_effect() {
+        assert_eq!(
+            VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1,
+            "action_verification_and_finality_only"
+        );
+        assert_eq!(
+            VEGA_ACTION_EXECUTION_CLASSIFICATION_V1,
+            "action_verification_and_finality_only"
+        );
+    }
+
+    #[test]
+    fn component_python_owned_witness_buffers_are_explicitly_erased() {
+        let mut verange = ZeroizingVeRangeWitnessBytes {
+            values: vec![7, u64::MAX],
+            blindings: vec![vec![0xA5; 32], vec![0x5A; 32]],
+        };
+        verange.erase();
+        assert!(verange.values.iter().all(|value| *value == 0));
+        assert!(verange.blindings.iter().flatten().all(|byte| *byte == 0));
+
+        let mut vega = ZeroizingVegaWitnessBytes {
+            issuer_authentication_sig_structure: vec![0x11; 67],
+            mobile_security_object_payload: vec![0x22; 91],
+            birth_date_issuer_signed_item: vec![0x33; 41],
+            issuer_signature: vec![0x44; 64],
+            device_signature: vec![0x55; 64],
+        };
+        vega.erase();
+        assert!(
+            vega.issuer_authentication_sig_structure
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert!(
+            vega.mobile_security_object_payload
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert!(
+            vega.birth_date_issuer_signed_item
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert!(vega.issuer_signature.iter().all(|byte| *byte == 0));
+        assert!(vega.device_signature.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
+        assert!(python_nonzero_privacy_digest_v1(&[0x11; 32], "digest").is_ok());
+        assert!(python_nonzero_privacy_digest_v1(&[0x11; 31], "digest").is_err());
+        assert!(python_nonzero_privacy_digest_v1(&[0x11; 33], "digest").is_err());
+        assert!(python_nonzero_privacy_digest_v1(&[0; 32], "digest").is_err());
+    }
+
+    #[test]
+    fn vega_python_device_digest_binds_intent_and_session() {
+        let profile = python_compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            "Vega",
+        )
+        .expect("compiled Vega profile");
+        let issuer_public_key = *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
+            .expect("P-256 parameters")
+            .value_generator()
+            .as_bytes();
+        let context = |intent: [u8; 32]| PrivacyStatementContextV1 {
+            chain_id: parse_chain_id("test-chain").expect("chain id"),
+            action_index: 0,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(intent),
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
+        };
+        let statement = |intent, challenge| {
+            python_vega_statement_v1(
+                context(intent),
+                [0xA5; 32],
+                [0xA1; 32],
+                1,
+                [0xA2; 32],
+                issuer_public_key,
+                2026,
+                7,
+                28,
+                18,
+                challenge,
+                [0xC3; 32],
+            )
+            .expect("valid Vega public statement")
+        };
+
+        let bound_intent = statement([0xD2; 32], [0xB4; 32]);
+        let other_intent = statement([0xD3; 32], [0xB4; 32]);
+        let other_session = statement([0xD2; 32], [0xB5; 32]);
+        assert_ne!(
+            bound_intent.device_authentication_digest, other_intent.device_authentication_digest,
+            "H_dev must bind the canonical transaction intent"
+        );
+        assert_ne!(
+            bound_intent.device_authentication_digest, other_session.device_authentication_digest,
+            "H_dev must bind the reader challenge"
+        );
+        assert!(
+            python_vega_statement_v1(
+                context([0; 32]),
+                [0xA5; 32],
+                [0xA1; 32],
+                1,
+                [0xA2; 32],
+                issuer_public_key,
+                2026,
+                7,
+                28,
+                18,
+                [0xB4; 32],
+                [0xC3; 32],
+            )
+            .is_err(),
+            "the low-level helper must reject an unprepared all-zero intent"
+        );
+        assert!(
+            python_vega_statement_v1(
+                context([0xD2; 32]),
+                [0xA5; 32],
+                [0xA1; 32],
+                1,
+                [0xA2; 32],
+                issuer_public_key,
+                2026,
+                13,
+                28,
+                18,
+                [0xB4; 32],
+                [0xC3; 32],
+            )
+            .is_err()
+        );
+        assert!(
+            python_vega_statement_v1(
+                context([0xD2; 32]),
+                [0xA5; 32],
+                [0xA1; 32],
+                1,
+                [0xA2; 32],
+                [0; 33],
+                2026,
+                7,
+                28,
+                18,
+                [0xB4; 32],
+                [0xC3; 32],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn vega_python_preparation_freezes_nonzero_intent_and_is_single_use() {
+        ensure_python();
+        let authority = canonical_i105_from_seed(0x51);
+        let issuer_public_key = *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
+            .expect("P-256 parameters")
+            .value_generator()
+            .as_bytes();
+        Python::attach(|py| {
+            let builder =
+                TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                    .expect("builder constructs");
+            let mut preparation = builder
+                .prepare_privacy_vega_action_v1(
+                    &[0xA5; 32],
+                    &[0xA1; 32],
+                    1,
+                    &[0xA2; 32],
+                    &issuer_public_key,
+                    2026,
+                    7,
+                    28,
+                    18,
+                    &[0xB4; 32],
+                    &[0xC3; 32],
+                )
+                .expect("valid Vega preparation");
+            let prepared = preparation
+                .inner
+                .as_ref()
+                .expect("preparation remains available");
+            assert_ne!(
+                prepared
+                    .statement
+                    .context
+                    .transaction_intent_digest
+                    .as_bytes(),
+                &[0; 32]
+            );
+            assert_ne!(
+                prepared.statement.device_authentication_digest.as_bytes(),
+                &[0; 32]
+            );
+
+            assert!(
+                preparation
+                    .finalize_privacy_vega_action_v1(
+                        py,
+                        &[0],
+                        0,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                    .is_err()
+            );
+            assert!(preparation.consumed());
+            let replay = preparation
+                .finalize_privacy_vega_action_v1(
+                    py,
+                    &[0],
+                    0,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .err()
+                .expect("consumed preparation must reject replay");
+            assert!(replay.to_string().contains("already been consumed"));
+        });
+    }
+
+    #[test]
+    fn component_python_builders_reject_adversarial_shapes_before_proving() {
+        ensure_python();
+        let authority = canonical_i105_from_seed(0x51);
+        Python::attach(|py| {
+            let new_builder = || {
+                TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                    .expect("builder constructs")
+            };
+            let mut empty = new_builder();
+            assert!(
+                empty
+                    .sign_privacy_verange_action_v1(
+                        py,
+                        &[0; 32],
+                        &[0xA5; 32],
+                        "asset#domain",
+                        &[0x11; 32],
+                        64,
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                    .err()
+                    .expect("empty VeRange witness must reject")
+                    .to_string()
+                    .contains("between 1 and 8")
+            );
+            let mut mismatched = new_builder();
+            assert!(
+                mismatched
+                    .sign_privacy_verange_action_v1(
+                        py,
+                        &[0; 32],
+                        &[0xA5; 32],
+                        "asset#domain",
+                        &[0x11; 32],
+                        64,
+                        vec![1],
+                        Vec::new(),
+                    )
+                    .err()
+                    .expect("mismatched VeRange witness must reject")
+                    .to_string()
+                    .contains("matching lengths")
+            );
+            let mut wrong_width = new_builder();
+            assert!(
+                wrong_width
+                    .sign_privacy_verange_action_v1(
+                        py,
+                        &[0; 32],
+                        &[0xA5; 32],
+                        "asset#domain",
+                        &[0x11; 32],
+                        48,
+                        vec![1],
+                        vec![vec![1; 32]],
+                    )
+                    .err()
+                    .expect("unsupported VeRange width must reject")
+                    .to_string()
+                    .contains("exactly 32 or 64")
+            );
+            let mut out_of_range = new_builder();
+            assert!(
+                out_of_range
+                    .sign_privacy_verange_action_v1(
+                        py,
+                        &[0; 32],
+                        &[0xA5; 32],
+                        "asset#domain",
+                        &[0x11; 32],
+                        32,
+                        vec![u64::from(u32::MAX) + 1],
+                        vec![vec![1; 32]],
+                    )
+                    .err()
+                    .expect("out-of-range VeRange value must reject")
+                    .to_string()
+                    .contains("[0, 2^32)")
+            );
+
+            let mut mixed = new_builder();
+            mixed
+                .add_instruction(&batch_test_instruction("forged prefix"))
+                .expect("instruction");
+            assert!(
+                mixed
+                    .sign_privacy_verange_action_v1(
+                        py,
+                        &[0; 32],
+                        &[0xA5; 32],
+                        "asset#domain",
+                        &[0x11; 32],
+                        64,
+                        vec![1],
+                        vec![vec![1; 32]],
+                    )
+                    .err()
+                    .expect("mixed action builder must reject")
+                    .to_string()
+                    .contains("otherwise empty")
+            );
+        });
+    }
+
+    #[test]
+    fn component_python_inspectors_reject_empty_and_malformed_signed_wire() {
+        ensure_python();
+        Python::attach(|py| {
+            for malformed in [&[][..], &[0xA5, 0x5A][..]] {
+                assert!(inspect_signed_privacy_verange_action_v1_py(py, malformed).is_err());
+                assert!(inspect_signed_privacy_vega_action_v1_py(py, malformed).is_err());
+                assert!(
+                    inspect_signed_privacy_zk_ams_batch_admission_action_v1_py(py, malformed)
+                        .is_err()
+                );
+                assert!(
+                    inspect_signed_privacy_zk_ams_provision_account_action_v1_py(py, malformed)
+                        .is_err()
+                );
+                assert!(
+                    inspect_signed_privacy_bootle_lantern_presentation_action_v1_py(py, malformed)
+                        .is_err()
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn wave2_python_results_keep_exact_action_and_ledger_semantics() {
+        assert_eq!(
+            ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1,
+            "admission_action"
+        );
+        assert_eq!(
+            ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1,
+            "zk_ams_batch_admission"
+        );
+        assert_eq!(
+            ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1,
+            "zk_ams_provision_account"
+        );
+        assert_eq!(
+            BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1,
+            "presentation_action"
+        );
+    }
+
+    #[test]
+    fn wave2_python_owned_witness_buffers_are_explicitly_erased() {
+        let mut batch = ZeroizingZkAmsBatchWitnessBytes {
+            subject_commitments: vec![vec![0x11; 32]],
+            credential_nonces: vec![vec![0x22; 32]],
+            seed_secrets: vec![vec![0x33; 32]],
+            issuer_signatures: vec![vec![0x44; 64]],
+        };
+        batch.erase();
+        assert!(
+            batch
+                .subject_commitments
+                .iter()
+                .chain(&batch.credential_nonces)
+                .chain(&batch.seed_secrets)
+                .chain(&batch.issuer_signatures)
+                .flatten()
+                .all(|byte| *byte == 0)
+        );
+
+        let mut provision = ZeroizingZkAmsProvisionWitnessBytes(vec![0x55; 32]);
+        provision.erase();
+        assert!(provision.0.iter().all(|byte| *byte == 0));
+
+        let mut bootle = ZeroizingBootleLanternWitnessBytes {
+            secret_polynomials: vec![vec![7; 64]; BOOTLE_LANTERN_SECRET_POLYNOMIALS_V1],
+            attributes: vec![vec![0x66; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1],
+        };
+        bootle.erase();
+        assert!(
+            bootle
+                .secret_polynomials
+                .iter()
+                .flatten()
+                .all(|coefficient| *coefficient == 0)
+        );
+        assert!(bootle.attributes.iter().flatten().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn zk_ams_python_governance_rejects_substituted_artifact_digests() {
+        let issuer_id = PrivacyIssuerIdV1::new([0x11; 32]);
+        let issuer_public_key = PrivacyP256PointV1::new(
+            *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
+                .expect("P-256 parameters")
+                .value_generator()
+                .as_bytes(),
+        );
+        let registry_id = PrivacyZkAmsRegistryIdV1::new([0x22; 32]);
+        let policy_id = PrivacyPolicyIdV1::new([0x33; 32]);
+        let policy_digest = PrivacyPolicyDigestV1::new([0x44; 32]);
+        let root = PrivacyRootV1::new([0x55; 32]);
+        let issuer_record = zk_ams_issuer_policy_record_digest_v1(
+            issuer_id,
+            policy_id,
+            issuer_public_key,
+            policy_digest,
+        );
+        let registry_record = zk_ams_registry_record_digest_v1(
+            issuer_id,
+            registry_id,
+            policy_id,
+            issuer_record,
+            policy_digest,
+            root,
+            7,
+        );
+        let parse = |issuer_record_bytes: &[u8], registry_record_bytes: &[u8], epoch| {
+            python_zk_ams_governance_v1(
+                issuer_id.as_bytes(),
+                issuer_public_key.as_bytes(),
+                issuer_record_bytes,
+                registry_id.as_bytes(),
+                registry_record_bytes,
+                policy_id.as_bytes(),
+                policy_digest.as_bytes(),
+                root.as_bytes(),
+                epoch,
+            )
+        };
+        assert!(parse(issuer_record.as_bytes(), registry_record.as_bytes(), 7).is_ok());
+
+        let mut substituted_issuer = *issuer_record.as_bytes();
+        substituted_issuer[0] ^= 1;
+        assert!(parse(&substituted_issuer, registry_record.as_bytes(), 7).is_err());
+        let mut substituted_registry = *registry_record.as_bytes();
+        substituted_registry[0] ^= 1;
+        assert!(parse(issuer_record.as_bytes(), &substituted_registry, 7).is_err());
+        assert!(parse(issuer_record.as_bytes(), registry_record.as_bytes(), 0).is_err());
+        assert!(parse(issuer_record.as_bytes(), registry_record.as_bytes(), 8).is_err());
+    }
+
+    #[test]
+    fn bootle_python_polynomial_boundary_is_exact_and_erases_rejected_rows() {
+        let mut valid = vec![vec![0_u16; BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1]; 8];
+        assert!(python_bootle_lantern_polynomials_v1::<8>(&mut valid, "polynomials").is_ok());
+        assert!(valid.iter().flatten().all(|coefficient| *coefficient == 0));
+
+        let mut noncanonical = vec![vec![0_u16; BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1]; 8];
+        noncanonical[3][9] = 12_289;
+        assert!(
+            python_bootle_lantern_polynomials_v1::<8>(&mut noncanonical, "polynomials").is_err()
+        );
+        assert!(noncanonical[3].iter().all(|coefficient| *coefficient == 0));
+
+        let mut wrong_count = vec![vec![0_u16; BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1]; 7];
+        assert!(
+            python_bootle_lantern_polynomials_v1::<8>(&mut wrong_count, "polynomials").is_err()
+        );
+    }
+
+    #[test]
+    fn jindo_python_builder_binds_native_and_submitted_encoding_metrics() {
+        ensure_python();
+        let signing = SigningKey::from_bytes(&[0x31; 32]);
+        let private_key =
+            parse_private_key(signing.as_bytes()).expect("ed25519 private key parses");
+        let authority = AccountId::new(PublicKey::from(private_key))
+            .canonical_i105()
+            .expect("canonical I105 authority");
+        let mut coefficient = vec![0_u8; 32];
+        coefficient[0] = 7;
+        let mut evaluation_point = [0_u8; 32];
+        evaluation_point[0] = 3;
+
+        Python::attach(|py| {
+            let mut builder =
+                TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                    .expect("builder constructs");
+            let result = builder
+                .sign_privacy_jindo_action_v1(
+                    py,
+                    signing.as_bytes(),
+                    &[0xA7; 32],
+                    vec![vec![coefficient]],
+                    &evaluation_point,
+                )
+                .expect("native Jindo action builds");
+            let envelope = result.envelope.bind(py);
+            let adaptive = envelope
+                .getattr("signed_transaction")
+                .expect("adaptive encoding getter")
+                .extract::<Vec<u8>>()
+                .expect("adaptive encoding bytes");
+            let submitted_versioned = envelope
+                .getattr("signed_transaction_versioned")
+                .expect("versioned encoding getter")
+                .extract::<Vec<u8>>()
+                .expect("versioned encoding bytes");
+
+            assert_eq!(
+                result.adaptive_signed_transaction_bytes,
+                u32::try_from(adaptive.len()).expect("bounded adaptive encoding")
+            );
+            assert!(!submitted_versioned.is_empty());
+            assert_eq!(
+                canonical_signed_transaction_hash_v1(&submitted_versioned)
+                    .expect("submitted encoding authenticates"),
+                result
+                    .envelope
+                    .bind(py)
+                    .getattr("hash")
+                    .expect("hash getter")
+                    .extract::<Vec<u8>>()
+                    .expect("hash bytes")
+                    .try_into()
+                    .expect("hash is exactly 32 bytes")
+            );
+            assert!(result.statement_bytes > 0);
+            assert!(result.proof_bytes > 0);
+            assert!(result.encoded_proof_envelope_bytes >= result.proof_bytes);
+            assert_eq!(
+                result.execution_classification(),
+                "action_verification_and_finality_only"
+            );
+            assert_eq!(result.ledger_effect(), None);
+        });
     }
 
     #[test]
@@ -11587,6 +7892,53 @@ mod tests {
             .attachments_json()
             .expect("attachments decode succeeds");
         assert!(attachments.is_none());
+
+        let recomputed =
+            canonical_signed_transaction_hash_v1(&envelope.signed_transaction_versioned)
+                .expect("exact signed envelope hashes");
+        assert_eq!(recomputed, envelope.hash);
+        assert!(
+            verify_signed_transaction_versioned_py(&envelope.signed_transaction_versioned)
+                .expect("canonical signed envelope verifies")
+        );
+
+        let mut tampered = envelope.signed_transaction_versioned.clone();
+        let last = tampered
+            .last_mut()
+            .expect("signed transaction is non-empty");
+        *last ^= 0x01;
+        assert!(canonical_signed_transaction_hash_v1(&tampered).is_err());
+    }
+
+    #[test]
+    fn signed_transaction_python_boundaries_use_the_canonical_transaction_limit() {
+        let maximum = usize::try_from(
+            iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+        )
+        .expect("canonical transaction limit fits the test platform");
+        let adversarial = vec![0_u8; maximum + 1];
+
+        assert!(require_canonical_signed_transaction_wire_size_v1(&[]).is_err());
+        assert!(require_canonical_signed_transaction_wire_size_v1(&adversarial[..maximum]).is_ok());
+        assert!(require_canonical_signed_transaction_wire_size_v1(&adversarial).is_err());
+
+        let exact_bound_error = canonical_signed_transaction_hash_v1(&adversarial[..maximum])
+            .expect_err("malformed exact-bound input must not authenticate");
+        assert!(
+            exact_bound_error
+                .to_string()
+                .contains("not a valid current signed transaction")
+        );
+        let oversized_error = canonical_signed_transaction_hash_v1(&adversarial)
+            .expect_err("oversized input must reject before decoding");
+        assert!(
+            oversized_error
+                .to_string()
+                .contains(&format!("between 1 and {maximum} bytes"))
+        );
+        assert!(verify_signed_transaction_versioned_py(&[]).is_err());
+        assert!(verify_signed_transaction_versioned_py(&adversarial[..maximum]).is_err());
+        assert!(verify_signed_transaction_versioned_py(&adversarial).is_err());
     }
 
     #[test]
@@ -12192,265 +8544,6 @@ mod tests {
             assert!(err.contains("proof.vk_ref.backend"));
         });
     }
-
-    #[test]
-    fn zk_ace_instruction_classmethods_serialize_payloads() {
-        ensure_python();
-        Python::attach(|py| {
-            let instruction_type = py.get_type::<Instruction>();
-            let json_module = py.import("json").expect("json module");
-            let verifier = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"stark/fri/sha256-goldilocks","name":"zk_ace_pq_authorization_v0"}"#,),
-                )
-                .expect("verifier loads");
-            let proof = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"stark/fri/sha256-goldilocks","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"stark/fri/sha256-goldilocks","name":"zk_ace_pq_authorization_v0"}}"#,),
-                )
-                .expect("proof loads");
-            let identity = PyBytes::new(py, &[0x11; 32]);
-            let replacement = PyBytes::new(py, &[0x12; 32]);
-            let policy = PyBytes::new(py, &[0x22; 32]);
-            let tx_digest = PyBytes::new(py, &[0x33; 32]);
-            let replay = PyBytes::new(py, &[0x44; 32]);
-            let reason = PyBytes::new(py, &[0x55; 32]);
-            let source = canonical_i105_from_seed(0x34);
-            let destination = canonical_i105_from_seed(0x35);
-            let allowed_accounts = PyList::empty(py);
-            allowed_accounts
-                .append(source.clone())
-                .expect("allowed account append");
-
-            let register = Instruction::register_zk_ace_identity_commitment(
-                &instruction_type,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                identity.as_any(),
-                policy.as_any(),
-                allowed_accounts.as_any(),
-                Some(verifier.as_any()),
-                None,
-                None,
-            )
-            .expect("register ZK-ACE identity builds");
-            let decoded = json::from_str::<InstructionBox>(&register.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let register = instruction_ref
-                .as_any()
-                .downcast_ref::<RegisterZkAceIdentityCommitment>()
-                .expect("expected RegisterZkAceIdentityCommitment");
-            assert_eq!(register.identity_commitment, [0x11; 32]);
-            assert_eq!(register.policy_hash, [0x22; 32]);
-            assert_eq!(
-                register.action_class,
-                ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
-            );
-            assert_eq!(register.domain_tag, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG);
-            assert_eq!(
-                register.verifier_key.backend.to_string(),
-                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-            );
-
-            let rotate = Instruction::rotate_zk_ace_identity_commitment(
-                &instruction_type,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                identity.as_any(),
-                replacement.as_any(),
-                policy.as_any(),
-                allowed_accounts.as_any(),
-                Some(verifier.as_any()),
-                None,
-                None,
-            )
-            .expect("rotate ZK-ACE identity builds");
-            let decoded = json::from_str::<InstructionBox>(&rotate.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let rotate = instruction_ref
-                .as_any()
-                .downcast_ref::<RotateZkAceIdentityCommitment>()
-                .expect("expected RotateZkAceIdentityCommitment");
-            assert_eq!(rotate.old_identity_commitment, [0x11; 32]);
-            assert_eq!(rotate.new_identity_commitment, [0x12; 32]);
-
-            let revoke = Instruction::revoke_zk_ace_identity_commitment(
-                &instruction_type,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                identity.as_any(),
-                Some(reason.as_any()),
-            )
-            .expect("revoke ZK-ACE identity builds");
-            let decoded = json::from_str::<InstructionBox>(&revoke.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let revoke = instruction_ref
-                .as_any()
-                .downcast_ref::<RevokeZkAceIdentityCommitment>()
-                .expect("expected RevokeZkAceIdentityCommitment");
-            assert_eq!(revoke.identity_commitment, [0x11; 32]);
-            assert_eq!(revoke.reason_hash, Some([0x55; 32]));
-
-            let transfer = Instruction::zk_ace_authorized_transfer(
-                &instruction_type,
-                &source,
-                &destination,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "7",
-                identity.as_any(),
-                tx_digest.as_any(),
-                "chain",
-                ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-                ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-                replay.as_any(),
-                policy.as_any(),
-                proof.as_any(),
-            )
-            .expect("ZK-ACE transfer builds");
-            let decoded = json::from_str::<InstructionBox>(&transfer.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let transfer = instruction_ref
-                .as_any()
-                .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
-                .expect("expected SubmitZkAceAuthorizedTransfer");
-            assert_eq!(
-                transfer.amount,
-                Quantity::from_str("7").expect("quantity parses")
-            );
-            assert_eq!(transfer.identity_commitment, [0x11; 32]);
-            assert_eq!(transfer.tx_digest, [0x33; 32]);
-            assert_eq!(transfer.replay_nullifier, [0x44; 32]);
-            assert_eq!(transfer.policy_hash, [0x22; 32]);
-            assert_eq!(
-                transfer.proof.backend.to_string(),
-                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-            );
-        });
-    }
-
-    #[test]
-    fn zk_ace_instruction_classmethods_reject_adversarial_inputs() {
-        ensure_python();
-        Python::attach(|py| {
-            let instruction_type = py.get_type::<Instruction>();
-            let json_module = py.import("json").expect("json module");
-            let verifier = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"stark/fri/sha256-goldilocks","name":"zk_ace_pq_authorization_v0"}"#,),
-                )
-                .expect("verifier loads");
-            let wrong_verifier = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","name":"zk_ace_pq_authorization_v0"}"#,),
-                )
-                .expect("wrong verifier loads");
-            let wrong_proof = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"vk"}}"#,),
-                )
-                .expect("wrong proof loads");
-            let zero = PyBytes::new(py, &[0x00; 32]);
-            let identity = PyBytes::new(py, &[0x11; 32]);
-            let policy = PyBytes::new(py, &[0x22; 32]);
-            let digest = PyBytes::new(py, &[0x33; 32]);
-            let replay = PyBytes::new(py, &[0x44; 32]);
-            let source = canonical_i105_from_seed(0x36);
-            let destination = canonical_i105_from_seed(0x37);
-            let allowed_accounts = PyList::empty(py);
-            allowed_accounts
-                .append(source.clone())
-                .expect("allowed account append");
-
-            let err = match Instruction::register_zk_ace_identity_commitment(
-                &instruction_type,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                zero.as_any(),
-                policy.as_any(),
-                allowed_accounts.as_any(),
-                Some(verifier.as_any()),
-                None,
-                None,
-            ) {
-                Ok(_) => panic!("zero identity commitment must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains("identity_commitment"));
-
-            let err = match Instruction::register_zk_ace_identity_commitment(
-                &instruction_type,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                identity.as_any(),
-                policy.as_any(),
-                allowed_accounts.as_any(),
-                Some(wrong_verifier.as_any()),
-                None,
-                None,
-            ) {
-                Ok(_) => panic!("wrong verifier backend must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND));
-
-            let err = match Instruction::rotate_zk_ace_identity_commitment(
-                &instruction_type,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                identity.as_any(),
-                identity.as_any(),
-                policy.as_any(),
-                allowed_accounts.as_any(),
-                Some(verifier.as_any()),
-                None,
-                None,
-            ) {
-                Ok(_) => panic!("same replacement commitment must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains("must differ"));
-
-            let err = match Instruction::register_zk_ace_identity_commitment(
-                &instruction_type,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                identity.as_any(),
-                policy.as_any(),
-                allowed_accounts.as_any(),
-                Some(verifier.as_any()),
-                Some("wrong-action"),
-                None,
-            ) {
-                Ok(_) => panic!("wrong action must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains(ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER));
-
-            let err = match Instruction::zk_ace_authorized_transfer(
-                &instruction_type,
-                &source,
-                &destination,
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "1",
-                identity.as_any(),
-                digest.as_any(),
-                "chain",
-                ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-                ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-                replay.as_any(),
-                policy.as_any(),
-                wrong_proof.as_any(),
-            ) {
-                Ok(_) => panic!("wrong proof backend must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND));
-        });
-    }
-
-    #[test]
     fn merge_rwas_and_set_rwa_controls_classmethods_roundtrip_payloads() {
         ensure_python();
         Python::attach(|py| {
@@ -14362,6 +10455,77 @@ fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
     Ok(EscrowId::new(Hash::new(text.as_bytes())))
 }
 
+fn json_object_string(fields: &mut json::Map, key: &str, context: &str) -> PyResult<String> {
+    let value = fields
+        .remove(key)
+        .ok_or_else(|| PyValueError::new_err(format!("{context} requires `{key}`")))?;
+    match value {
+        json::Value::String(value) if !value.is_empty() && value.trim() == value => Ok(value),
+        _ => Err(PyValueError::new_err(format!(
+            "{context}.{key} must be a non-empty unpadded string"
+        ))),
+    }
+}
+
+fn parse_transfer_asset_batch_entries(
+    raw: &str,
+    source: &AccountId,
+    asset_definition: &AssetDefinitionId,
+) -> PyResult<Vec<TransferAssetBatchEntry>> {
+    let value = json::from_str::<json::Value>(raw)
+        .map_err(|error| PyValueError::new_err(format!("invalid payments JSON: {error}")))?;
+    let json::Value::Array(values) = value else {
+        return Err(PyValueError::new_err("payments JSON must be an array"));
+    };
+    if values.is_empty() {
+        return Err(PyValueError::new_err(
+            "payments must contain at least one payment",
+        ));
+    }
+    let mut leg_ids = HashSet::new();
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let json::Value::Object(mut fields) = value else {
+                return Err(PyValueError::new_err(format!(
+                    "payments[{index}] must be an object"
+                )));
+            };
+            let context = format!("payments[{index}]");
+            let leg_id = json_object_string(&mut fields, "id", &context)?;
+            if !leg_ids.insert(leg_id.clone()) {
+                return Err(PyValueError::new_err(format!(
+                    "duplicate payment id `{leg_id}`"
+                )));
+            }
+            let destination = parse_account_id(&json_object_string(&mut fields, "to", &context)?)?;
+            ensure_ed25519_account(&destination)?;
+            let amount = parse_typed_quantity(
+                &json_object_string(&mut fields, "amount", &context)?,
+                "payment amount",
+            )?;
+            if amount.is_zero() {
+                return Err(PyValueError::new_err(format!(
+                    "{context}.amount must be positive"
+                )));
+            }
+            if !fields.is_empty() {
+                return Err(PyValueError::new_err(format!(
+                    "{context} contains unknown fields"
+                )));
+            }
+            Ok(TransferAssetBatchEntry::with_leg_id(
+                leg_id,
+                source.clone(),
+                destination,
+                asset_definition.clone(),
+                amount,
+            ))
+        })
+        .collect()
+}
+
 fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyResult<Vec<Hash>> {
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -14371,6 +10535,42 @@ fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyR
     }
     py_fixed_array_list(value, context)
         .map(|items| items.into_iter().map(Hash::prehashed).collect())
+}
+
+fn conditional_escrow_evidence_hash_from_py(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<Hash> {
+    let raw_digest = py_fixed_array::<32>(value, context)?;
+    Ok(hash_conditional_escrow_evidence_digest(&raw_digest))
+}
+
+fn parse_optional_conditional_evidence_digest(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<Option<Hash>> {
+    value
+        .filter(|value| !value.is_none())
+        .map(|value| conditional_escrow_evidence_hash_from_py(value, context))
+        .transpose()
+}
+
+fn parse_optional_conditional_evidence_digests(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<Vec<Hash>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    if value.is_none() {
+        return Ok(Vec::new());
+    }
+    py_fixed_array_list(value, context).map(|digests| {
+        digests
+            .iter()
+            .map(hash_conditional_escrow_evidence_digest)
+            .collect()
+    })
 }
 
 fn quantity_from_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Quantity> {
@@ -15093,6 +11293,21 @@ impl Instruction {
         Ok(dict)
     }
 
+    /// Return the canonical framed Norito `InstructionBox`.
+    fn to_norito_bytes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyBytes>> {
+        let bytes = norito::to_bytes(&self.inner).map_err(|err| {
+            PyValueError::new_err(format!("failed to encode canonical InstructionBox: {err}"))
+        })?;
+        Ok(Py::from(PyBytes::new(py, &bytes)))
+    }
+
+    /// Return the stable registry identity used by canonical instruction framing.
+    fn wire_id(&self) -> PyResult<String> {
+        iroha_data_model::isi::instruction_wire_id(&self.inner)
+            .map(str::to_owned)
+            .ok_or_else(|| PyValueError::new_err("instruction is not registered"))
+    }
+
     /// Create a new fail-closed fee sponsor program.
     #[classmethod]
     #[pyo3(signature = (sponsor, program_name = "default"))]
@@ -15459,98 +11674,6 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (asset_definition_id, identity_commitment, policy_hash, allowed_accounts, verifier_key=None, *, action_class=None, domain_tag=None))]
-    fn register_zk_ace_identity_commitment<'py>(
-        _cls: &Bound<'py, PyType>,
-        asset_definition_id: &str,
-        identity_commitment: &Bound<'py, PyAny>,
-        policy_hash: &Bound<'py, PyAny>,
-        allowed_accounts: &Bound<'py, PyAny>,
-        verifier_key: Option<&Bound<'py, PyAny>>,
-        action_class: Option<&str>,
-        domain_tag: Option<&str>,
-    ) -> PyResult<Self> {
-        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid asset definition id `{asset_definition_id}`: {err}"
-            ))
-        })?;
-        let instruction = RegisterZkAceIdentityCommitment::new(
-            asset,
-            py_non_zero_fixed_array::<32>(identity_commitment, "identity_commitment")?,
-            py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?,
-            py_account_id_list(allowed_accounts, "allowed_accounts")?,
-            parse_zk_ace_action(action_class, "action_class")?,
-            parse_zk_ace_domain_tag(domain_tag, "domain_tag")?,
-            parse_optional_zk_ace_verifying_key_id_py(verifier_key, "verifier_key")?,
-        );
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (asset_definition_id, old_identity_commitment, new_identity_commitment, policy_hash, allowed_accounts, verifier_key=None, *, action_class=None, domain_tag=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn rotate_zk_ace_identity_commitment<'py>(
-        _cls: &Bound<'py, PyType>,
-        asset_definition_id: &str,
-        old_identity_commitment: &Bound<'py, PyAny>,
-        new_identity_commitment: &Bound<'py, PyAny>,
-        policy_hash: &Bound<'py, PyAny>,
-        allowed_accounts: &Bound<'py, PyAny>,
-        verifier_key: Option<&Bound<'py, PyAny>>,
-        action_class: Option<&str>,
-        domain_tag: Option<&str>,
-    ) -> PyResult<Self> {
-        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid asset definition id `{asset_definition_id}`: {err}"
-            ))
-        })?;
-        let old_identity_commitment =
-            py_non_zero_fixed_array::<32>(old_identity_commitment, "old_identity_commitment")?;
-        let new_identity_commitment =
-            py_non_zero_fixed_array::<32>(new_identity_commitment, "new_identity_commitment")?;
-        if old_identity_commitment == new_identity_commitment {
-            return Err(PyValueError::new_err(
-                "new_identity_commitment must differ from old_identity_commitment",
-            ));
-        }
-        let instruction = RotateZkAceIdentityCommitment::new(
-            asset,
-            old_identity_commitment,
-            new_identity_commitment,
-            py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?,
-            py_account_id_list(allowed_accounts, "allowed_accounts")?,
-            parse_zk_ace_action(action_class, "action_class")?,
-            parse_zk_ace_domain_tag(domain_tag, "domain_tag")?,
-            parse_optional_zk_ace_verifying_key_id_py(verifier_key, "verifier_key")?,
-        );
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (asset_definition_id, identity_commitment, *, reason_hash=None))]
-    fn revoke_zk_ace_identity_commitment<'py>(
-        _cls: &Bound<'py, PyType>,
-        asset_definition_id: &str,
-        identity_commitment: &Bound<'py, PyAny>,
-        reason_hash: Option<&Bound<'py, PyAny>>,
-    ) -> PyResult<Self> {
-        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid asset definition id `{asset_definition_id}`: {err}"
-            ))
-        })?;
-        let instruction = RevokeZkAceIdentityCommitment::new(
-            asset,
-            py_non_zero_fixed_array::<32>(identity_commitment, "identity_commitment")?,
-            parse_optional_fixed_array_py::<32>(reason_hash, "reason_hash")?,
-        );
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
     #[pyo3(signature = (asset_definition_id, from_account_id, amount, note_commitment, ephemeral_public_key, nonce, ciphertext))]
     #[allow(clippy::too_many_arguments)]
     fn shield_asset<'py>(
@@ -15696,65 +11819,6 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (from_account_id, to_account_id, asset_definition_id, amount, identity_commitment, tx_digest, chain_id, domain_tag, action_class, replay_nullifier, policy_hash, proof))]
-    #[allow(clippy::too_many_arguments)]
-    fn zk_ace_authorized_transfer<'py>(
-        _cls: &Bound<'py, PyType>,
-        from_account_id: &str,
-        to_account_id: &str,
-        asset_definition_id: &str,
-        amount: &str,
-        identity_commitment: &Bound<'py, PyAny>,
-        tx_digest: &Bound<'py, PyAny>,
-        chain_id: &str,
-        domain_tag: &str,
-        action_class: &str,
-        replay_nullifier: &Bound<'py, PyAny>,
-        policy_hash: &Bound<'py, PyAny>,
-        proof: &Bound<'py, PyAny>,
-    ) -> PyResult<Self> {
-        let from = parse_account_id(from_account_id)?;
-        ensure_ed25519_account(&from)?;
-        let to = parse_account_id(to_account_id)?;
-        ensure_ed25519_account(&to)?;
-        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid asset definition id `{asset_definition_id}`: {err}"
-            ))
-        })?;
-        let amount = parse_asset_quantity(amount, "amount")?;
-        let proof_amount = (amount.scale() == 0)
-            .then(|| amount.as_numeric().try_mantissa_u128())
-            .flatten()
-            .ok_or_else(|| {
-                PyValueError::new_err("amount must be an exact scale-0 u128 proof scalar")
-            })?;
-        if proof_amount == 0 {
-            return Err(PyValueError::new_err("amount must be positive"));
-        }
-        let chain_id: ChainId = chain_id.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid chain_id `{chain_id}`: {err}"))
-        })?;
-        let proof =
-            ensure_zk_ace_proof_attachment(parse_zk_proof_attachment(proof, "proof")?, "proof")?;
-        let instruction = SubmitZkAceAuthorizedTransfer::new(
-            from,
-            to,
-            asset,
-            amount,
-            py_non_zero_fixed_array::<32>(identity_commitment, "identity_commitment")?,
-            py_non_zero_fixed_array::<32>(tx_digest, "tx_digest")?,
-            chain_id,
-            parse_zk_ace_domain_tag(Some(domain_tag), "domain_tag")?,
-            parse_zk_ace_action(Some(action_class), "action_class")?,
-            py_non_zero_fixed_array::<32>(replay_nullifier, "replay_nullifier")?,
-            py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?,
-            proof,
-        );
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
     fn mint_asset_quantity(
         _cls: &Bound<'_, PyType>,
         asset_id: &str,
@@ -15791,6 +11855,38 @@ impl Instruction {
         let quantity = parse_asset_quantity(quantity, "asset quantity")?;
         let instruction = Transfer::asset_quantity(asset_id, quantity, destination);
         Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (source_account, asset_definition_id, payments_json, *, mode="Independent"))]
+    fn transfer_asset_batch(
+        _cls: &Bound<'_, PyType>,
+        source_account: &str,
+        asset_definition_id: &str,
+        payments_json: &str,
+        mode: &str,
+    ) -> PyResult<Self> {
+        let source = parse_account_id(source_account)?;
+        ensure_ed25519_account(&source)?;
+        let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {error}"
+            ))
+        })?;
+        let entries =
+            parse_transfer_asset_batch_entries(payments_json, &source, &asset_definition)?;
+        let mode = match mode {
+            "Atomic" | "atomic" => BatchMode::Atomic,
+            "Independent" | "independent" => BatchMode::Independent,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "batch mode must be Atomic or Independent",
+                ));
+            }
+        };
+        Ok(Instruction::new(
+            TransferAssetBatch::new(entries).with_mode(mode).into(),
+        ))
     }
 
     #[classmethod]
@@ -15928,6 +12024,100 @@ impl Instruction {
             evidence_hashes,
         );
         Ok(Instruction::new(instruction.into()))
+    }
+
+    /// Open an ordered, all-of conditional escrow with an immutable on-chain policy.
+    #[classmethod]
+    #[pyo3(signature = (escrow_id, asset_definition_id, beneficiary, amount, conditions, expires_at_ms, *, evidence_digests=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn open_conditional_escrow<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        escrow_id: &str,
+        asset_definition_id: &str,
+        beneficiary: &str,
+        amount: &str,
+        conditions: &Bound<'py, PyAny>,
+        expires_at_ms: u64,
+        evidence_digests: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        if expires_at_ms == 0 {
+            return Err(PyValueError::new_err(
+                "conditional escrow expires_at_ms must be greater than zero",
+            ));
+        }
+        let escrow_id = parse_escrow_id(escrow_id, "escrow_id")?;
+        let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let beneficiary = parse_account_id(beneficiary)?;
+        ensure_ed25519_account(&beneficiary)?;
+        let amount = parse_typed_quantity(amount, "conditional escrow amount")?;
+        if amount.is_zero() {
+            return Err(PyValueError::new_err(
+                "conditional escrow amount must be positive",
+            ));
+        }
+        let conditions: Vec<ConditionalEscrowCondition> =
+            py_to_json_model(py, conditions, "conditional escrow conditions")?;
+        if conditions.is_empty() {
+            return Err(PyValueError::new_err(
+                "conditional escrow conditions must not be empty",
+            ));
+        }
+        let evidence_hashes =
+            parse_optional_conditional_evidence_digests(evidence_digests, "evidence_digests")?;
+        let instruction = OpenConditionalEscrow::with_evidence_hashes(
+            escrow_id,
+            asset_definition,
+            beneficiary,
+            amount,
+            conditions,
+            expires_at_ms,
+            evidence_hashes,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    /// Attest the next ordered predicate in a native conditional escrow.
+    #[classmethod]
+    #[pyo3(signature = (escrow_id, condition_id, value, *, evidence_digest=None))]
+    fn attest_escrow_condition<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        escrow_id: &str,
+        condition_id: &str,
+        value: &Bound<'py, PyAny>,
+        evidence_digest: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let condition_id: Name = condition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid conditional escrow condition_id `{condition_id}`: {err}"
+            ))
+        })?;
+        let value: ConditionalEscrowValue =
+            py_to_json_model(py, value, "conditional escrow attestation value")?;
+        let evidence_hash =
+            parse_optional_conditional_evidence_digest(evidence_digest, "evidence_digest")?;
+        Ok(Instruction::new(
+            AttestEscrowCondition::new(
+                parse_escrow_id(escrow_id, "escrow_id")?,
+                condition_id,
+                value,
+                evidence_hash,
+            )
+            .into(),
+        ))
+    }
+
+    /// Expire and refund a native conditional escrow after its authoritative deadline.
+    #[classmethod]
+    fn expire_conditional_escrow(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
+        Ok(Instruction::new(
+            ExpireConditionalEscrow::new(parse_escrow_id(escrow_id, "escrow_id")?).into(),
+        ))
     }
 
     #[classmethod]
@@ -16625,6 +12815,667 @@ impl Instruction {
 }
 
 /// Thin wrapper around [`TransactionBuilder`] with JSON instruction support.
+struct ZeroizingJindoWitnessBytes(Vec<Vec<Vec<u8>>>);
+
+impl ZeroizingJindoWitnessBytes {
+    fn erase(&mut self) {
+        for polynomial in &mut self.0 {
+            for coefficient in polynomial {
+                coefficient.fill(0);
+            }
+        }
+    }
+}
+
+impl Drop for ZeroizingJindoWitnessBytes {
+    fn drop(&mut self) {
+        self.erase();
+    }
+}
+
+struct ZeroizingVeRangeWitnessBytes {
+    values: Vec<u64>,
+    blindings: Vec<Vec<u8>>,
+}
+
+impl ZeroizingVeRangeWitnessBytes {
+    fn erase(&mut self) {
+        self.values.fill(0);
+        for blinding in &mut self.blindings {
+            blinding.fill(0);
+        }
+    }
+}
+
+impl Drop for ZeroizingVeRangeWitnessBytes {
+    fn drop(&mut self) {
+        self.erase();
+    }
+}
+
+struct ZeroizingVegaWitnessBytes {
+    issuer_authentication_sig_structure: Vec<u8>,
+    mobile_security_object_payload: Vec<u8>,
+    birth_date_issuer_signed_item: Vec<u8>,
+    issuer_signature: Vec<u8>,
+    device_signature: Vec<u8>,
+}
+
+impl ZeroizingVegaWitnessBytes {
+    fn erase(&mut self) {
+        self.issuer_authentication_sig_structure.fill(0);
+        self.mobile_security_object_payload.fill(0);
+        self.birth_date_issuer_signed_item.fill(0);
+        self.issuer_signature.fill(0);
+        self.device_signature.fill(0);
+    }
+}
+
+impl Drop for ZeroizingVegaWitnessBytes {
+    fn drop(&mut self) {
+        self.erase();
+    }
+}
+
+struct ZeroizingZkAmsBatchWitnessBytes {
+    subject_commitments: Vec<Vec<u8>>,
+    credential_nonces: Vec<Vec<u8>>,
+    seed_secrets: Vec<Vec<u8>>,
+    issuer_signatures: Vec<Vec<u8>>,
+}
+
+impl ZeroizingZkAmsBatchWitnessBytes {
+    fn erase(&mut self) {
+        for bytes in self
+            .subject_commitments
+            .iter_mut()
+            .chain(&mut self.credential_nonces)
+            .chain(&mut self.seed_secrets)
+            .chain(&mut self.issuer_signatures)
+        {
+            bytes.fill(0);
+        }
+    }
+}
+
+impl Drop for ZeroizingZkAmsBatchWitnessBytes {
+    fn drop(&mut self) {
+        self.erase();
+    }
+}
+
+struct ZeroizingZkAmsBatchNativeMaterial {
+    credentials: Vec<PrivacyZkAmsPersonhoodCredentialV1>,
+    issuer_signatures: Vec<[u8; 64]>,
+    seed_secrets: Vec<ZkAmsSeedSecretV1>,
+}
+
+impl ZeroizingZkAmsBatchNativeMaterial {
+    fn erase(&mut self) {
+        for credential in &mut self.credentials {
+            *credential = PrivacyZkAmsPersonhoodCredentialV1 {
+                version: 0,
+                issuer_id: PrivacyIssuerIdV1::new([0; 32]),
+                policy_id: PrivacyPolicyIdV1::new([0; 32]),
+                subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new([0; 32]),
+                seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new([0; 32]),
+                credential_nonce: PrivacyZkAmsCredentialNonceV1::new([0; 32]),
+            };
+        }
+        self.issuer_signatures.fill([0; 64]);
+        self.seed_secrets.clear();
+    }
+}
+
+impl Drop for ZeroizingZkAmsBatchNativeMaterial {
+    fn drop(&mut self) {
+        self.erase();
+    }
+}
+
+struct ZeroizingZkAmsProvisionWitnessBytes(Vec<u8>);
+
+impl ZeroizingZkAmsProvisionWitnessBytes {
+    fn erase(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+impl Drop for ZeroizingZkAmsProvisionWitnessBytes {
+    fn drop(&mut self) {
+        self.erase();
+    }
+}
+
+struct ZeroizingBootleLanternWitnessBytes {
+    secret_polynomials: Vec<Vec<u16>>,
+    attributes: Vec<Vec<u8>>,
+}
+
+impl ZeroizingBootleLanternWitnessBytes {
+    fn erase(&mut self) {
+        for polynomial in &mut self.secret_polynomials {
+            polynomial.fill(0);
+        }
+        for attribute in &mut self.attributes {
+            attribute.fill(0);
+        }
+    }
+}
+
+impl Drop for ZeroizingBootleLanternWitnessBytes {
+    fn drop(&mut self) {
+        self.erase();
+    }
+}
+
+struct ZeroizingZkAceWitnessBytes {
+    identity_root: Vec<u8>,
+    identity_blinding: Vec<u8>,
+    replay_secret: Vec<u8>,
+}
+
+impl ZeroizingZkAceWitnessBytes {
+    fn erase(&mut self) {
+        self.identity_root.fill(0);
+        self.identity_blinding.fill(0);
+        self.replay_secret.fill(0);
+    }
+}
+
+impl Drop for ZeroizingZkAceWitnessBytes {
+    fn drop(&mut self) {
+        self.erase();
+    }
+}
+
+const BOOTLE_LANTERN_POLICY_ARCHIVE_MAX_BYTES_V1: usize = 64 * 1024;
+const BOOTLE_LANTERN_SECRET_POLYNOMIALS_V1: usize = 40;
+const BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1: usize = 64;
+const ZK_ACE_POLICY_ARCHIVE_MAX_BYTES_V1: usize = 64 * 1024;
+
+fn python_bootle_lantern_policy_v1(
+    canonical_policy_archive: &[u8],
+) -> PyResult<BootleLanternIssuerPolicyV1> {
+    if canonical_policy_archive.is_empty()
+        || canonical_policy_archive.len() > BOOTLE_LANTERN_POLICY_ARCHIVE_MAX_BYTES_V1
+    {
+        return Err(PyValueError::new_err(format!(
+            "canonical_policy_archive must contain between 1 and {BOOTLE_LANTERN_POLICY_ARCHIVE_MAX_BYTES_V1} bytes"
+        )));
+    }
+    let policy =
+        norito::decode_canonical::<BootleLanternIssuerPolicyV1>(canonical_policy_archive)
+            .map_err(|_| {
+                PyValueError::new_err(
+                    "canonical_policy_archive is not the exact canonical Bootle/Lantern issuer-policy wire",
+                )
+            })?;
+    policy.validate().map_err(|error| {
+        PyValueError::new_err(format!(
+            "canonical_policy_archive contains an invalid Bootle/Lantern issuer policy: {error}"
+        ))
+    })?;
+    if policy.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+        return Err(PyValueError::new_err(
+            "canonical_policy_archive selects a revoked Bootle/Lantern issuer policy",
+        ));
+    }
+    Ok(policy)
+}
+
+fn python_zk_ace_policy_v1(
+    canonical_policy_archive: &[u8],
+) -> PyResult<PrivacyZkAcePolicyRecordV1> {
+    if canonical_policy_archive.is_empty()
+        || canonical_policy_archive.len() > ZK_ACE_POLICY_ARCHIVE_MAX_BYTES_V1
+    {
+        return Err(PyValueError::new_err(format!(
+            "canonical_policy_archive must contain between 1 and {ZK_ACE_POLICY_ARCHIVE_MAX_BYTES_V1} bytes"
+        )));
+    }
+    let policy = norito::decode_canonical::<PrivacyZkAcePolicyRecordV1>(canonical_policy_archive)
+        .map_err(|_| {
+        PyValueError::new_err(
+            "canonical_policy_archive is not the exact canonical ZK-ACE policy-record wire",
+        )
+    })?;
+    policy.validate().map_err(|error| {
+        PyValueError::new_err(format!(
+            "canonical_policy_archive contains an invalid ZK-ACE policy record: {error}"
+        ))
+    })?;
+    Ok(policy)
+}
+
+fn python_bootle_lantern_polynomials_v1<const N: usize>(
+    rows: &mut [Vec<u16>],
+    label: &str,
+) -> PyResult<[ApplicationPolynomialV1; N]> {
+    if rows.len() != N {
+        return Err(PyValueError::new_err(format!(
+            "{label} must contain exactly {N} polynomials"
+        )));
+    }
+    let mut output = [ApplicationPolynomialV1::ZERO; N];
+    for (index, row) in rows.iter_mut().enumerate() {
+        if row.len() != BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1 {
+            return Err(PyValueError::new_err(format!(
+                "{label}[{index}] must contain exactly {BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1} coefficients"
+            )));
+        }
+        let coefficients: [u16; BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1] = row
+            .as_slice()
+            .try_into()
+            .expect("length checked immediately above");
+        row.fill(0);
+        output[index] = ApplicationPolynomialV1::new(coefficients).map_err(|error| {
+            PyValueError::new_err(format!(
+                "{label}[{index}] contains a non-canonical coefficient: {error}"
+            ))
+        })?;
+    }
+    Ok(output)
+}
+
+#[derive(Clone)]
+struct PythonPrivacyActionTransactionContextV1 {
+    chain_id: ChainId,
+    authority: AccountId,
+    creation_time: Duration,
+    time_to_live: Option<Duration>,
+    nonce: Option<NonZeroU32>,
+    fee_payment: FeePaymentIntent,
+    metadata: Metadata,
+}
+
+fn python_privacy_statement_context_v1(
+    context: &PythonPrivacyActionTransactionContextV1,
+    profile: CompiledPrivacyProfileV1,
+    transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+) -> PrivacyStatementContextV1 {
+    PrivacyStatementContextV1 {
+        chain_id: context.chain_id.clone(),
+        action_index: 0,
+        transaction_intent_digest,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+    }
+}
+
+fn python_privacy_placeholder_envelope_v1(
+    profile: CompiledPrivacyProfileV1,
+    statement: PrivacyStatementV1,
+    proof: PrivacyProofV1,
+) -> PrivacyProofEnvelopeV1 {
+    PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest: PrivacyStatementDigestV1::new([0; 32]),
+        statement,
+        proof,
+    }
+}
+
+fn python_privacy_action_payload_v1(
+    context: &PythonPrivacyActionTransactionContextV1,
+    envelope: PrivacyProofEnvelopeV1,
+) -> PyResult<TransactionPayload> {
+    let mut builder = ModelTransactionBuilder::new(
+        context.chain_id.clone(),
+        context.authority.clone(),
+        context.fee_payment.clone(),
+    )
+    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_metadata(context.metadata.clone());
+    builder.set_creation_time(context.creation_time);
+    if let Some(time_to_live) = context.time_to_live {
+        builder.set_ttl(time_to_live);
+    }
+    if let Some(nonce) = context.nonce {
+        builder.set_nonce(nonce);
+    }
+    builder.into_payload().map_err(|_| {
+        PyValueError::new_err("native privacy action has an invalid transaction context")
+    })
+}
+
+fn python_privacy_action_intent_v1(
+    context: &PythonPrivacyActionTransactionContextV1,
+    envelope: PrivacyProofEnvelopeV1,
+) -> PyResult<PrivacyTransactionIntentDigestV1> {
+    python_privacy_action_payload_v1(context, envelope)?
+        .privacy_transaction_intent_digest_v1()
+        .map_err(|_| {
+            PyValueError::new_err("native privacy action intent digest construction failed")
+        })
+}
+
+struct PythonSignedPrivacyActionV1 {
+    signed_transaction: SignedTransaction,
+    transaction_hash: [u8; 32],
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+}
+
+fn finalize_python_privacy_action_v1(
+    context: &PythonPrivacyActionTransactionContextV1,
+    profile: CompiledPrivacyProfileV1,
+    statement: PrivacyStatementV1,
+    proof: PrivacyProofV1,
+    private_key: &PrivateKey,
+) -> PyResult<PythonSignedPrivacyActionV1> {
+    let statement_digest = statement
+        .digest()
+        .map_err(|_| PyRuntimeError::new_err("native privacy statement digest failed"))?;
+    let statement_bytes = u32::try_from(
+        norito::to_bytes(&statement)
+            .map_err(|_| PyRuntimeError::new_err("native privacy statement encoding failed"))?
+            .len(),
+    )
+    .map_err(|_| PyRuntimeError::new_err("native privacy statement length overflowed"))?;
+    let proof_bytes = u32::try_from(proof.bytes().as_bytes().len())
+        .map_err(|_| PyRuntimeError::new_err("native privacy proof length overflowed"))?;
+    let envelope = PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest,
+        statement,
+        proof,
+    };
+    envelope
+        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|error| {
+            PyRuntimeError::new_err(format!(
+                "native privacy proof envelope validation failed: {error}"
+            ))
+        })?;
+    let envelope_encoding = norito::to_bytes(&envelope)
+        .map_err(|_| PyRuntimeError::new_err("native privacy proof envelope encoding failed"))?;
+    let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
+        .map_err(|_| PyRuntimeError::new_err("native privacy proof envelope length overflowed"))?;
+    let proof_envelope_hash = *Hash::new(&envelope_encoding).as_ref();
+    let payload = python_privacy_action_payload_v1(context, envelope)?;
+    let transaction_intent_digest = payload
+        .validate_privacy_transaction_intent_binding_v1()
+        .map_err(|_| PyRuntimeError::new_err("native privacy action intent binding failed"))?;
+    let signed_transaction = ModelTransactionBuilder::from_payload(payload)
+        .map_err(|_| PyValueError::new_err("native privacy transaction payload is invalid"))?
+        .try_sign(private_key)
+        .map_err(|_| PyValueError::new_err("native privacy transaction signing failed"))?;
+    let signed_intent = signed_transaction
+        .privacy_transaction_intent_digest_v1()
+        .map_err(|_| PyRuntimeError::new_err("signed privacy action intent validation failed"))?;
+    if signed_intent != transaction_intent_digest {
+        return Err(PyRuntimeError::new_err(
+            "signed privacy action intent digest changed during signing",
+        ));
+    }
+    let transaction_hash = *signed_transaction.hash().as_ref();
+    let adaptive_signed_transaction_bytes =
+        u32::try_from(norito::codec::encode_adaptive(&signed_transaction).len())
+            .map_err(|_| PyRuntimeError::new_err("signed privacy action length overflowed"))?;
+    Ok(PythonSignedPrivacyActionV1 {
+        signed_transaction,
+        transaction_hash,
+        transaction_intent_digest: *transaction_intent_digest.as_bytes(),
+        statement_digest: *statement_digest.as_bytes(),
+        proof_envelope_hash,
+        statement_bytes,
+        proof_bytes,
+        encoded_proof_envelope_bytes,
+        adaptive_signed_transaction_bytes,
+    })
+}
+
+fn python_compiled_privacy_profile_v1(
+    protocol_id: PrivacyProtocolIdV1,
+    protocol_label: &str,
+) -> PyResult<CompiledPrivacyProfileV1> {
+    compiled_privacy_profile_v1(protocol_id).map_err(|error| {
+        PyRuntimeError::new_err(format!(
+            "compiled {protocol_label} privacy profile is unavailable: {error}"
+        ))
+    })
+}
+
+fn python_nonzero_privacy_digest_v1(value: &[u8], field: &str) -> PyResult<[u8; 32]> {
+    let digest = fixed_array::<32>(value, field)?;
+    if digest == [0; 32] {
+        return Err(PyValueError::new_err(format!(
+            "{field} must not be the all-zero sentinel"
+        )));
+    }
+    Ok(digest)
+}
+
+#[derive(Clone, Copy)]
+struct PythonZkAmsGovernanceV1 {
+    issuer_id: PrivacyIssuerIdV1,
+    issuer_public_key: PrivacyP256PointV1,
+    issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    registry_id: PrivacyZkAmsRegistryIdV1,
+    registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    policy_id: PrivacyPolicyIdV1,
+    policy_digest: PrivacyPolicyDigestV1,
+    account_registry_root: PrivacyRootV1,
+    account_registry_root_epoch: u64,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn python_zk_ams_governance_v1(
+    issuer_id: &[u8],
+    issuer_public_key: &[u8],
+    issuer_policy_record_digest: &[u8],
+    registry_id: &[u8],
+    registry_record_digest: &[u8],
+    policy_id: &[u8],
+    policy_digest: &[u8],
+    account_registry_root: &[u8],
+    account_registry_root_epoch: u64,
+) -> PyResult<PythonZkAmsGovernanceV1> {
+    if account_registry_root_epoch == 0 {
+        return Err(PyValueError::new_err(
+            "account_registry_root_epoch must be greater than zero",
+        ));
+    }
+    let issuer_id =
+        PrivacyIssuerIdV1::new(python_nonzero_privacy_digest_v1(issuer_id, "issuer_id")?);
+    let issuer_public_key = CompressedPointV1::from_slice(issuer_public_key).map_err(|error| {
+        PyValueError::new_err(format!(
+            "issuer_public_key is not a canonical compressed non-identity P-256 point: {error}"
+        ))
+    })?;
+    let issuer_public_key = PrivacyP256PointV1::new(*issuer_public_key.as_bytes());
+    let issuer_policy_record_digest =
+        PrivacyZkAmsIssuerPolicyRecordDigestV1::new(python_nonzero_privacy_digest_v1(
+            issuer_policy_record_digest,
+            "issuer_policy_record_digest",
+        )?);
+    let registry_id = PrivacyZkAmsRegistryIdV1::new(python_nonzero_privacy_digest_v1(
+        registry_id,
+        "registry_id",
+    )?);
+    let registry_record_digest = PrivacyZkAmsRegistryRecordDigestV1::new(
+        python_nonzero_privacy_digest_v1(registry_record_digest, "registry_record_digest")?,
+    );
+    let policy_id =
+        PrivacyPolicyIdV1::new(python_nonzero_privacy_digest_v1(policy_id, "policy_id")?);
+    let policy_digest = PrivacyPolicyDigestV1::new(python_nonzero_privacy_digest_v1(
+        policy_digest,
+        "policy_digest",
+    )?);
+    let account_registry_root = PrivacyRootV1::new(python_nonzero_privacy_digest_v1(
+        account_registry_root,
+        "account_registry_root",
+    )?);
+
+    let expected_issuer_policy_record_digest = zk_ams_issuer_policy_record_digest_v1(
+        issuer_id,
+        policy_id,
+        issuer_public_key,
+        policy_digest,
+    );
+    if issuer_policy_record_digest != expected_issuer_policy_record_digest {
+        return Err(PyValueError::new_err(
+            "issuer_policy_record_digest does not authenticate the exact ZK-AMS issuer, key, policy, and policy digest",
+        ));
+    }
+    let expected_registry_record_digest = zk_ams_registry_record_digest_v1(
+        issuer_id,
+        registry_id,
+        policy_id,
+        issuer_policy_record_digest,
+        policy_digest,
+        account_registry_root,
+        account_registry_root_epoch,
+    );
+    if registry_record_digest != expected_registry_record_digest {
+        return Err(PyValueError::new_err(
+            "registry_record_digest does not authenticate the exact ZK-AMS governance record and current root/epoch",
+        ));
+    }
+
+    Ok(PythonZkAmsGovernanceV1 {
+        issuer_id,
+        issuer_public_key,
+        issuer_policy_record_digest,
+        registry_id,
+        registry_record_digest,
+        policy_id,
+        policy_digest,
+        account_registry_root,
+        account_registry_root_epoch,
+    })
+}
+
+fn python_zk_ams_transcript_binding_v1<'a>(
+    context: &'a PythonPrivacyActionTransactionContextV1,
+    profile: CompiledPrivacyProfileV1,
+    canonical_genesis_hash: [u8; 32],
+    statement_digest: [u8; 32],
+) -> TranscriptBindingV1<'a> {
+    TranscriptBindingV1 {
+        chain_id: context.chain_id.as_str().as_bytes(),
+        genesis_hash: canonical_genesis_hash,
+        action_index: 0,
+        statement_digest,
+        parameter_id: *profile.parameter_id.as_bytes(),
+        parameter_digest: *profile.parameter_digest.as_bytes(),
+        verifier_digest: *profile.verifier_digest.as_bytes(),
+        statement_schema_digest: *profile.statement_schema_digest.as_bytes(),
+        engine_manifest_digest: *profile.engine_manifest_digest.as_bytes(),
+        generator_digest: zk_ams_generator_digest_v1(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn python_vega_draft_statement_v1(
+    context: PrivacyStatementContextV1,
+    issuer_id: [u8; 32],
+    issuer_record_epoch: u64,
+    issuer_record_digest: [u8; 32],
+    issuer_public_key: [u8; 33],
+    presentation_year: u16,
+    presentation_month: u8,
+    presentation_day: u8,
+    minimum_age_years: u8,
+    reader_challenge: [u8; 32],
+    session_transcript_digest: [u8; 32],
+) -> VegaExistingCredentialStatementV1 {
+    VegaExistingCredentialStatementV1 {
+        context,
+        issuer_id: PrivacyIssuerIdV1::new(issuer_id),
+        issuer_record_epoch,
+        issuer_record_digest: PrivacyVegaIssuerRecordDigestV1::new(issuer_record_digest),
+        document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+        namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+        digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+        issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+        device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+        issuer_public_key: PrivacyP256PointV1::new(issuer_public_key),
+        device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new([0; 32]),
+        presentation_date: PrivacyVegaMdlDateV1 {
+            year: presentation_year,
+            month: presentation_month,
+            day: presentation_day,
+        },
+        minimum_age_years,
+        reader_challenge: PrivacyChallengeV1::new(reader_challenge),
+        session_transcript_digest: PrivacySessionTranscriptDigestV1::new(session_transcript_digest),
+    }
+}
+
+fn python_bind_vega_device_authentication_digest_v1(
+    mut statement: VegaExistingCredentialStatementV1,
+    canonical_genesis_hash: [u8; 32],
+) -> PyResult<VegaExistingCredentialStatementV1> {
+    let digest = {
+        let binding =
+            VegaMdlConsensusBindingV1::from_context(&statement.context, canonical_genesis_hash);
+        derive_device_authentication_digest_v1(&statement, &binding).map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid Vega public device-authentication statement: {error}"
+            ))
+        })?
+    };
+    statement.device_authentication_digest = digest;
+    Ok(statement)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn python_vega_statement_v1(
+    context: PrivacyStatementContextV1,
+    canonical_genesis_hash: [u8; 32],
+    issuer_id: [u8; 32],
+    issuer_record_epoch: u64,
+    issuer_record_digest: [u8; 32],
+    issuer_public_key: [u8; 33],
+    presentation_year: u16,
+    presentation_month: u8,
+    presentation_day: u8,
+    minimum_age_years: u8,
+    reader_challenge: [u8; 32],
+    session_transcript_digest: [u8; 32],
+) -> PyResult<VegaExistingCredentialStatementV1> {
+    python_bind_vega_device_authentication_digest_v1(
+        python_vega_draft_statement_v1(
+            context,
+            issuer_id,
+            issuer_record_epoch,
+            issuer_record_digest,
+            issuer_public_key,
+            presentation_year,
+            presentation_month,
+            presentation_day,
+            minimum_age_years,
+            reader_challenge,
+            session_transcript_digest,
+        ),
+        canonical_genesis_hash,
+    )
+}
+
 #[pyclass(from_py_object, module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct TransactionBuilder {
@@ -16642,6 +13493,52 @@ struct TransactionBuilder {
 }
 
 impl TransactionBuilder {
+    fn require_empty_privacy_action_builder_v1(&self, protocol_label: &str) -> PyResult<()> {
+        if self.explicit_batch
+            || !self.executable_items.is_empty()
+            || self.executable_override.is_some()
+            || !self.attachments.is_empty()
+        {
+            return Err(PyValueError::new_err(format!(
+                "native {protocol_label} action requires an otherwise empty transaction builder"
+            )));
+        }
+        Ok(())
+    }
+
+    fn privacy_action_transaction_context_v1(&self) -> PythonPrivacyActionTransactionContextV1 {
+        // Resolve the default clock exactly once. Both intent construction and
+        // final signing must use this same signature-bound millisecond value.
+        let resolved_builder = self.to_model_builder();
+        PythonPrivacyActionTransactionContextV1 {
+            chain_id: self.chain_id.clone(),
+            authority: self.authority.clone(),
+            creation_time: Duration::from_millis(resolved_builder.payload().creation_time_ms),
+            time_to_live: self.ttl,
+            nonce: self.nonce,
+            fee_payment: self.fee_payment.clone(),
+            metadata: self.metadata.clone(),
+        }
+    }
+
+    fn validate_privacy_action_signing_authority_v1(
+        &self,
+        private_key: &PrivateKey,
+    ) -> PyResult<()> {
+        let expected = self.authority.try_signatory().ok_or_else(|| {
+            PyValueError::new_err(
+                "native privacy actions require a direct single-signatory authority",
+            )
+        })?;
+        let derived = PublicKey::from(private_key.clone());
+        if expected != &derived {
+            return Err(PyValueError::new_err(
+                "privacy action private key does not match the transaction authority",
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_executable(&self) -> PyResult<()> {
         if self.executable_override.is_some()
             && (self.explicit_batch || !self.executable_items.is_empty())
@@ -17025,6 +13922,1286 @@ impl TransactionBuilder {
         Ok(envelope)
     }
 
+    /// Build and sign one canonical, intent-bound ZK-ACE transparent transfer.
+    ///
+    /// The governed policy is accepted only as its canonical typed archive.
+    /// The three witness components move into zeroizing native storage and
+    /// never appear in the returned public result.
+    #[pyo3(signature = (
+        private_key,
+        canonical_genesis_hash,
+        canonical_policy_archive,
+        source_account_id,
+        destination_account_id,
+        amount,
+        identity_root,
+        identity_blinding,
+        replay_secret
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn sign_privacy_zk_ace_transfer_action_v1(
+        &mut self,
+        py: Python<'_>,
+        private_key: &[u8],
+        canonical_genesis_hash: &[u8],
+        canonical_policy_archive: &[u8],
+        source_account_id: &str,
+        destination_account_id: &str,
+        amount: &str,
+        identity_root: Vec<u8>,
+        identity_blinding: Vec<u8>,
+        replay_secret: Vec<u8>,
+    ) -> PyResult<PrivacyZkAceTransferActionBuildResultV1> {
+        let mut witness_bytes = ZeroizingZkAceWitnessBytes {
+            identity_root,
+            identity_blinding,
+            replay_secret,
+        };
+        self.require_empty_privacy_action_builder_v1("ZK-ACE transparent-transfer")?;
+        let canonical_genesis_hash =
+            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let policy = python_zk_ace_policy_v1(canonical_policy_archive)?;
+        require_non_blank_unpadded(source_account_id, "source_account_id")?;
+        require_non_blank_unpadded(destination_account_id, "destination_account_id")?;
+        let source = AccountId::from_str(source_account_id).map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid ZK-ACE source_account_id `{source_account_id}`: {error}"
+            ))
+        })?;
+        let destination = AccountId::from_str(destination_account_id).map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid ZK-ACE destination_account_id `{destination_account_id}`: {error}"
+            ))
+        })?;
+        let amount = parse_canonical_u128_text(amount, "amount")?;
+        if amount == 0 {
+            return Err(PyValueError::new_err(
+                "amount must use canonical positive unsigned-integer spelling",
+            ));
+        }
+        let private_key = parse_private_key(private_key)?;
+        self.validate_privacy_action_signing_authority_v1(&private_key)?;
+        let transfer = ZkAcePrivacyTransferV1::try_new(policy, source, destination, amount)
+            .map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid native ZK-ACE transparent transfer: {error}"
+                ))
+            })?;
+        for (bytes, label) in [
+            (&witness_bytes.identity_root, "identity_root"),
+            (&witness_bytes.identity_blinding, "identity_blinding"),
+            (&witness_bytes.replay_secret, "replay_secret"),
+        ] {
+            if bytes.len() != 32 {
+                return Err(PyValueError::new_err(format!(
+                    "{label} must be exactly 32 bytes"
+                )));
+            }
+        }
+        let mut identity_root = [0_u8; 32];
+        identity_root.copy_from_slice(&witness_bytes.identity_root);
+        let mut identity_blinding = [0_u8; 32];
+        identity_blinding.copy_from_slice(&witness_bytes.identity_blinding);
+        let mut replay_secret = [0_u8; 32];
+        replay_secret.copy_from_slice(&witness_bytes.replay_secret);
+        witness_bytes.erase();
+        let witness =
+            ZkAcePrivacyWitnessV1::try_new(identity_root, identity_blinding, replay_secret)
+                .map_err(|error| {
+                    PyValueError::new_err(format!("invalid native ZK-ACE witness: {error}"))
+                })?;
+        let context = self.privacy_action_transaction_context_v1();
+        let native_context = ZkAcePrivacyActionTransactionContextV1 {
+            chain_id: context.chain_id,
+            authority: context.authority,
+            creation_time: context.creation_time,
+            time_to_live: context.time_to_live,
+            nonce: context.nonce,
+            fee_payment: context.fee_payment,
+            metadata: context.metadata,
+        };
+        let result = build_signed_zk_ace_privacy_transfer_v1(
+            native_context,
+            transfer,
+            witness,
+            canonical_genesis_hash,
+            &private_key,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "native ZK-ACE transparent-transfer construction failed: {error}"
+            ))
+        })?;
+        let envelope = self.envelope_from_signed(result.signed_transaction())?;
+        if envelope.hash != result.transaction_hash() {
+            return Err(PyRuntimeError::new_err(
+                "native ZK-ACE transaction hash recomputation failed",
+            ));
+        }
+        let effect = result.effect();
+        let output = PrivacyZkAceTransferActionBuildResultV1 {
+            envelope: Py::new(py, envelope)?,
+            transaction_intent_digest: result.transaction_intent_digest(),
+            statement_digest: result.statement_digest(),
+            proof_envelope_hash: result.proof_envelope_hash(),
+            statement_bytes: result.statement_bytes(),
+            proof_bytes: result.proof_bytes(),
+            encoded_proof_envelope_bytes: result.encoded_proof_envelope_bytes(),
+            adaptive_signed_transaction_bytes: result.adaptive_signed_transaction_bytes(),
+            policy_id: *effect.policy_id.as_bytes(),
+            authorization_epoch: effect.authorization_epoch,
+            source_account_id: effect.source.to_string(),
+            destination_account_id: effect.destination.to_string(),
+            asset_definition_id: effect.asset_definition_id.to_string(),
+            amount: effect.amount.to_string(),
+            replay_nullifier: *effect.replay_nullifier.as_bytes(),
+        };
+        self.clear_transaction_state();
+        Ok(output)
+    }
+
+    /// Build and sign exactly one native, intent-bound Jindo component action.
+    ///
+    /// The builder must not contain an executable, batch, contract, IVM
+    /// override, or attachment. Witness bytes are copied once into fixed-width
+    /// native field elements and erased on every return path.
+    #[pyo3(signature = (
+        private_key,
+        canonical_genesis_hash,
+        witness_polynomials,
+        evaluation_point
+    ))]
+    fn sign_privacy_jindo_action_v1(
+        &mut self,
+        py: Python<'_>,
+        private_key: &[u8],
+        canonical_genesis_hash: &[u8],
+        witness_polynomials: Vec<Vec<Vec<u8>>>,
+        evaluation_point: &[u8],
+    ) -> PyResult<PrivacyJindoActionBuildResultV1> {
+        let mut witness_bytes = ZeroizingJindoWitnessBytes(witness_polynomials);
+        if self.explicit_batch
+            || !self.executable_items.is_empty()
+            || self.executable_override.is_some()
+            || !self.attachments.is_empty()
+        {
+            return Err(PyValueError::new_err(
+                "native Jindo action requires an otherwise empty transaction builder",
+            ));
+        }
+
+        let canonical_genesis_hash: [u8; 32] = canonical_genesis_hash.try_into().map_err(|_| {
+            PyValueError::new_err("canonical_genesis_hash must be exactly 32 bytes")
+        })?;
+        let mut evaluation_encoding: [u8; 32] = evaluation_point
+            .try_into()
+            .map_err(|_| PyValueError::new_err("evaluation_point must be exactly 32 bytes"))?;
+        let evaluation_point = PrivacyJindoFieldElementV1::new(evaluation_encoding);
+        evaluation_encoding.fill(0);
+
+        let mut polynomials = Vec::with_capacity(witness_bytes.0.len());
+        for (polynomial_index, raw_polynomial) in witness_bytes.0.iter_mut().enumerate() {
+            let mut polynomial = Vec::with_capacity(raw_polynomial.len());
+            for (coefficient_index, raw_coefficient) in raw_polynomial.iter_mut().enumerate() {
+                if raw_coefficient.len() != 32 {
+                    return Err(PyValueError::new_err(format!(
+                        "witness_polynomials[{polynomial_index}][{coefficient_index}] must be exactly 32 bytes"
+                    )));
+                }
+                let mut encoding = [0_u8; 32];
+                encoding.copy_from_slice(raw_coefficient);
+                raw_coefficient.fill(0);
+                polynomial.push(PrivacyJindoFieldElementV1::new(encoding));
+                encoding.fill(0);
+            }
+            polynomials.push(polynomial);
+        }
+        let witness = JindoPrivacyActionWitnessV1::try_new(polynomials, evaluation_point).map_err(
+            |error| PyValueError::new_err(format!("invalid native Jindo witness: {error}")),
+        )?;
+        let private_key = parse_private_key(private_key)?;
+
+        // Resolve the default clock once. Both construction passes receive
+        // this exact signature-bound millisecond value.
+        let resolved_builder = self.to_model_builder();
+        let context = JindoPrivacyActionTransactionContextV1 {
+            chain_id: self.chain_id.clone(),
+            authority: self.authority.clone(),
+            creation_time: Duration::from_millis(resolved_builder.payload().creation_time_ms),
+            time_to_live: self.ttl,
+            nonce: self.nonce,
+            fee_payment: self.fee_payment.clone(),
+            metadata: self.metadata.clone(),
+        };
+        let result =
+            build_signed_privacy_action_v1(context, witness, canonical_genesis_hash, &private_key)
+                .map_err(|error| {
+                    PyValueError::new_err(format!(
+                        "native Jindo action construction failed: {error}"
+                    ))
+                })?;
+        let envelope = self.envelope_from_signed(result.signed_transaction())?;
+        if envelope.hash != result.transaction_hash() {
+            return Err(PyRuntimeError::new_err(
+                "native Jindo action transaction hash recomputation failed",
+            ));
+        }
+        let output = PrivacyJindoActionBuildResultV1 {
+            envelope: Py::new(py, envelope)?,
+            transaction_intent_digest: result.transaction_intent_digest(),
+            statement_digest: result.statement_digest(),
+            proof_envelope_hash: result.proof_envelope_hash(),
+            statement_bytes: result.statement_bytes(),
+            proof_bytes: result.proof_bytes(),
+            encoded_proof_envelope_bytes: result.encoded_proof_envelope_bytes(),
+            adaptive_signed_transaction_bytes: result.adaptive_signed_transaction_bytes(),
+            polynomial_count: result.polynomial_count(),
+            coefficient_counts: result.coefficient_counts().to_vec(),
+        };
+        self.clear_transaction_state();
+        Ok(output)
+    }
+
+    /// Build and sign exactly one native, intent-bound VeRange component action.
+    ///
+    /// `values` and `blindings` are private prover inputs. The signed result
+    /// exposes only their ordered P-256 commitments and public proof metadata.
+    #[pyo3(signature = (
+        private_key,
+        canonical_genesis_hash,
+        asset_definition_id,
+        policy_id,
+        bit_length,
+        values,
+        blindings
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn sign_privacy_verange_action_v1(
+        &mut self,
+        py: Python<'_>,
+        private_key: &[u8],
+        canonical_genesis_hash: &[u8],
+        asset_definition_id: &str,
+        policy_id: &[u8],
+        bit_length: u16,
+        values: Vec<u64>,
+        blindings: Vec<Vec<u8>>,
+    ) -> PyResult<PrivacyVeRangeActionBuildResultV1> {
+        let mut witness_bytes = ZeroizingVeRangeWitnessBytes { values, blindings };
+        self.require_empty_privacy_action_builder_v1("VeRange")?;
+        if witness_bytes.values.is_empty() || witness_bytes.values.len() > 8 {
+            return Err(PyValueError::new_err(
+                "VeRange values and blindings must contain between 1 and 8 entries",
+            ));
+        }
+        if witness_bytes.values.len() != witness_bytes.blindings.len() {
+            return Err(PyValueError::new_err(
+                "VeRange values and blindings must have exactly matching lengths",
+            ));
+        }
+        let (native_bit_length, public_bit_length) = match bit_length {
+            32 => (
+                VeRangeBitLengthV1::Bits32,
+                PrivacyVeRangeBitLengthV1::Bits32,
+            ),
+            64 => (
+                VeRangeBitLengthV1::Bits64,
+                PrivacyVeRangeBitLengthV1::Bits64,
+            ),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "VeRange bit_length must be exactly 32 or 64",
+                ));
+            }
+        };
+        if native_bit_length == VeRangeBitLengthV1::Bits32
+            && witness_bytes
+                .values
+                .iter()
+                .any(|value| *value > u64::from(u32::MAX))
+        {
+            return Err(PyValueError::new_err(
+                "VeRange 32-bit values must be in the closed range [0, 2^32)",
+            ));
+        }
+        require_non_blank_unpadded(asset_definition_id, "asset_definition_id")?;
+        let asset_definition_id =
+            AssetDefinitionId::from_str(asset_definition_id).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid VeRange asset_definition_id `{asset_definition_id}`: {error}"
+                ))
+            })?;
+        let policy_id =
+            PrivacyPolicyIdV1::new(python_nonzero_privacy_digest_v1(policy_id, "policy_id")?);
+        let canonical_genesis_hash =
+            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let private_key = parse_private_key(private_key)?;
+        self.validate_privacy_action_signing_authority_v1(&private_key)?;
+        let profile = python_compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            "VeRange",
+        )?;
+        let parameters = VeRangeParametersV1::for_profile(native_bit_length).map_err(|error| {
+            PyRuntimeError::new_err(format!(
+                "native VeRange parameter construction failed: {error}"
+            ))
+        })?;
+        if parameters.parameter_digest() != *profile.parameter_digest.as_bytes() {
+            return Err(PyRuntimeError::new_err(
+                "native VeRange parameters do not match the compiled privacy profile",
+            ));
+        }
+
+        let mut blindings = Vec::with_capacity(witness_bytes.blindings.len());
+        for (index, raw_blinding) in witness_bytes.blindings.iter_mut().enumerate() {
+            if raw_blinding.len() != 32 {
+                return Err(PyValueError::new_err(format!(
+                    "blindings[{index}] must be exactly 32 bytes"
+                )));
+            }
+            let mut encoding = [0_u8; 32];
+            encoding.copy_from_slice(raw_blinding);
+            raw_blinding.fill(0);
+            let blinding = SecretScalarV1::from_bytes(encoding).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "blindings[{index}] is not a canonical non-zero P-256 scalar: {error}"
+                ))
+            })?;
+            encoding.fill(0);
+            blindings.push(blinding);
+        }
+        let commitments = witness_bytes
+            .values
+            .iter()
+            .copied()
+            .zip(&blindings)
+            .map(|(value, blinding)| commit(native_bit_length, value, blinding))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                PyValueError::new_err(format!("invalid native VeRange witness: {error}"))
+            })?;
+        let public_commitments = commitments
+            .iter()
+            .map(|commitment| PrivacyP256PointV1::new(*commitment.as_bytes()))
+            .collect::<Vec<_>>();
+        let aggregation_count = u32::try_from(public_commitments.len())
+            .map_err(|_| PyRuntimeError::new_err("VeRange aggregation count overflowed"))?;
+        let context = self.privacy_action_transaction_context_v1();
+        let mut statement = VeRangeTransparentRangeStatementV1 {
+            context: python_privacy_statement_context_v1(
+                &context,
+                profile,
+                PrivacyTransactionIntentDigestV1::new([0; 32]),
+            ),
+            asset_definition_id,
+            policy_id,
+            value_commitments: public_commitments,
+            bit_length: public_bit_length,
+            aggregation_count,
+        };
+        let draft_statement = PrivacyStatementV1::VeRangeTransparentRangeV1(statement.clone());
+        let transaction_intent_digest = python_privacy_action_intent_v1(
+            &context,
+            python_privacy_placeholder_envelope_v1(
+                profile,
+                draft_statement,
+                PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(Vec::new())),
+            ),
+        )?;
+        statement.context.transaction_intent_digest = transaction_intent_digest;
+        let typed_statement = PrivacyStatementV1::VeRangeTransparentRangeV1(statement.clone());
+        let statement_digest = typed_statement
+            .digest()
+            .map_err(|_| PyRuntimeError::new_err("native VeRange statement digest failed"))?;
+        let transcript_binding = TranscriptBindingV1 {
+            chain_id: context.chain_id.as_str().as_bytes(),
+            genesis_hash: canonical_genesis_hash,
+            action_index: 0,
+            statement_digest: *statement_digest.as_bytes(),
+            parameter_id: *profile.parameter_id.as_bytes(),
+            parameter_digest: *profile.parameter_digest.as_bytes(),
+            verifier_digest: *profile.verifier_digest.as_bytes(),
+            statement_schema_digest: *profile.statement_schema_digest.as_bytes(),
+            engine_manifest_digest: *profile.engine_manifest_digest.as_bytes(),
+            generator_digest: parameters.generator_digest(),
+        };
+        let native_statement = VeRangeType1BatchStatementV1::new(
+            native_bit_length,
+            commitments.clone(),
+            transcript_binding,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!("invalid native VeRange statement: {error}"))
+        })?;
+        let proof = prove_batch(
+            &native_statement,
+            &witness_bytes.values,
+            &blindings,
+            &mut OsRng06,
+        )
+        .map_err(|error| {
+            PyRuntimeError::new_err(format!("native VeRange proof construction failed: {error}"))
+        })?
+        .encode();
+        let signed = finalize_python_privacy_action_v1(
+            &context,
+            profile,
+            typed_statement,
+            PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(proof)),
+            &private_key,
+        )?;
+        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
+            return Err(PyRuntimeError::new_err(
+                "native VeRange action intent digest changed during proof construction",
+            ));
+        }
+        let envelope = self.envelope_from_signed(&signed.signed_transaction)?;
+        if envelope.hash != signed.transaction_hash {
+            return Err(PyRuntimeError::new_err(
+                "native VeRange action transaction hash recomputation failed",
+            ));
+        }
+        let output = PrivacyVeRangeActionBuildResultV1 {
+            envelope: Py::new(py, envelope)?,
+            transaction_intent_digest: signed.transaction_intent_digest,
+            statement_digest: signed.statement_digest,
+            proof_envelope_hash: signed.proof_envelope_hash,
+            statement_bytes: signed.statement_bytes,
+            proof_bytes: signed.proof_bytes,
+            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
+            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
+            asset_definition_id: statement.asset_definition_id.to_string(),
+            policy_id: *statement.policy_id.as_bytes(),
+            bit_length,
+            aggregation_count,
+            value_commitments: commitments
+                .iter()
+                .map(|commitment| *commitment.as_bytes())
+                .collect(),
+        };
+        self.clear_transaction_state();
+        Ok(output)
+    }
+
+    /// Build and sign one canonical ZK-AMS credential-admission batch.
+    ///
+    /// Hidden credential fields, seed scalars, and issuer signatures are
+    /// copied into zeroizing native storage and erased before the signed
+    /// transaction is returned. The resulting action atomically advances the
+    /// admitted-identity registry if consensus accepts every ordered anchor.
+    #[pyo3(signature = (
+        private_key,
+        canonical_genesis_hash,
+        issuer_id,
+        issuer_public_key,
+        issuer_policy_record_digest,
+        registry_id,
+        registry_record_digest,
+        policy_id,
+        policy_digest,
+        account_registry_root,
+        account_registry_root_epoch,
+        subject_commitments,
+        credential_nonces,
+        seed_secrets,
+        issuer_signatures
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn sign_privacy_zk_ams_batch_admission_action_v1(
+        &mut self,
+        py: Python<'_>,
+        private_key: &[u8],
+        canonical_genesis_hash: &[u8],
+        issuer_id: &[u8],
+        issuer_public_key: &[u8],
+        issuer_policy_record_digest: &[u8],
+        registry_id: &[u8],
+        registry_record_digest: &[u8],
+        policy_id: &[u8],
+        policy_digest: &[u8],
+        account_registry_root: &[u8],
+        account_registry_root_epoch: u64,
+        subject_commitments: Vec<Vec<u8>>,
+        credential_nonces: Vec<Vec<u8>>,
+        seed_secrets: Vec<Vec<u8>>,
+        issuer_signatures: Vec<Vec<u8>>,
+    ) -> PyResult<PrivacyZkAmsBatchAdmissionActionBuildResultV1> {
+        let mut witness_bytes = ZeroizingZkAmsBatchWitnessBytes {
+            subject_commitments,
+            credential_nonces,
+            seed_secrets,
+            issuer_signatures,
+        };
+        self.require_empty_privacy_action_builder_v1("ZK-AMS batch-admission")?;
+        let batch_size = witness_bytes.subject_commitments.len();
+        if batch_size == 0 || batch_size > ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 {
+            return Err(PyValueError::new_err(format!(
+                "ZK-AMS admission batch must contain between 1 and {ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1} credentials"
+            )));
+        }
+        if witness_bytes.credential_nonces.len() != batch_size
+            || witness_bytes.seed_secrets.len() != batch_size
+            || witness_bytes.issuer_signatures.len() != batch_size
+        {
+            return Err(PyValueError::new_err(
+                "ZK-AMS subject commitments, credential nonces, seed secrets, and issuer signatures must have exactly matching lengths",
+            ));
+        }
+        let canonical_genesis_hash =
+            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let governance = python_zk_ams_governance_v1(
+            issuer_id,
+            issuer_public_key,
+            issuer_policy_record_digest,
+            registry_id,
+            registry_record_digest,
+            policy_id,
+            policy_digest,
+            account_registry_root,
+            account_registry_root_epoch,
+        )?;
+        let next_epoch = governance
+            .account_registry_root_epoch
+            .checked_add(1)
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "account_registry_root_epoch has no canonical successor epoch",
+                )
+            })?;
+        let private_key = parse_private_key(private_key)?;
+        self.validate_privacy_action_signing_authority_v1(&private_key)?;
+        let profile =
+            python_compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, "ZK-AMS")?;
+
+        let mut material = ZeroizingZkAmsBatchNativeMaterial {
+            credentials: Vec::with_capacity(batch_size),
+            issuer_signatures: Vec::with_capacity(batch_size),
+            seed_secrets: Vec::with_capacity(batch_size),
+        };
+        let mut anchors = Vec::with_capacity(batch_size);
+        for index in 0..batch_size {
+            let mut subject_commitment = python_nonzero_privacy_digest_v1(
+                &witness_bytes.subject_commitments[index],
+                &format!("subject_commitments[{index}]"),
+            )?;
+            witness_bytes.subject_commitments[index].fill(0);
+            let mut credential_nonce = python_nonzero_privacy_digest_v1(
+                &witness_bytes.credential_nonces[index],
+                &format!("credential_nonces[{index}]"),
+            )?;
+            witness_bytes.credential_nonces[index].fill(0);
+
+            if witness_bytes.seed_secrets[index].len() != 32 {
+                return Err(PyValueError::new_err(format!(
+                    "seed_secrets[{index}] must be exactly 32 bytes"
+                )));
+            }
+            let mut seed_encoding = [0_u8; 32];
+            seed_encoding.copy_from_slice(&witness_bytes.seed_secrets[index]);
+            witness_bytes.seed_secrets[index].fill(0);
+            let seed_secret_result = ZkAmsSeedSecretV1::from_bytes(seed_encoding);
+            seed_encoding.fill(0);
+            let seed_secret = seed_secret_result.map_err(|error| {
+                PyValueError::new_err(format!(
+                    "seed_secrets[{index}] is not a canonical non-zero Ristretto scalar: {error}"
+                ))
+            })?;
+            let seed_public_key =
+                PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(&seed_secret));
+
+            if witness_bytes.issuer_signatures[index].len() != 64 {
+                return Err(PyValueError::new_err(format!(
+                    "issuer_signatures[{index}] must be exactly 64 bytes"
+                )));
+            }
+            let mut issuer_signature = [0_u8; 64];
+            issuer_signature.copy_from_slice(&witness_bytes.issuer_signatures[index]);
+            witness_bytes.issuer_signatures[index].fill(0);
+
+            let credential = PrivacyZkAmsPersonhoodCredentialV1 {
+                version: ZK_AMS_PHC_VERSION_V1,
+                issuer_id: governance.issuer_id,
+                policy_id: governance.policy_id,
+                subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new(subject_commitment),
+                seed_public_key,
+                credential_nonce: PrivacyZkAmsCredentialNonceV1::new(credential_nonce),
+            };
+            subject_commitment.fill(0);
+            credential_nonce.fill(0);
+            anchors.push(PrivacyZkAmsAdmissionAnchorV1 {
+                phc_hash: credential.digest(),
+                seed_public_key,
+            });
+            material.credentials.push(credential);
+            material.issuer_signatures.push(issuer_signature);
+            issuer_signature.fill(0);
+            material.seed_secrets.push(seed_secret);
+        }
+        witness_bytes.erase();
+
+        let batch_size_u32 = u32::try_from(batch_size)
+            .map_err(|_| PyRuntimeError::new_err("ZK-AMS admission batch size overflowed"))?;
+        let mut next_root = governance.account_registry_root;
+        for (index, anchor) in anchors.iter().copied().enumerate() {
+            next_root = zk_ams_registry_transition_root_v1(
+                governance.registry_id,
+                next_root,
+                governance.account_registry_root_epoch,
+                next_epoch,
+                batch_size_u32,
+                u32::try_from(index).expect("ZK-AMS admission batch is bounded to eight"),
+                anchor,
+            );
+        }
+
+        let context = self.privacy_action_transaction_context_v1();
+        let mut statement = IrohaZkAmsStatementV1 {
+            context: python_privacy_statement_context_v1(
+                &context,
+                profile,
+                PrivacyTransactionIntentDigestV1::new([0; 32]),
+            ),
+            issuer_id: governance.issuer_id,
+            issuer_public_key: governance.issuer_public_key,
+            issuer_policy_record_digest: governance.issuer_policy_record_digest,
+            registry_id: governance.registry_id,
+            registry_record_digest: governance.registry_record_digest,
+            policy_id: governance.policy_id,
+            policy_digest: governance.policy_digest,
+            action: PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
+                account_registry_root: governance.account_registry_root,
+                account_registry_root_epoch: governance.account_registry_root_epoch,
+                next_account_registry_root: next_root,
+                next_account_registry_root_epoch: next_epoch,
+                anchors: anchors.clone(),
+            }),
+        };
+        let transaction_intent_digest = python_privacy_action_intent_v1(
+            &context,
+            python_privacy_placeholder_envelope_v1(
+                profile,
+                PrivacyStatementV1::IrohaZkAmsV1(statement.clone()),
+                PrivacyProofV1::IrohaZkAmsV1(
+                    IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
+                        PrivacyProofBytesV1::new(Vec::new()),
+                    ),
+                ),
+            ),
+        )?;
+        statement.context.transaction_intent_digest = transaction_intent_digest;
+        let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+        let statement_digest = typed_statement
+            .digest()
+            .map_err(|_| PyRuntimeError::new_err("native ZK-AMS statement digest failed"))?;
+        let binding = python_zk_ams_transcript_binding_v1(
+            &context,
+            profile,
+            canonical_genesis_hash,
+            *statement_digest.as_bytes(),
+        );
+        let native_witnesses = material
+            .credentials
+            .iter()
+            .zip(&material.issuer_signatures)
+            .zip(&material.seed_secrets)
+            .map(|((credential, signature), secret)| {
+                ZkAmsBatchCredentialWitnessV1::new(credential, signature, secret)
+            })
+            .collect::<Vec<_>>();
+        let config = ZkAmsMaskedProverConfigV1::new(1).map_err(|error| {
+            PyRuntimeError::new_err(format!(
+                "native ZK-AMS prover configuration failed: {error}"
+            ))
+        })?;
+        let proof = prove_zk_ams_batch_admission_v1(
+            &statement,
+            &binding,
+            &native_witnesses,
+            config,
+            &mut OsRng06,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "native ZK-AMS batch-admission proof construction failed: {error}"
+            ))
+        })?;
+        drop(native_witnesses);
+        material.erase();
+        let signed = finalize_python_privacy_action_v1(
+            &context,
+            profile,
+            typed_statement,
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
+                PrivacyProofBytesV1::new(proof),
+            )),
+            &private_key,
+        )?;
+        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
+            return Err(PyRuntimeError::new_err(
+                "native ZK-AMS batch-admission action intent digest changed during proof construction",
+            ));
+        }
+        let envelope = self.envelope_from_signed(&signed.signed_transaction)?;
+        if envelope.hash != signed.transaction_hash {
+            return Err(PyRuntimeError::new_err(
+                "native ZK-AMS batch-admission transaction hash recomputation failed",
+            ));
+        }
+        let output = PrivacyZkAmsBatchAdmissionActionBuildResultV1 {
+            envelope: Py::new(py, envelope)?,
+            transaction_intent_digest: signed.transaction_intent_digest,
+            statement_digest: signed.statement_digest,
+            proof_envelope_hash: signed.proof_envelope_hash,
+            statement_bytes: signed.statement_bytes,
+            proof_bytes: signed.proof_bytes,
+            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
+            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
+            issuer_id: *governance.issuer_id.as_bytes(),
+            issuer_public_key: *governance.issuer_public_key.as_bytes(),
+            issuer_policy_record_digest: *governance.issuer_policy_record_digest.as_bytes(),
+            registry_id: *governance.registry_id.as_bytes(),
+            registry_record_digest: *governance.registry_record_digest.as_bytes(),
+            policy_id: *governance.policy_id.as_bytes(),
+            policy_digest: *governance.policy_digest.as_bytes(),
+            account_registry_root: *governance.account_registry_root.as_bytes(),
+            account_registry_root_epoch: governance.account_registry_root_epoch,
+            next_account_registry_root: *next_root.as_bytes(),
+            next_account_registry_root_epoch: next_epoch,
+            phc_hashes: anchors
+                .iter()
+                .map(|anchor| *anchor.phc_hash.as_bytes())
+                .collect(),
+            seed_public_keys: anchors
+                .iter()
+                .map(|anchor| *anchor.seed_public_key.as_bytes())
+                .collect(),
+        };
+        self.clear_transaction_state();
+        Ok(output)
+    }
+
+    /// Build and sign one canonical anonymous ZK-AMS account provisioning.
+    ///
+    /// The signer position is derived by matching the native public key of the
+    /// private seed against the strictly ordered 16/32/64-member registry ring;
+    /// callers cannot select or alias a signer index.
+    #[pyo3(signature = (
+        private_key,
+        canonical_genesis_hash,
+        issuer_id,
+        issuer_public_key,
+        issuer_policy_record_digest,
+        registry_id,
+        registry_record_digest,
+        policy_id,
+        policy_digest,
+        account_registry_root,
+        account_registry_root_epoch,
+        admitted_seed_key_ring,
+        account_id,
+        seed_secret
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn sign_privacy_zk_ams_provision_account_action_v1(
+        &mut self,
+        py: Python<'_>,
+        private_key: &[u8],
+        canonical_genesis_hash: &[u8],
+        issuer_id: &[u8],
+        issuer_public_key: &[u8],
+        issuer_policy_record_digest: &[u8],
+        registry_id: &[u8],
+        registry_record_digest: &[u8],
+        policy_id: &[u8],
+        policy_digest: &[u8],
+        account_registry_root: &[u8],
+        account_registry_root_epoch: u64,
+        admitted_seed_key_ring: Vec<Vec<u8>>,
+        account_id: &str,
+        seed_secret: Vec<u8>,
+    ) -> PyResult<PrivacyZkAmsProvisionAccountActionBuildResultV1> {
+        let mut seed_secret_bytes = ZeroizingZkAmsProvisionWitnessBytes(seed_secret);
+        self.require_empty_privacy_action_builder_v1("ZK-AMS account-provisioning")?;
+        if !ZK_AMS_RING_SIZES_V1.contains(&admitted_seed_key_ring.len()) {
+            return Err(PyValueError::new_err(format!(
+                "admitted_seed_key_ring must contain exactly one of the canonical sizes {ZK_AMS_RING_SIZES_V1:?}"
+            )));
+        }
+        let canonical_genesis_hash =
+            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let governance = python_zk_ams_governance_v1(
+            issuer_id,
+            issuer_public_key,
+            issuer_policy_record_digest,
+            registry_id,
+            registry_record_digest,
+            policy_id,
+            policy_digest,
+            account_registry_root,
+            account_registry_root_epoch,
+        )?;
+        let mut ring = Vec::with_capacity(admitted_seed_key_ring.len());
+        for (index, key) in admitted_seed_key_ring.iter().enumerate() {
+            ring.push(PrivacyZkAmsSeedPublicKeyV1::new(
+                python_nonzero_privacy_digest_v1(key, &format!("admitted_seed_key_ring[{index}]"))?,
+            ));
+        }
+        if ring.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(PyValueError::new_err(
+                "admitted_seed_key_ring must be strictly increasing and duplicate-free",
+            ));
+        }
+        require_non_blank_unpadded(account_id, "account_id")?;
+        let account_id = AccountId::from_str(account_id).map_err(|error| {
+            PyValueError::new_err(format!("invalid ZK-AMS account_id `{account_id}`: {error}"))
+        })?;
+        if seed_secret_bytes.0.len() != 32 {
+            return Err(PyValueError::new_err(
+                "seed_secret must be exactly 32 bytes",
+            ));
+        }
+        let mut seed_encoding = [0_u8; 32];
+        seed_encoding.copy_from_slice(&seed_secret_bytes.0);
+        seed_secret_bytes.0.fill(0);
+        let seed_secret_result = ZkAmsSeedSecretV1::from_bytes(seed_encoding);
+        seed_encoding.fill(0);
+        let seed_secret = seed_secret_result.map_err(|error| {
+            PyValueError::new_err(format!(
+                "seed_secret is not a canonical non-zero Ristretto scalar: {error}"
+            ))
+        })?;
+        let signer_public_key =
+            PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(&seed_secret));
+        let signer_index = ring.binary_search(&signer_public_key).map_err(|_| {
+            PyValueError::new_err(
+                "seed_secret does not correspond to a member of admitted_seed_key_ring",
+            )
+        })?;
+        let key_image =
+            PrivacyZkAmsKeyImageV1::new(zk_ams_key_image_v1(&seed_secret).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "native ZK-AMS key-image derivation failed: {error}"
+                ))
+            })?);
+        let private_key = parse_private_key(private_key)?;
+        self.validate_privacy_action_signing_authority_v1(&private_key)?;
+        let profile =
+            python_compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, "ZK-AMS")?;
+        let context = self.privacy_action_transaction_context_v1();
+        let mut statement = IrohaZkAmsStatementV1 {
+            context: python_privacy_statement_context_v1(
+                &context,
+                profile,
+                PrivacyTransactionIntentDigestV1::new([0; 32]),
+            ),
+            issuer_id: governance.issuer_id,
+            issuer_public_key: governance.issuer_public_key,
+            issuer_policy_record_digest: governance.issuer_policy_record_digest,
+            registry_id: governance.registry_id,
+            registry_record_digest: governance.registry_record_digest,
+            policy_id: governance.policy_id,
+            policy_digest: governance.policy_digest,
+            action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
+                account_registry_root: governance.account_registry_root,
+                account_registry_root_epoch: governance.account_registry_root_epoch,
+                admitted_seed_key_ring: ring.clone(),
+                account_id: account_id.clone(),
+                key_image,
+            }),
+        };
+        let transaction_intent_digest = python_privacy_action_intent_v1(
+            &context,
+            python_privacy_placeholder_envelope_v1(
+                profile,
+                PrivacyStatementV1::IrohaZkAmsV1(statement.clone()),
+                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
+                    PrivacyProofBytesV1::new(Vec::new()),
+                )),
+            ),
+        )?;
+        statement.context.transaction_intent_digest = transaction_intent_digest;
+        let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+        let statement_digest = typed_statement
+            .digest()
+            .map_err(|_| PyRuntimeError::new_err("native ZK-AMS statement digest failed"))?;
+        let binding = python_zk_ams_transcript_binding_v1(
+            &context,
+            profile,
+            canonical_genesis_hash,
+            *statement_digest.as_bytes(),
+        );
+        let proof = sign_zk_ams_provision_statement_v1(
+            &statement,
+            &binding,
+            signer_index,
+            &seed_secret,
+            &mut OsRng06,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "native ZK-AMS account-provisioning proof construction failed: {error}"
+            ))
+        })?;
+        drop(seed_secret);
+        let signed = finalize_python_privacy_action_v1(
+            &context,
+            profile,
+            typed_statement,
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
+                PrivacyProofBytesV1::new(proof),
+            )),
+            &private_key,
+        )?;
+        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
+            return Err(PyRuntimeError::new_err(
+                "native ZK-AMS account-provisioning action intent digest changed during proof construction",
+            ));
+        }
+        let envelope = self.envelope_from_signed(&signed.signed_transaction)?;
+        if envelope.hash != signed.transaction_hash {
+            return Err(PyRuntimeError::new_err(
+                "native ZK-AMS account-provisioning transaction hash recomputation failed",
+            ));
+        }
+        let output = PrivacyZkAmsProvisionAccountActionBuildResultV1 {
+            envelope: Py::new(py, envelope)?,
+            transaction_intent_digest: signed.transaction_intent_digest,
+            statement_digest: signed.statement_digest,
+            proof_envelope_hash: signed.proof_envelope_hash,
+            statement_bytes: signed.statement_bytes,
+            proof_bytes: signed.proof_bytes,
+            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
+            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
+            issuer_id: *governance.issuer_id.as_bytes(),
+            issuer_public_key: *governance.issuer_public_key.as_bytes(),
+            issuer_policy_record_digest: *governance.issuer_policy_record_digest.as_bytes(),
+            registry_id: *governance.registry_id.as_bytes(),
+            registry_record_digest: *governance.registry_record_digest.as_bytes(),
+            policy_id: *governance.policy_id.as_bytes(),
+            policy_digest: *governance.policy_digest.as_bytes(),
+            account_registry_root: *governance.account_registry_root.as_bytes(),
+            account_registry_root_epoch: governance.account_registry_root_epoch,
+            admitted_seed_key_ring: ring.iter().map(|key| *key.as_bytes()).collect(),
+            account_id: account_id.to_string(),
+            key_image: *key_image.as_bytes(),
+        };
+        self.clear_transaction_state();
+        Ok(output)
+    }
+
+    /// Freeze exactly one native, intent-bound Vega mDL age action for holder signing.
+    ///
+    /// This is phase one of the first-release Vega API. It resolves the exact
+    /// transaction context once, derives the canonical transaction intent, and
+    /// returns the final `H_dev` that the credential holder must sign. The
+    /// returned preparation owns that frozen draft and is consumed by
+    /// `finalize_privacy_vega_action_v1`.
+    #[pyo3(signature = (
+        canonical_genesis_hash,
+        issuer_id,
+        issuer_record_epoch,
+        issuer_record_digest,
+        issuer_public_key,
+        presentation_year,
+        presentation_month,
+        presentation_day,
+        minimum_age_years,
+        reader_challenge,
+        session_transcript_digest
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_privacy_vega_action_v1(
+        &self,
+        canonical_genesis_hash: &[u8],
+        issuer_id: &[u8],
+        issuer_record_epoch: u64,
+        issuer_record_digest: &[u8],
+        issuer_public_key: &[u8],
+        presentation_year: u16,
+        presentation_month: u8,
+        presentation_day: u8,
+        minimum_age_years: u8,
+        reader_challenge: &[u8],
+        session_transcript_digest: &[u8],
+    ) -> PyResult<PrivacyVegaActionPreparationV1> {
+        self.require_empty_privacy_action_builder_v1("Vega")?;
+        let canonical_genesis_hash =
+            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let issuer_id = python_nonzero_privacy_digest_v1(issuer_id, "issuer_id")?;
+        if issuer_record_epoch == 0 {
+            return Err(PyValueError::new_err(
+                "issuer_record_epoch must be non-zero",
+            ));
+        }
+        let issuer_record_digest =
+            python_nonzero_privacy_digest_v1(issuer_record_digest, "issuer_record_digest")?;
+        let issuer_public_key = fixed_array::<33>(issuer_public_key, "issuer_public_key")?;
+        let reader_challenge =
+            python_nonzero_privacy_digest_v1(reader_challenge, "reader_challenge")?;
+        let session_transcript_digest = python_nonzero_privacy_digest_v1(
+            session_transcript_digest,
+            "session_transcript_digest",
+        )?;
+        let profile = python_compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            "Vega",
+        )?;
+        let context = self.privacy_action_transaction_context_v1();
+        let mut statement = python_vega_draft_statement_v1(
+            python_privacy_statement_context_v1(
+                &context,
+                profile,
+                PrivacyTransactionIntentDigestV1::new([0; 32]),
+            ),
+            issuer_id,
+            issuer_record_epoch,
+            issuer_record_digest,
+            issuer_public_key,
+            presentation_year,
+            presentation_month,
+            presentation_day,
+            minimum_age_years,
+            reader_challenge,
+            session_transcript_digest,
+        );
+        let draft_statement = PrivacyStatementV1::VegaExistingCredentialZkV0(statement.clone());
+        let transaction_intent_digest = python_privacy_action_intent_v1(
+            &context,
+            python_privacy_placeholder_envelope_v1(
+                profile,
+                draft_statement,
+                PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
+            ),
+        )?;
+        if transaction_intent_digest.as_bytes() == &[0; 32] {
+            return Err(PyRuntimeError::new_err(
+                "native Vega action produced the reserved all-zero transaction intent",
+            ));
+        }
+        statement.context.transaction_intent_digest = transaction_intent_digest;
+        statement =
+            python_bind_vega_device_authentication_digest_v1(statement, canonical_genesis_hash)?;
+        let rebound_intent = python_privacy_action_intent_v1(
+            &context,
+            python_privacy_placeholder_envelope_v1(
+                profile,
+                PrivacyStatementV1::VegaExistingCredentialZkV0(statement.clone()),
+                PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
+            ),
+        )?;
+        if rebound_intent != transaction_intent_digest {
+            return Err(PyRuntimeError::new_err(
+                "native Vega action intent changed after binding the derived H_dev",
+            ));
+        }
+        Ok(PrivacyVegaActionPreparationV1 {
+            inner: Some(PrivacyVegaActionPreparationInnerV1 {
+                context,
+                profile,
+                canonical_genesis_hash,
+                statement,
+            }),
+        })
+    }
+
+    /// Build and sign one canonical Bootle/Lantern anonymous-credential presentation.
+    ///
+    /// The issuer-policy archive is an exact canonical public state artifact.
+    /// All forty private ring polynomials and all eight credential attributes
+    /// are parsed into the native relation witness and erased on every return
+    /// path. Public disclosures are derived from that witness, never accepted
+    /// as a second caller-controlled value.
+    #[pyo3(signature = (
+        private_key,
+        canonical_genesis_hash,
+        canonical_policy_archive,
+        disclosure_indices,
+        secret_polynomials,
+        attributes
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn sign_privacy_bootle_lantern_presentation_action_v1(
+        &mut self,
+        py: Python<'_>,
+        private_key: &[u8],
+        canonical_genesis_hash: &[u8],
+        canonical_policy_archive: &[u8],
+        disclosure_indices: Vec<u8>,
+        secret_polynomials: Vec<Vec<u16>>,
+        attributes: Vec<Vec<u8>>,
+    ) -> PyResult<PrivacyBootleLanternPresentationActionBuildResultV1> {
+        let mut witness_bytes = ZeroizingBootleLanternWitnessBytes {
+            secret_polynomials,
+            attributes,
+        };
+        self.require_empty_privacy_action_builder_v1("Bootle/Lantern presentation")?;
+        let canonical_genesis_hash =
+            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let policy = python_bootle_lantern_policy_v1(canonical_policy_archive)?;
+        if disclosure_indices
+            .iter()
+            .any(|index| usize::from(*index) >= BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
+        {
+            return Err(PyValueError::new_err(
+                "disclosure_indices must contain only indices in 0..8",
+            ));
+        }
+        if disclosure_indices.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(PyValueError::new_err(
+                "disclosure_indices must be strictly increasing and duplicate-free",
+            ));
+        }
+        if witness_bytes.secret_polynomials.len() != BOOTLE_LANTERN_SECRET_POLYNOMIALS_V1 {
+            return Err(PyValueError::new_err(format!(
+                "secret_polynomials must contain exactly {BOOTLE_LANTERN_SECRET_POLYNOMIALS_V1} polynomials in randomness/tag/signature-one/signature-two order"
+            )));
+        }
+        if witness_bytes.attributes.len() != BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 {
+            return Err(PyValueError::new_err(format!(
+                "attributes must contain exactly {BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1} eight-byte values"
+            )));
+        }
+
+        let mut randomness = python_bootle_lantern_polynomials_v1::<16>(
+            &mut witness_bytes.secret_polynomials[0..16],
+            "secret_polynomials.randomness",
+        )?;
+        let mut tag = python_bootle_lantern_polynomials_v1::<8>(
+            &mut witness_bytes.secret_polynomials[16..24],
+            "secret_polynomials.tag",
+        )?;
+        let mut signature_one = python_bootle_lantern_polynomials_v1::<8>(
+            &mut witness_bytes.secret_polynomials[24..32],
+            "secret_polynomials.signature_one",
+        )?;
+        let mut signature_two = python_bootle_lantern_polynomials_v1::<8>(
+            &mut witness_bytes.secret_polynomials[32..40],
+            "secret_polynomials.signature_two",
+        )?;
+        let mut native_attributes = [[0_u8; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1];
+        for (index, (output, raw)) in native_attributes
+            .iter_mut()
+            .zip(&mut witness_bytes.attributes)
+            .enumerate()
+        {
+            if raw.len() != 8 {
+                return Err(PyValueError::new_err(format!(
+                    "attributes[{index}] must be exactly 8 bytes"
+                )));
+            }
+            output.copy_from_slice(raw);
+            raw.fill(0);
+        }
+        witness_bytes.erase();
+
+        let disclosures = disclosure_indices
+            .iter()
+            .copied()
+            .map(|index| BootleLanternDisclosedAttributeV1 {
+                index,
+                value: BootleLanternAttributeValueV1::new(native_attributes[usize::from(index)]),
+            })
+            .collect::<Vec<_>>();
+        let private_key = parse_private_key(private_key)?;
+        self.validate_privacy_action_signing_authority_v1(&private_key)?;
+        let profile = python_compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            "Bootle/Lantern",
+        )?;
+        let context = self.privacy_action_transaction_context_v1();
+        let mut statement = IrohaBootleLanternAnoncredStatementV1 {
+            context: python_privacy_statement_context_v1(
+                &context,
+                profile,
+                PrivacyTransactionIntentDigestV1::new([0; 32]),
+            ),
+            issuer_id: policy.issuer_id,
+            policy_id: policy.policy_id,
+            issuer_policy_epoch: policy.epoch,
+            issuer_policy_record_digest: policy.record_digest,
+            issuer_parameter_id: policy.issuer_parameter_id,
+            issuer_parameter_digest: policy.issuer_parameter_digest,
+            disclosures: disclosures.clone(),
+        };
+        let transaction_intent_digest = python_privacy_action_intent_v1(
+            &context,
+            python_privacy_placeholder_envelope_v1(
+                profile,
+                PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone()),
+                PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(Vec::new())),
+            ),
+        )?;
+        statement.context.transaction_intent_digest = transaction_intent_digest;
+        let typed_statement = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
+        let witness = BootleLanternPresentationWitnessV1 {
+            randomness,
+            tag,
+            signature_one,
+            signature_two,
+            attributes: native_attributes,
+        };
+        randomness.fill(ApplicationPolynomialV1::ZERO);
+        tag.fill(ApplicationPolynomialV1::ZERO);
+        signature_one.fill(ApplicationPolynomialV1::ZERO);
+        signature_two.fill(ApplicationPolynomialV1::ZERO);
+        native_attributes.fill([0; 8]);
+        let proof = prove_bound_presentation_v1(
+            &statement,
+            &policy,
+            canonical_genesis_hash,
+            &witness,
+            &mut OsRng06,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "native Bootle/Lantern presentation proof construction failed: {error}"
+            ))
+        })?
+        .encode();
+        drop(witness);
+        let signed = finalize_python_privacy_action_v1(
+            &context,
+            profile,
+            typed_statement,
+            PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
+            &private_key,
+        )?;
+        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
+            return Err(PyRuntimeError::new_err(
+                "native Bootle/Lantern presentation action intent digest changed during proof construction",
+            ));
+        }
+        let envelope = self.envelope_from_signed(&signed.signed_transaction)?;
+        if envelope.hash != signed.transaction_hash {
+            return Err(PyRuntimeError::new_err(
+                "native Bootle/Lantern presentation transaction hash recomputation failed",
+            ));
+        }
+        let output = PrivacyBootleLanternPresentationActionBuildResultV1 {
+            envelope: Py::new(py, envelope)?,
+            transaction_intent_digest: signed.transaction_intent_digest,
+            statement_digest: signed.statement_digest,
+            proof_envelope_hash: signed.proof_envelope_hash,
+            statement_bytes: signed.statement_bytes,
+            proof_bytes: signed.proof_bytes,
+            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
+            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
+            issuer_id: *policy.issuer_id.as_bytes(),
+            policy_id: *policy.policy_id.as_bytes(),
+            issuer_policy_epoch: policy.epoch,
+            issuer_policy_record_digest: *policy.record_digest.as_bytes(),
+            issuer_parameter_id: *policy.issuer_parameter_id.as_bytes(),
+            issuer_parameter_digest: *policy.issuer_parameter_digest.as_bytes(),
+            disclosure_indices,
+            disclosed_attribute_values: disclosures
+                .iter()
+                .map(|disclosure| *disclosure.value.as_bytes())
+                .collect(),
+        };
+        self.clear_transaction_state();
+        Ok(output)
+    }
+
     /// Replace only fee maxima using a quote, then sign the exact quoted draft.
     fn sign_quoted_payload(
         &mut self,
@@ -17089,6 +15266,1340 @@ impl TransactionBuilder {
         let envelope = self.envelope_from_signed(&signed)?;
         self.clear_transaction_state();
         Ok(envelope)
+    }
+}
+
+const ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "authorization_action";
+const ZK_ACE_TRANSFER_LEDGER_EFFECT_V1: &str = "zk_ace_transparent_transfer";
+
+/// Public metadata for one canonical signed ZK-ACE transparent transfer.
+///
+/// The native witness remains owned by the Rust prover and is overwritten on
+/// every exit path. The proof is exposed only inside the signed transaction.
+#[pyclass(frozen, module = "iroha_python._crypto")]
+struct PrivacyZkAceTransferActionBuildResultV1 {
+    envelope: Py<SignedTransactionEnvelope>,
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+    policy_id: [u8; 32],
+    authorization_epoch: u64,
+    source_account_id: String,
+    destination_account_id: String,
+    asset_definition_id: String,
+    amount: String,
+    replay_nullifier: [u8; 32],
+}
+
+#[pymethods]
+impl PrivacyZkAceTransferActionBuildResultV1 {
+    #[getter]
+    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
+        self.envelope.clone_ref(py)
+    }
+
+    #[getter]
+    fn protocol_id(&self) -> &'static str {
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.canonical_label()
+    }
+
+    #[getter]
+    const fn action_kind(&self) -> &'static str {
+        "transparent_transfer"
+    }
+
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_intent_digest)
+    }
+
+    #[getter]
+    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.statement_digest)
+    }
+
+    #[getter]
+    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.proof_envelope_hash)
+    }
+
+    #[getter]
+    const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    #[getter]
+    const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    #[getter]
+    const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+
+    #[getter]
+    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    #[getter]
+    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.policy_id)
+    }
+
+    #[getter]
+    const fn authorization_epoch(&self) -> u64 {
+        self.authorization_epoch
+    }
+
+    #[getter]
+    fn source_account_id(&self) -> &str {
+        &self.source_account_id
+    }
+
+    #[getter]
+    fn destination_account_id(&self) -> &str {
+        &self.destination_account_id
+    }
+
+    #[getter]
+    fn asset_definition_id(&self) -> &str {
+        &self.asset_definition_id
+    }
+
+    #[getter]
+    fn amount(&self) -> &str {
+        &self.amount
+    }
+
+    #[getter]
+    fn replay_nullifier<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.replay_nullifier)
+    }
+
+    #[getter]
+    const fn execution_classification(&self) -> &'static str {
+        ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1
+    }
+
+    #[getter]
+    const fn ledger_effect(&self) -> &'static str {
+        ZK_ACE_TRANSFER_LEDGER_EFFECT_V1
+    }
+
+    fn transaction_intent_digest_hex(&self) -> String {
+        hex_encode(self.transaction_intent_digest)
+    }
+
+    fn statement_digest_hex(&self) -> String {
+        hex_encode(self.statement_digest)
+    }
+
+    fn proof_envelope_hash_hex(&self) -> String {
+        hex_encode(self.proof_envelope_hash)
+    }
+}
+
+/// Public metadata for one canonical signed Jindo component action.
+///
+/// The proof remains only inside `envelope`; this result exposes no witness,
+/// opening, randomness, or duplicate proof byte surface.
+#[pyclass(frozen, module = "iroha_python._crypto")]
+struct PrivacyJindoActionBuildResultV1 {
+    envelope: Py<SignedTransactionEnvelope>,
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+    polynomial_count: u32,
+    coefficient_counts: Vec<u32>,
+}
+
+const JINDO_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
+
+const fn jindo_action_ledger_effect_v1() -> Option<&'static str> {
+    None
+}
+
+#[pymethods]
+impl PrivacyJindoActionBuildResultV1 {
+    /// Exact signed transaction envelope to submit.
+    #[getter]
+    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
+        self.envelope.clone_ref(py)
+    }
+
+    /// Canonical transaction-intent digest.
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_intent_digest)
+    }
+
+    /// Canonical typed-statement digest.
+    #[getter]
+    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.statement_digest)
+    }
+
+    /// Hash of the exact canonical privacy proof envelope.
+    #[getter]
+    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.proof_envelope_hash)
+    }
+
+    /// Canonical encoded typed-statement byte count.
+    #[getter]
+    const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    /// Native proof byte count.
+    #[getter]
+    const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    /// Canonical encoded proof-envelope byte count.
+    #[getter]
+    const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+
+    /// Canonical adaptive signed-transaction byte count.
+    #[getter]
+    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    /// Number of committed witness polynomials.
+    #[getter]
+    const fn polynomial_count(&self) -> u32 {
+        self.polynomial_count
+    }
+
+    /// Canonical coefficient counts in commitment order.
+    #[getter]
+    fn coefficient_counts(&self) -> Vec<u32> {
+        self.coefficient_counts.clone()
+    }
+
+    /// Explicit execution classification for Jindo V1.
+    #[getter]
+    fn execution_classification(&self) -> &'static str {
+        JINDO_ACTION_EXECUTION_CLASSIFICATION_V1
+    }
+
+    /// Jindo V1 verifies an action and has no ledger mutation effect.
+    #[getter]
+    fn ledger_effect(&self) -> Option<&'static str> {
+        jindo_action_ledger_effect_v1()
+    }
+
+    /// Canonical transaction-intent digest as lowercase hexadecimal.
+    fn transaction_intent_digest_hex(&self) -> String {
+        hex_encode(self.transaction_intent_digest)
+    }
+
+    /// Canonical typed-statement digest as lowercase hexadecimal.
+    fn statement_digest_hex(&self) -> String {
+        hex_encode(self.statement_digest)
+    }
+
+    /// Canonical proof-envelope hash as lowercase hexadecimal.
+    fn proof_envelope_hash_hex(&self) -> String {
+        hex_encode(self.proof_envelope_hash)
+    }
+}
+
+/// Public metadata for one canonical signed VeRange component action.
+///
+/// Values and blindings remain only in the native prover call. The result
+/// exposes their ordered commitments but no witness or duplicate proof bytes.
+#[pyclass(frozen, module = "iroha_python._crypto")]
+struct PrivacyVeRangeActionBuildResultV1 {
+    envelope: Py<SignedTransactionEnvelope>,
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+    asset_definition_id: String,
+    policy_id: [u8; 32],
+    bit_length: u16,
+    aggregation_count: u32,
+    value_commitments: Vec<[u8; 33]>,
+}
+
+const VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
+
+#[pymethods]
+impl PrivacyVeRangeActionBuildResultV1 {
+    /// Exact signed transaction envelope to submit.
+    #[getter]
+    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
+        self.envelope.clone_ref(py)
+    }
+
+    /// Exact first-release protocol identifier.
+    #[getter]
+    fn protocol_id(&self) -> &'static str {
+        PrivacyProtocolIdV1::VeRangeTransparentRangeV1.canonical_label()
+    }
+
+    /// Canonical transaction-intent digest.
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_intent_digest)
+    }
+
+    /// Canonical typed-statement digest.
+    #[getter]
+    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.statement_digest)
+    }
+
+    /// Hash of the exact canonical privacy proof envelope.
+    #[getter]
+    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.proof_envelope_hash)
+    }
+
+    /// Canonical encoded typed-statement byte count.
+    #[getter]
+    const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    /// Native proof byte count.
+    #[getter]
+    const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    /// Canonical encoded proof-envelope byte count.
+    #[getter]
+    const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+
+    /// Canonical adaptive signed-transaction byte count.
+    #[getter]
+    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    /// Public asset definition whose atomic values were committed.
+    #[getter]
+    fn asset_definition_id(&self) -> &str {
+        &self.asset_definition_id
+    }
+
+    /// Exact public VeRange policy identifier.
+    #[getter]
+    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.policy_id)
+    }
+
+    /// Exact selected range width.
+    #[getter]
+    const fn bit_length(&self) -> u16 {
+        self.bit_length
+    }
+
+    /// Number of ordered commitments proved.
+    #[getter]
+    const fn aggregation_count(&self) -> u32 {
+        self.aggregation_count
+    }
+
+    /// Ordered public P-256 value commitments.
+    #[getter]
+    fn value_commitments(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
+        self.value_commitments
+            .iter()
+            .map(|commitment| Py::from(PyBytes::new(py, commitment)))
+            .collect()
+    }
+
+    /// Explicit execution classification for VeRange V1.
+    #[getter]
+    fn execution_classification(&self) -> &'static str {
+        VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1
+    }
+
+    /// VeRange V1 verifies a component action and has no ledger mutation.
+    #[getter]
+    const fn ledger_effect(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Canonical transaction-intent digest as lowercase hexadecimal.
+    fn transaction_intent_digest_hex(&self) -> String {
+        hex_encode(self.transaction_intent_digest)
+    }
+
+    /// Canonical typed-statement digest as lowercase hexadecimal.
+    fn statement_digest_hex(&self) -> String {
+        hex_encode(self.statement_digest)
+    }
+
+    /// Canonical proof-envelope hash as lowercase hexadecimal.
+    fn proof_envelope_hash_hex(&self) -> String {
+        hex_encode(self.proof_envelope_hash)
+    }
+
+    /// Public VeRange policy identifier as lowercase hexadecimal.
+    fn policy_id_hex(&self) -> String {
+        hex_encode(self.policy_id)
+    }
+}
+
+struct PrivacyVegaActionPreparationInnerV1 {
+    context: PythonPrivacyActionTransactionContextV1,
+    profile: CompiledPrivacyProfileV1,
+    canonical_genesis_hash: [u8; 32],
+    statement: VegaExistingCredentialStatementV1,
+}
+
+/// Frozen phase-one Vega action awaiting the holder's exact `H_dev` signature.
+///
+/// The preparation is deliberately single-use. Finalization consumes its
+/// exact transaction context before parsing any private witness, so a failed
+/// attempt cannot be replayed against a mutated or freshly timestamped draft.
+#[pyclass(module = "iroha_python._crypto")]
+struct PrivacyVegaActionPreparationV1 {
+    inner: Option<PrivacyVegaActionPreparationInnerV1>,
+}
+
+impl PrivacyVegaActionPreparationV1 {
+    fn require_inner(&self) -> PyResult<&PrivacyVegaActionPreparationInnerV1> {
+        self.inner.as_ref().ok_or_else(|| {
+            PyValueError::new_err("Vega action preparation has already been consumed")
+        })
+    }
+}
+
+fn python_privacy_action_signed_envelope_v1(
+    context: &PythonPrivacyActionTransactionContextV1,
+    signed: &SignedTransaction,
+) -> PyResult<SignedTransactionEnvelope> {
+    let signature: Signature = signed.signature().payload().clone();
+    let signature_bytes = signature.payload().to_vec();
+    let hash: HashOf<SignedTransaction> = signed.hash();
+    let hash_bytes: [u8; Hash::LENGTH] = *hash.as_ref();
+    let signed_transaction = codec::encode_adaptive(signed);
+    let signed_transaction_versioned = signed.encode_versioned();
+    let (_, public_key_bytes) =
+        public_key_to_bytes(signed.authority().signatory(), "authority public key")?;
+    Ok(SignedTransactionEnvelope {
+        chain_id: context.chain_id.to_string(),
+        authority: context.authority.to_string(),
+        signed_transaction,
+        signed_transaction_versioned,
+        hash: hash_bytes,
+        signature: signature_bytes,
+        public_key: public_key_bytes.to_vec(),
+    })
+}
+
+#[pymethods]
+impl PrivacyVegaActionPreparationV1 {
+    /// Exact first-release protocol identifier.
+    #[getter]
+    fn protocol_id(&self) -> &'static str {
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0.canonical_label()
+    }
+
+    /// Whether finalization has already consumed this preparation.
+    #[getter]
+    fn consumed(&self) -> bool {
+        self.inner.is_none()
+    }
+
+    /// Frozen chain identifier.
+    #[getter]
+    fn chain_id(&self) -> PyResult<String> {
+        Ok(self.require_inner()?.context.chain_id.to_string())
+    }
+
+    /// Frozen transaction authority.
+    #[getter]
+    fn authority(&self) -> PyResult<String> {
+        Ok(self.require_inner()?.context.authority.to_string())
+    }
+
+    /// Frozen transaction creation time in milliseconds since UNIX epoch.
+    #[getter]
+    fn creation_time_ms(&self) -> PyResult<u64> {
+        u64::try_from(self.require_inner()?.context.creation_time.as_millis())
+            .map_err(|_| PyRuntimeError::new_err("Vega creation_time_ms overflowed"))
+    }
+
+    /// Frozen transaction time-to-live in milliseconds.
+    #[getter]
+    fn ttl_ms(&self) -> PyResult<Option<u64>> {
+        self.require_inner()?
+            .context
+            .time_to_live
+            .map(|ttl| {
+                u64::try_from(ttl.as_millis())
+                    .map_err(|_| PyRuntimeError::new_err("Vega ttl_ms overflowed"))
+            })
+            .transpose()
+    }
+
+    /// Frozen transaction nonce.
+    #[getter]
+    fn nonce(&self) -> PyResult<Option<u32>> {
+        Ok(self.require_inner()?.context.nonce.map(NonZeroU32::get))
+    }
+
+    /// Canonical nonzero transaction-intent digest for the frozen draft.
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        Ok(PyBytes::new(
+            py,
+            self.require_inner()?
+                .statement
+                .context
+                .transaction_intent_digest
+                .as_bytes(),
+        ))
+    }
+
+    /// Final public `H_dev` that the credential holder must sign.
+    #[getter]
+    fn device_authentication_digest<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        Ok(PyBytes::new(
+            py,
+            self.require_inner()?
+                .statement
+                .device_authentication_digest
+                .as_bytes(),
+        ))
+    }
+
+    fn transaction_intent_digest_hex(&self) -> PyResult<String> {
+        Ok(hex_encode(
+            *self
+                .require_inner()?
+                .statement
+                .context
+                .transaction_intent_digest
+                .as_bytes(),
+        ))
+    }
+
+    fn device_authentication_digest_hex(&self) -> PyResult<String> {
+        Ok(hex_encode(
+            *self
+                .require_inner()?
+                .statement
+                .device_authentication_digest
+                .as_bytes(),
+        ))
+    }
+
+    /// Consume the frozen draft, prove it, locally validate it, and sign it.
+    #[pyo3(signature = (
+        private_key,
+        trusted_block_timestamp_ms,
+        issuer_authentication_sig_structure,
+        mobile_security_object_payload,
+        birth_date_issuer_signed_item,
+        issuer_signature,
+        device_signature
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_privacy_vega_action_v1(
+        &mut self,
+        py: Python<'_>,
+        private_key: &[u8],
+        trusted_block_timestamp_ms: u64,
+        issuer_authentication_sig_structure: Vec<u8>,
+        mobile_security_object_payload: Vec<u8>,
+        birth_date_issuer_signed_item: Vec<u8>,
+        issuer_signature: Vec<u8>,
+        device_signature: Vec<u8>,
+    ) -> PyResult<PrivacyVegaActionBuildResultV1> {
+        let mut witness_bytes = ZeroizingVegaWitnessBytes {
+            issuer_authentication_sig_structure,
+            mobile_security_object_payload,
+            birth_date_issuer_signed_item,
+            issuer_signature,
+            device_signature,
+        };
+        let inner = self.inner.take().ok_or_else(|| {
+            PyValueError::new_err("Vega action preparation has already been consumed")
+        })?;
+        let private_key = parse_private_key(private_key)?;
+        let expected_authority = inner.context.authority.try_signatory().ok_or_else(|| {
+            PyValueError::new_err(
+                "native privacy actions require a direct single-signatory authority",
+            )
+        })?;
+        let derived_authority = PublicKey::from(private_key.clone());
+        if expected_authority != &derived_authority {
+            return Err(PyValueError::new_err(
+                "privacy action private key does not match the frozen transaction authority",
+            ));
+        }
+        let transaction_intent_digest = inner.statement.context.transaction_intent_digest;
+        let rebound_intent = python_privacy_action_intent_v1(
+            &inner.context,
+            python_privacy_placeholder_envelope_v1(
+                inner.profile,
+                PrivacyStatementV1::VegaExistingCredentialZkV0(inner.statement.clone()),
+                PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
+            ),
+        )?;
+        if rebound_intent != transaction_intent_digest {
+            return Err(PyRuntimeError::new_err(
+                "frozen Vega action intent changed before proof construction",
+            ));
+        }
+        let rebound_device_digest = {
+            let binding = VegaMdlConsensusBindingV1::from_context(
+                &inner.statement.context,
+                inner.canonical_genesis_hash,
+            );
+            derive_device_authentication_digest_v1(&inner.statement, &binding).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid frozen Vega device-authentication statement: {error}"
+                ))
+            })?
+        };
+        if rebound_device_digest != inner.statement.device_authentication_digest {
+            return Err(PyRuntimeError::new_err(
+                "frozen Vega H_dev changed before proof construction",
+            ));
+        }
+        let witness = VegaMdlWitnessV1::new(
+            std::mem::take(&mut witness_bytes.issuer_authentication_sig_structure),
+            std::mem::take(&mut witness_bytes.mobile_security_object_payload),
+            std::mem::take(&mut witness_bytes.birth_date_issuer_signed_item),
+            &witness_bytes.issuer_signature,
+            &witness_bytes.device_signature,
+        )
+        .map_err(|error| PyValueError::new_err(format!("invalid native Vega witness: {error}")))?;
+        witness_bytes.erase();
+        let config = VegaMdlProverConfigV1::new(1).map_err(|error| {
+            PyRuntimeError::new_err(format!("native Vega prover configuration failed: {error}"))
+        })?;
+        let proof = {
+            let binding = VegaMdlConsensusBindingV1::from_context(
+                &inner.statement.context,
+                inner.canonical_genesis_hash,
+            );
+            prove_mdl_figure9_v1(
+                &inner.statement,
+                &binding,
+                trusted_block_timestamp_ms,
+                witness,
+                config,
+                &mut OsRng06,
+            )
+            .map_err(|error| {
+                PyValueError::new_err(format!("native Vega proof construction failed: {error}"))
+            })?
+        };
+        let signed = finalize_python_privacy_action_v1(
+            &inner.context,
+            inner.profile,
+            PrivacyStatementV1::VegaExistingCredentialZkV0(inner.statement.clone()),
+            PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(proof)),
+            &private_key,
+        )?;
+        if signed.transaction_intent_digest != *transaction_intent_digest.as_bytes() {
+            return Err(PyRuntimeError::new_err(
+                "native Vega action intent digest changed during proof construction",
+            ));
+        }
+        let envelope =
+            python_privacy_action_signed_envelope_v1(&inner.context, &signed.signed_transaction)?;
+        if envelope.hash != signed.transaction_hash {
+            return Err(PyRuntimeError::new_err(
+                "native Vega action transaction hash recomputation failed",
+            ));
+        }
+        Ok(PrivacyVegaActionBuildResultV1 {
+            envelope: Py::new(py, envelope)?,
+            transaction_intent_digest: signed.transaction_intent_digest,
+            statement_digest: signed.statement_digest,
+            proof_envelope_hash: signed.proof_envelope_hash,
+            statement_bytes: signed.statement_bytes,
+            proof_bytes: signed.proof_bytes,
+            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes,
+            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes,
+            trusted_block_timestamp_ms,
+            issuer_id: *inner.statement.issuer_id.as_bytes(),
+            issuer_record_epoch: inner.statement.issuer_record_epoch,
+            issuer_record_digest: *inner.statement.issuer_record_digest.as_bytes(),
+            issuer_public_key: *inner.statement.issuer_public_key.as_bytes(),
+            device_authentication_digest: *inner.statement.device_authentication_digest.as_bytes(),
+            presentation_year: inner.statement.presentation_date.year,
+            presentation_month: inner.statement.presentation_date.month,
+            presentation_day: inner.statement.presentation_date.day,
+            minimum_age_years: inner.statement.minimum_age_years,
+            reader_challenge: *inner.statement.reader_challenge.as_bytes(),
+            session_transcript_digest: *inner.statement.session_transcript_digest.as_bytes(),
+        })
+    }
+}
+
+/// Public metadata for one canonical signed Vega mDL-age component action.
+///
+/// Credential bytes and both signatures remain private native witness inputs.
+/// This result contains only the exact public statement and proof metrics.
+#[pyclass(frozen, module = "iroha_python._crypto")]
+struct PrivacyVegaActionBuildResultV1 {
+    envelope: Py<SignedTransactionEnvelope>,
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+    trusted_block_timestamp_ms: u64,
+    issuer_id: [u8; 32],
+    issuer_record_epoch: u64,
+    issuer_record_digest: [u8; 32],
+    issuer_public_key: [u8; 33],
+    device_authentication_digest: [u8; 32],
+    presentation_year: u16,
+    presentation_month: u8,
+    presentation_day: u8,
+    minimum_age_years: u8,
+    reader_challenge: [u8; 32],
+    session_transcript_digest: [u8; 32],
+}
+
+const VEGA_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
+
+#[pymethods]
+impl PrivacyVegaActionBuildResultV1 {
+    /// Exact signed transaction envelope to submit.
+    #[getter]
+    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
+        self.envelope.clone_ref(py)
+    }
+
+    /// Exact first-release protocol identifier.
+    #[getter]
+    fn protocol_id(&self) -> &'static str {
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0.canonical_label()
+    }
+
+    /// Canonical transaction-intent digest.
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_intent_digest)
+    }
+
+    /// Canonical typed-statement digest.
+    #[getter]
+    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.statement_digest)
+    }
+
+    /// Hash of the exact canonical privacy proof envelope.
+    #[getter]
+    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.proof_envelope_hash)
+    }
+
+    /// Canonical encoded typed-statement byte count.
+    #[getter]
+    const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    /// Native proof byte count.
+    #[getter]
+    const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    /// Canonical encoded proof-envelope byte count.
+    #[getter]
+    const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+
+    /// Canonical adaptive signed-transaction byte count.
+    #[getter]
+    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    /// Trusted block timestamp used for UTC date binding.
+    #[getter]
+    const fn trusted_block_timestamp_ms(&self) -> u64 {
+        self.trusted_block_timestamp_ms
+    }
+
+    /// Governed issuer identifier.
+    #[getter]
+    fn issuer_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_id)
+    }
+
+    /// Exact governed issuer-record epoch.
+    #[getter]
+    const fn issuer_record_epoch(&self) -> u64 {
+        self.issuer_record_epoch
+    }
+
+    /// Digest of the exact governed issuer record.
+    #[getter]
+    fn issuer_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_record_digest)
+    }
+
+    /// Public issuer P-256 key.
+    #[getter]
+    fn issuer_public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_public_key)
+    }
+
+    /// Public chain- and session-bound holder-device digest `H_dev`.
+    #[getter]
+    fn device_authentication_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.device_authentication_digest)
+    }
+
+    /// Public presentation year.
+    #[getter]
+    const fn presentation_year(&self) -> u16 {
+        self.presentation_year
+    }
+
+    /// Public presentation month.
+    #[getter]
+    const fn presentation_month(&self) -> u8 {
+        self.presentation_month
+    }
+
+    /// Public presentation day.
+    #[getter]
+    const fn presentation_day(&self) -> u8 {
+        self.presentation_day
+    }
+
+    /// Public minimum-age threshold.
+    #[getter]
+    const fn minimum_age_years(&self) -> u8 {
+        self.minimum_age_years
+    }
+
+    /// Public reader challenge.
+    #[getter]
+    fn reader_challenge<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.reader_challenge)
+    }
+
+    /// Public canonical session-transcript digest.
+    #[getter]
+    fn session_transcript_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.session_transcript_digest)
+    }
+
+    /// Explicit execution classification for Vega V0.
+    #[getter]
+    fn execution_classification(&self) -> &'static str {
+        VEGA_ACTION_EXECUTION_CLASSIFICATION_V1
+    }
+
+    /// Vega V0 verifies a component action and has no ledger mutation.
+    #[getter]
+    const fn ledger_effect(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Canonical transaction-intent digest as lowercase hexadecimal.
+    fn transaction_intent_digest_hex(&self) -> String {
+        hex_encode(self.transaction_intent_digest)
+    }
+
+    /// Canonical typed-statement digest as lowercase hexadecimal.
+    fn statement_digest_hex(&self) -> String {
+        hex_encode(self.statement_digest)
+    }
+
+    /// Canonical proof-envelope hash as lowercase hexadecimal.
+    fn proof_envelope_hash_hex(&self) -> String {
+        hex_encode(self.proof_envelope_hash)
+    }
+
+    /// Public device-authentication digest as lowercase hexadecimal.
+    fn device_authentication_digest_hex(&self) -> String {
+        hex_encode(self.device_authentication_digest)
+    }
+}
+
+const ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "admission_action";
+const ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1: &str = "zk_ams_batch_admission";
+const ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1: &str = "zk_ams_provision_account";
+
+/// Public metadata for one canonical signed ZK-AMS admission batch.
+#[pyclass(frozen, module = "iroha_python._crypto")]
+struct PrivacyZkAmsBatchAdmissionActionBuildResultV1 {
+    envelope: Py<SignedTransactionEnvelope>,
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+    issuer_id: [u8; 32],
+    issuer_public_key: [u8; 33],
+    issuer_policy_record_digest: [u8; 32],
+    registry_id: [u8; 32],
+    registry_record_digest: [u8; 32],
+    policy_id: [u8; 32],
+    policy_digest: [u8; 32],
+    account_registry_root: [u8; 32],
+    account_registry_root_epoch: u64,
+    next_account_registry_root: [u8; 32],
+    next_account_registry_root_epoch: u64,
+    phc_hashes: Vec<[u8; 32]>,
+    seed_public_keys: Vec<[u8; 32]>,
+}
+
+#[pymethods]
+impl PrivacyZkAmsBatchAdmissionActionBuildResultV1 {
+    #[getter]
+    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
+        self.envelope.clone_ref(py)
+    }
+
+    #[getter]
+    fn protocol_id(&self) -> &'static str {
+        PrivacyProtocolIdV1::IrohaZkAmsV1.canonical_label()
+    }
+
+    #[getter]
+    const fn action_kind(&self) -> &'static str {
+        "batch_admission"
+    }
+
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_intent_digest)
+    }
+
+    #[getter]
+    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.statement_digest)
+    }
+
+    #[getter]
+    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.proof_envelope_hash)
+    }
+
+    #[getter]
+    const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    #[getter]
+    const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    #[getter]
+    const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+
+    #[getter]
+    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    #[getter]
+    fn issuer_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_id)
+    }
+
+    #[getter]
+    fn issuer_public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_public_key)
+    }
+
+    #[getter]
+    fn issuer_policy_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_policy_record_digest)
+    }
+
+    #[getter]
+    fn registry_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.registry_id)
+    }
+
+    #[getter]
+    fn registry_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.registry_record_digest)
+    }
+
+    #[getter]
+    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.policy_id)
+    }
+
+    #[getter]
+    fn policy_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.policy_digest)
+    }
+
+    #[getter]
+    fn account_registry_root<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.account_registry_root)
+    }
+
+    #[getter]
+    const fn account_registry_root_epoch(&self) -> u64 {
+        self.account_registry_root_epoch
+    }
+
+    #[getter]
+    fn next_account_registry_root<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.next_account_registry_root)
+    }
+
+    #[getter]
+    const fn next_account_registry_root_epoch(&self) -> u64 {
+        self.next_account_registry_root_epoch
+    }
+
+    #[getter]
+    fn anchor_count(&self) -> u32 {
+        u32::try_from(self.phc_hashes.len()).expect("ZK-AMS batch is bounded to eight")
+    }
+
+    #[getter]
+    fn phc_hashes(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
+        self.phc_hashes
+            .iter()
+            .map(|value| Py::from(PyBytes::new(py, value)))
+            .collect()
+    }
+
+    #[getter]
+    fn seed_public_keys(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
+        self.seed_public_keys
+            .iter()
+            .map(|value| Py::from(PyBytes::new(py, value)))
+            .collect()
+    }
+
+    #[getter]
+    const fn execution_classification(&self) -> &'static str {
+        ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1
+    }
+
+    #[getter]
+    const fn ledger_effect(&self) -> &'static str {
+        ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1
+    }
+}
+
+/// Public metadata for one canonical signed ZK-AMS account provisioning.
+#[pyclass(frozen, module = "iroha_python._crypto")]
+struct PrivacyZkAmsProvisionAccountActionBuildResultV1 {
+    envelope: Py<SignedTransactionEnvelope>,
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+    issuer_id: [u8; 32],
+    issuer_public_key: [u8; 33],
+    issuer_policy_record_digest: [u8; 32],
+    registry_id: [u8; 32],
+    registry_record_digest: [u8; 32],
+    policy_id: [u8; 32],
+    policy_digest: [u8; 32],
+    account_registry_root: [u8; 32],
+    account_registry_root_epoch: u64,
+    admitted_seed_key_ring: Vec<[u8; 32]>,
+    account_id: String,
+    key_image: [u8; 32],
+}
+
+#[pymethods]
+impl PrivacyZkAmsProvisionAccountActionBuildResultV1 {
+    #[getter]
+    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
+        self.envelope.clone_ref(py)
+    }
+
+    #[getter]
+    fn protocol_id(&self) -> &'static str {
+        PrivacyProtocolIdV1::IrohaZkAmsV1.canonical_label()
+    }
+
+    #[getter]
+    const fn action_kind(&self) -> &'static str {
+        "provision_account"
+    }
+
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_intent_digest)
+    }
+
+    #[getter]
+    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.statement_digest)
+    }
+
+    #[getter]
+    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.proof_envelope_hash)
+    }
+
+    #[getter]
+    const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    #[getter]
+    const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    #[getter]
+    const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+
+    #[getter]
+    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    #[getter]
+    fn issuer_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_id)
+    }
+
+    #[getter]
+    fn issuer_public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_public_key)
+    }
+
+    #[getter]
+    fn issuer_policy_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_policy_record_digest)
+    }
+
+    #[getter]
+    fn registry_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.registry_id)
+    }
+
+    #[getter]
+    fn registry_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.registry_record_digest)
+    }
+
+    #[getter]
+    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.policy_id)
+    }
+
+    #[getter]
+    fn policy_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.policy_digest)
+    }
+
+    #[getter]
+    fn account_registry_root<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.account_registry_root)
+    }
+
+    #[getter]
+    const fn account_registry_root_epoch(&self) -> u64 {
+        self.account_registry_root_epoch
+    }
+
+    #[getter]
+    fn admitted_seed_key_ring(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
+        self.admitted_seed_key_ring
+            .iter()
+            .map(|value| Py::from(PyBytes::new(py, value)))
+            .collect()
+    }
+
+    #[getter]
+    fn ring_size(&self) -> u32 {
+        u32::try_from(self.admitted_seed_key_ring.len())
+            .expect("ZK-AMS ring is bounded to 64 entries")
+    }
+
+    #[getter]
+    fn account_id(&self) -> &str {
+        &self.account_id
+    }
+
+    #[getter]
+    fn key_image<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.key_image)
+    }
+
+    #[getter]
+    const fn execution_classification(&self) -> &'static str {
+        ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1
+    }
+
+    #[getter]
+    const fn ledger_effect(&self) -> &'static str {
+        ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1
+    }
+}
+
+const BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "presentation_action";
+
+/// Public metadata for one canonical signed Bootle/Lantern presentation.
+#[pyclass(frozen, module = "iroha_python._crypto")]
+struct PrivacyBootleLanternPresentationActionBuildResultV1 {
+    envelope: Py<SignedTransactionEnvelope>,
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+    issuer_id: [u8; 32],
+    policy_id: [u8; 32],
+    issuer_policy_epoch: u64,
+    issuer_policy_record_digest: [u8; 32],
+    issuer_parameter_id: [u8; 32],
+    issuer_parameter_digest: [u8; 32],
+    disclosure_indices: Vec<u8>,
+    disclosed_attribute_values: Vec<[u8; 8]>,
+}
+
+#[pymethods]
+impl PrivacyBootleLanternPresentationActionBuildResultV1 {
+    #[getter]
+    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
+        self.envelope.clone_ref(py)
+    }
+
+    #[getter]
+    fn protocol_id(&self) -> &'static str {
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1.canonical_label()
+    }
+
+    #[getter]
+    const fn action_kind(&self) -> &'static str {
+        "presentation"
+    }
+
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_intent_digest)
+    }
+
+    #[getter]
+    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.statement_digest)
+    }
+
+    #[getter]
+    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.proof_envelope_hash)
+    }
+
+    #[getter]
+    const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    #[getter]
+    const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    #[getter]
+    const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+
+    #[getter]
+    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    #[getter]
+    fn issuer_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_id)
+    }
+
+    #[getter]
+    fn policy_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.policy_id)
+    }
+
+    #[getter]
+    const fn issuer_policy_epoch(&self) -> u64 {
+        self.issuer_policy_epoch
+    }
+
+    #[getter]
+    fn issuer_policy_record_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_policy_record_digest)
+    }
+
+    #[getter]
+    fn issuer_parameter_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_parameter_id)
+    }
+
+    #[getter]
+    fn issuer_parameter_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.issuer_parameter_digest)
+    }
+
+    #[getter]
+    fn disclosure_indices(&self) -> Vec<u8> {
+        self.disclosure_indices.clone()
+    }
+
+    #[getter]
+    fn disclosed_attribute_values(&self, py: Python<'_>) -> Vec<Py<PyBytes>> {
+        self.disclosed_attribute_values
+            .iter()
+            .map(|value| Py::from(PyBytes::new(py, value)))
+            .collect()
+    }
+
+    #[getter]
+    const fn execution_classification(&self) -> &'static str {
+        BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1
+    }
+
+    #[getter]
+    const fn ledger_effect(&self) -> Option<&'static str> {
+        None
     }
 }
 
@@ -17413,6 +16924,107 @@ fn sign_py(
 }
 
 #[pyfunction]
+#[pyo3(name = "build_find_asset_escrow_query")]
+/// Build the exact versioned Norito signed query for one native escrow record.
+fn build_find_asset_escrow_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    escrow_id: &str,
+) -> PyResult<Py<PyBytes>> {
+    let authority = parse_account_id(authority)?;
+    ensure_ed25519_account(&authority)?;
+    let private = parse_private_key(private_key)?;
+    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
+        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
+    })?;
+    if key_pair.public_key() != authority.signatory() {
+        return Err(PyValueError::new_err(
+            "query private key does not match the authority account",
+        ));
+    }
+    let request = QueryRequest::Singular(SingularQueryBox::FindAssetEscrowById(
+        FindAssetEscrowById::new(parse_escrow_id(escrow_id, "escrow_id")?),
+    ));
+    let signed = request
+        .with_authority(authority)
+        .try_sign(&key_pair)
+        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))?;
+    Ok(Py::from(PyBytes::new(py, &signed.encode_versioned())))
+}
+
+fn build_find_asset_escrows_by_party_query(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    query_payload: Vec<u8>,
+) -> PyResult<Py<PyBytes>> {
+    let authority = parse_account_id(authority)?;
+    ensure_ed25519_account(&authority)?;
+    let private = parse_private_key(private_key)?;
+    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
+        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
+    })?;
+    if key_pair.public_key() != authority.signatory() {
+        return Err(PyValueError::new_err(
+            "query private key does not match the authority account",
+        ));
+    }
+    let erased = ErasedIterQuery::<AssetEscrowRecord>::new(
+        CompoundPredicate::PASS,
+        SelectorTuple::default(),
+        query_payload,
+    );
+    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
+    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+    let signed = request
+        .with_authority(authority)
+        .try_sign(&key_pair)
+        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))?;
+    Ok(Py::from(PyBytes::new(py, &signed.encode_versioned())))
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_asset_escrows_by_seller_query")]
+/// Build a signed iterable query for native escrows funded by one account.
+fn build_find_asset_escrows_by_seller_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    seller: &str,
+) -> PyResult<Py<PyBytes>> {
+    let query = FindAssetEscrowsBySeller {
+        seller: parse_account_id(seller)?,
+    };
+    build_find_asset_escrows_by_party_query(
+        py,
+        authority,
+        private_key,
+        norito::codec::Encode::encode(&query),
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_asset_escrows_by_buyer_query")]
+/// Build a signed iterable query for native escrows benefiting one account.
+fn build_find_asset_escrows_by_buyer_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    buyer: &str,
+) -> PyResult<Py<PyBytes>> {
+    let query = FindAssetEscrowsByBuyer {
+        buyer: parse_account_id(buyer)?,
+    };
+    build_find_asset_escrows_by_party_query(
+        py,
+        authority,
+        private_key,
+        norito::codec::Encode::encode(&query),
+    )
+}
+
+#[pyfunction]
 #[pyo3(name = "verify")]
 /// Verify a raw signature against a public-key payload for any supported signature algorithm.
 fn verify_py(
@@ -17684,13 +17296,757 @@ fn hash_blake2b_32_py(py: Python<'_>, payload: &[u8]) -> PyResult<Py<PyBytes>> {
     Ok(Py::from(PyBytes::new(py, &bytes)))
 }
 
+fn require_canonical_signed_transaction_wire_size_v1(bytes: &[u8]) -> PyResult<()> {
+    let maximum = usize::try_from(
+        iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+    )
+    .map_err(|_| {
+        PyRuntimeError::new_err("canonical transaction byte limit does not fit this platform")
+    })?;
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(PyValueError::new_err(format!(
+            "signed_transaction_versioned must contain between 1 and {maximum} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn decode_canonical_signed_transaction_v1(bytes: &[u8]) -> PyResult<SignedTransaction> {
+    require_canonical_signed_transaction_wire_size_v1(bytes)?;
+    let signed = SignedTransaction::decode_all_versioned(bytes).map_err(|_| {
+        PyValueError::new_err(
+            "signed_transaction_versioned is not a valid current signed transaction",
+        )
+    })?;
+    if signed.encode_versioned() != bytes {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned is not the exact canonical wire",
+        ));
+    }
+    Ok(signed)
+}
+
+fn canonical_signed_transaction_hash_v1(bytes: &[u8]) -> PyResult<[u8; Hash::LENGTH]> {
+    let signed = decode_canonical_signed_transaction_v1(bytes)?;
+    signed.verify_signature().map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
+    })?;
+    Ok(*signed.hash().as_ref())
+}
+
+#[pyfunction]
+#[pyo3(name = "canonical_signed_transaction_hash_v1")]
+/// Decode, authenticate, and recompute the current transaction hash.
+fn canonical_signed_transaction_hash_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let hash = canonical_signed_transaction_hash_v1(signed_transaction_versioned)?;
+    Ok(Py::from(PyBytes::new(py, &hash)))
+}
+
+#[pyfunction]
+#[pyo3(name = "privacy_vega_device_authentication_digest_v1")]
+/// Derive `H_dev` for an already prepared, explicit nonzero transaction intent.
+#[allow(clippy::too_many_arguments)]
+fn privacy_vega_device_authentication_digest_v1_py(
+    py: Python<'_>,
+    chain_id: &str,
+    canonical_genesis_hash: &[u8],
+    transaction_intent_digest: &[u8],
+    issuer_id: &[u8],
+    issuer_record_epoch: u64,
+    issuer_record_digest: &[u8],
+    issuer_public_key: &[u8],
+    presentation_year: u16,
+    presentation_month: u8,
+    presentation_day: u8,
+    minimum_age_years: u8,
+    reader_challenge: &[u8],
+    session_transcript_digest: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    require_non_blank_unpadded(chain_id, "chain_id")?;
+    let chain_id = parse_chain_id(chain_id)?;
+    let canonical_genesis_hash =
+        python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+    let transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(
+        python_nonzero_privacy_digest_v1(transaction_intent_digest, "transaction_intent_digest")?,
+    );
+    let issuer_id = python_nonzero_privacy_digest_v1(issuer_id, "issuer_id")?;
+    if issuer_record_epoch == 0 {
+        return Err(PyValueError::new_err(
+            "issuer_record_epoch must be non-zero",
+        ));
+    }
+    let issuer_record_digest =
+        python_nonzero_privacy_digest_v1(issuer_record_digest, "issuer_record_digest")?;
+    let issuer_public_key = fixed_array::<33>(issuer_public_key, "issuer_public_key")?;
+    let reader_challenge = python_nonzero_privacy_digest_v1(reader_challenge, "reader_challenge")?;
+    let session_transcript_digest =
+        python_nonzero_privacy_digest_v1(session_transcript_digest, "session_transcript_digest")?;
+    let profile = python_compiled_privacy_profile_v1(
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        "Vega",
+    )?;
+    let statement = python_vega_statement_v1(
+        PrivacyStatementContextV1 {
+            chain_id,
+            action_index: 0,
+            transaction_intent_digest,
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
+        },
+        canonical_genesis_hash,
+        issuer_id,
+        issuer_record_epoch,
+        issuer_record_digest,
+        issuer_public_key,
+        presentation_year,
+        presentation_month,
+        presentation_day,
+        minimum_age_years,
+        reader_challenge,
+        session_transcript_digest,
+    )?;
+    Ok(Py::from(PyBytes::new(
+        py,
+        statement.device_authentication_digest.as_bytes(),
+    )))
+}
+
+fn python_authenticated_privacy_action_envelope_v1<'a>(
+    signed: &'a SignedTransaction,
+    expected_protocol_id: PrivacyProtocolIdV1,
+    protocol_label: &str,
+) -> PyResult<(PrivacyTransactionIntentDigestV1, &'a PrivacyProofEnvelopeV1)> {
+    signed.verify_signature().map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
+    })?;
+    let (transaction_intent_digest, submission) = signed
+        .privacy_transaction_intent_binding_if_present_v1()
+        .map_err(|_| {
+            PyValueError::new_err(
+                "signed_transaction_versioned has an invalid privacy intent binding",
+            )
+        })?
+        .ok_or_else(|| {
+            PyValueError::new_err("signed_transaction_versioned contains no direct privacy action")
+        })?;
+    let envelope = &submission.envelope;
+    if envelope.protocol_id != expected_protocol_id {
+        return Err(PyValueError::new_err(format!(
+            "signed_transaction_versioned is not a {protocol_label} action"
+        )));
+    }
+    envelope
+        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| {
+            PyValueError::new_err(format!(
+                "signed_transaction_versioned has an invalid {protocol_label} proof envelope"
+            ))
+        })?;
+    Ok((transaction_intent_digest, envelope))
+}
+
+fn python_privacy_action_inspection_result_v1<'py>(
+    py: Python<'py>,
+    signed: &SignedTransaction,
+    signed_transaction_versioned: &[u8],
+    transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+    envelope: &PrivacyProofEnvelopeV1,
+    execution_classification: &str,
+    ledger_effect: Option<&str>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned privacy statement could not be encoded")
+    })?;
+    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned privacy envelope could not be encoded")
+    })?;
+    let statement_bytes = u32::try_from(statement_encoding.len())
+        .map_err(|_| PyValueError::new_err("privacy statement byte length overflowed"))?;
+    let proof_bytes = u32::try_from(envelope.proof.bytes().as_bytes().len())
+        .map_err(|_| PyValueError::new_err("privacy proof byte length overflowed"))?;
+    let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
+        .map_err(|_| PyValueError::new_err("privacy envelope byte length overflowed"))?;
+    let adaptive_signed_transaction_bytes =
+        u32::try_from(norito::codec::encode_adaptive(signed).len())
+            .map_err(|_| PyValueError::new_err("adaptive transaction byte length overflowed"))?;
+    let submitted_versioned_transaction_bytes =
+        u32::try_from(signed_transaction_versioned.len())
+            .map_err(|_| PyValueError::new_err("versioned transaction byte length overflowed"))?;
+    let proof_envelope_hash = Hash::new(&envelope_encoding);
+    let transaction_hash = signed.hash();
+    let result = PyDict::new(py);
+    result.set_item(
+        "transaction_hash",
+        PyBytes::new(py, transaction_hash.as_ref()),
+    )?;
+    result.set_item(
+        "transaction_intent_digest",
+        PyBytes::new(py, transaction_intent_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "statement_digest",
+        PyBytes::new(py, envelope.statement_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "proof_envelope_hash",
+        PyBytes::new(py, proof_envelope_hash.as_ref()),
+    )?;
+    result.set_item("protocol_id", envelope.protocol_id.canonical_label())?;
+    result.set_item("statement_bytes", statement_bytes)?;
+    result.set_item("proof_bytes", proof_bytes)?;
+    result.set_item("encoded_proof_envelope_bytes", encoded_proof_envelope_bytes)?;
+    result.set_item(
+        "adaptive_signed_transaction_bytes",
+        adaptive_signed_transaction_bytes,
+    )?;
+    result.set_item(
+        "submitted_versioned_transaction_bytes",
+        submitted_versioned_transaction_bytes,
+    )?;
+    result.set_item("execution_classification", execution_classification)?;
+    match ledger_effect {
+        Some(effect) => result.set_item("ledger_effect", effect)?,
+        None => result.set_item("ledger_effect", py.None())?,
+    }
+    Ok(result)
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_zk_ace_transfer_action_v1")]
+/// Authenticate and inspect exactly one native ZK-ACE transparent transfer.
+fn inspect_signed_privacy_zk_ace_transfer_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        "ZK-ACE",
+    )?;
+    let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched ZK-ACE statement",
+        ));
+    };
+    if !matches!(&envelope.proof, PrivacyProofV1::ZkAcePqAuthorizationV0(_)) {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched ZK-ACE proof variant",
+        ));
+    }
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1,
+        Some(ZK_ACE_TRANSFER_LEDGER_EFFECT_V1),
+    )?;
+    result.set_item("action_kind", "transparent_transfer")?;
+    result.set_item(
+        "identity_commitment",
+        PyBytes::new(py, statement.identity_commitment.as_bytes()),
+    )?;
+    result.set_item(
+        "policy_id",
+        PyBytes::new(py, statement.policy_id.as_bytes()),
+    )?;
+    result.set_item(
+        "policy_digest",
+        PyBytes::new(py, statement.policy_digest.as_bytes()),
+    )?;
+    result.set_item("source_account_id", statement.source.to_string())?;
+    result.set_item("destination_account_id", statement.destination.to_string())?;
+    result.set_item(
+        "asset_definition_id",
+        statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item("amount", statement.amount.to_string())?;
+    result.set_item("authorization_epoch", statement.authorization_epoch)?;
+    result.set_item(
+        "replay_nullifier",
+        PyBytes::new(py, statement.replay_nullifier.as_bytes()),
+    )?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_jindo_action_v1")]
+/// Authenticate and inspect the exact public metadata carried by one Jindo action.
+fn inspect_signed_privacy_jindo_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    signed.verify_signature().map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
+    })?;
+    let (transaction_intent_digest, submission) = signed
+        .privacy_transaction_intent_binding_if_present_v1()
+        .map_err(|_| {
+            PyValueError::new_err(
+                "signed_transaction_versioned has an invalid privacy intent binding",
+            )
+        })?
+        .ok_or_else(|| {
+            PyValueError::new_err("signed_transaction_versioned contains no direct privacy action")
+        })?;
+    let envelope = &submission.envelope;
+    if envelope.protocol_id != PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned is not a Jindo action",
+        ));
+    }
+    envelope
+        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| {
+            PyValueError::new_err(
+                "signed_transaction_versioned has an invalid Jindo proof envelope",
+            )
+        })?;
+    let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &envelope.statement
+    else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched Jindo statement",
+        ));
+    };
+    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned Jindo statement could not be encoded")
+    })?;
+    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned Jindo envelope could not be encoded")
+    })?;
+    let statement_bytes = u32::try_from(statement_encoding.len())
+        .map_err(|_| PyValueError::new_err("Jindo statement byte length overflowed"))?;
+    let proof_bytes = u32::try_from(envelope.proof.bytes().as_bytes().len())
+        .map_err(|_| PyValueError::new_err("Jindo proof byte length overflowed"))?;
+    let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
+        .map_err(|_| PyValueError::new_err("Jindo envelope byte length overflowed"))?;
+    let adaptive_signed_transaction_bytes =
+        u32::try_from(norito::codec::encode_adaptive(&signed).len())
+            .map_err(|_| PyValueError::new_err("adaptive transaction byte length overflowed"))?;
+    let submitted_versioned_transaction_bytes =
+        u32::try_from(signed_transaction_versioned.len())
+            .map_err(|_| PyValueError::new_err("versioned transaction byte length overflowed"))?;
+    let polynomial_count = u32::try_from(statement.polynomial_commitments.len())
+        .map_err(|_| PyValueError::new_err("Jindo polynomial count overflowed"))?;
+    let proof_envelope_hash = Hash::new(&envelope_encoding);
+    let transaction_hash = signed.hash();
+    let result = PyDict::new(py);
+    result.set_item(
+        "transaction_hash",
+        PyBytes::new(py, transaction_hash.as_ref()),
+    )?;
+    result.set_item(
+        "transaction_intent_digest",
+        PyBytes::new(py, transaction_intent_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "statement_digest",
+        PyBytes::new(py, envelope.statement_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "proof_envelope_hash",
+        PyBytes::new(py, proof_envelope_hash.as_ref()),
+    )?;
+    result.set_item("statement_bytes", statement_bytes)?;
+    result.set_item("proof_bytes", proof_bytes)?;
+    result.set_item("encoded_proof_envelope_bytes", encoded_proof_envelope_bytes)?;
+    result.set_item(
+        "adaptive_signed_transaction_bytes",
+        adaptive_signed_transaction_bytes,
+    )?;
+    result.set_item(
+        "submitted_versioned_transaction_bytes",
+        submitted_versioned_transaction_bytes,
+    )?;
+    result.set_item("polynomial_count", polynomial_count)?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_verange_action_v1")]
+/// Authenticate and inspect the exact public metadata carried by one VeRange action.
+fn inspect_signed_privacy_verange_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        "VeRange",
+    )?;
+    let PrivacyStatementV1::VeRangeTransparentRangeV1(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched VeRange statement",
+        ));
+    };
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1,
+        None,
+    )?;
+    result.set_item(
+        "asset_definition_id",
+        statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item(
+        "policy_id",
+        PyBytes::new(py, statement.policy_id.as_bytes()),
+    )?;
+    result.set_item("bit_length", statement.bit_length.bits())?;
+    result.set_item("aggregation_count", statement.aggregation_count)?;
+    let commitments = PyList::empty(py);
+    for commitment in &statement.value_commitments {
+        commitments.append(PyBytes::new(py, commitment.as_bytes()))?;
+    }
+    result.set_item("value_commitments", commitments)?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_vega_action_v1")]
+/// Authenticate and inspect the exact public metadata carried by one Vega action.
+fn inspect_signed_privacy_vega_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        "Vega",
+    )?;
+    let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched Vega statement",
+        ));
+    };
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        VEGA_ACTION_EXECUTION_CLASSIFICATION_V1,
+        None,
+    )?;
+    result.set_item("document_type", "org.iso.18013.5.1.mDL")?;
+    result.set_item("namespace", "org.iso.18013.5.1")?;
+    result.set_item("digest_algorithm", "SHA-256")?;
+    result.set_item("issuer_authentication_algorithm", "COSE_Sign1/ES256")?;
+    result.set_item("device_authentication_algorithm", "COSE_Sign1/ES256")?;
+    result.set_item(
+        "issuer_id",
+        PyBytes::new(py, statement.issuer_id.as_bytes()),
+    )?;
+    result.set_item("issuer_record_epoch", statement.issuer_record_epoch)?;
+    result.set_item(
+        "issuer_record_digest",
+        PyBytes::new(py, statement.issuer_record_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "issuer_public_key",
+        PyBytes::new(py, statement.issuer_public_key.as_bytes()),
+    )?;
+    result.set_item(
+        "device_authentication_digest",
+        PyBytes::new(py, statement.device_authentication_digest.as_bytes()),
+    )?;
+    result.set_item("presentation_year", statement.presentation_date.year)?;
+    result.set_item("presentation_month", statement.presentation_date.month)?;
+    result.set_item("presentation_day", statement.presentation_date.day)?;
+    result.set_item("minimum_age_years", statement.minimum_age_years)?;
+    result.set_item(
+        "reader_challenge",
+        PyBytes::new(py, statement.reader_challenge.as_bytes()),
+    )?;
+    result.set_item(
+        "session_transcript_digest",
+        PyBytes::new(py, statement.session_transcript_digest.as_bytes()),
+    )?;
+    Ok(result.unbind())
+}
+
+fn python_zk_ams_action_inspection_result_v1<'py>(
+    py: Python<'py>,
+    signed: &SignedTransaction,
+    signed_transaction_versioned: &[u8],
+    transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+    envelope: &PrivacyProofEnvelopeV1,
+    statement: &IrohaZkAmsStatementV1,
+    ledger_effect: &'static str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1,
+        Some(ledger_effect),
+    )?;
+    result.set_item(
+        "issuer_id",
+        PyBytes::new(py, statement.issuer_id.as_bytes()),
+    )?;
+    result.set_item(
+        "issuer_public_key",
+        PyBytes::new(py, statement.issuer_public_key.as_bytes()),
+    )?;
+    result.set_item(
+        "issuer_policy_record_digest",
+        PyBytes::new(py, statement.issuer_policy_record_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "registry_id",
+        PyBytes::new(py, statement.registry_id.as_bytes()),
+    )?;
+    result.set_item(
+        "registry_record_digest",
+        PyBytes::new(py, statement.registry_record_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "policy_id",
+        PyBytes::new(py, statement.policy_id.as_bytes()),
+    )?;
+    result.set_item(
+        "policy_digest",
+        PyBytes::new(py, statement.policy_digest.as_bytes()),
+    )?;
+    Ok(result)
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_zk_ams_batch_admission_action_v1")]
+/// Authenticate and inspect exactly one ZK-AMS batch-admission action.
+fn inspect_signed_privacy_zk_ams_batch_admission_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::IrohaZkAmsV1,
+        "ZK-AMS",
+    )?;
+    let PrivacyStatementV1::IrohaZkAmsV1(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched ZK-AMS statement",
+        ));
+    };
+    let PrivacyZkAmsActionV1::BatchAdmission(batch) = &statement.action else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned is not a ZK-AMS batch-admission action",
+        ));
+    };
+    if !matches!(
+        &envelope.proof,
+        PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(_))
+    ) {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched ZK-AMS batch-admission proof variant",
+        ));
+    }
+    let result = python_zk_ams_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        statement,
+        ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1,
+    )?;
+    result.set_item("action_kind", "batch_admission")?;
+    result.set_item(
+        "account_registry_root",
+        PyBytes::new(py, batch.account_registry_root.as_bytes()),
+    )?;
+    result.set_item(
+        "account_registry_root_epoch",
+        batch.account_registry_root_epoch,
+    )?;
+    result.set_item(
+        "next_account_registry_root",
+        PyBytes::new(py, batch.next_account_registry_root.as_bytes()),
+    )?;
+    result.set_item(
+        "next_account_registry_root_epoch",
+        batch.next_account_registry_root_epoch,
+    )?;
+    result.set_item(
+        "anchor_count",
+        u32::try_from(batch.anchors.len())
+            .map_err(|_| PyValueError::new_err("ZK-AMS anchor count overflowed"))?,
+    )?;
+    let phc_hashes = PyList::empty(py);
+    let seed_public_keys = PyList::empty(py);
+    for anchor in &batch.anchors {
+        phc_hashes.append(PyBytes::new(py, anchor.phc_hash.as_bytes()))?;
+        seed_public_keys.append(PyBytes::new(py, anchor.seed_public_key.as_bytes()))?;
+    }
+    result.set_item("phc_hashes", phc_hashes)?;
+    result.set_item("seed_public_keys", seed_public_keys)?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_zk_ams_provision_account_action_v1")]
+/// Authenticate and inspect exactly one ZK-AMS account-provisioning action.
+fn inspect_signed_privacy_zk_ams_provision_account_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::IrohaZkAmsV1,
+        "ZK-AMS",
+    )?;
+    let PrivacyStatementV1::IrohaZkAmsV1(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched ZK-AMS statement",
+        ));
+    };
+    let PrivacyZkAmsActionV1::ProvisionAccount(provision) = &statement.action else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned is not a ZK-AMS account-provisioning action",
+        ));
+    };
+    if !matches!(
+        &envelope.proof,
+        PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(_))
+    ) {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched ZK-AMS account-provisioning proof variant",
+        ));
+    }
+    let result = python_zk_ams_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        statement,
+        ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1,
+    )?;
+    result.set_item("action_kind", "provision_account")?;
+    result.set_item(
+        "account_registry_root",
+        PyBytes::new(py, provision.account_registry_root.as_bytes()),
+    )?;
+    result.set_item(
+        "account_registry_root_epoch",
+        provision.account_registry_root_epoch,
+    )?;
+    result.set_item(
+        "ring_size",
+        u32::try_from(provision.admitted_seed_key_ring.len())
+            .map_err(|_| PyValueError::new_err("ZK-AMS ring size overflowed"))?,
+    )?;
+    let ring = PyList::empty(py);
+    for key in &provision.admitted_seed_key_ring {
+        ring.append(PyBytes::new(py, key.as_bytes()))?;
+    }
+    result.set_item("admitted_seed_key_ring", ring)?;
+    result.set_item("account_id", provision.account_id.to_string())?;
+    result.set_item(
+        "key_image",
+        PyBytes::new(py, provision.key_image.as_bytes()),
+    )?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_bootle_lantern_presentation_action_v1")]
+/// Authenticate and inspect exactly one Bootle/Lantern presentation action.
+fn inspect_signed_privacy_bootle_lantern_presentation_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        "Bootle/Lantern",
+    )?;
+    let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched Bootle/Lantern statement",
+        ));
+    };
+    if !matches!(
+        &envelope.proof,
+        PrivacyProofV1::IrohaBootleLanternAnoncredV1(_)
+    ) {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched Bootle/Lantern proof variant",
+        ));
+    }
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1,
+        None,
+    )?;
+    result.set_item("action_kind", "presentation")?;
+    result.set_item(
+        "issuer_id",
+        PyBytes::new(py, statement.issuer_id.as_bytes()),
+    )?;
+    result.set_item(
+        "policy_id",
+        PyBytes::new(py, statement.policy_id.as_bytes()),
+    )?;
+    result.set_item("issuer_policy_epoch", statement.issuer_policy_epoch)?;
+    result.set_item(
+        "issuer_policy_record_digest",
+        PyBytes::new(py, statement.issuer_policy_record_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "issuer_parameter_id",
+        PyBytes::new(py, statement.issuer_parameter_id.as_bytes()),
+    )?;
+    result.set_item(
+        "issuer_parameter_digest",
+        PyBytes::new(py, statement.issuer_parameter_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "disclosure_indices",
+        statement
+            .disclosures
+            .iter()
+            .map(|disclosure| disclosure.index)
+            .collect::<Vec<_>>(),
+    )?;
+    let disclosed_values = PyList::empty(py);
+    for disclosure in &statement.disclosures {
+        disclosed_values.append(PyBytes::new(py, disclosure.value.as_bytes()))?;
+    }
+    result.set_item("disclosed_attribute_values", disclosed_values)?;
+    Ok(result.unbind())
+}
+
 #[pyfunction]
 #[pyo3(name = "verify_signed_transaction_versioned")]
 /// Decode a versioned signed transaction and verify its signature.
 fn verify_signed_transaction_versioned_py(bytes: &[u8]) -> PyResult<bool> {
-    let signed = SignedTransaction::decode_all_versioned(bytes).map_err(|err| {
-        PyValueError::new_err(format!("failed to decode SignedTransaction: {err}"))
-    })?;
+    let signed = decode_canonical_signed_transaction_v1(bytes)?;
     Ok(signed.verify_signature().is_ok())
 }
 
@@ -17998,2646 +18354,43 @@ fn lane_settlement_hash_py(settlement_json: &str) -> PyResult<String> {
     Ok(hex_encode_upper(hash.as_ref()))
 }
 
-const PRIVACY_FFI_VERSION_V1: u32 = 1;
-const PRIVACY_FFI_STATUS_ERROR: u32 = 1;
-const PRIVACY_FFI_ERROR_MALFORMED_NORITO: u32 = 2;
-const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM: u32 = 3;
-const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED: u32 = 4;
-const PRIVACY_FFI_ERROR_INVALID_REQUEST: u32 = 5;
-const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
-const PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES: usize = 1024;
-const PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES: usize = 1024 * 1024;
-const PRIVACY_REQUEST_WITNESS_MAX_BYTES: usize = PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2;
-const PRIVACY_REQUEST_PROOF_MAX_BYTES: usize = PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2;
-const PRIVACY_NORITO_SCHEMA_START: usize = 6;
-const PRIVACY_NORITO_SCHEMA_END: usize = 22;
-const PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE: u8 = 0x50;
-const PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE: u8 = 0x42;
-const PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE: u8 = 0x56;
-const PRIVACY_REQUEST_SCHEMA_BYTE: u8 = 0x52;
-const PRIVACY_PRODUCTION_GATE_VERSION: &str = "privacy-production-gate-v1";
-const PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION: &str = "privacy-production-review-scope-v1";
-const PRIVACY_PRODUCTION_GATE_MISSING_ENGINE: &str =
-    "real protocol engine is not production-enabled";
-const PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST: &str =
-    "Iroha production allowlist is not enabled for this audited row";
-const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, witness privacy checks, deterministic tests, negative/adversarial tests, replay/nullifier rejection tests, fuzzing, parser fuzzing, verifier fuzzing, performance gates, internal cryptographic review, real protocol engine enablement, and Iroha production allowlist evidence all pass";
-#[cfg(test)]
-const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: &[u8] =
-    b"iroha-privacy-native-availability-probe-v1";
-
-fn privacy_request_archive_out_of_bounds(len: usize) -> bool {
-    len == 0 || len > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
-}
-
-fn privacy_archive_has_repeated_schema_byte(bytes: &[u8], schema_byte: u8) -> bool {
-    bytes
-        .get(PRIVACY_NORITO_SCHEMA_START..PRIVACY_NORITO_SCHEMA_END)
-        .is_some_and(|schema| schema.iter().all(|byte| *byte == schema_byte))
-}
-
-fn privacy_patch_archive_schema_hash(bytes: &mut [u8], schema_hash: [u8; 16]) -> bool {
-    let Some(schema) = bytes.get_mut(PRIVACY_NORITO_SCHEMA_START..PRIVACY_NORITO_SCHEMA_END) else {
-        return false;
-    };
-    schema.copy_from_slice(&schema_hash);
-    true
-}
-
-fn privacy_patch_archive_repeated_schema_byte(bytes: &mut [u8], schema_byte: u8) -> bool {
-    let Some(schema) = bytes.get_mut(PRIVACY_NORITO_SCHEMA_START..PRIVACY_NORITO_SCHEMA_END) else {
-        return false;
-    };
-    schema.fill(schema_byte);
-    true
-}
-
-fn privacy_result_schema_byte(operation: PrivacyProofOperationV1) -> u8 {
-    match operation {
-        PrivacyProofOperationV1::Build => PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
-        PrivacyProofOperationV1::Verify => PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE,
-    }
-}
-
-const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
-    ("real_proving", "real proving engine is not registered"),
-    ("real_verification", "real verifier is not registered"),
-    ("chain_admission", "chain admission path is not enabled"),
-    ("sdk_parity", "cross-SDK parity is incomplete"),
-    ("wallet_state", "wallet/state support is incomplete"),
-    (
-        "witness_privacy_checks",
-        "witness privacy checks are incomplete",
-    ),
-    ("deterministic_tests", "deterministic tests are incomplete"),
-    (
-        "negative_adversarial_tests",
-        "negative/adversarial tests are incomplete",
-    ),
-    (
-        "replay_nullifier_tests",
-        "replay/nullifier rejection tests are incomplete",
-    ),
-    ("fuzzing", "fuzzing gate is incomplete"),
-    ("parser_fuzzing", "parser fuzzing gate is incomplete"),
-    ("verifier_fuzzing", "verifier fuzzing gate is incomplete"),
-    ("performance_gates", "performance gate is incomplete"),
-    (
-        "external_audit",
-        "internal cryptographic review signoff is missing",
-    ),
-];
-const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
-    "real_proving",
-    "real_verification",
-    "witness_privacy_checks",
-    "verifier_fuzzing",
-];
-const PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX: &str = "sha256:";
-const PRIVACY_PRODUCTION_LOCALNET_TARGET: &str = "localnet";
-const PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT: u8 = 4;
-const PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES: &[&str] = &[
-    "rust_core",
-    "ffi",
-    "python",
-    "javascript",
-    "java_android",
-    "kotlin",
-    "swift",
-    "csharp",
-];
-const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS: &[&str] =
-    &["types", "validation_rules", "error_codes", "golden_vectors"];
-
-const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
-    (
-        "zk-ace-pq-authorization-v0",
-        "stark/fri/sha256-goldilocks",
-        "stark-fri",
-    ),
-    (
-        "anonymous-pgc-k-out-of-n-v1",
-        "anonymous-pgc-k-out-of-n",
-        "anonymous-pgc",
-    ),
-    (
-        "verange-transparent-range-v1",
-        "verange-transparent-range",
-        "verange",
-    ),
-    (
-        "zkat-policy-private-auth-v1",
-        "zkat-policy-private-authenticator",
-        "zkat",
-    ),
-    (
-        "zk-ams-recursive-admission-v0",
-        "recursive-anonymous-admission",
-        "recursive-anonymous-admission",
-    ),
-    (
-        "vega-existing-credential-zk-v0",
-        "existing-credential-zk",
-        "vega-existing-credential-zk",
-    ),
-    (
-        "silent-threshold-anoncred-v0",
-        "threshold-anonymous-credentials",
-        "silent-threshold-anoncred",
-    ),
-    (
-        "zk-x509-onchain-identity-v0",
-        "zkvm-x509-identity",
-        "zk-x509",
-    ),
-    (
-        "jindo-lattice-pcs-zk-v0",
-        "lattice-polynomial-commitment",
-        "lattice-pcs-sis",
-    ),
-    (
-        "sis-hints-anoncred-pq-v0",
-        "lattice-anonymous-credentials",
-        "sis-with-hints",
-    ),
-    (
-        "orchard-halo2-actions-v1",
-        "halo2-pasta-action-bundle",
-        "halo2-ipa-orchard",
-    ),
-    (
-        "penumbra-masp-v1",
-        "groth16-bls12-377-decaf377",
-        "groth16-bls12-377",
-    ),
-    (
-        "monero-fcmp-plus-plus-v1",
-        "fcmp-plus-plus-curve-trees-bulletproofs",
-        "fcmp-plus-plus-curve-tree",
-    ),
-    (
-        "miden-stark-note-v1",
-        "stark-vm-note-transaction",
-        "miden-stark",
-    ),
-    (
-        "aztec-private-rollup-v1",
-        "plonkish-private-kernel-rollup",
-        "aztec-plonkish-private-kernel",
-    ),
-    ("pq-masp-stark-v0", "stark-fri", "pq-masp-stark-fri"),
-];
-
-const PRIVACY_COMPONENT_ALGORITHM_IDS: &[&str] = &["verange-transparent-range-v1"];
-const PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS: &[&str] = &[];
-const PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS: &[&str] = &[
-    "productionready",
-    "productionhardened",
-    "productionenabled",
-    "productionapproved",
-    "productioncertified",
-    "productionclaim",
-    "claimedproduction",
-    "mainnetready",
-    "mainnetcomplete",
-    "mainnetclaim",
-    "claimedmainnet",
-    "mainnetcertified",
-    "mainnetapproved",
-    "mainnetrelease",
-    "auditedproduction",
-    "externallyaudited",
-    "thirdpartyaudited",
-    "boiaudited",
-    "auditedmainnet",
-    "internalcryptographicreview",
-    "auditpassed",
-    "auditapproved",
-    "auditsignoff",
-    "auditclaim",
-    "claimedaudit",
-    "securityreviewpassed",
-    "securityauditpassed",
-    "securityaudited",
-    "externalsecurityreview",
-    "certifiedproduction",
-    "certifiedmainnet",
-    "releaseready",
-    "releaseapproved",
-    "releasecertified",
-];
-
-#[derive(Clone, Copy)]
-struct PrivacyAlgorithmEntry {
-    id: &'static str,
-    proof_family: &'static str,
-    backend_family: &'static str,
-    sdk_entrypoints: &'static [&'static str],
-    planned_entrypoints: &'static [&'static str],
-}
-
-const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
-    PrivacyAlgorithmEntry {
-        id: "transparent-transfer",
-        proof_family: "none",
-        backend_family: "none",
-        sdk_entrypoints: &[
-            "buildTransferAssetInstruction",
-            "buildTransaction",
-            "submitSignedTransaction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "shield",
-        proof_family: "commitment-only",
-        backend_family: "commitment-only",
-        sdk_entrypoints: &[
-            "buildShieldInstruction",
-            "buildTransaction",
-            "submitSignedTransaction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "confidential-transfer-v2",
-        proof_family: "halo2-ipa-pasta",
-        backend_family: "halo2-ipa-pasta",
-        sdk_entrypoints: &[
-            "buildConfidentialTransferProofV2",
-            "buildZkTransferInstruction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "unshield",
-        proof_family: "halo2-ipa-pasta",
-        backend_family: "halo2-ipa-pasta",
-        sdk_entrypoints: &[
-            "buildConfidentialUnshieldProofV3",
-            "buildUnshieldInstruction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "asset-hidden-confidential-transfer-v1",
-        proof_family: "halo2-ipa-pasta",
-        backend_family: "halo2-ipa-pasta",
-        sdk_entrypoints: &[
-            "buildConfidentialAssetHiddenTransferProofV1",
-            "buildRegisterAssetHiddenZkPoolInstruction",
-            "buildAssetHiddenZkTransferInstruction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "zk-ace-pq-authorization-v0",
-        proof_family: "stark/fri/sha256-goldilocks",
-        backend_family: "stark-fri",
-        sdk_entrypoints: &[
-            "buildRegisterZkAceIdentityCommitmentInstruction",
-            "buildRotateZkAceIdentityCommitmentInstruction",
-            "buildRevokeZkAceIdentityCommitmentInstruction",
-            "buildZkAceAuthorizedTransferInstruction",
-            "buildZkAceAuthorizationProofV1",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "anonymous-pgc-k-out-of-n-v1",
-        proof_family: "anonymous-pgc-k-out-of-n",
-        backend_family: "anonymous-pgc",
-        sdk_entrypoints: &[
-            "buildAnonymousPgcReceiverSet",
-            "buildAnonymousPgcAccountCommitmentInstruction",
-            "buildAnonymousPgcKOutOfNProofV1",
-            "buildAnonymousPgcTransferInstruction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "verange-transparent-range-v1",
-        proof_family: "verange-transparent-range",
-        backend_family: "verange",
-        sdk_entrypoints: &[
-            "buildRangeCommitment",
-            "buildVeRangeDevProofFixture",
-            "buildVeRangeProofEnvelope",
-            "buildVeRangeProofV1",
-            "verifyVeRangeProofLocally",
-            "verifyVeRangeProofV1",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "zkat-policy-private-auth-v1",
-        proof_family: "zkat-policy-private-authenticator",
-        backend_family: "zkat",
-        sdk_entrypoints: &[
-            "buildZkAtPolicyCommitment",
-            "buildZkAtAuthenticatorEnvelope",
-            "buildZkAtPolicyProofV1",
-            "verifyZkAtPolicyProofV1",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "zk-ams-recursive-admission-v0",
-        proof_family: "recursive-anonymous-admission",
-        backend_family: "recursive-anonymous-admission",
-        sdk_entrypoints: &[
-            "buildZkAmsAdmissionBatch",
-            "buildZkAmsAdmissionProofEnvelope",
-            "buildZkAmsAdmissionBatchProofV0",
-            "verifyZkAmsAdmissionBatchProofV0",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "vega-existing-credential-zk-v0",
-        proof_family: "existing-credential-zk",
-        backend_family: "vega-existing-credential-zk",
-        sdk_entrypoints: &[
-            "buildVegaCredentialPredicateCommitment",
-            "buildVegaCredentialProofEnvelope",
-            "buildVegaCredentialPredicateProofV0",
-            "verifyVegaCredentialPredicateProofV0",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "silent-threshold-anoncred-v0",
-        proof_family: "threshold-anonymous-credentials",
-        backend_family: "silent-threshold-anoncred",
-        sdk_entrypoints: &[
-            "buildSilentThresholdCredentialCommitments",
-            "buildSilentThresholdCredentialEnvelope",
-            "buildSilentThresholdCredentialShowingProofV0",
-            "verifySilentThresholdCredentialShowingProofV0",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "zk-x509-onchain-identity-v0",
-        proof_family: "zkvm-x509-identity",
-        backend_family: "zk-x509",
-        sdk_entrypoints: &[
-            "buildZkX509IdentityCommitments",
-            "buildZkX509IdentityEnvelope",
-            "buildZkX509IdentityProofV0",
-            "verifyZkX509IdentityProofV0",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "jindo-lattice-pcs-zk-v0",
-        proof_family: "lattice-polynomial-commitment",
-        backend_family: "lattice-pcs-sis",
-        sdk_entrypoints: &[
-            "buildJindoLatticePublicInputs",
-            "buildJindoLatticeProofEnvelope",
-            "buildJindoLatticeProofV0",
-            "verifyJindoPolynomialCommitmentV0",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "sis-hints-anoncred-pq-v0",
-        proof_family: "lattice-anonymous-credentials",
-        backend_family: "sis-with-hints",
-        sdk_entrypoints: &[
-            "buildSisHintsCredentialCommitments",
-            "buildSisHintsCredentialEnvelope",
-            "buildSisHintsAnonymousCredentialProofV0",
-            "verifySisHintsAnonymousCredentialProofV0",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "orchard-halo2-actions-v1",
-        proof_family: "halo2-pasta-action-bundle",
-        backend_family: "halo2-ipa-orchard",
-        sdk_entrypoints: &[
-            "buildOrchardActionBundleProofV1",
-            "buildOrchardActionBundleInstruction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "penumbra-masp-v1",
-        proof_family: "groth16-bls12-377-decaf377",
-        backend_family: "groth16-bls12-377",
-        sdk_entrypoints: &[
-            "buildPenumbraSpendProofV1",
-            "buildPenumbraOutputProofV1",
-            "buildPenumbraShieldedPoolTransaction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "monero-fcmp-plus-plus-v1",
-        proof_family: "fcmp-plus-plus-curve-trees-bulletproofs",
-        backend_family: "fcmp-plus-plus-curve-tree",
-        sdk_entrypoints: &[
-            "buildFcmpPlusPlusMembershipProofV1",
-            "buildFcmpPlusPlusTransferInstruction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "miden-stark-note-v1",
-        proof_family: "stark-vm-note-transaction",
-        backend_family: "miden-stark",
-        sdk_entrypoints: &[
-            "buildMidenStarkTransactionProofV1",
-            "buildMidenNoteTransactionInstruction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "aztec-private-rollup-v1",
-        proof_family: "plonkish-private-kernel-rollup",
-        backend_family: "aztec-plonkish-private-kernel",
-        sdk_entrypoints: &[
-            "buildAztecPrivateKernelProofV1",
-            "buildAztecPrivateRollupTransactionInstruction",
-        ],
-        planned_entrypoints: &[],
-    },
-    PrivacyAlgorithmEntry {
-        id: "pq-masp-stark-v0",
-        proof_family: "stark-fri",
-        backend_family: "pq-masp-stark-fri",
-        sdk_entrypoints: &[
-            "buildPqMaspStarkTransferProofV0",
-            "buildPqMaspStarkRegisterPoolInstruction",
-            "buildPqMaspStarkTransferInstruction",
-            "generateMlDsaKeyPair",
-            "encapsulateMlKem",
-        ],
-        planned_entrypoints: &[],
-    },
-];
-
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-struct PrivacyProductionGateStatusV1 {
-    key: String,
-    passed: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-struct PrivacyProductionGateV1 {
-    version: String,
-    ready: bool,
-    gates: Vec<PrivacyProductionGateStatusV1>,
-    required_gates: Vec<String>,
-    missing: Vec<String>,
-    audit_references: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-struct PrivacyCapabilityV1 {
-    algorithm_id: String,
-    proof_family: String,
-    backend_family: String,
-    sdk_entrypoints: Vec<String>,
-    planned_entrypoints: Vec<String>,
-    production_ready: bool,
-    production_gate: PrivacyProductionGateV1,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-struct PrivacyCapabilitiesV1 {
-    version: u32,
-    gate_version: String,
-    algorithms: Vec<PrivacyCapabilityV1>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-struct PrivacyProofRequestV1 {
-    algorithm_id: String,
-    entrypoint: String,
-    vk_ref: String,
-    public_inputs: Vec<u8>,
-    witness: Vec<u8>,
-    proof: Vec<u8>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-struct PrivacyProofResultV1 {
-    version: u32,
-    status: u32,
-    error_code: u32,
-    message: String,
-    algorithm_id: String,
-    entrypoint: String,
-    vk_ref: String,
-    public_inputs: Vec<u8>,
-    proof: Vec<u8>,
-    verified: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PrivacyProofOperationV1 {
-    Build,
-    Verify,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PrivacyProductionGateEvidenceV1 {
-    key: &'static str,
-    artifact_hash: &'static str,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PrivacyProductionLocalnetEvidenceV1 {
-    run_id: &'static str,
-    target: &'static str,
-    peer_count: u8,
-    peer_ids: [&'static str; 4],
-    chain_id: &'static str,
-    smoke_passed: bool,
-    smoke_tx_hash: &'static str,
-    lifecycle_passed: bool,
-    lifecycle_shield_tx_hash: &'static str,
-    lifecycle_hop_proof_hash: &'static str,
-    lifecycle_recursive_init_hash: &'static str,
-    lifecycle_recursive_init_verify_hash: &'static str,
-    lifecycle_recursive_append_hash: &'static str,
-    lifecycle_recursive_append_verify_hash: &'static str,
-    lifecycle_unshield_proof_hash: &'static str,
-    lifecycle_redeem_tx_hash: &'static str,
-    replay_rejected: bool,
-    replay_rejection_hash: &'static str,
-    restart_persistence_checked: bool,
-    restart_replay_rejected: bool,
-    restart_replay_rejection_hash: &'static str,
-    state_recovery_passed: bool,
-    state_recovery_hash: &'static str,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PrivacyProductionSdkExportV1 {
-    surface: &'static str,
-    entrypoints: Vec<&'static str>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PrivacyProductionSdkParityArtifactV1 {
-    kind: &'static str,
-    surface: &'static str,
-    artifact_hash: &'static str,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PrivacyProductionReviewScopeV1 {
-    version: &'static str,
-    algorithm_id: &'static str,
-    chain_id: &'static str,
-    verifier_key_id: &'static str,
-    proof_family: &'static str,
-    public_inputs_schema: Option<&'static str>,
-    sdk_entrypoints: Vec<&'static str>,
-    required_state: Vec<&'static str>,
-    fuzz_artifact_hash: &'static str,
-    performance_artifact_hash: &'static str,
-    localnet_run_id: &'static str,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PrivacyProductionEvidenceRowV1 {
-    algorithm_id: &'static str,
-    chain_id: &'static str,
-    reviewer_identity: &'static str,
-    review_artifact_hash: &'static str,
-    review_artifact_signature: &'static str,
-    review_scope: PrivacyProductionReviewScopeV1,
-    verifier_key_id: &'static str,
-    proof_family: &'static str,
-    public_inputs_schema: Option<&'static str>,
-    sdk_entrypoints: Vec<&'static str>,
-    sdk_exports: Vec<PrivacyProductionSdkExportV1>,
-    sdk_parity_artifacts: Vec<PrivacyProductionSdkParityArtifactV1>,
-    required_state: Vec<&'static str>,
-    fuzz_artifact_hash: &'static str,
-    performance_artifact_hash: &'static str,
-    localnet_acceptance: PrivacyProductionLocalnetEvidenceV1,
-    gate_evidence: Vec<PrivacyProductionGateEvidenceV1>,
-}
-
-fn privacy_production_gate_requirement_is_waived(entry: &PrivacyAlgorithmEntry, key: &str) -> bool {
-    entry.id == "transparent-transfer"
-        && PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS.contains(&key)
-}
-
-fn privacy_required_production_gate_keys(entry: &PrivacyAlgorithmEntry) -> Vec<String> {
-    PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-        .iter()
-        .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
-        .map(|(key, _)| (*key).to_owned())
-        .collect()
-}
-
-fn privacy_expected_verifier_key_id(entry: &PrivacyAlgorithmEntry) -> &'static str {
-    match entry.id {
-        "transparent-transfer" => "none",
-        "shield" => "zk::Shield",
-        "confidential-transfer-v2" => "confidential_transfer_v2",
-        "unshield" => "confidential_unshield_v3",
-        "asset-hidden-confidential-transfer-v1" => "asset_hidden_transfer_v1",
-        "zk-ace-pq-authorization-v0" => "zk_ace_pq_authorization_v0",
-        "anonymous-pgc-k-out-of-n-v1" => "anonymous_pgc_k_out_of_n_v1",
-        "verange-transparent-range-v1" => "verange_transparent_range_v1",
-        "zkat-policy-private-auth-v1" => "zkat_policy_private_auth_v1",
-        "zk-ams-recursive-admission-v0" => "zk_ams_recursive_admission_v0",
-        "vega-existing-credential-zk-v0" => "vega_existing_credential_zk_v0",
-        "silent-threshold-anoncred-v0" => "silent_threshold_anoncred_v0",
-        "zk-x509-onchain-identity-v0" => "zk_x509_onchain_identity_v0",
-        "jindo-lattice-pcs-zk-v0" => "jindo_lattice_pcs_zk_v0",
-        "sis-hints-anoncred-pq-v0" => "sis_hints_anoncred_pq_v0",
-        "orchard-halo2-actions-v1" => "orchard_halo2_action_bundle_v1",
-        "penumbra-masp-v1" => "penumbra_masp_v1",
-        "monero-fcmp-plus-plus-v1" => "monero_fcmp_plus_plus_v1",
-        "miden-stark-note-v1" => "miden_stark_note_v1",
-        "aztec-private-rollup-v1" => "aztec_private_kernel_v1",
-        "pq-masp-stark-v0" => "pq_masp_stark_v0",
-        _ => "",
-    }
-}
-
-fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Option<&'static str> {
-    match entry.id {
-        "transparent-transfer" => None,
-        "shield" => Some("asset,from,amount,note_commitment"),
-        "confidential-transfer-v2" => Some(
-            "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag",
-        ),
-        "unshield" => Some(
-            "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,change_commitment_0,root,public_amount,asset_tag,chain_tag",
-        ),
-        "asset-hidden-confidential-transfer-v1" => Some(
-            "pool_id,asset_set_root,input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,chain_tag",
-        ),
-        "zk-ace-pq-authorization-v0" => Some(
-            "identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id",
-        ),
-        "anonymous-pgc-k-out-of-n-v1" => Some(
-            "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,payment_binding_hash,chain_id,domain_separator",
-        ),
-        "verange-transparent-range-v1" => {
-            Some("commitments,range_parameters,aggregation_count,domain_separator,payload_digest")
-        }
-        "zkat-policy-private-auth-v1" => Some(
-            "policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch",
-        ),
-        "zk-ams-recursive-admission-v0" => Some(
-            "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
-        ),
-        "vega-existing-credential-zk-v0" => Some(
-            "issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator",
-        ),
-        "silent-threshold-anoncred-v0" => Some(
-            "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
-        ),
-        "zk-x509-onchain-identity-v0" => Some(
-            "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
-        ),
-        "jindo-lattice-pcs-zk-v0" => {
-            Some("commitment,opening_claim,query_set,parameter_hash,domain_separator")
-        }
-        "sis-hints-anoncred-pq-v0" => Some(
-            "issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator",
-        ),
-        "orchard-halo2-actions-v1" => {
-            Some("anchor,nullifiers,cmx,value_commitments,binding_signature")
-        }
-        "penumbra-masp-v1" => Some(
-            "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment",
-        ),
-        "monero-fcmp-plus-plus-v1" => Some(
-            "membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag",
-        ),
-        "miden-stark-note-v1" => Some(
-            "account_id,initial_account_commitment,final_account_commitment,input_note_nullifiers,output_note_hashes,reference_block",
-        ),
-        "aztec-private-rollup-v1" => Some(
-            "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots",
-        ),
-        "pq-masp-stark-v0" => Some(
-            "pool_id,asset_set_root,nullifier_set,output_commitments,root,chain_tag,pq_policy_hash",
-        ),
-        _ => None,
-    }
-}
-
-fn privacy_expected_required_state(entry: &PrivacyAlgorithmEntry) -> &'static [&'static str] {
-    match entry.id {
-        "transparent-transfer"
-        | "shield"
-        | "confidential-transfer-v2"
-        | "unshield"
-        | "asset-hidden-confidential-transfer-v1" => &[],
-        "zk-ace-pq-authorization-v0" => &[
-            "registered ZK-ACE identity commitment",
-            "source-account allowlist",
-            "authorization policy hash registry",
-            "active ZK-ACE verifier key",
-            "chain/domain binding state",
-            "transfer digest binding",
-            "replay nullifier uniqueness set",
-            "identity rotation/revocation registry",
-            "STARK/FRI verifier parameter floors",
-            "wallet identity witness and replay-secret store",
-        ],
-        "anonymous-pgc-k-out-of-n-v1" => &[
-            "anonymous account commitment set",
-            "recent anonymity-set roots",
-            "spent link-tag set",
-            "range-proof verifier parameters",
-            "wallet account blinding and receiver recovery metadata",
-        ],
-        "verange-transparent-range-v1" => &[
-            "range-proof verifier parameters",
-            "VeRange verifier key registry",
-            "range commitment domain separators",
-            "maximum aggregation policy",
-        ],
-        "zkat-policy-private-auth-v1" => &[
-            "policy commitment registry",
-            "policy epoch state",
-            "authorization replay guard",
-            "authorization verifier registry",
-            "wallet policy witness store",
-        ],
-        "zk-ams-recursive-admission-v0" => &[
-            "issuer root registry",
-            "admission nullifier set",
-            "anonymous account commitment registry",
-            "recursive verifier parameters",
-            "recursive admission verifier key registry",
-            "wallet admission witness store",
-        ],
-        "vega-existing-credential-zk-v0" => &[
-            "credential issuer registry",
-            "supported credential schema registry",
-            "predicate registry",
-            "revocation or expiration policy",
-            "wallet credential predicate witness store",
-            "credential predicate commitment registry",
-            "credential predicate verifier key registry",
-        ],
-        "silent-threshold-anoncred-v0" => &[
-            "threshold issuer registry",
-            "credential parameter registry",
-            "verifier policy registry",
-            "credential showing nullifier policy",
-            "wallet credential showing witness store",
-            "credential showing commitment registry",
-            "anonymous credential verifier key registry",
-        ],
-        "zk-x509-onchain-identity-v0" => &[
-            "trusted CA root registry",
-            "certificate policy registry",
-            "revocation root registry",
-            "identity proof verifier",
-            "wallet certificate witness store",
-            "certificate subject commitment registry",
-            "ZK-X.509 verifier key registry",
-        ],
-        "jindo-lattice-pcs-zk-v0" => &[
-            "lattice PCS parameter registry",
-            "backend verifier implementation",
-            "lattice PCS verifier key registry",
-            "production benchmark vectors",
-        ],
-        "sis-hints-anoncred-pq-v0" => &[
-            "lattice credential parameter registry",
-            "issuer parameter registry",
-            "credential showing verifier",
-            "wallet lattice credential witness store",
-            "lattice credential commitment registry",
-            "lattice credential verifier key registry",
-        ],
-        "orchard-halo2-actions-v1" => &[
-            "Orchard note commitment tree",
-            "Orchard nullifier set",
-            "Orchard action-bundle verifier key registry",
-            "wallet Orchard witness store",
-        ],
-        "penumbra-masp-v1" => &[
-            "multi-asset state commitment tree",
-            "typed nullifier set",
-            "Groth16 spend/output verifier key registry",
-            "wallet asset metadata witness store",
-        ],
-        "monero-fcmp-plus-plus-v1" => &[
-            "full-output-set commitment accumulator",
-            "spent link-tag set",
-            "FCMP++ verifier key registry",
-            "wallet output ownership scan state",
-        ],
-        "miden-stark-note-v1" => &[
-            "private note hash database",
-            "input note nullifier set",
-            "account commitment state",
-            "STARK VM verifier key registry",
-            "wallet private note witness store",
-        ],
-        "aztec-private-rollup-v1" => &[
-            "private note-hash tree",
-            "nullifier tree",
-            "encrypted log delivery store",
-            "private-kernel verifier key registry",
-            "wallet private execution witness store",
-        ],
-        "pq-masp-stark-v0" => &[
-            "PQ MASP asset-set commitment root",
-            "PQ nullifier set",
-            "ML-KEM encrypted note payload store",
-            "wallet PQ note witness store",
-        ],
-        _ => &[],
-    }
-}
-
-fn privacy_expected_production_sdk_entrypoints(entry: &PrivacyAlgorithmEntry) -> Vec<String> {
-    entry
-        .sdk_entrypoints
-        .iter()
-        .chain(entry.planned_entrypoints.iter())
-        .filter(|entrypoint| {
-            !privacy_entrypoint_is_dev_fixture(entrypoint)
-                && !privacy_entrypoint_is_local_verifier(entrypoint)
-        })
-        .fold(Vec::new(), |mut acc, entrypoint| {
-            if !acc.iter().any(|existing| existing == entrypoint) {
-                acc.push((*entrypoint).to_owned());
-            }
-            acc
-        })
-}
-
-fn privacy_evidence_public_text_is_clean(value: &str, max_len: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= max_len
-        && value.trim() == value
-        && value
-            .bytes()
-            .all(|byte| matches!(byte, 0x20..=0x7e) && byte != b'\\')
-}
-
-fn privacy_evidence_text_has_non_production_marker(value: &str) -> bool {
-    let compact = privacy_compact_ascii_lowercase(value);
-    compact.contains("devfixture")
-        || compact.contains("devprooffixture")
-        || compact.contains("localonly")
-        || compact.contains("mock")
-}
-
-fn privacy_production_evidence_hash_is_valid(value: &str) -> bool {
-    let Some(digest) = value.strip_prefix(PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX) else {
-        return false;
-    };
-
-    digest.len() == 64
-        && digest
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-fn privacy_production_review_signature_is_valid(value: &str) -> bool {
-    let Some(signature) = value.strip_prefix("ed25519:") else {
-        return false;
-    };
-
-    privacy_evidence_public_text_is_clean(value, 512)
-        && !privacy_evidence_text_has_non_production_marker(value)
-        && signature.len() == 128
-        && signature
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-fn privacy_production_localnet_run_id_is_valid(value: &str) -> bool {
-    if !privacy_evidence_public_text_is_clean(value, 160)
-        || privacy_evidence_text_has_non_production_marker(value)
-        || value.contains("..")
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'))
-    {
-        return false;
-    }
-
-    let compact = value.replace('_', "-").to_ascii_lowercase();
-    compact.contains("4-peer") || compact.contains("4peer")
-}
-
-fn privacy_production_localnet_peer_ids_are_valid(peer_ids: &[&str; 4]) -> bool {
-    for (index, peer_id) in peer_ids.iter().enumerate() {
-        if !privacy_evidence_public_text_is_clean(peer_id, 160)
-            || privacy_evidence_text_has_non_production_marker(peer_id)
-            || peer_id.contains("..")
-            || !peer_id.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-' | b'@')
-            })
-            || peer_ids[(index + 1)..]
-                .iter()
-                .any(|candidate| candidate == peer_id)
-        {
-            return false;
-        }
-    }
-    true
-}
-
-fn privacy_production_localnet_artifact_hashes_are_valid(
-    acceptance: PrivacyProductionLocalnetEvidenceV1,
-) -> bool {
-    let hashes = [
-        acceptance.smoke_tx_hash,
-        acceptance.lifecycle_shield_tx_hash,
-        acceptance.lifecycle_hop_proof_hash,
-        acceptance.lifecycle_recursive_init_hash,
-        acceptance.lifecycle_recursive_init_verify_hash,
-        acceptance.lifecycle_recursive_append_hash,
-        acceptance.lifecycle_recursive_append_verify_hash,
-        acceptance.lifecycle_unshield_proof_hash,
-        acceptance.lifecycle_redeem_tx_hash,
-        acceptance.replay_rejection_hash,
-        acceptance.restart_replay_rejection_hash,
-        acceptance.state_recovery_hash,
-    ];
-    for (index, hash) in hashes.iter().enumerate() {
-        if !privacy_production_evidence_hash_is_valid(hash)
-            || hashes[(index + 1)..]
-                .iter()
-                .any(|candidate| candidate == hash)
-        {
-            return false;
-        }
-    }
-    true
-}
-
-fn privacy_production_ready_gate_hashes_are_distinct(row: &PrivacyProductionEvidenceRowV1) -> bool {
-    let hashes = [
-        row.review_artifact_hash,
-        row.fuzz_artifact_hash,
-        row.performance_artifact_hash,
-        row.localnet_acceptance.smoke_tx_hash,
-        row.localnet_acceptance.lifecycle_shield_tx_hash,
-        row.localnet_acceptance.lifecycle_hop_proof_hash,
-        row.localnet_acceptance.lifecycle_recursive_init_hash,
-        row.localnet_acceptance.lifecycle_recursive_init_verify_hash,
-        row.localnet_acceptance.lifecycle_recursive_append_hash,
-        row.localnet_acceptance
-            .lifecycle_recursive_append_verify_hash,
-        row.localnet_acceptance.lifecycle_unshield_proof_hash,
-        row.localnet_acceptance.lifecycle_redeem_tx_hash,
-        row.localnet_acceptance.replay_rejection_hash,
-        row.localnet_acceptance.restart_replay_rejection_hash,
-        row.localnet_acceptance.state_recovery_hash,
-    ];
-    !hashes.iter().enumerate().any(|(index, hash)| {
-        hashes[(index + 1)..]
-            .iter()
-            .any(|candidate| candidate == hash)
-    })
-}
-
-fn privacy_production_localnet_evidence_is_valid(
-    acceptance: PrivacyProductionLocalnetEvidenceV1,
-    expected_chain_id: &str,
-) -> bool {
-    privacy_production_localnet_run_id_is_valid(acceptance.run_id)
-        && acceptance.target == PRIVACY_PRODUCTION_LOCALNET_TARGET
-        && acceptance.peer_count == PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT
-        && privacy_production_localnet_peer_ids_are_valid(&acceptance.peer_ids)
-        && acceptance.chain_id == expected_chain_id
-        && privacy_text_field_is_portable_identifier(acceptance.chain_id)
-        && !privacy_evidence_text_has_non_production_marker(acceptance.chain_id)
-        && acceptance.smoke_passed
-        && acceptance.lifecycle_passed
-        && acceptance.replay_rejected
-        && acceptance.restart_persistence_checked
-        && acceptance.restart_replay_rejected
-        && acceptance.state_recovery_passed
-        && privacy_production_localnet_artifact_hashes_are_valid(acceptance)
-}
-
-fn privacy_string_slice_matches_vec(values: &[&'static str], expected: &[String]) -> bool {
-    values.len() == expected.len()
-        && values
-            .iter()
-            .zip(expected.iter())
-            .all(|(value, expected)| *value == expected.as_str())
-}
-
-fn privacy_string_slice_matches_slice(values: &[&'static str], expected: &[&'static str]) -> bool {
-    values.len() == expected.len()
-        && values
-            .iter()
-            .zip(expected.iter())
-            .all(|(value, expected)| *value == *expected)
-}
-
-fn privacy_production_gate_evidence_has_duplicate_keys(
-    evidence: &[PrivacyProductionGateEvidenceV1],
-) -> bool {
-    evidence.iter().enumerate().any(|(index, gate)| {
-        evidence[index + 1..]
-            .iter()
-            .any(|other| other.key == gate.key)
-    })
-}
-
-fn privacy_production_gate_evidence_is_valid(
-    entry: &PrivacyAlgorithmEntry,
-    evidence: &[PrivacyProductionGateEvidenceV1],
-) -> bool {
-    let required_gates = privacy_required_production_gate_keys(entry);
-    evidence.len() == required_gates.len()
-        && !privacy_production_gate_evidence_has_duplicate_keys(evidence)
-        && evidence
-            .iter()
-            .zip(required_gates.iter())
-            .all(|(gate, expected_key)| {
-                gate.key == expected_key
-                    && privacy_text_field_is_portable_identifier(gate.key)
-                    && privacy_production_gate_key_is_required(gate.key)
-                    && privacy_production_evidence_hash_is_valid(gate.artifact_hash)
-            })
-}
-
-fn privacy_production_evidence_sdk_entrypoints_are_valid(
-    row: &PrivacyProductionEvidenceRowV1,
-    entry: &PrivacyAlgorithmEntry,
-) -> bool {
-    let expected_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
-    privacy_string_slice_matches_vec(&row.sdk_entrypoints, &expected_entrypoints)
-        && !privacy_string_slice_has_duplicates(&row.sdk_entrypoints)
-        && row.sdk_entrypoints.iter().all(|entrypoint| {
-            privacy_sdk_entrypoint_is_portable(entrypoint)
-                && !privacy_entrypoint_is_dev_fixture(entrypoint)
-                && !privacy_entrypoint_is_local_verifier(entrypoint)
-                && !privacy_exposed_label_claims_production_readiness(entrypoint)
-        })
-}
-
-fn privacy_production_evidence_sdk_exports_are_valid(
-    row: &PrivacyProductionEvidenceRowV1,
-    entry: &PrivacyAlgorithmEntry,
-) -> bool {
-    let expected_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
-    row.sdk_exports.len() == PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
-        && PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
-            .iter()
-            .enumerate()
-            .all(|(index, expected_surface)| {
-                let Some(export) = row.sdk_exports.get(index) else {
-                    return false;
-                };
-                export.surface == *expected_surface
-                    && privacy_text_field_is_portable_identifier(export.surface)
-                    && !privacy_evidence_text_has_non_production_marker(export.surface)
-                    && !privacy_exposed_label_claims_production_readiness(export.surface)
-                    && privacy_string_slice_matches_vec(&export.entrypoints, &expected_entrypoints)
-                    && !privacy_string_slice_has_duplicates(&export.entrypoints)
-                    && export.entrypoints.iter().all(|entrypoint| {
-                        privacy_sdk_entrypoint_is_portable(entrypoint)
-                            && !privacy_entrypoint_is_dev_fixture(entrypoint)
-                            && !privacy_entrypoint_is_local_verifier(entrypoint)
-                            && !privacy_exposed_label_claims_production_readiness(entrypoint)
-                    })
-            })
-}
-
-fn privacy_production_evidence_sdk_parity_artifacts_are_valid(
-    row: &PrivacyProductionEvidenceRowV1,
-) -> bool {
-    row.sdk_parity_artifacts.len()
-        == PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS.len()
-            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
-        && PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
-            .iter()
-            .enumerate()
-            .all(|(kind_index, expected_kind)| {
-                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
-                    .iter()
-                    .enumerate()
-                    .all(|(surface_index, expected_surface)| {
-                        let artifact_index = kind_index
-                            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
-                            + surface_index;
-                        let Some(artifact) = row.sdk_parity_artifacts.get(artifact_index) else {
-                            return false;
-                        };
-                        artifact.kind == *expected_kind
-                            && artifact.surface == *expected_surface
-                            && privacy_text_field_is_portable_identifier(artifact.kind)
-                            && privacy_text_field_is_portable_identifier(artifact.surface)
-                            && !privacy_evidence_text_has_non_production_marker(artifact.kind)
-                            && !privacy_evidence_text_has_non_production_marker(artifact.surface)
-                            && !privacy_exposed_label_claims_production_readiness(artifact.kind)
-                            && !privacy_exposed_label_claims_production_readiness(artifact.surface)
-                            && privacy_production_evidence_hash_is_valid(artifact.artifact_hash)
-                    })
-            })
-}
-
-fn privacy_production_evidence_required_state_is_valid(
-    row: &PrivacyProductionEvidenceRowV1,
-    entry: &PrivacyAlgorithmEntry,
-) -> bool {
-    privacy_string_slice_matches_slice(&row.required_state, privacy_expected_required_state(entry))
-        && !privacy_string_slice_has_duplicates(&row.required_state)
-        && row
-            .required_state
-            .iter()
-            .all(|item| privacy_evidence_public_text_is_clean(item, 256))
-}
-
-fn privacy_production_review_scope_is_valid(
-    row: &PrivacyProductionEvidenceRowV1,
-    entry: &PrivacyAlgorithmEntry,
-) -> bool {
-    row.review_scope.version == PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION
-        && row.review_scope.algorithm_id == row.algorithm_id
-        && row.review_scope.algorithm_id == entry.id
-        && row.review_scope.chain_id == row.chain_id
-        && row.review_scope.verifier_key_id == row.verifier_key_id
-        && row.review_scope.proof_family == row.proof_family
-        && row.review_scope.public_inputs_schema == row.public_inputs_schema
-        && privacy_string_slice_matches_slice(
-            &row.review_scope.sdk_entrypoints,
-            &row.sdk_entrypoints,
-        )
-        && privacy_string_slice_matches_slice(&row.review_scope.required_state, &row.required_state)
-        && row.review_scope.fuzz_artifact_hash == row.fuzz_artifact_hash
-        && row.review_scope.performance_artifact_hash == row.performance_artifact_hash
-        && row.review_scope.localnet_run_id == row.localnet_acceptance.run_id
-        && privacy_production_evidence_hash_is_valid(row.review_scope.fuzz_artifact_hash)
-        && privacy_production_evidence_hash_is_valid(row.review_scope.performance_artifact_hash)
-        && privacy_production_localnet_run_id_is_valid(row.review_scope.localnet_run_id)
-}
-
-fn privacy_production_evidence_row_is_valid(
-    row: &PrivacyProductionEvidenceRowV1,
-    entry: &PrivacyAlgorithmEntry,
-    chain_id: Option<&str>,
-) -> bool {
-    let Some(expected_chain_id) = chain_id else {
-        return false;
-    };
-
-    row.algorithm_id == entry.id
-        && row.chain_id == expected_chain_id
-        && privacy_text_field_is_portable_identifier(row.chain_id)
-        && !privacy_evidence_text_has_non_production_marker(row.chain_id)
-        && !privacy_exposed_label_claims_production_readiness(row.algorithm_id)
-        && privacy_evidence_public_text_is_clean(row.reviewer_identity, 160)
-        && !privacy_evidence_text_has_non_production_marker(row.reviewer_identity)
-        && privacy_production_evidence_hash_is_valid(row.review_artifact_hash)
-        && privacy_production_review_signature_is_valid(row.review_artifact_signature)
-        && privacy_production_review_scope_is_valid(row, entry)
-        && row.verifier_key_id == privacy_expected_verifier_key_id(entry)
-        && privacy_text_field_is_portable_identifier(row.verifier_key_id)
-        && row.proof_family == entry.proof_family
-        && row.public_inputs_schema == privacy_expected_public_inputs_schema(entry)
-        && privacy_production_evidence_sdk_entrypoints_are_valid(row, entry)
-        && privacy_production_evidence_sdk_exports_are_valid(row, entry)
-        && privacy_production_evidence_sdk_parity_artifacts_are_valid(row)
-        && privacy_production_evidence_required_state_is_valid(row, entry)
-        && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
-        && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
-        && privacy_production_localnet_evidence_is_valid(row.localnet_acceptance, expected_chain_id)
-        && privacy_production_ready_gate_hashes_are_distinct(row)
-        && privacy_production_gate_evidence_is_valid(entry, &row.gate_evidence)
-}
-
-fn privacy_production_evidence_for_entry<'a>(
-    entry: &PrivacyAlgorithmEntry,
-    evidence: &'a [PrivacyProductionEvidenceRowV1],
-    chain_id: Option<&str>,
-) -> Option<&'a PrivacyProductionEvidenceRowV1> {
-    let mut valid_row = None;
-    for row in evidence.iter().filter(|row| row.algorithm_id == entry.id) {
-        if !privacy_production_evidence_row_is_valid(row, entry, chain_id) || valid_row.is_some() {
-            return None;
-        }
-        valid_row = Some(row);
-    }
-    valid_row
-}
-
-fn privacy_production_gate(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionGateV1 {
-    PrivacyProductionGateV1 {
-        version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned(),
-        ready: false,
-        gates: PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-            .iter()
-            .map(|(key, _)| PrivacyProductionGateStatusV1 {
-                key: (*key).to_owned(),
-                passed: false,
-            })
-            .collect(),
-        required_gates: privacy_required_production_gate_keys(entry),
-        missing: PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-            .iter()
-            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
-            .map(|(_, label)| (*label).to_owned())
-            .chain(
-                [
-                    "real protocol engine is not production-enabled",
-                    "Iroha production allowlist is not enabled for this audited row",
-                ]
-                .into_iter()
-                .map(str::to_owned),
-            )
-            .collect(),
-        audit_references: Vec::new(),
-    }
-}
-
-fn privacy_production_gate_from_evidence(
-    entry: &PrivacyAlgorithmEntry,
-    evidence: &PrivacyProductionEvidenceRowV1,
-) -> PrivacyProductionGateV1 {
-    PrivacyProductionGateV1 {
-        version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned(),
-        ready: true,
-        gates: PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-            .iter()
-            .map(|(key, _)| PrivacyProductionGateStatusV1 {
-                key: (*key).to_owned(),
-                passed: !privacy_production_gate_requirement_is_waived(entry, key),
-            })
-            .collect(),
-        required_gates: privacy_required_production_gate_keys(entry),
-        missing: Vec::new(),
-        audit_references: vec![
-            format!("chain_id:{}", evidence.chain_id),
-            format!("reviewer:{}", evidence.reviewer_identity),
-            format!("review_artifact_hash:{}", evidence.review_artifact_hash),
-            format!(
-                "review_artifact_signature:{}",
-                evidence.review_artifact_signature
-            ),
-            format!("fuzz_artifact_hash:{}", evidence.fuzz_artifact_hash),
-            format!(
-                "performance_artifact_hash:{}",
-                evidence.performance_artifact_hash
-            ),
-            format!("localnet_run_id:{}", evidence.localnet_acceptance.run_id),
-            format!(
-                "localnet_smoke_tx_hash:{}",
-                evidence.localnet_acceptance.smoke_tx_hash
-            ),
-            format!(
-                "localnet_replay_rejection_hash:{}",
-                evidence.localnet_acceptance.replay_rejection_hash
-            ),
-            format!(
-                "localnet_restart_replay_rejection_hash:{}",
-                evidence.localnet_acceptance.restart_replay_rejection_hash
-            ),
-            format!(
-                "localnet_state_recovery_hash:{}",
-                evidence.localnet_acceptance.state_recovery_hash
-            ),
-            format!(
-                "localnet_lifecycle_shield_tx_hash:{}",
-                evidence.localnet_acceptance.lifecycle_shield_tx_hash
-            ),
-            format!(
-                "localnet_lifecycle_hop_proof_hash:{}",
-                evidence.localnet_acceptance.lifecycle_hop_proof_hash
-            ),
-            format!(
-                "localnet_lifecycle_recursive_init_hash:{}",
-                evidence.localnet_acceptance.lifecycle_recursive_init_hash
-            ),
-            format!(
-                "localnet_lifecycle_recursive_init_verify_hash:{}",
-                evidence
-                    .localnet_acceptance
-                    .lifecycle_recursive_init_verify_hash
-            ),
-            format!(
-                "localnet_lifecycle_recursive_append_hash:{}",
-                evidence.localnet_acceptance.lifecycle_recursive_append_hash
-            ),
-            format!(
-                "localnet_lifecycle_recursive_append_verify_hash:{}",
-                evidence
-                    .localnet_acceptance
-                    .lifecycle_recursive_append_verify_hash
-            ),
-            format!(
-                "localnet_lifecycle_unshield_proof_hash:{}",
-                evidence.localnet_acceptance.lifecycle_unshield_proof_hash
-            ),
-            format!(
-                "localnet_lifecycle_redeem_tx_hash:{}",
-                evidence.localnet_acceptance.lifecycle_redeem_tx_hash
-            ),
-        ],
-    }
-}
-
-fn privacy_capability_from_entry(
-    entry: &PrivacyAlgorithmEntry,
-    evidence: Option<&PrivacyProductionEvidenceRowV1>,
-) -> PrivacyCapabilityV1 {
-    if let Some(evidence) = evidence {
-        return PrivacyCapabilityV1 {
-            algorithm_id: entry.id.to_owned(),
-            proof_family: entry.proof_family.to_owned(),
-            backend_family: entry.backend_family.to_owned(),
-            sdk_entrypoints: privacy_expected_production_sdk_entrypoints(entry),
-            planned_entrypoints: Vec::new(),
-            production_ready: true,
-            production_gate: privacy_production_gate_from_evidence(entry, evidence),
-        };
-    }
-
-    PrivacyCapabilityV1 {
-        algorithm_id: entry.id.to_owned(),
-        proof_family: entry.proof_family.to_owned(),
-        backend_family: entry.backend_family.to_owned(),
-        sdk_entrypoints: entry
-            .sdk_entrypoints
-            .iter()
-            .map(|entrypoint| (*entrypoint).to_owned())
-            .collect(),
-        planned_entrypoints: entry
-            .planned_entrypoints
-            .iter()
-            .map(|entrypoint| (*entrypoint).to_owned())
-            .collect(),
-        production_ready: false,
-        production_gate: privacy_production_gate(entry),
-    }
-}
-
-fn privacy_capabilities_with_production_evidence(
-    evidence: &[PrivacyProductionEvidenceRowV1],
-    chain_id: Option<&str>,
-) -> PrivacyCapabilitiesV1 {
-    debug_assert!(privacy_algorithm_catalog_invariants_hold());
-    let capabilities = PrivacyCapabilitiesV1 {
-        version: PRIVACY_FFI_VERSION_V1,
-        gate_version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned(),
-        algorithms: PRIVACY_ALGORITHM_ENTRIES
-            .iter()
-            .map(|entry| {
-                privacy_capability_from_entry(
-                    entry,
-                    privacy_production_evidence_for_entry(entry, evidence, chain_id),
-                )
-            })
-            .collect(),
-    };
-    debug_assert!(privacy_capabilities_invariants_hold(&capabilities));
-    capabilities
-}
-
-fn privacy_capabilities() -> PrivacyCapabilitiesV1 {
-    privacy_capabilities_with_production_evidence(&[], None)
-}
-
-fn privacy_algorithm_entry(algorithm_id: &str) -> Option<&'static PrivacyAlgorithmEntry> {
-    PRIVACY_ALGORITHM_ENTRIES
-        .iter()
-        .find(|entry| entry.id == algorithm_id)
-}
-
-fn privacy_entrypoint_supported(entry: &PrivacyAlgorithmEntry, entrypoint: &str) -> bool {
-    entry.sdk_entrypoints.contains(&entrypoint)
-}
-
-fn privacy_entrypoint_planned(entry: &PrivacyAlgorithmEntry, entrypoint: &str) -> bool {
-    entry.planned_entrypoints.contains(&entrypoint)
-}
-
-fn privacy_proof_family_is_portable(label: &str) -> bool {
-    !label.is_empty()
-        && label.split(['-', '/']).all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        })
-}
-
-fn privacy_string_slice_has_duplicates(values: &[&'static str]) -> bool {
-    values
-        .iter()
-        .enumerate()
-        .any(|(index, value)| values[index + 1..].iter().any(|other| other == value))
-}
-
-fn privacy_entrypoints_overlap(left: &[&'static str], right: &[&'static str]) -> bool {
-    left.iter()
-        .any(|candidate| right.iter().any(|other| other == candidate))
-}
-
-fn privacy_entrypoint_name(entrypoint: &str) -> &str {
-    entrypoint.rsplit('.').next().unwrap_or(entrypoint)
-}
-
-fn privacy_compact_ascii_lowercase(value: &str) -> String {
-    value
-        .bytes()
-        .filter(|byte| byte.is_ascii_alphanumeric())
-        .map(|byte| char::from(byte.to_ascii_lowercase()))
-        .collect()
-}
-
-fn privacy_entrypoint_compact_lowercase(entrypoint: &str) -> String {
-    privacy_compact_ascii_lowercase(entrypoint)
-}
-
-fn privacy_exposed_label_claims_production_readiness(value: &str) -> bool {
-    let compact = privacy_entrypoint_compact_lowercase(value);
-    PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS
-        .iter()
-        .any(|fragment| compact.contains(fragment))
-}
-
-fn privacy_entrypoint_is_dev_fixture(entrypoint: &str) -> bool {
-    let normalized = entrypoint.replace('-', "_").to_ascii_lowercase();
-    let compact = privacy_entrypoint_compact_lowercase(entrypoint);
-    normalized.contains("devfixture")
-        || normalized.contains("dev_fixture")
-        || normalized.contains("devprooffixture")
-        || normalized.contains("dev_proof_fixture")
-        || normalized.contains("fixture")
-        || normalized.contains("mock")
-        || compact.contains("devfixture")
-        || compact.contains("devprooffixture")
-        || compact.contains("fixture")
-        || compact.contains("mock")
-}
-
-fn privacy_entrypoint_is_explicit_dev_fixture(entrypoint: &str) -> bool {
-    let normalized = entrypoint.replace('-', "_").to_ascii_lowercase();
-    let compact = privacy_entrypoint_compact_lowercase(entrypoint);
-    normalized.contains("devfixture")
-        || normalized.contains("dev_fixture")
-        || normalized.contains("devprooffixture")
-        || normalized.contains("dev_proof_fixture")
-        || compact.contains("devfixture")
-        || compact.contains("devprooffixture")
-}
-
-fn privacy_entrypoint_is_local_verifier(entrypoint: &str) -> bool {
-    let name = privacy_entrypoint_name(entrypoint);
-    let lower = name.to_ascii_lowercase();
-    lower.starts_with("verify")
-        && (lower.ends_with("locally")
-            || lower.ends_with("local")
-            || lower.contains("localverifier")
-            || lower.contains("localonly"))
-}
-
-fn privacy_entrypoint_is_instruction_builder(entrypoint: &str) -> bool {
-    privacy_entrypoint_name(entrypoint).ends_with("Instruction")
-}
-
-fn privacy_entrypoint_is_ledger_mutation(entrypoint: &str) -> bool {
-    let name = privacy_entrypoint_name(entrypoint);
-    name.ends_with("Instruction") || name.ends_with("Transaction") || name.contains("Submit")
-}
-
-fn privacy_entrypoint_is_generic_ledger_mutation(entrypoint: &str) -> bool {
-    let name = privacy_entrypoint_name(entrypoint);
-    name == "buildTransaction" || name == "submitSignedTransaction"
-}
-
-fn privacy_entrypoint_is_untyped_ledger_mutation(entrypoint: &str) -> bool {
-    let name = privacy_entrypoint_name(entrypoint);
-    privacy_entrypoint_is_ledger_mutation(entrypoint)
-        && !name.ends_with("Instruction")
-        && !name.ends_with("Transaction")
-}
-
-fn privacy_entrypoint_is_proof_helper(entrypoint: &str) -> bool {
-    let name = privacy_entrypoint_name(entrypoint);
-    name.contains("ProofEnvelope")
-        || name.contains("ProofWitness")
-        || name.contains("ProofPublicInputs")
-        || name.contains("ProofRequest")
-        || name.contains("ProofCommitment")
-}
-
-fn privacy_entrypoint_is_production_proof_builder(entrypoint: &str) -> bool {
-    let name = privacy_entrypoint_name(entrypoint);
-    name.starts_with("build")
-        && name.contains("Proof")
-        && !privacy_entrypoint_is_instruction_builder(entrypoint)
-        && !privacy_entrypoint_is_ledger_mutation(entrypoint)
-        && !privacy_entrypoint_is_proof_helper(entrypoint)
-        && !privacy_entrypoint_is_dev_fixture(entrypoint)
-}
-
-fn privacy_entrypoint_is_production_proof_verifier(entrypoint: &str) -> bool {
-    let name = privacy_entrypoint_name(entrypoint);
-    name.starts_with("verify")
-        && (name.contains("Proof") || name.contains("Commitment"))
-        && !privacy_entrypoint_is_instruction_builder(entrypoint)
-        && !privacy_entrypoint_is_ledger_mutation(entrypoint)
-        && !privacy_entrypoint_is_dev_fixture(entrypoint)
-        && !privacy_entrypoint_is_local_verifier(entrypoint)
-}
-
-fn privacy_algorithm_entry_is_component(entry: &PrivacyAlgorithmEntry) -> bool {
-    PRIVACY_COMPONENT_ALGORITHM_IDS.contains(&entry.id)
-}
-
-fn privacy_algorithm_entry_is_research_target(entry: &PrivacyAlgorithmEntry) -> bool {
-    PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS.contains(&entry.id)
-}
-
-fn privacy_algorithm_entry_is_proofed_privacy(entry: &PrivacyAlgorithmEntry) -> bool {
-    entry.proof_family != "none" && entry.proof_family != "commitment-only"
-}
-
-fn privacy_entrypoints_include_ledger_mutation(entrypoints: &[&'static str]) -> bool {
-    entrypoints
-        .iter()
-        .any(|entrypoint| privacy_entrypoint_is_ledger_mutation(entrypoint))
-}
-
-fn privacy_entrypoints_include_generic_ledger_mutation(entrypoints: &[&'static str]) -> bool {
-    entrypoints
-        .iter()
-        .any(|entrypoint| privacy_entrypoint_is_generic_ledger_mutation(entrypoint))
-}
-
-fn privacy_entrypoints_include_untyped_ledger_mutation(entrypoints: &[&'static str]) -> bool {
-    entrypoints
-        .iter()
-        .any(|entrypoint| privacy_entrypoint_is_untyped_ledger_mutation(entrypoint))
-}
-
-fn privacy_entrypoints_include_production_proof_builder(entrypoints: &[&'static str]) -> bool {
-    entrypoints
-        .iter()
-        .any(|entrypoint| privacy_entrypoint_is_production_proof_builder(entrypoint))
-}
-
-fn privacy_algorithm_entry_invariants_hold(entry: &PrivacyAlgorithmEntry) -> bool {
-    let has_local_verifier = entry
-        .sdk_entrypoints
-        .iter()
-        .any(|entrypoint| privacy_entrypoint_is_local_verifier(entrypoint));
-    let has_explicit_dev_fixture = entry
-        .sdk_entrypoints
-        .iter()
-        .any(|entrypoint| privacy_entrypoint_is_explicit_dev_fixture(entrypoint));
-    let has_sdk_ledger_mutation =
-        privacy_entrypoints_include_ledger_mutation(entry.sdk_entrypoints);
-    let has_planned_ledger_mutation =
-        privacy_entrypoints_include_ledger_mutation(entry.planned_entrypoints);
-    let has_production_proof_builder =
-        privacy_entrypoints_include_production_proof_builder(entry.sdk_entrypoints)
-            || privacy_entrypoints_include_production_proof_builder(entry.planned_entrypoints);
-    let proofed_privacy_row = privacy_algorithm_entry_is_proofed_privacy(entry);
-    let has_generic_ledger_mutation =
-        privacy_entrypoints_include_generic_ledger_mutation(entry.sdk_entrypoints)
-            || privacy_entrypoints_include_generic_ledger_mutation(entry.planned_entrypoints);
-    let has_untyped_ledger_mutation =
-        privacy_entrypoints_include_untyped_ledger_mutation(entry.sdk_entrypoints)
-            || privacy_entrypoints_include_untyped_ledger_mutation(entry.planned_entrypoints);
-
-    privacy_algorithm_id_is_portable(entry.id)
-        && privacy_proof_family_is_portable(entry.proof_family)
-        && privacy_vk_ref_backend_family_is_portable(entry.backend_family)
-        && !privacy_exposed_label_claims_production_readiness(entry.id)
-        && !privacy_exposed_label_claims_production_readiness(entry.proof_family)
-        && !privacy_exposed_label_claims_production_readiness(entry.backend_family)
-        && privacy_catalog_vk_ref_name_is_registered(entry)
-        && entry
-            .sdk_entrypoints
-            .iter()
-            .all(|entrypoint| privacy_sdk_entrypoint_is_portable(entrypoint))
-        && entry
-            .planned_entrypoints
-            .iter()
-            .all(|entrypoint| privacy_sdk_entrypoint_is_portable(entrypoint))
-        && entry
-            .sdk_entrypoints
-            .iter()
-            .all(|entrypoint| !privacy_exposed_label_claims_production_readiness(entrypoint))
-        && entry
-            .planned_entrypoints
-            .iter()
-            .all(|entrypoint| !privacy_exposed_label_claims_production_readiness(entrypoint))
-        && !privacy_string_slice_has_duplicates(entry.sdk_entrypoints)
-        && !privacy_string_slice_has_duplicates(entry.planned_entrypoints)
-        && !privacy_entrypoints_overlap(entry.sdk_entrypoints, entry.planned_entrypoints)
-        && entry.planned_entrypoints.iter().all(|entrypoint| {
-            !privacy_entrypoint_is_dev_fixture(entrypoint)
-                && !privacy_entrypoint_is_local_verifier(entrypoint)
-        })
-        && entry.sdk_entrypoints.iter().all(|entrypoint| {
-            !privacy_entrypoint_is_dev_fixture(entrypoint)
-                || privacy_entrypoint_is_explicit_dev_fixture(entrypoint)
-        })
-        && (!has_local_verifier || has_explicit_dev_fixture)
-        && (!has_explicit_dev_fixture || has_local_verifier)
-        && (!has_explicit_dev_fixture || has_production_proof_builder)
-        && (!has_planned_ledger_mutation || has_production_proof_builder)
-        && (!proofed_privacy_row || !has_sdk_ledger_mutation || has_production_proof_builder)
-        && (!proofed_privacy_row || !has_generic_ledger_mutation)
-        && (!proofed_privacy_row || !has_untyped_ledger_mutation)
-        && (!privacy_algorithm_entry_is_component(entry)
-            || (!privacy_entrypoints_include_ledger_mutation(entry.sdk_entrypoints)
-                && !privacy_entrypoints_include_ledger_mutation(entry.planned_entrypoints)))
-        && (!privacy_algorithm_entry_is_research_target(entry) || entry.sdk_entrypoints.is_empty())
-}
-
-fn privacy_algorithm_catalog_entries_are_valid(entries: &[PrivacyAlgorithmEntry]) -> bool {
-    entries.iter().all(privacy_algorithm_entry_invariants_hold)
-        && !privacy_algorithm_catalog_vk_ref_names_have_duplicates(entries)
-        && entries.iter().enumerate().all(|(index, entry)| {
-            !entries[index + 1..]
-                .iter()
-                .any(|other| other.id == entry.id)
-        })
-}
-
-fn privacy_algorithm_catalog_vk_ref_names_have_duplicates(
-    entries: &[PrivacyAlgorithmEntry],
-) -> bool {
-    entries.iter().enumerate().any(|(index, entry)| {
-        let name = privacy_catalog_vk_ref_name(entry);
-        entries[index + 1..]
-            .iter()
-            .any(|other| privacy_catalog_vk_ref_name(other) == name)
-    })
-}
-
-fn privacy_required_production_plan_rows_are_present(entries: &[PrivacyAlgorithmEntry]) -> bool {
-    PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.iter().all(
-        |(algorithm_id, proof_family, backend_family)| {
-            let mut matching_rows = entries.iter().filter(|entry| entry.id == *algorithm_id);
-            matches!(
-                (matching_rows.next(), matching_rows.next()),
-                (Some(entry), None)
-                    if entry.proof_family == *proof_family
-                        && entry.backend_family == *backend_family
-                        && (privacy_entrypoints_include_production_proof_builder(
-                            entry.sdk_entrypoints,
-                        ) || privacy_entrypoints_include_production_proof_builder(
-                            entry.planned_entrypoints,
-                        ))
-            )
-        },
+fn privacy_capabilities() -> PrivacyCapabilitySnapshotV1 {
+    let snapshot = committed_privacy_capability_snapshot_v1(
+        0,
+        PrivacyConsensusPolicyV1::taira_default(),
+        |_| None,
     )
-}
-
-fn privacy_algorithm_catalog_invariants_hold() -> bool {
-    privacy_algorithm_catalog_entries_are_valid(PRIVACY_ALGORITHM_ENTRIES)
-        && privacy_required_production_plan_rows_are_present(PRIVACY_ALGORITHM_ENTRIES)
-}
-
-fn privacy_string_vec_has_duplicates(values: &[String]) -> bool {
-    values
-        .iter()
-        .enumerate()
-        .any(|(index, value)| values[index + 1..].iter().any(|other| other == value))
-}
-
-fn privacy_string_vec_matches_slice(values: &[String], expected: &[&'static str]) -> bool {
-    values.len() == expected.len()
-        && values
+    .expect("the compiled first-release privacy capability snapshot must be valid");
+    debug_assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::ALL.len());
+    debug_assert!(
+        snapshot
+            .protocols
             .iter()
-            .zip(expected.iter())
-            .all(|(value, expected)| value.as_str() == *expected)
+            .map(|row| row.protocol_id)
+            .eq(PrivacyProtocolIdV1::ALL)
+    );
+    snapshot
 }
 
-fn privacy_string_vec_matches_vec(values: &[String], expected: &[String]) -> bool {
-    values.len() == expected.len()
-        && values
-            .iter()
-            .zip(expected.iter())
-            .all(|(value, expected)| value == expected)
-}
-
-fn privacy_string_vecs_overlap(left: &[String], right: &[String]) -> bool {
-    left.iter()
-        .any(|candidate| right.iter().any(|other| other == candidate))
-}
-
-fn privacy_gate_status_keys_have_duplicates(gates: &[PrivacyProductionGateStatusV1]) -> bool {
-    gates.iter().enumerate().any(|(index, status)| {
-        gates[index + 1..]
-            .iter()
-            .any(|other| other.key.as_str() == status.key.as_str())
-    })
-}
-
-fn privacy_production_gate_key_is_required(key: &str) -> bool {
-    PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-        .iter()
-        .any(|(required_key, _)| key == *required_key)
-}
-
-fn privacy_production_gate_missing_reason_is_required(missing: &str) -> bool {
-    PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-        .iter()
-        .any(|(_, label)| missing == *label)
-        || missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
-        || missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
-}
-
-fn privacy_gate_statuses_match_requirements(
-    gates: &[PrivacyProductionGateStatusV1],
-    entry: &PrivacyAlgorithmEntry,
-    ready: bool,
-) -> bool {
-    gates.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()
-        && gates
-            .iter()
-            .zip(PRIVACY_PRODUCTION_GATE_REQUIREMENTS.iter())
-            .all(|(status, (key, _))| {
-                status.key.as_str() == *key
-                    && status.passed
-                        == (ready && !privacy_production_gate_requirement_is_waived(entry, key))
-            })
-}
-
-fn privacy_required_gate_keys_match_entry(
-    required_gates: &[String],
-    entry: &PrivacyAlgorithmEntry,
-) -> bool {
-    let expected = privacy_required_production_gate_keys(entry);
-    required_gates.len() == expected.len()
-        && required_gates
-            .iter()
-            .zip(expected.iter())
-            .all(|(required, expected)| required == expected)
-}
-
-fn privacy_gate_missing_reasons_match_requirements(
-    missing: &[String],
-    entry: &PrivacyAlgorithmEntry,
-) -> bool {
-    let required_requirements = PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-        .iter()
-        .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key));
-    let required_count = required_requirements.clone().count();
-
-    missing.len() == required_count + 2
-        && missing
-            .iter()
-            .take(required_count)
-            .zip(required_requirements)
-            .all(|(missing, (_, label))| missing.as_str() == *label)
-        && missing[required_count].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
-        && missing[required_count + 1].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
-}
-
-fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) -> bool {
-    if audit_references.len() != 19
-        || privacy_string_vec_has_duplicates(audit_references)
-        || !audit_references
-            .iter()
-            .all(|reference| privacy_evidence_public_text_is_clean(reference, 768))
-        || audit_references
-            .iter()
-            .any(|reference| privacy_evidence_text_has_non_production_marker(reference))
-    {
-        return false;
-    }
-
-    let Some(chain_id) = audit_references[0].strip_prefix("chain_id:") else {
-        return false;
-    };
-    let Some(reviewer) = audit_references[1].strip_prefix("reviewer:") else {
-        return false;
-    };
-    let Some(review_hash) = audit_references[2].strip_prefix("review_artifact_hash:") else {
-        return false;
-    };
-    let Some(review_signature) = audit_references[3].strip_prefix("review_artifact_signature:")
-    else {
-        return false;
-    };
-    let Some(fuzz_hash) = audit_references[4].strip_prefix("fuzz_artifact_hash:") else {
-        return false;
-    };
-    let Some(performance_hash) = audit_references[5].strip_prefix("performance_artifact_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_run_id) = audit_references[6].strip_prefix("localnet_run_id:") else {
-        return false;
-    };
-    let Some(localnet_smoke_hash) = audit_references[7].strip_prefix("localnet_smoke_tx_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_replay_hash) =
-        audit_references[8].strip_prefix("localnet_replay_rejection_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_restart_replay_hash) =
-        audit_references[9].strip_prefix("localnet_restart_replay_rejection_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_state_recovery_hash) =
-        audit_references[10].strip_prefix("localnet_state_recovery_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_lifecycle_shield_hash) =
-        audit_references[11].strip_prefix("localnet_lifecycle_shield_tx_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_lifecycle_hop_hash) =
-        audit_references[12].strip_prefix("localnet_lifecycle_hop_proof_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_lifecycle_init_hash) =
-        audit_references[13].strip_prefix("localnet_lifecycle_recursive_init_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_lifecycle_init_verify_hash) =
-        audit_references[14].strip_prefix("localnet_lifecycle_recursive_init_verify_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_lifecycle_append_hash) =
-        audit_references[15].strip_prefix("localnet_lifecycle_recursive_append_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_lifecycle_append_verify_hash) =
-        audit_references[16].strip_prefix("localnet_lifecycle_recursive_append_verify_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_lifecycle_unshield_hash) =
-        audit_references[17].strip_prefix("localnet_lifecycle_unshield_proof_hash:")
-    else {
-        return false;
-    };
-    let Some(localnet_lifecycle_redeem_hash) =
-        audit_references[18].strip_prefix("localnet_lifecycle_redeem_tx_hash:")
-    else {
-        return false;
-    };
-
-    let localnet_hashes = [
-        localnet_smoke_hash,
-        localnet_replay_hash,
-        localnet_restart_replay_hash,
-        localnet_state_recovery_hash,
-        localnet_lifecycle_shield_hash,
-        localnet_lifecycle_hop_hash,
-        localnet_lifecycle_init_hash,
-        localnet_lifecycle_init_verify_hash,
-        localnet_lifecycle_append_hash,
-        localnet_lifecycle_append_verify_hash,
-        localnet_lifecycle_unshield_hash,
-        localnet_lifecycle_redeem_hash,
-    ];
-    let ready_gate_hashes = [
-        review_hash,
-        fuzz_hash,
-        performance_hash,
-        localnet_smoke_hash,
-        localnet_replay_hash,
-        localnet_restart_replay_hash,
-        localnet_state_recovery_hash,
-        localnet_lifecycle_shield_hash,
-        localnet_lifecycle_hop_hash,
-        localnet_lifecycle_init_hash,
-        localnet_lifecycle_init_verify_hash,
-        localnet_lifecycle_append_hash,
-        localnet_lifecycle_append_verify_hash,
-        localnet_lifecycle_unshield_hash,
-        localnet_lifecycle_redeem_hash,
-    ];
-
-    privacy_text_field_is_portable_identifier(chain_id)
-        && !privacy_evidence_text_has_non_production_marker(chain_id)
-        && privacy_evidence_public_text_is_clean(reviewer, 160)
-        && !privacy_evidence_text_has_non_production_marker(reviewer)
-        && privacy_production_evidence_hash_is_valid(review_hash)
-        && privacy_production_review_signature_is_valid(review_signature)
-        && privacy_production_evidence_hash_is_valid(fuzz_hash)
-        && privacy_production_evidence_hash_is_valid(performance_hash)
-        && privacy_production_localnet_run_id_is_valid(localnet_run_id)
-        && localnet_hashes.iter().all(|hash| {
-            privacy_production_evidence_hash_is_valid(hash)
-                && !privacy_evidence_text_has_non_production_marker(hash)
-        })
-        && !localnet_hashes.iter().enumerate().any(|(index, hash)| {
-            localnet_hashes[(index + 1)..]
-                .iter()
-                .any(|other| other == hash)
-        })
-        && !ready_gate_hashes.iter().enumerate().any(|(index, hash)| {
-            ready_gate_hashes[(index + 1)..]
-                .iter()
-                .any(|other| other == hash)
-        })
-}
-
-fn privacy_production_gate_invariants_hold(
-    gate: &PrivacyProductionGateV1,
-    entry: &PrivacyAlgorithmEntry,
-) -> bool {
-    let required_gate_count = privacy_required_production_gate_keys(entry).len();
-
-    if !(gate.version == PRIVACY_PRODUCTION_GATE_VERSION
-        && gate.gates.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()
-        && gate.required_gates.len() == required_gate_count
-        && privacy_gate_statuses_match_requirements(&gate.gates, entry, gate.ready)
-        && privacy_required_gate_keys_match_entry(&gate.required_gates, entry)
-        && !privacy_gate_status_keys_have_duplicates(&gate.gates)
-        && !privacy_string_vec_has_duplicates(&gate.required_gates)
-        && gate.gates.iter().all(|status| {
-            privacy_text_field_is_portable_identifier(&status.key)
-                && privacy_production_gate_key_is_required(&status.key)
-        })
-        && gate.required_gates.iter().all(|key| {
-            privacy_text_field_is_portable_identifier(key)
-                && privacy_production_gate_key_is_required(key)
-        }))
-    {
-        return false;
-    }
-
-    if gate.ready {
-        return gate.missing.is_empty()
-            && privacy_ready_gate_audit_references_are_valid(&gate.audit_references)
-            && PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-                .iter()
-                .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
-                .all(|(key, _)| {
-                    gate.required_gates
-                        .iter()
-                        .any(|required| required.as_str() == *key)
-                        && gate
-                            .gates
-                            .iter()
-                            .any(|status| status.key.as_str() == *key && status.passed)
-                })
-            && PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-                .iter()
-                .filter(|(key, _)| privacy_production_gate_requirement_is_waived(entry, key))
-                .all(|(key, _)| {
-                    !gate
-                        .required_gates
-                        .iter()
-                        .any(|required| required.as_str() == *key)
-                        && gate
-                            .gates
-                            .iter()
-                            .any(|status| status.key.as_str() == *key && !status.passed)
-                });
-    }
-
-    gate.audit_references.is_empty()
-        && gate.missing.len() == required_gate_count + 2
-        && privacy_gate_missing_reasons_match_requirements(&gate.missing, entry)
-        && !privacy_string_vec_has_duplicates(&gate.missing)
-        && gate
-            .missing
-            .iter()
-            .all(|missing| privacy_production_gate_missing_reason_is_required(missing))
-        && PRIVACY_PRODUCTION_GATE_REQUIREMENTS
-            .iter()
-            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
-            .all(|(key, label)| {
-                gate.required_gates
-                    .iter()
-                    .any(|required| required.as_str() == *key)
-                    && gate
-                        .gates
-                        .iter()
-                        .any(|status| status.key.as_str() == *key && !status.passed)
-                    && gate
-                        .missing
-                        .iter()
-                        .any(|missing| missing.as_str() == *label)
-            })
-        && gate
-            .missing
-            .iter()
-            .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE)
-        && gate
-            .missing
-            .iter()
-            .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST)
-}
-
-fn privacy_capability_rows_match_catalog_order(algorithms: &[PrivacyCapabilityV1]) -> bool {
-    algorithms.len() == PRIVACY_ALGORITHM_ENTRIES.len()
-        && algorithms
-            .iter()
-            .zip(PRIVACY_ALGORITHM_ENTRIES.iter())
-            .all(|(algorithm, entry)| algorithm.algorithm_id.as_str() == entry.id)
-}
-
-fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool {
-    let Some(entry) = privacy_algorithm_entry(&capability.algorithm_id) else {
-        return false;
-    };
-    let production_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
-    let sdk_entrypoints_match = if capability.production_ready {
-        capability.planned_entrypoints.is_empty()
-            && privacy_string_vec_matches_vec(&capability.sdk_entrypoints, &production_entrypoints)
-            && capability.sdk_entrypoints.iter().all(|entrypoint| {
-                !privacy_entrypoint_is_dev_fixture(entrypoint)
-                    && !privacy_entrypoint_is_local_verifier(entrypoint)
-            })
-    } else {
-        privacy_string_vec_matches_slice(&capability.sdk_entrypoints, entry.sdk_entrypoints)
-            && privacy_string_vec_matches_slice(
-                &capability.planned_entrypoints,
-                entry.planned_entrypoints,
-            )
-    };
-
-    privacy_algorithm_id_is_portable(&capability.algorithm_id)
-        && !privacy_exposed_label_claims_production_readiness(&capability.algorithm_id)
-        && capability.proof_family.as_str() == entry.proof_family
-        && privacy_proof_family_is_portable(&capability.proof_family)
-        && !privacy_exposed_label_claims_production_readiness(&capability.proof_family)
-        && capability.backend_family.as_str() == entry.backend_family
-        && privacy_vk_ref_backend_family_is_portable(&capability.backend_family)
-        && !privacy_exposed_label_claims_production_readiness(&capability.backend_family)
-        && sdk_entrypoints_match
-        && capability
-            .sdk_entrypoints
-            .iter()
-            .all(|entrypoint| privacy_sdk_entrypoint_is_portable(entrypoint))
-        && capability
-            .sdk_entrypoints
-            .iter()
-            .all(|entrypoint| !privacy_exposed_label_claims_production_readiness(entrypoint))
-        && capability
-            .planned_entrypoints
-            .iter()
-            .all(|entrypoint| privacy_sdk_entrypoint_is_portable(entrypoint))
-        && capability
-            .planned_entrypoints
-            .iter()
-            .all(|entrypoint| !privacy_exposed_label_claims_production_readiness(entrypoint))
-        && !privacy_string_vec_has_duplicates(&capability.sdk_entrypoints)
-        && !privacy_string_vec_has_duplicates(&capability.planned_entrypoints)
-        && !privacy_string_vecs_overlap(
-            &capability.sdk_entrypoints,
-            &capability.planned_entrypoints,
-        )
-        && capability.production_ready == capability.production_gate.ready
-        && privacy_production_gate_invariants_hold(&capability.production_gate, entry)
-}
-
-fn privacy_capabilities_invariants_hold(capabilities: &PrivacyCapabilitiesV1) -> bool {
-    capabilities.version == PRIVACY_FFI_VERSION_V1
-        && capabilities.gate_version == PRIVACY_PRODUCTION_GATE_VERSION
-        && capabilities.algorithms.len() == PRIVACY_ALGORITHM_ENTRIES.len()
-        && privacy_capability_rows_match_catalog_order(&capabilities.algorithms)
-        && capabilities
-            .algorithms
-            .iter()
-            .all(privacy_capability_invariants_hold)
-        && capabilities
-            .algorithms
-            .iter()
-            .enumerate()
-            .all(|(index, algorithm)| {
-                !capabilities.algorithms[index + 1..]
-                    .iter()
-                    .any(|other| other.algorithm_id.as_str() == algorithm.algorithm_id.as_str())
-            })
-}
-
-fn privacy_request_text_fields(request: &PrivacyProofRequestV1) -> [&str; 3] {
-    [&request.algorithm_id, &request.entrypoint, &request.vk_ref]
-}
-
-fn privacy_request_has_oversized_text_field(request: &PrivacyProofRequestV1) -> bool {
-    privacy_request_text_fields(request)
-        .iter()
-        .any(|field| field.len() > PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES)
-}
-
-fn privacy_request_has_control_text_field(request: &PrivacyProofRequestV1) -> bool {
-    privacy_request_text_fields(request)
-        .iter()
-        .any(|field| field.chars().any(|ch| ch.is_control()))
-}
-
-fn privacy_request_has_non_ascii_text_field(request: &PrivacyProofRequestV1) -> bool {
-    privacy_request_text_fields(request)
-        .iter()
-        .any(|field| !field.is_ascii())
-}
-
-fn privacy_text_field_is_portable_identifier(field: &str) -> bool {
-    field
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
-}
-
-fn privacy_vk_ref_backend_family_is_portable(field: &str) -> bool {
-    let Some(first) = field.bytes().next() else {
-        return false;
-    };
-    let Some(last) = field.bytes().last() else {
-        return false;
-    };
-    (first.is_ascii_lowercase() || first.is_ascii_digit())
-        && (last.is_ascii_lowercase() || last.is_ascii_digit())
-        && !field.contains("--")
-        && field
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-fn privacy_vk_ref_name_is_portable(field: &str) -> bool {
-    let Some(first) = field.bytes().next() else {
-        return false;
-    };
-    let Some(last) = field.bytes().last() else {
-        return false;
-    };
-    first.is_ascii_lowercase()
-        && (last.is_ascii_lowercase() || last.is_ascii_digit())
-        && !field.contains("__")
-        && field
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-}
-
-fn privacy_algorithm_id_is_portable(field: &str) -> bool {
-    let Some(first) = field.bytes().next() else {
-        return false;
-    };
-    let Some(last) = field.bytes().last() else {
-        return false;
-    };
-    (first.is_ascii_lowercase() || first.is_ascii_digit())
-        && (last.is_ascii_lowercase() || last.is_ascii_digit())
-        && field.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        })
-}
-
-fn privacy_sdk_entrypoint_is_portable(field: &str) -> bool {
-    !field.is_empty()
-        && field.split('.').all(|segment| {
-            let Some(first) = segment.bytes().next() else {
-                return false;
-            };
-            let Some(last) = segment.bytes().last() else {
-                return false;
-            };
-            first.is_ascii_alphabetic()
-                && last.is_ascii_alphanumeric()
-                && segment.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        })
-}
-
-fn privacy_request_has_unportable_text_field(request: &PrivacyProofRequestV1) -> bool {
-    privacy_request_text_fields(request)
-        .iter()
-        .any(|field| !privacy_text_field_is_portable_identifier(field))
-}
-
-fn privacy_request_has_invalid_catalog_shape(request: &PrivacyProofRequestV1) -> bool {
-    !privacy_algorithm_id_is_portable(&request.algorithm_id)
-        || !privacy_sdk_entrypoint_is_portable(&request.entrypoint)
-}
-
-fn privacy_request_has_exposed_production_claim_text_field(
-    request: &PrivacyProofRequestV1,
-) -> bool {
-    privacy_request_text_fields(request)
-        .iter()
-        .any(|field| privacy_exposed_label_claims_production_readiness(field))
-}
-
-fn privacy_vk_ref_parts(vk_ref: &str) -> Option<(&str, &str)> {
-    let (backend, name) = vk_ref.split_once(':')?;
-    if backend.is_empty() || name.is_empty() || name.contains(':') {
-        return None;
-    }
-    Some((backend, name))
-}
-
-fn privacy_vk_ref_is_well_formed(vk_ref: &str) -> bool {
-    matches!(
-        privacy_vk_ref_parts(vk_ref),
-        Some((backend, name))
-            if privacy_vk_ref_backend_family_is_portable(backend)
-                && privacy_vk_ref_name_is_portable(name)
-    )
-}
-
-fn privacy_vk_ref_matches_backend(entry: &PrivacyAlgorithmEntry, vk_ref: &str) -> bool {
-    matches!(
-        privacy_vk_ref_parts(vk_ref),
-        Some((backend, _name)) if backend == entry.backend_family
-    )
-}
-
-fn privacy_catalog_vk_ref_name(entry: &PrivacyAlgorithmEntry) -> &'static str {
-    match entry.id {
-        "transparent-transfer" => "transparent_transfer",
-        "shield" => "shield",
-        "confidential-transfer-v2" => "confidential_transfer_v2",
-        "unshield" => "confidential_unshield_v3",
-        "asset-hidden-confidential-transfer-v1" => "asset_hidden_transfer_v1",
-        "zk-ace-pq-authorization-v0" => "zk_ace_pq_authorization_v0",
-        "anonymous-pgc-k-out-of-n-v1" => "anonymous_pgc_k_out_of_n_v1",
-        "verange-transparent-range-v1" => "verange_transparent_range_v1",
-        "zkat-policy-private-auth-v1" => "zkat_policy_private_auth_v1",
-        "zk-ams-recursive-admission-v0" => "zk_ams_recursive_admission_v0",
-        "vega-existing-credential-zk-v0" => "vega_existing_credential_zk_v0",
-        "silent-threshold-anoncred-v0" => "silent_threshold_anoncred_v0",
-        "zk-x509-onchain-identity-v0" => "zk_x509_onchain_identity_v0",
-        "jindo-lattice-pcs-zk-v0" => "jindo_lattice_pcs_zk_v0",
-        "sis-hints-anoncred-pq-v0" => "sis_hints_anoncred_pq_v0",
-        "orchard-halo2-actions-v1" => "orchard_halo2_action_bundle_v1",
-        "penumbra-masp-v1" => "penumbra_masp_v1",
-        "monero-fcmp-plus-plus-v1" => "monero_fcmp_plus_plus_v1",
-        "miden-stark-note-v1" => "miden_stark_note_v1",
-        "aztec-private-rollup-v1" => "aztec_private_kernel_v1",
-        "pq-masp-stark-v0" => "pq_masp_stark_v0",
-        _ => "unknown",
-    }
-}
-
-fn privacy_catalog_vk_ref_name_is_registered(entry: &PrivacyAlgorithmEntry) -> bool {
-    let name = privacy_catalog_vk_ref_name(entry);
-    name != "unknown" && privacy_vk_ref_name_is_portable(name)
-}
-
-fn privacy_canonical_vk_ref_name(entry: &PrivacyAlgorithmEntry) -> String {
-    privacy_catalog_vk_ref_name(entry).to_owned()
-}
-
-fn privacy_vk_ref_name_matches_algorithm(entry: &PrivacyAlgorithmEntry, vk_ref: &str) -> bool {
-    let Some((_backend, name)) = privacy_vk_ref_parts(vk_ref) else {
-        return false;
-    };
-    let expected_name = privacy_canonical_vk_ref_name(entry);
-    name == expected_name.as_str()
-}
-
-fn privacy_failure_result(
-    error_code: u32,
-    message: &str,
-    request: Option<&PrivacyProofRequestV1>,
-) -> PrivacyProofResultV1 {
-    let result = PrivacyProofResultV1 {
-        version: PRIVACY_FFI_VERSION_V1,
-        status: PRIVACY_FFI_STATUS_ERROR,
-        error_code,
-        message: message.to_owned(),
-        algorithm_id: request
-            .map(|request| request.algorithm_id.clone())
-            .unwrap_or_default(),
-        entrypoint: request
-            .map(|request| request.entrypoint.clone())
-            .unwrap_or_default(),
-        vk_ref: request
-            .map(|request| request.vk_ref.clone())
-            .unwrap_or_default(),
-        public_inputs: request
-            .map(|request| request.public_inputs.clone())
-            .unwrap_or_default(),
-        proof: Vec::new(),
-        verified: false,
-    };
-    debug_assert!(privacy_failure_result_invariants_hold(&result));
-    result
-}
-
-fn privacy_failure_result_without_vk_ref(
-    error_code: u32,
-    message: &str,
-    request: &PrivacyProofRequestV1,
-) -> PrivacyProofResultV1 {
-    let mut sanitized = request.clone();
-    sanitized.vk_ref.clear();
-    sanitized.witness.clear();
-    sanitized.proof.clear();
-    privacy_failure_result(error_code, message, Some(&sanitized))
-}
-
-fn privacy_failure_result_invariants_hold(result: &PrivacyProofResultV1) -> bool {
-    result.version == PRIVACY_FFI_VERSION_V1
-        && result.status == PRIVACY_FFI_STATUS_ERROR
-        && result.error_code != 0
-        && result.proof.is_empty()
-        && !result.verified
-}
-
-fn privacy_production_disabled_result(request: &PrivacyProofRequestV1) -> PrivacyProofResultV1 {
-    privacy_failure_result(
-        PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
-        PRIVACY_PRODUCTION_DISABLED_MESSAGE,
-        Some(request),
-    )
-}
-
-fn privacy_clear_request_byte_fields(request: &mut PrivacyProofRequestV1) {
-    request.public_inputs.fill(0);
-    request.witness.fill(0);
-    request.proof.fill(0);
-}
-
-fn privacy_result_for_request(
-    mut request: PrivacyProofRequestV1,
-    operation: PrivacyProofOperationV1,
-) -> PrivacyProofResultV1 {
-    let result = (|| -> PrivacyProofResultV1 {
-        if privacy_request_has_oversized_text_field(&request) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request text fields exceed maximum length",
-                None,
-            );
-        }
-
-        if privacy_request_has_control_text_field(&request) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request text fields must not contain control characters",
-                None,
-            );
-        }
-
-        if privacy_request_has_non_ascii_text_field(&request) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request text fields must be printable ASCII",
-                None,
-            );
-        }
-
-        if privacy_request_has_unportable_text_field(&request) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request text fields must use portable identifier characters",
-                None,
-            );
-        }
-
-        if privacy_request_has_exposed_production_claim_text_field(&request) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request text fields must not claim production/mainnet/audit readiness",
-                None,
-            );
-        }
-
-        if request.public_inputs.len() > PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request public_inputs exceeds maximum length",
-                None,
-            );
-        }
-
-        if request.witness.len() > PRIVACY_REQUEST_WITNESS_MAX_BYTES {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request witness exceeds maximum length",
-                None,
-            );
-        }
-
-        if request.proof.len() > PRIVACY_REQUEST_PROOF_MAX_BYTES {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request proof exceeds maximum length",
-                None,
-            );
-        }
-
-        if request.algorithm_id.trim().is_empty() || request.entrypoint.trim().is_empty() {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request must include non-empty algorithm_id and entrypoint",
-                Some(&request),
-            );
-        }
-
-        if privacy_request_has_invalid_catalog_shape(&request) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request algorithm_id and entrypoint must use catalog identifier shapes",
-                None,
-            );
-        }
-
-        let known_entry = privacy_algorithm_entry(&request.algorithm_id);
-        if let Some(entry) = known_entry
-            && privacy_entrypoint_planned(entry, &request.entrypoint)
-        {
-            return privacy_failure_result_without_vk_ref(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request entrypoint is planned but not executable until the production gate passes",
-                &request,
-            );
-        }
-
-        if request.vk_ref.trim().is_empty() {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request must include non-empty vk_ref",
-                Some(&request),
-            );
-        }
-
-        if !privacy_vk_ref_is_well_formed(&request.vk_ref) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request vk_ref must use backend:name with portable verifier-key components",
-                None,
-            );
-        }
-
-        let Some(entry) = known_entry else {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
-                "unsupported privacy algorithm id",
-                Some(&request),
-            );
-        };
-
-        if !privacy_entrypoint_supported(entry, &request.entrypoint) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request entrypoint is not registered for the algorithm",
-                Some(&request),
-            );
-        }
-
-        let production_builder =
-            privacy_entrypoint_is_production_proof_builder(&request.entrypoint);
-        let production_verifier =
-            privacy_entrypoint_is_production_proof_verifier(&request.entrypoint);
-        if operation == PrivacyProofOperationV1::Build && !production_builder {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof build request entrypoint must be a production proof builder",
-                Some(&request),
-            );
-        }
-
-        if operation == PrivacyProofOperationV1::Verify
-            && !production_builder
-            && !production_verifier
-        {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof verify request entrypoint must be a production proof builder or verifier",
-                Some(&request),
-            );
-        }
-
-        if !privacy_vk_ref_matches_backend(entry, &request.vk_ref) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request vk_ref backend must match algorithm backend family",
-                Some(&request),
-            );
-        }
-
-        if !privacy_vk_ref_name_matches_algorithm(entry, &request.vk_ref) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request vk_ref name must match algorithm verifier key name",
-                Some(&request),
-            );
-        }
-
-        if request.public_inputs.is_empty() {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request must include non-empty public_inputs",
-                Some(&request),
-            );
-        }
-
-        if operation == PrivacyProofOperationV1::Build && !request.proof.is_empty() {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof build request must not include proof bytes",
-                Some(&request),
-            );
-        }
-
-        if operation == PrivacyProofOperationV1::Verify && !request.witness.is_empty() {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof verify request must not include witness bytes",
-                Some(&request),
-            );
-        }
-
-        if operation == PrivacyProofOperationV1::Build && request.witness.is_empty() {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof build request must include witness bytes",
-                Some(&request),
-            );
-        }
-
-        if operation == PrivacyProofOperationV1::Verify && request.proof.is_empty() {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof verify request must include proof bytes",
-                Some(&request),
-            );
-        }
-
-        privacy_production_disabled_result(&request)
-    })();
-    privacy_clear_request_byte_fields(&mut request);
-    result
-}
-
-fn privacy_result_for_request_archive(
-    request_archive: &[u8],
-    operation: PrivacyProofOperationV1,
-) -> PrivacyProofResultV1 {
-    if privacy_request_archive_out_of_bounds(request_archive.len()) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_MALFORMED_NORITO,
-            "malformed Norito V1 privacy proof request",
-            None,
-        );
-    }
-    let request = privacy_decode_public_request_archive(request_archive);
-    match request {
-        Ok(request) => privacy_result_for_request(request, operation),
-        Err(_) => privacy_failure_result(
-            PRIVACY_FFI_ERROR_MALFORMED_NORITO,
-            "malformed Norito V1 privacy proof request",
-            None,
-        ),
-    }
-}
-
-fn privacy_decode_public_request_archive(
-    request_archive: &[u8],
-) -> Result<PrivacyProofRequestV1, ()> {
-    if !privacy_archive_has_repeated_schema_byte(request_archive, PRIVACY_REQUEST_SCHEMA_BYTE) {
-        return Err(());
-    }
-    let mut normalized = request_archive.to_vec();
-    if !privacy_patch_archive_schema_hash(
-        &mut normalized,
-        <PrivacyProofRequestV1 as norito::NoritoSerialize>::schema_hash(),
-    ) {
-        normalized.fill(0);
-        return Err(());
-    }
-    let decoded = norito::decode_from_bytes(&normalized).map_err(|_| ());
-    normalized.fill(0);
-    decoded
-}
-
-fn encode_privacy_archive_py<T>(
+fn encode_privacy_archive_py(
     py: Python<'_>,
-    value: &T,
+    value: &PrivacyCapabilitySnapshotV1,
     context: &str,
-    schema_byte: u8,
-) -> PyResult<Py<PyBytes>>
-where
-    T: norito::NoritoSerialize,
-{
-    let mut bytes = norito::to_bytes(value)
+) -> PyResult<Py<PyBytes>> {
+    let mut bytes = norito::encode_canonical(value)
         .map_err(|err| PyRuntimeError::new_err(format!("{context}: {err}")))?;
-    if !privacy_patch_archive_repeated_schema_byte(&mut bytes, schema_byte) {
+    if bytes.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
         bytes.fill(0);
         return Err(PyRuntimeError::new_err(format!(
-            "{context}: encoded privacy archive is missing a Norito schema slot"
+            "{context}: encoded privacy archive exceeds {PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1} bytes"
         )));
     }
-    if bytes.len() > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES {
+    let status = validate_privacy_capability_archive_v1(&bytes);
+    if !status.is_valid() {
         bytes.fill(0);
         return Err(PyRuntimeError::new_err(format!(
-            "{context}: encoded privacy archive exceeds {PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes"
+            "{context}: native archive validation failed with status {}",
+            status.code()
         )));
     }
     let output = Py::from(PyBytes::new(py, &bytes));
@@ -20648,18 +18401,19 @@ where
 #[pyfunction]
 #[pyo3(name = "privacy_capabilities_v1")]
 fn privacy_capabilities_v1_py(py: Python<'_>) -> PyResult<Py<PyBytes>> {
-    encode_privacy_archive_py(
-        py,
-        &privacy_capabilities(),
-        "encode privacy capabilities",
-        PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
-    )
+    encode_privacy_archive_py(py, &privacy_capabilities(), "encode privacy capabilities")
+}
+
+#[pyfunction]
+#[pyo3(name = "privacy_validate_capabilities_v1")]
+fn privacy_validate_capabilities_v1_py(archive: &[u8]) -> i32 {
+    validate_privacy_capability_archive_v1(archive).code()
 }
 
 #[pyfunction]
 #[pyo3(name = "privacy_bridge_abi_version")]
 fn privacy_bridge_abi_version_py() -> u32 {
-    7
+    PRIVACY_BRIDGE_ABI_VERSION_V1
 }
 
 #[pyfunction]
@@ -20669,58 +18423,35 @@ fn connect_norito_bridge_abi_version_py() -> u32 {
 }
 
 #[pyfunction]
-#[pyo3(name = "privacy_proof_request_v1")]
-fn privacy_proof_request_v1_py(
+#[pyo3(name = "canonical_genesis_header_hash_v1")]
+fn canonical_genesis_header_hash_v1_py(
     py: Python<'_>,
-    algorithm_id: &str,
-    entrypoint: &str,
-    vk_ref: &str,
-    public_inputs: &[u8],
-    witness: &[u8],
-    proof: &[u8],
+    framed_signed_genesis: &[u8],
 ) -> PyResult<Py<PyBytes>> {
-    let mut request = PrivacyProofRequestV1 {
-        algorithm_id: algorithm_id.to_owned(),
-        entrypoint: entrypoint.to_owned(),
-        vk_ref: vk_ref.to_owned(),
-        public_inputs: public_inputs.to_vec(),
-        witness: witness.to_vec(),
-        proof: proof.to_vec(),
-    };
-    let encoded = encode_privacy_archive_py(
-        py,
-        &request,
-        "encode privacy proof request",
-        PRIVACY_REQUEST_SCHEMA_BYTE,
-    );
-    privacy_clear_request_byte_fields(&mut request);
-    encoded
-}
-
-#[pyfunction]
-#[pyo3(name = "privacy_build_proof_v1")]
-fn privacy_build_proof_v1_py(py: Python<'_>, request_archive: &[u8]) -> PyResult<Py<PyBytes>> {
-    let result =
-        privacy_result_for_request_archive(request_archive, PrivacyProofOperationV1::Build);
-    encode_privacy_archive_py(
-        py,
-        &result,
-        "encode privacy proof build result",
-        privacy_result_schema_byte(PrivacyProofOperationV1::Build),
-    )
-}
-
-#[pyfunction]
-#[pyo3(name = "privacy_verify_proof_v1")]
-fn privacy_verify_proof_v1_py(py: Python<'_>, request_archive: &[u8]) -> PyResult<Py<PyBytes>> {
-    let result =
-        privacy_result_for_request_archive(request_archive, PrivacyProofOperationV1::Verify);
-    encode_privacy_archive_py(
-        py,
-        &result,
-        "encode privacy proof verify result",
-        privacy_result_schema_byte(PrivacyProofOperationV1::Verify),
-    )
+    const MAX_GENESIS_FRAME_BYTES: usize = 64 * 1024 * 1024;
+    if framed_signed_genesis.is_empty() || framed_signed_genesis.len() > MAX_GENESIS_FRAME_BYTES {
+        return Err(PyValueError::new_err(
+            "framed_signed_genesis must be non-empty and at most 64 MiB",
+        ));
+    }
+    let block = decode_framed_signed_block(framed_signed_genesis)
+        .map_err(|_| PyValueError::new_err("framed_signed_genesis is not a valid Norito frame"))?;
+    let canonical = block.encode_wire().map_err(|_| {
+        PyValueError::new_err("framed_signed_genesis could not be canonically re-encoded")
+    })?;
+    if canonical != framed_signed_genesis {
+        return Err(PyValueError::new_err(
+            "framed_signed_genesis is not the exact canonical block wire",
+        ));
+    }
+    let header = block.header();
+    if !header.is_genesis() {
+        return Err(PyValueError::new_err(
+            "framed_signed_genesis is not a genesis block",
+        ));
+    }
+    let hash = header.hash();
+    Ok(Py::from(PyBytes::new(py, hash.as_ref())))
 }
 
 #[pymodule]
@@ -20735,6 +18466,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyAssetId>()?;
     module.add_class::<Instruction>()?;
     module.add_class::<TransactionBuilder>()?;
+    module.add_class::<PrivacyZkAceTransferActionBuildResultV1>()?;
+    module.add_class::<PrivacyJindoActionBuildResultV1>()?;
+    module.add_class::<PrivacyVeRangeActionBuildResultV1>()?;
+    module.add_class::<PrivacyVegaActionPreparationV1>()?;
+    module.add_class::<PrivacyVegaActionBuildResultV1>()?;
+    module.add_class::<PrivacyZkAmsBatchAdmissionActionBuildResultV1>()?;
+    module.add_class::<PrivacyZkAmsProvisionAccountActionBuildResultV1>()?;
+    module.add_class::<PrivacyBootleLanternPresentationActionBuildResultV1>()?;
     module.add_class::<SignedTransactionEnvelope>()?;
     module.add_function(wrap_pyfunction!(supported_crypto_algorithms_py, module)?)?;
     module.add_function(wrap_pyfunction!(normalize_crypto_algorithm_py, module)?)?;
@@ -20742,6 +18481,15 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(derive_keypair_from_seed_py, module)?)?;
     module.add_function(wrap_pyfunction!(load_keypair_py, module)?)?;
     module.add_function(wrap_pyfunction!(sign_py, module)?)?;
+    module.add_function(wrap_pyfunction!(build_find_asset_escrow_query_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        build_find_asset_escrows_by_seller_query_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_find_asset_escrows_by_buyer_query_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(verify_py, module)?)?;
     module.add_function(wrap_pyfunction!(public_key_multihash_py, module)?)?;
     module.add_function(wrap_pyfunction!(private_key_multihash_py, module)?)?;
@@ -20765,12 +18513,52 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(verify_sm2_py, module)?)?;
     module.add_function(wrap_pyfunction!(hash_blake2b_32_py, module)?)?;
     module.add_function(wrap_pyfunction!(
+        canonical_signed_transaction_hash_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_vega_device_authentication_digest_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_zk_ace_transfer_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_jindo_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_verange_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_vega_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_zk_ams_batch_admission_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_zk_ams_provision_account_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_bootle_lantern_presentation_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         verify_signed_transaction_versioned_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(lane_relay_envelope_fixture_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         verify_lane_relay_envelope_bytes_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        canonical_genesis_header_hash_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
@@ -20862,23 +18650,11 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        zk_ace_verifying_key_registration_payload_v1_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
         confidential_transfer_v2_verifying_key_registration_payload_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
         confidential_unshield_v3_verifying_key_registration_payload_v1_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        zk_ace_build_transfer_authorization_v1_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        zk_ace_authorized_transfer_digest_check_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
@@ -20920,10 +18696,11 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         connect_norito_bridge_abi_version_py,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(privacy_proof_request_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(privacy_capabilities_v1_py, module)?)?;
-    module.add_function(wrap_pyfunction!(privacy_build_proof_v1_py, module)?)?;
-    module.add_function(wrap_pyfunction!(privacy_verify_proof_v1_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_validate_capabilities_v1_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(cuda_available_py, module)?)?;
     module.add_function(wrap_pyfunction!(cuda_disabled_py, module)?)?;
     module.add_function(wrap_pyfunction!(poseidon2_cuda_py, module)?)?;

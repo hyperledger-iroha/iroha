@@ -83,9 +83,10 @@ Endpoints
   - Builds exactly one native PLAIN validation-fee proposal instruction for
     local signing. The strict request requires `plain_electorate_rules`; those
     exact rules are included in the native proposal fingerprint and retained
-    for ballot eligibility, amount, duration, conviction, turnout, and approval
-    checks. Legacy signed-policy, governance-keyset, detached-signature, and ZK
-    compatibility shapes are not accepted.
+    for the voting asset, bond escrow, slash receiver, ballot eligibility,
+    amount, duration, conviction, turnout, and approval checks. Legacy
+    signed-policy, governance-keyset, detached-signature, and ZK compatibility
+    shapes are not accepted.
   - The supplied rules and inclusive referendum span must exactly match active
     governance configuration. Taira fixes the span at 3,600 blocks
     (`h_end = h_start + 3,599`); the draft route rejects any other span or
@@ -102,6 +103,10 @@ Endpoints
     at `h_start`, and the account has not already cast an effective ballot.
     Membership is never recomputed from the live citizen registry. Callers
     cannot override amount or duration.
+  - Accepted locks retain the proposal-bound voting asset, bond escrow, and
+    slash receiver. Later governance configuration changes cannot redirect
+    locking, release, slashing, or restitution; missing or mismatched custody
+    evidence fails closed without deleting the lock.
 
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):

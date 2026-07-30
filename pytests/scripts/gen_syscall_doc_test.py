@@ -53,7 +53,10 @@ def test_localized_table_replacement_preserves_surrounding_content() -> None:
 @pytest.mark.parametrize(
     "lines, message",
     [
-        (["no table"], "no syscall table separator"),
+        (
+            ["no table"],
+            "expected exactly one syscall table separator, found 0",
+        ),
         (["| Name | Value |", "|---|---|", ""], "no syscall rows found"),
     ],
 )

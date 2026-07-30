@@ -32,7 +32,9 @@ pub const G_ESCROW: u64 = 16;
 pub const G_SORACLOUD: u64 = 16;
 
 /// Version of the consensus-visible host-syscall gas formulas.
-pub const HOST_GAS_FORMULA_VERSION: u16 = 6;
+pub const HOST_GAS_FORMULA_VERSION: u16 = 7;
+/// Version of the V1 VRF base/item/byte gas formula.
+pub const HOST_VRF_GAS_FORMULA_VERSION_V1: u64 = 1;
 /// Version of the ledger-query base/item/offset/byte formula.
 ///
 /// This value is included in the gas-schedule descriptor. Any change to the
@@ -91,6 +93,23 @@ pub const GROW_HEAP_PAGE_BYTES: u64 = 4_096;
 pub const HOST_BYTE_GAS_BASE: u64 = 16;
 /// Common base charge for cryptographic verification helpers.
 pub const HOST_VERIFY_GAS_BASE: u64 = 64;
+/// Fixed charge for canonical V1 VRF request handling.
+pub const HOST_VRF_VERIFY_GAS_BASE: u64 = 64;
+/// Charge for each VRF item whose validation begins.
+pub const HOST_VRF_VERIFY_GAS_PER_ITEM: u64 = 250_000;
+/// Charge per byte in the complete canonical VRF request frame.
+pub const HOST_VRF_VERIFY_GAS_PER_BYTE: u64 = 5;
+
+/// Compute the V1 VRF charge from canonical schedule parameters.
+///
+/// Decode and batch-bound failures examine zero items. An item rejected during
+/// chain, variant, key, proof, or pairing validation counts as examined.
+#[must_use]
+pub const fn vrf_verify_gas(examined_items: u64, payload_bytes: u64) -> u64 {
+    HOST_VRF_VERIFY_GAS_BASE
+        .saturating_add(HOST_VRF_VERIFY_GAS_PER_ITEM.saturating_mul(examined_items))
+        .saturating_add(HOST_VRF_VERIFY_GAS_PER_BYTE.saturating_mul(payload_bytes))
+}
 /// Schema codec base charge.
 pub const HOST_SCHEMA_GAS_BASE: u64 = 32;
 /// Debug/abort/exit fixed host charge.
@@ -593,6 +612,7 @@ struct GasScheduleDescriptor {
 }
 
 fn canonical_gas_parameters() -> Vec<GasParameter> {
+    let vrf_decode_limits = ivm_abi::host_payload::VRF_VERIFY_DECODE_LIMITS_V1;
     let values = [
         ("vector_base_lanes", VECTOR_BASE_LANES as u64),
         ("syscall_per_byte", SYSCALL_GAS_PER_BYTE),
@@ -672,6 +692,38 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
         ("grow_heap_page_bytes", GROW_HEAP_PAGE_BYTES),
         ("host_byte_base", HOST_BYTE_GAS_BASE),
         ("host_verify_base", HOST_VERIFY_GAS_BASE),
+        ("host_vrf_formula_version", HOST_VRF_GAS_FORMULA_VERSION_V1),
+        ("host_vrf_verify_base", HOST_VRF_VERIFY_GAS_BASE),
+        ("host_vrf_verify_per_item", HOST_VRF_VERIFY_GAS_PER_ITEM),
+        ("host_vrf_verify_per_byte", HOST_VRF_VERIFY_GAS_PER_BYTE),
+        (
+            "host_vrf_verify_max_payload_bytes",
+            ivm_abi::host_payload::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 as u64,
+        ),
+        (
+            "host_vrf_verify_max_batch_items",
+            ivm_abi::host_payload::MAX_VRF_VERIFY_BATCH_ITEMS_V1 as u64,
+        ),
+        (
+            "host_vrf_decode_max_sequence_elements",
+            vrf_decode_limits.max_sequence_elements() as u64,
+        ),
+        (
+            "host_vrf_decode_max_field_bytes",
+            vrf_decode_limits.max_field_bytes() as u64,
+        ),
+        (
+            "host_vrf_decode_max_total_elements",
+            vrf_decode_limits.max_total_elements() as u64,
+        ),
+        (
+            "host_vrf_decode_max_total_allocated_bytes",
+            vrf_decode_limits.max_total_allocated_bytes() as u64,
+        ),
+        (
+            "host_vrf_decode_max_nesting_depth",
+            vrf_decode_limits.max_nesting_depth() as u64,
+        ),
         ("host_schema_base", HOST_SCHEMA_GAS_BASE),
         ("host_debug_base", HOST_DEBUG_GAS_BASE),
         ("host_commit_output", HOST_COMMIT_OUTPUT_GAS),
@@ -828,6 +880,7 @@ fn formula_tag(formula: crate::host::HostSyscallGasFormula) -> u8 {
         Formula::ConservativeEnvelope => 12,
         Formula::ZkVerifyV1 => 14,
         Formula::LedgerQueryV1 => 15,
+        Formula::VrfVerifyV1 => 16,
     }
 }
 
@@ -845,6 +898,7 @@ fn parameters_tag(parameters: crate::host::HostSyscallGasParameters) -> u8 {
         Parameters::Conservative => 7,
         Parameters::ZkVerifyV1 => 9,
         Parameters::LedgerQueryV1 => 10,
+        Parameters::VrfVerifyV1 => 11,
     }
 }
 
@@ -1021,6 +1075,97 @@ mod tests {
             ),
             3_950,
         );
+    }
+
+    #[test]
+    fn schedule_hash_binds_the_complete_live_vrf_formula() {
+        let decode_limits = ivm_abi::host_payload::VRF_VERIFY_DECODE_LIMITS_V1;
+        let expected = [
+            ("host_vrf_formula_version", HOST_VRF_GAS_FORMULA_VERSION_V1),
+            ("host_vrf_verify_base", HOST_VRF_VERIFY_GAS_BASE),
+            ("host_vrf_verify_per_item", HOST_VRF_VERIFY_GAS_PER_ITEM),
+            ("host_vrf_verify_per_byte", HOST_VRF_VERIFY_GAS_PER_BYTE),
+            (
+                "host_vrf_verify_max_payload_bytes",
+                ivm_abi::host_payload::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 as u64,
+            ),
+            (
+                "host_vrf_verify_max_batch_items",
+                ivm_abi::host_payload::MAX_VRF_VERIFY_BATCH_ITEMS_V1 as u64,
+            ),
+            (
+                "host_vrf_decode_max_sequence_elements",
+                decode_limits.max_sequence_elements() as u64,
+            ),
+            (
+                "host_vrf_decode_max_field_bytes",
+                decode_limits.max_field_bytes() as u64,
+            ),
+            (
+                "host_vrf_decode_max_total_elements",
+                decode_limits.max_total_elements() as u64,
+            ),
+            (
+                "host_vrf_decode_max_total_allocated_bytes",
+                decode_limits.max_total_allocated_bytes() as u64,
+            ),
+            (
+                "host_vrf_decode_max_nesting_depth",
+                decode_limits.max_nesting_depth() as u64,
+            ),
+        ];
+        let canonical = canonical_gas_schedule_descriptor();
+        for (name, value) in expected {
+            let matches = canonical
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| parameter.name == name)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1, "descriptor coverage for {name}");
+            let (index, parameter) = matches[0];
+            assert_eq!(parameter.value, value, "descriptor value for {name}");
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.parameters[index].value = changed.parameters[index].value.wrapping_add(1);
+            });
+        }
+        assert_eq!(vrf_verify_gas(2, 100), 500_564);
+    }
+
+    #[test]
+    fn schedule_hash_binds_vrf_syscalls_to_the_vrf_formula_family() {
+        let canonical = canonical_gas_schedule_descriptor();
+        for number in [
+            crate::syscalls::SYSCALL_VRF_VERIFY,
+            crate::syscalls::SYSCALL_VRF_VERIFY_BATCH,
+        ] {
+            let matches = canonical
+                .syscalls
+                .iter()
+                .enumerate()
+                .filter(|(_, syscall)| syscall.number == number)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matches.len(),
+                1,
+                "metering descriptor coverage for VRF syscall {number:#x}"
+            );
+            let (index, syscall) = matches[0];
+            assert_eq!(syscall.quote_strategy, 0);
+            assert_eq!(syscall.formula, 16);
+            assert_eq!(syscall.parameters, 11);
+            assert_eq!(syscall.minimum_gas, vrf_verify_gas(1, 0));
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.syscalls[index].formula ^= 0x80;
+            });
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.syscalls[index].parameters ^= 0x80;
+            });
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.syscalls[index].minimum_gas =
+                    changed.syscalls[index].minimum_gas.wrapping_add(1);
+            });
+        }
     }
 
     #[test]

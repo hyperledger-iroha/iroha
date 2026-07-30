@@ -827,6 +827,9 @@ pub enum ParseError {
     /// SoraFS configuration contained invalid or unsafe values.
     #[error("Invalid SoraFS configuration")]
     InvalidSorafsConfig,
+    /// Soracloud runtime configuration contained invalid or unsafe values.
+    #[error("Invalid Soracloud runtime configuration")]
+    InvalidSoracloudConfig,
     /// Snapshot configuration contained an invalid audited-bootstrap policy.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
@@ -1037,7 +1040,7 @@ impl Root {
         let parsed_sorafs = self.sorafs.parse(&mut emitter);
         let kagemusha_commands_configured = self.torii.kagemusha_commands.is_some();
         let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
-        let soracloud_runtime = self.soracloud_runtime.parse();
+        let soracloud_runtime = self.soracloud_runtime.parse(&mut emitter);
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = if self.telemetry_enabled {
             actual::TelemetryProfile::from(self.telemetry_profile)
@@ -12847,17 +12850,19 @@ pub struct SoracloudRuntime {
 }
 
 impl SoracloudRuntime {
-    fn parse(self) -> actual::SoracloudRuntime {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntime {
+        let production_mode = self.production_mode;
         let egress = self.egress.parse();
-        let hf = self.hf.parse();
+        let hf = self.hf.parse(emitter);
+        let submission = self.submission.parse(production_mode, emitter);
         let actual = actual::SoracloudRuntime {
-            production_mode: self.production_mode,
+            production_mode,
             state_dir: self.state_dir.resolve_relative_path(),
             reconcile_interval: self.reconcile_interval_ms.get().max(MIN_TIMER_INTERVAL),
             hydration_concurrency: self.hydration_concurrency,
             cache_budgets: self.cache_budgets.parse(),
-            inrou: self.inrou.parse(),
-            submission: self.submission.parse(),
+            inrou: self.inrou.parse(emitter),
+            submission,
             egress,
             hf,
         };
@@ -13082,6 +13087,26 @@ pub struct SoracloudRuntimeInrou {
     #[config(default = "defaults::soracloud_runtime::INROU_PROXY_ONLY")]
     #[norito(default = "default_soracloud_runtime_inrou_proxy_only")]
     pub proxy_only: bool,
+    /// Maximum compressed size accepted for one bundle archive.
+    #[config(default = "defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES")]
+    #[norito(default = "default_soracloud_runtime_inrou_bundle_archive_max_compressed_bytes")]
+    pub bundle_archive_max_compressed_bytes: NonZeroU64,
+    /// Maximum decoded size accepted for one bundle archive.
+    #[config(default = "defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES")]
+    #[norito(default = "default_soracloud_runtime_inrou_bundle_archive_max_decoded_bytes")]
+    pub bundle_archive_max_decoded_bytes: NonZeroU64,
+    /// Maximum number of entries accepted from one bundle archive.
+    #[config(default = "defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES")]
+    #[norito(default = "default_soracloud_runtime_inrou_bundle_archive_max_entries")]
+    pub bundle_archive_max_entries: NonZeroU32,
+    /// Maximum decoded size accepted for one file in a bundle archive.
+    #[config(default = "defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES")]
+    #[norito(default = "default_soracloud_runtime_inrou_bundle_archive_max_file_bytes")]
+    pub bundle_archive_max_file_bytes: NonZeroU64,
+    /// Maximum aggregate decoded file size accepted from one bundle archive.
+    #[config(default = "defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES")]
+    #[norito(default = "default_soracloud_runtime_inrou_bundle_archive_max_total_file_bytes")]
+    pub bundle_archive_max_total_file_bytes: NonZeroU64,
     /// Startup grace window in milliseconds.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS))"
@@ -13108,6 +13133,26 @@ fn default_soracloud_runtime_inrou_proxy_only() -> bool {
     defaults::soracloud_runtime::INROU_PROXY_ONLY
 }
 
+fn default_soracloud_runtime_inrou_bundle_archive_max_compressed_bytes() -> NonZeroU64 {
+    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES
+}
+
+fn default_soracloud_runtime_inrou_bundle_archive_max_decoded_bytes() -> NonZeroU64 {
+    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES
+}
+
+fn default_soracloud_runtime_inrou_bundle_archive_max_entries() -> NonZeroU32 {
+    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES
+}
+
+fn default_soracloud_runtime_inrou_bundle_archive_max_file_bytes() -> NonZeroU64 {
+    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES
+}
+
+fn default_soracloud_runtime_inrou_bundle_archive_max_total_file_bytes() -> NonZeroU64 {
+    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES
+}
+
 fn default_soracloud_runtime_inrou_start_grace_ms() -> DurationMs {
     DurationMs(std::time::Duration::from_millis(
         defaults::soracloud_runtime::INROU_START_GRACE_MS,
@@ -13126,6 +13171,16 @@ impl Default for SoracloudRuntimeInrou {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             enabled: defaults::soracloud_runtime::INROU_ENABLED,
             proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            bundle_archive_max_compressed_bytes:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+            bundle_archive_max_decoded_bytes:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+            bundle_archive_max_entries:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+            bundle_archive_max_file_bytes:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+            bundle_archive_max_total_file_bytes:
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
             start_grace_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::soracloud_runtime::INROU_START_GRACE_MS,
             )),
@@ -13137,11 +13192,81 @@ impl Default for SoracloudRuntimeInrou {
 }
 
 impl SoracloudRuntimeInrou {
-    fn parse(self) -> actual::SoracloudRuntimeInrou {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeInrou {
+        if self.bundle_archive_max_compressed_bytes.get()
+            > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.inrou.bundle_archive_max_compressed_bytes must not exceed {}",
+                    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
+                )),
+            );
+        }
+        if self.bundle_archive_max_decoded_bytes.get()
+            > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.inrou.bundle_archive_max_decoded_bytes must not exceed {}",
+                    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT
+                )),
+            );
+        }
+        if self.bundle_archive_max_file_bytes.get()
+            > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.inrou.bundle_archive_max_file_bytes must not exceed {}",
+                    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT
+                )),
+            );
+        }
+        if self.bundle_archive_max_total_file_bytes.get()
+            > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed {}",
+                    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT
+                )),
+            );
+        }
+        if self.bundle_archive_max_file_bytes > self.bundle_archive_max_total_file_bytes {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "soracloud_runtime.inrou.bundle_archive_max_file_bytes must not exceed bundle_archive_max_total_file_bytes",
+                ),
+            );
+        }
+        if self.bundle_archive_max_total_file_bytes > self.bundle_archive_max_decoded_bytes {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed bundle_archive_max_decoded_bytes",
+                ),
+            );
+        }
+        if self.bundle_archive_max_entries.get()
+            > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES_LIMIT
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.inrou.bundle_archive_max_entries must not exceed {}",
+                    defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES_LIMIT
+                )),
+            );
+        }
+
         actual::SoracloudRuntimeInrou {
             max_concurrent_vms: self.max_concurrent_vms,
             enabled: self.enabled,
             proxy_only: self.proxy_only,
+            bundle_archive_max_compressed_bytes: self.bundle_archive_max_compressed_bytes,
+            bundle_archive_max_decoded_bytes: self.bundle_archive_max_decoded_bytes,
+            bundle_archive_max_entries: self.bundle_archive_max_entries,
+            bundle_archive_max_file_bytes: self.bundle_archive_max_file_bytes,
+            bundle_archive_max_total_file_bytes: self.bundle_archive_max_total_file_bytes,
             start_grace: self.start_grace_ms.get().max(MIN_TIMER_INTERVAL),
             stop_grace: self.stop_grace_ms.get().max(MIN_TIMER_INTERVAL),
         }
@@ -13157,10 +13282,181 @@ pub struct SoracloudRuntimeSubmission {
     pub fee_program_id: Option<String>,
     /// Exact immutable sponsor revision, required only when `fee_payer = "sponsor"`.
     pub fee_program_revision: Option<u64>,
+    /// Deployment-owned mutation and provenance signer.
+    pub signer: Option<SoracloudRuntimeMutationSignerBinding>,
+}
+
+/// User-facing public identity for the Soracloud runtime mutation signer.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SoracloudRuntimeMutationSignerBinding {
+    /// Stable opaque production provider handle.
+    pub handle: String,
+    /// Canonical I105 transaction authority controlled by the signer.
+    pub authority: String,
+    /// Exact signature algorithm label (`ed25519` or `ml_dsa`).
+    pub algorithm: String,
+    /// Canonical lowercase raw public-key payload for `algorithm`.
+    pub public_key_hex: String,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero public-policy digest as lowercase hexadecimal.
+    pub policy_digest_hex: String,
+}
+
+impl SoracloudRuntimeMutationSignerBinding {
+    fn parse(
+        self,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SoracloudRuntimeMutationSignerBinding> {
+        const PATH: &str = "soracloud_runtime.submission.signer";
+        let emit = |emitter: &mut Emitter<ParseError>, message: String| {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(message));
+        };
+        let Self {
+            handle,
+            authority,
+            algorithm,
+            public_key_hex,
+            revision,
+            policy_digest_hex,
+        } = self;
+
+        let handle = if is_production_runtime_handle(&handle) {
+            Some(handle)
+        } else {
+            emit(
+                emitter,
+                format!("{PATH}.handle must be one canonical production provider handle"),
+            );
+            None
+        };
+        let authority = match AccountId::parse_encoded(&authority) {
+            Ok(parsed) if parsed.canonical() == authority => Some(parsed.into_account_id()),
+            Ok(_) | Err(_) => {
+                emit(
+                    emitter,
+                    format!("{PATH}.authority must be one canonical I105 account literal"),
+                );
+                None
+            }
+        };
+        let algorithm = match algorithm.as_str() {
+            "ed25519" => Some(Algorithm::Ed25519),
+            "ml_dsa" => Some(Algorithm::MlDsa),
+            _ => {
+                emit(
+                    emitter,
+                    format!("{PATH}.algorithm must be exactly `ed25519` or `ml_dsa`"),
+                );
+                None
+            }
+        };
+        let public_key = match algorithm {
+            Some(algorithm)
+                if !public_key_hex.is_empty()
+                    && public_key_hex.len() <= 16 * 1024
+                    && public_key_hex.len().is_multiple_of(2)
+                    && public_key_hex
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) =>
+            {
+                match PublicKey::from_hex(algorithm, &public_key_hex) {
+                    Ok(public_key)
+                        if public_key
+                            .try_to_bytes()
+                            .is_ok_and(|(decoded_algorithm, bytes)| {
+                                decoded_algorithm == algorithm
+                                    && bytes.iter().any(|byte| *byte != 0)
+                                    && hex::encode(bytes) == public_key_hex
+                            }) =>
+                    {
+                        Some(public_key)
+                    }
+                    Ok(_) | Err(_) => {
+                        emit(
+                            emitter,
+                            format!(
+                                "{PATH}.public_key_hex must be one canonical non-zero raw public key for algorithm"
+                            ),
+                        );
+                        None
+                    }
+                }
+            }
+            Some(_) => {
+                emit(
+                    emitter,
+                    format!(
+                        "{PATH}.public_key_hex must be bounded canonical lowercase hexadecimal"
+                    ),
+                );
+                None
+            }
+            None => None,
+        };
+        let authority = match (authority, public_key.as_ref()) {
+            (Some(authority), Some(public_key))
+                if authority == AccountId::new(public_key.clone()) =>
+            {
+                Some(authority)
+            }
+            (Some(_), Some(_)) => {
+                emit(
+                    emitter,
+                    format!("{PATH}.authority must be derived from public_key_hex"),
+                );
+                None
+            }
+            (authority, _) => authority,
+        };
+        let revision = if revision == 0 {
+            emit(emitter, format!("{PATH}.revision must be nonzero"));
+            None
+        } else {
+            Some(revision)
+        };
+        let policy_digest = if policy_digest_hex.len() == 64
+            && policy_digest_hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            let mut digest = [0_u8; 32];
+            hex::decode_to_slice(policy_digest_hex, &mut digest)
+                .expect("validated lowercase 32-byte hexadecimal");
+            if digest == [0; 32] {
+                emit(emitter, format!("{PATH}.policy_digest_hex must be nonzero"));
+                None
+            } else {
+                Some(digest)
+            }
+        } else {
+            emit(
+                emitter,
+                format!(
+                    "{PATH}.policy_digest_hex must be exactly 64 lowercase hexadecimal characters"
+                ),
+            );
+            None
+        };
+
+        Some(actual::SoracloudRuntimeMutationSignerBinding {
+            handle: handle?,
+            authority: authority?,
+            algorithm: algorithm?,
+            public_key: public_key?,
+            revision: revision?,
+            policy_digest: policy_digest?,
+        })
+    }
 }
 
 impl SoracloudRuntimeSubmission {
-    fn parse(self) -> actual::SoracloudRuntimeSubmission {
+    fn parse(
+        self,
+        production_mode: bool,
+        emitter: &mut Emitter<ParseError>,
+    ) -> actual::SoracloudRuntimeSubmission {
         let fee_payer = match self.fee_payer.as_deref().map_or("authority", str::trim) {
             "authority" => {
                 assert!(
@@ -13205,7 +13501,14 @@ impl SoracloudRuntimeSubmission {
                 "invalid soracloud_runtime.submission.fee_payer `{payer}`; expected authority or sponsor"
             ),
         };
-        actual::SoracloudRuntimeSubmission { fee_payer }
+        if production_mode && self.signer.is_none() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig)
+                    .attach("soracloud_runtime.submission.signer is required in production mode"),
+            );
+        }
+        let signer = self.signer.and_then(|signer| signer.parse(emitter));
+        actual::SoracloudRuntimeSubmission { fee_payer, signer }
     }
 }
 
@@ -13312,6 +13615,14 @@ pub struct SoracloudRuntimeHuggingFace {
     #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES")]
     #[norito(default = "default_soracloud_runtime_hf_import_max_total_bytes")]
     pub import_max_total_bytes: u64,
+    /// Maximum in-memory response accepted from the Hub model-info API.
+    #[config(default = "defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES")]
+    #[norito(default = "default_soracloud_runtime_hf_model_info_max_response_bytes")]
+    pub model_info_max_response_bytes: u64,
+    /// Maximum in-memory response accepted from the HF inference bridge.
+    #[config(default = "defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES")]
+    #[norito(default = "default_soracloud_runtime_hf_inference_max_response_bytes")]
+    pub inference_max_response_bytes: u64,
     /// File-selection allowlist used by the importer.
     #[config(default = "defaults::soracloud_runtime::hf::import_file_allowlist()")]
     #[norito(default = "default_soracloud_runtime_hf_import_file_allowlist")]
@@ -13374,6 +13685,14 @@ fn default_soracloud_runtime_hf_import_max_total_bytes() -> u64 {
     defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES
 }
 
+fn default_soracloud_runtime_hf_model_info_max_response_bytes() -> u64 {
+    defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES
+}
+
+fn default_soracloud_runtime_hf_inference_max_response_bytes() -> u64 {
+    defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES
+}
+
 fn default_soracloud_runtime_hf_import_file_allowlist() -> Vec<String> {
     defaults::soracloud_runtime::hf::import_file_allowlist()
 }
@@ -13400,6 +13719,10 @@ impl Default for SoracloudRuntimeHuggingFace {
             import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
             import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
             import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
+            model_info_max_response_bytes:
+                defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
+            inference_max_response_bytes:
+                defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
             import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
             inference_token: None,
         }
@@ -13407,7 +13730,77 @@ impl Default for SoracloudRuntimeHuggingFace {
 }
 
 impl SoracloudRuntimeHuggingFace {
-    fn parse(self) -> actual::SoracloudRuntimeHuggingFace {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeHuggingFace {
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(message.into()));
+        }
+
+        if self.import_max_files == 0
+            || self.import_max_files > defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT
+        {
+            emit(
+                emitter,
+                format!(
+                    "soracloud_runtime.hf.import_max_files must be within 1..={}",
+                    defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT
+                ),
+            );
+        }
+        if self.import_max_file_bytes == 0
+            || self.import_max_file_bytes
+                > defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT
+        {
+            emit(
+                emitter,
+                format!(
+                    "soracloud_runtime.hf.import_max_file_bytes must be within 1..={}",
+                    defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT
+                ),
+            );
+        }
+        if self.import_max_total_bytes == 0
+            || self.import_max_total_bytes
+                > defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT
+        {
+            emit(
+                emitter,
+                format!(
+                    "soracloud_runtime.hf.import_max_total_bytes must be within 1..={}",
+                    defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT
+                ),
+            );
+        }
+        if self.import_max_file_bytes > self.import_max_total_bytes {
+            emit(
+                emitter,
+                "soracloud_runtime.hf.import_max_file_bytes must not exceed import_max_total_bytes",
+            );
+        }
+        if self.model_info_max_response_bytes == 0
+            || self.model_info_max_response_bytes
+                > defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT
+        {
+            emit(
+                emitter,
+                format!(
+                    "soracloud_runtime.hf.model_info_max_response_bytes must be within 1..={}",
+                    defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT
+                ),
+            );
+        }
+        if self.inference_max_response_bytes == 0
+            || self.inference_max_response_bytes
+                > defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT
+        {
+            emit(
+                emitter,
+                format!(
+                    "soracloud_runtime.hf.inference_max_response_bytes must be within 1..={}",
+                    defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT
+                ),
+            );
+        }
+
         let mut import_file_allowlist = self
             .import_file_allowlist
             .into_iter()
@@ -13442,9 +13835,11 @@ impl SoracloudRuntimeHuggingFace {
                 .get()
                 .max(MIN_TIMER_INTERVAL),
             allow_inference_bridge_fallback: self.allow_inference_bridge_fallback,
-            import_max_files: self.import_max_files.max(1),
-            import_max_file_bytes: self.import_max_file_bytes.max(1),
-            import_max_total_bytes: self.import_max_total_bytes.max(1),
+            import_max_files: self.import_max_files,
+            import_max_file_bytes: self.import_max_file_bytes,
+            import_max_total_bytes: self.import_max_total_bytes,
+            model_info_max_response_bytes: self.model_info_max_response_bytes,
+            inference_max_response_bytes: self.inference_max_response_bytes,
             import_file_allowlist,
             inference_token: self
                 .inference_token
@@ -19997,7 +20392,8 @@ pub struct SorafsProviderIngestOutboxConfig {
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::TERMINAL_RETENTION_BLOCKS"
     )]
     pub terminal_retention_blocks: u64,
-    /// Maximum canonical size of one signed completion transaction.
+    /// Maximum canonical size of one signed completion transaction; this must
+    /// meet the production floor and leave room for two retained canonical copies.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_SIGNED_TRANSACTION_BYTES"
     )]
@@ -20506,11 +20902,6 @@ impl SorafsProviderIngestRuntimeConfig {
         const MAX_ATTEMPTS: u32 = 64;
         const MAX_TERMINAL_RETENTION_BLOCKS: u64 = 10_000_000;
         const MAX_STATUS_PAGE_SIZE: usize = 1_000;
-        // Active records may retain the maximum signed transaction. Both
-        // active and terminal records also retain their immutable
-        // authorization, state discriminants, cursors, and collection framing.
-        const ESTIMATED_OUTBOX_ENTRY_OVERHEAD_BYTES: u64 = 2 * 1024;
-
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
@@ -21005,7 +21396,7 @@ impl SorafsProviderIngestRuntimeConfig {
                 ),
             );
         }
-        if outbox.max_signed_transaction_bytes.0 == 0
+        if outbox.max_signed_transaction_bytes.0 < outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
             || outbox.max_signed_transaction_bytes.0
                 > outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
             || outbox.max_signed_transaction_bytes.0 > outbox.checkpoint_max_bytes.0
@@ -21013,7 +21404,8 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "sorafs.storage.provider_ingest_runtime.outbox.max_signed_transaction_bytes must be within 1..={} and must not exceed checkpoint_max_bytes",
+                    "sorafs.storage.provider_ingest_runtime.outbox.max_signed_transaction_bytes must be within {}..={} and must not exceed checkpoint_max_bytes",
+                    outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN,
                     outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
                 ),
             );
@@ -21032,27 +21424,15 @@ impl SorafsProviderIngestRuntimeConfig {
                 "sorafs.storage.provider_ingest_runtime.max_source_jobs_per_tick must not exceed outbox.max_active_entries",
             );
         }
-        let worst_case_outbox_bytes = u64::try_from(outbox.max_active_entries)
-            .ok()
-            .and_then(|active| {
-                outbox
-                    .max_signed_transaction_bytes
-                    .0
-                    .checked_add(ESTIMATED_OUTBOX_ENTRY_OVERHEAD_BYTES)
-                    .and_then(|per_active| active.checked_mul(per_active))
-            })
-            .and_then(|active_bytes| {
-                u64::try_from(outbox.max_terminal_entries)
-                    .ok()
-                    .and_then(|terminal| {
-                        terminal.checked_mul(ESTIMATED_OUTBOX_ENTRY_OVERHEAD_BYTES)
-                    })
-                    .and_then(|terminal_bytes| active_bytes.checked_add(terminal_bytes))
-            });
+        let worst_case_outbox_bytes = outbox_defaults::worst_case_checkpoint_bytes_v1(
+            outbox.max_active_entries,
+            outbox.max_terminal_entries,
+            outbox.max_signed_transaction_bytes.0,
+        );
         if worst_case_outbox_bytes.is_none_or(|bytes| bytes > outbox.checkpoint_max_bytes.0) {
             emit(
                 emitter,
-                "sorafs.storage.provider_ingest_runtime worst-case active transaction and terminal tombstone capacity must fit outbox.checkpoint_max_bytes",
+                "sorafs.storage.provider_ingest_runtime worst-case retained expected payloads, signed transactions, structural state, and terminal tombstones must fit outbox.checkpoint_max_bytes",
             );
         }
 
@@ -22526,7 +22906,7 @@ mod sorafs_provider_ingest_runtime_config_tests {
         }
     }
 
-    fn broker_limit_config() -> SorafsProviderIngestRuntimeConfig {
+    fn large_valid_outbox_config() -> SorafsProviderIngestRuntimeConfig {
         use defaults::sorafs::storage::provider_ingest_runtime::outbox;
 
         let mut config = valid_config();
@@ -22600,7 +22980,7 @@ mod sorafs_provider_ingest_runtime_config_tests {
         assert_eq!(parsed.checkpoint_store_policy_digest, [0xA7; 32]);
         assert_eq!(parsed.outbox.max_status_page_size, 256);
         assert_eq!(parsed.outbox.max_active_entries, 128);
-        assert_eq!(parsed.outbox.checkpoint_max_bytes.0, 64 * 1024 * 1024);
+        assert_eq!(parsed.outbox.checkpoint_max_bytes.0, 160 * 1024 * 1024);
         assert_eq!(parsed.outbox.checkpoint_operation_timeout_ms, 30_000);
     }
 
@@ -22609,19 +22989,22 @@ mod sorafs_provider_ingest_runtime_config_tests {
         use defaults::sorafs::storage::provider_ingest_runtime::outbox;
 
         assert_eq!(outbox::CHECKPOINT_MAX_BYTES_LIMIT, 192 * 1024 * 1024);
-        assert_eq!(
-            outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT,
-            128 * 1024 * 1024
+        assert_eq!(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT, 64 * 1024 * 1024);
+        assert_eq!(outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN, 64 * 1024);
+        assert!(
+            outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN
+                > outbox::SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1
         );
         assert!(outbox::CHECKPOINT_MAX_BYTES.0 <= outbox::CHECKPOINT_MAX_BYTES_LIMIT);
+        assert!(outbox::MAX_SIGNED_TRANSACTION_BYTES.0 >= outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN);
         assert!(
             outbox::MAX_SIGNED_TRANSACTION_BYTES.0 <= outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
         );
 
         let mut emitter = Emitter::new();
-        let parsed = broker_limit_config()
+        let parsed = large_valid_outbox_config()
             .parse(true, Some(&provider_id()), &mut emitter)
-            .expect("broker ceiling policy must project");
+            .expect("large but checkpoint-compatible policy must project");
         assert!(emitter.into_result().is_ok());
         assert_eq!(
             parsed.outbox.checkpoint_max_bytes.0,
@@ -22637,7 +23020,7 @@ mod sorafs_provider_ingest_runtime_config_tests {
     fn broker_incompatible_outbox_limits_fail_closed() {
         use defaults::sorafs::storage::provider_ingest_runtime::outbox;
 
-        let mut oversized_checkpoint = broker_limit_config();
+        let mut oversized_checkpoint = large_valid_outbox_config();
         oversized_checkpoint.outbox.checkpoint_max_bytes =
             Bytes(outbox::CHECKPOINT_MAX_BYTES_LIMIT + 1);
         let mut emitter = Emitter::new();
@@ -22647,7 +23030,7 @@ mod sorafs_provider_ingest_runtime_config_tests {
             "checkpoint bytes above the stock broker ceiling must fail"
         );
 
-        let mut oversized_transaction = broker_limit_config();
+        let mut oversized_transaction = large_valid_outbox_config();
         oversized_transaction.outbox.max_signed_transaction_bytes =
             Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT + 1);
         let mut emitter = Emitter::new();
@@ -22655,6 +23038,40 @@ mod sorafs_provider_ingest_runtime_config_tests {
         assert!(
             emitter.into_result().is_err(),
             "signed transaction bytes above the stock broker ceiling must fail"
+        );
+
+        let mut below_envelope_reserve = large_valid_outbox_config();
+        below_envelope_reserve.outbox.max_signed_transaction_bytes =
+            Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN - 1);
+        let mut emitter = Emitter::new();
+        let _projected = below_envelope_reserve.parse(true, Some(&provider_id()), &mut emitter);
+        assert!(
+            emitter.into_result().is_err(),
+            "a signed transaction limit without room beyond the envelope reserve must fail"
+        );
+
+        let mut exact_minimum = large_valid_outbox_config();
+        exact_minimum.outbox.max_active_entries = 1;
+        exact_minimum.outbox.max_terminal_entries = 1;
+        exact_minimum.outbox.max_signed_transaction_bytes =
+            Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN);
+        let mut emitter = Emitter::new();
+        let projected = exact_minimum
+            .parse(true, Some(&provider_id()), &mut emitter)
+            .expect("exact signed-transaction minimum must project");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(
+            projected.outbox.max_signed_transaction_bytes.0,
+            outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN
+        );
+
+        let mut legacy_128_mib_ceiling = large_valid_outbox_config();
+        legacy_128_mib_ceiling.outbox.max_signed_transaction_bytes = Bytes(128 * 1024 * 1024);
+        let mut emitter = Emitter::new();
+        let _projected = legacy_128_mib_ceiling.parse(true, Some(&provider_id()), &mut emitter);
+        assert!(
+            emitter.into_result().is_err(),
+            "one retained expected payload plus one signed transaction at the 128 MiB ceiling cannot fit the 192 MiB checkpoint ceiling"
         );
     }
 
@@ -31281,6 +31698,42 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("load minimal user config")
     }
 
+    fn table_with_soracloud_hf_values(values: &[(&str, i64)]) -> Table {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        let hf = runtime
+            .entry("hf")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime.hf table");
+        for (field, value) in values {
+            hf.insert((*field).to_owned(), Value::Integer(*value));
+        }
+        table
+    }
+
+    fn table_with_soracloud_inrou_values(values: &[(&str, i64)]) -> Table {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        let inrou = runtime
+            .entry("inrou")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime.inrou table");
+        for (field, value) in values {
+            inrou.insert((*field).to_owned(), Value::Integer(*value));
+        }
+        table
+    }
+
     #[test]
     fn disabled_offline_profile_rejects_dormant_kagemusha_commands_during_root_parse() {
         let mut table = base_table();
@@ -33773,6 +34226,35 @@ publish_delay_seconds = 17
             actual.soracloud_runtime.inrou.proxy_only,
             defaults::soracloud_runtime::INROU_PROXY_ONLY
         );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_compressed_bytes,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_decoded_bytes,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES
+        );
+        assert_eq!(
+            actual.soracloud_runtime.inrou.bundle_archive_max_entries,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES
+        );
+        assert_eq!(
+            actual.soracloud_runtime.inrou.bundle_archive_max_file_bytes,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_total_file_bytes,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES
+        );
         assert!(matches!(
             actual.soracloud_runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority
@@ -33806,10 +34288,316 @@ publish_delay_seconds = 17
             defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
         );
         assert_eq!(
+            actual.soracloud_runtime.hf.model_info_max_response_bytes,
+            defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.inference_max_response_bytes,
+            defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES
+        );
+        assert_eq!(
             actual.soracloud_runtime.hf.allow_inference_bridge_fallback,
             defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK
         );
         assert!(actual.soracloud_runtime.hf.inference_token.is_none());
+    }
+
+    #[test]
+    fn soracloud_runtime_inrou_bundle_archive_limits_allow_equal_file_total_and_decoded() {
+        let table = table_with_soracloud_inrou_values(&[
+            ("bundle_archive_max_decoded_bytes", 4_096),
+            ("bundle_archive_max_file_bytes", 4_096),
+            ("bundle_archive_max_total_file_bytes", 4_096),
+        ]);
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_decoded_bytes
+                .get(),
+            4_096
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_file_bytes
+                .get(),
+            4_096
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_total_file_bytes
+                .get(),
+            4_096
+        );
+    }
+
+    #[test]
+    fn soracloud_runtime_inrou_bundle_archive_limits_reject_invalid_ordering() {
+        for (values, description) in [
+            (
+                [
+                    ("bundle_archive_max_file_bytes", 2),
+                    ("bundle_archive_max_total_file_bytes", 1),
+                    ("bundle_archive_max_decoded_bytes", 3),
+                ],
+                "per-file limit above aggregate file limit",
+            ),
+            (
+                [
+                    ("bundle_archive_max_file_bytes", 1),
+                    ("bundle_archive_max_total_file_bytes", 2),
+                    ("bundle_archive_max_decoded_bytes", 1),
+                ],
+                "aggregate file limit above decoded archive limit",
+            ),
+        ] {
+            let table = table_with_soracloud_inrou_values(&values);
+            let result = actual::Root::from_toml_source(TomlSource::inline(table));
+            assert!(result.is_err(), "{description} must fail closed");
+        }
+    }
+
+    #[test]
+    fn soracloud_runtime_inrou_bundle_archive_limits_reject_entry_count_above_hard_ceiling() {
+        let table = table_with_soracloud_inrou_values(&[(
+            "bundle_archive_max_entries",
+            i64::from(defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES_LIMIT) + 1,
+        )]);
+
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "entry count above the hard protocol ceiling must fail closed"
+        );
+    }
+
+    #[test]
+    fn soracloud_runtime_inrou_bundle_archive_byte_limits_accept_exact_hard_ceilings() {
+        let values = [
+            (
+                "bundle_archive_max_compressed_bytes",
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT,
+            ),
+            (
+                "bundle_archive_max_decoded_bytes",
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT,
+            ),
+            (
+                "bundle_archive_max_file_bytes",
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT,
+            ),
+            (
+                "bundle_archive_max_total_file_bytes",
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT,
+            ),
+        ]
+        .map(|(field, value)| {
+            (
+                field,
+                i64::try_from(value).expect("Inrou archive hard ceiling fits i64"),
+            )
+        });
+        let actual = load_root(table_with_soracloud_inrou_values(&values));
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_compressed_bytes
+                .get(),
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_decoded_bytes
+                .get(),
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_file_bytes
+                .get(),
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_total_file_bytes
+                .get(),
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT
+        );
+    }
+
+    #[test]
+    fn soracloud_runtime_inrou_bundle_archive_byte_limits_reject_hard_ceiling_plus_one() {
+        for (field, hard_ceiling) in [
+            (
+                "bundle_archive_max_compressed_bytes",
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT,
+            ),
+            (
+                "bundle_archive_max_decoded_bytes",
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT,
+            ),
+            (
+                "bundle_archive_max_file_bytes",
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT,
+            ),
+            (
+                "bundle_archive_max_total_file_bytes",
+                defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT,
+            ),
+        ] {
+            let value = i64::try_from(hard_ceiling + 1)
+                .expect("Inrou archive hard ceiling plus one fits i64");
+            let table = table_with_soracloud_inrou_values(&[(field, value)]);
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "{field} above its hard ceiling must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_runtime_hf_limits_accept_exact_hard_maxima() {
+        let table = table_with_soracloud_hf_values(&[
+            (
+                "import_max_files",
+                i64::from(defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT),
+            ),
+            (
+                "import_max_file_bytes",
+                i64::try_from(defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT)
+                    .expect("hard limit fits i64"),
+            ),
+            (
+                "import_max_total_bytes",
+                i64::try_from(defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT)
+                    .expect("hard limit fits i64"),
+            ),
+            (
+                "model_info_max_response_bytes",
+                i64::try_from(defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT)
+                    .expect("hard limit fits i64"),
+            ),
+            (
+                "inference_max_response_bytes",
+                i64::try_from(defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT)
+                    .expect("hard limit fits i64"),
+            ),
+        ]);
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual.soracloud_runtime.hf.import_max_files,
+            defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.import_max_file_bytes,
+            defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.import_max_total_bytes,
+            defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.model_info_max_response_bytes,
+            defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.inference_max_response_bytes,
+            defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT
+        );
+    }
+
+    #[test]
+    fn soracloud_runtime_hf_limits_reject_zero_and_max_plus_one() {
+        let cases = [
+            (
+                "import_max_files",
+                u64::from(defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT),
+            ),
+            (
+                "import_max_file_bytes",
+                defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT,
+            ),
+            (
+                "import_max_total_bytes",
+                defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT,
+            ),
+            (
+                "model_info_max_response_bytes",
+                defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT,
+            ),
+            (
+                "inference_max_response_bytes",
+                defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT,
+            ),
+        ];
+
+        for (field, maximum) in cases {
+            for value in [0, maximum + 1] {
+                let table = table_with_soracloud_hf_values(&[(
+                    field,
+                    i64::try_from(value).expect("test value fits i64"),
+                )]);
+                let result = actual::Root::from_toml_source(TomlSource::inline(table));
+                assert!(
+                    result.is_err(),
+                    "{field}={value} must fail outside the configured hard range"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn soracloud_runtime_hf_per_file_limit_must_fit_aggregate_limit() {
+        let table = table_with_soracloud_hf_values(&[
+            ("import_max_file_bytes", 2),
+            ("import_max_total_bytes", 1),
+        ]);
+
+        let result = actual::Root::from_toml_source(TomlSource::inline(table));
+        assert!(
+            result.is_err(),
+            "per-file import limit above the aggregate limit must fail closed"
+        );
+    }
+
+    fn production_soracloud_submission_table() -> Table {
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let (_, public_key) = key_pair.public_key().to_bytes();
+        let mut signer = Table::new();
+        signer.insert(
+            "handle".into(),
+            Value::String("hsm://soracloud/runtime-primary".into()),
+        );
+        signer.insert("authority".into(), Value::String(authority.to_string()));
+        signer.insert("algorithm".into(), Value::String("ed25519".into()));
+        signer.insert(
+            "public_key_hex".into(),
+            Value::String(hex::encode(public_key)),
+        );
+        signer.insert("revision".into(), Value::Integer(7));
+        signer.insert(
+            "policy_digest_hex".into(),
+            Value::String(hex::encode([0xA7; 32])),
+        );
+
+        let mut submission = Table::new();
+        submission.insert("fee_payer".into(), Value::String("authority".into()));
+        submission.insert("signer".into(), Value::Table(signer));
+        submission
     }
 
     #[test]
@@ -33829,9 +34617,10 @@ publish_delay_seconds = 17
         inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
         inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
         runtime.insert("inrou".into(), Value::Table(inrou));
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("authority".into()));
-        runtime.insert("submission".into(), Value::Table(submission));
+        runtime.insert(
+            "submission".into(),
+            Value::Table(production_soracloud_submission_table()),
+        );
 
         let _ = load_root(table);
     }
@@ -33852,9 +34641,10 @@ publish_delay_seconds = 17
         inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
         inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
         runtime.insert("inrou".into(), Value::Table(inrou));
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("authority".into()));
-        runtime.insert("submission".into(), Value::Table(submission));
+        runtime.insert(
+            "submission".into(),
+            Value::Table(production_soracloud_submission_table()),
+        );
         let mut egress = Table::new();
         egress.insert("default_allow".into(), Value::Boolean(false));
         egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
@@ -33874,6 +34664,15 @@ publish_delay_seconds = 17
             60
         );
         assert!(!actual.soracloud_runtime.hf.allow_inference_bridge_fallback);
+        let signer = actual
+            .soracloud_runtime
+            .submission
+            .signer
+            .expect("production signer binding");
+        assert_eq!(signer.handle, "hsm://soracloud/runtime-primary");
+        assert_eq!(signer.algorithm, Algorithm::Ed25519);
+        assert_eq!(signer.revision, 7);
+        assert_eq!(signer.policy_digest, [0xA7; 32]);
     }
 
     #[test]
@@ -33886,6 +34685,10 @@ publish_delay_seconds = 17
             .as_table_mut()
             .expect("soracloud_runtime table");
         runtime.insert("production_mode".into(), Value::Boolean(true));
+        runtime.insert(
+            "submission".into(),
+            Value::Table(production_soracloud_submission_table()),
+        );
 
         let _ = load_root(table);
     }
@@ -33983,9 +34786,10 @@ publish_delay_seconds = 17
         egress.insert("rate_per_minute".into(), Value::Integer(60));
         egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
         runtime.insert("egress".into(), Value::Table(egress));
-        let mut submission = Table::new();
-        submission.insert("fee_payer".into(), Value::String("authority".into()));
-        runtime.insert("submission".into(), Value::Table(submission));
+        runtime.insert(
+            "submission".into(),
+            Value::Table(production_soracloud_submission_table()),
+        );
         let mut inrou = Table::new();
         inrou.insert("enabled".into(), Value::Boolean(true));
         inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
@@ -34070,6 +34874,23 @@ publish_delay_seconds = 17
         inrou.insert("max_concurrent_vms".into(), Value::Integer(5));
         inrou.insert("enabled".into(), Value::Boolean(true));
         inrou.insert("proxy_only".into(), Value::Boolean(true));
+        inrou.insert(
+            "bundle_archive_max_compressed_bytes".into(),
+            Value::Integer(10_000),
+        );
+        inrou.insert(
+            "bundle_archive_max_decoded_bytes".into(),
+            Value::Integer(40_000),
+        );
+        inrou.insert("bundle_archive_max_entries".into(), Value::Integer(123));
+        inrou.insert(
+            "bundle_archive_max_file_bytes".into(),
+            Value::Integer(20_000),
+        );
+        inrou.insert(
+            "bundle_archive_max_total_file_bytes".into(),
+            Value::Integer(30_000),
+        );
         inrou.insert("start_grace_ms".into(), Value::Integer(7_500));
         inrou.insert("stop_grace_ms".into(), Value::Integer(9_500));
         runtime.insert("inrou".into(), Value::Table(inrou));
@@ -34120,6 +34941,14 @@ publish_delay_seconds = 17
         hf.insert("import_max_file_bytes".into(), Value::Integer(777_777));
         hf.insert("import_max_total_bytes".into(), Value::Integer(9_999_999));
         hf.insert(
+            "model_info_max_response_bytes".into(),
+            Value::Integer(1_234_567),
+        );
+        hf.insert(
+            "inference_max_response_bytes".into(),
+            Value::Integer(7_654_321),
+        );
+        hf.insert(
             "import_file_allowlist".into(),
             Value::Array(vec![
                 Value::String(" config.json ".to_string()),
@@ -34163,6 +34992,46 @@ publish_delay_seconds = 17
         assert_eq!(actual.soracloud_runtime.inrou.max_concurrent_vms.get(), 5);
         assert!(actual.soracloud_runtime.inrou.enabled);
         assert!(actual.soracloud_runtime.inrou.proxy_only);
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_compressed_bytes
+                .get(),
+            10_000
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_decoded_bytes
+                .get(),
+            40_000
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_entries
+                .get(),
+            123
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_file_bytes
+                .get(),
+            20_000
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .bundle_archive_max_total_file_bytes
+                .get(),
+            30_000
+        );
         assert!(matches!(
             actual.soracloud_runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority
@@ -34235,12 +35104,47 @@ publish_delay_seconds = 17
             9_999_999
         );
         assert_eq!(
+            actual.soracloud_runtime.hf.model_info_max_response_bytes,
+            1_234_567
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.inference_max_response_bytes,
+            7_654_321
+        );
+        assert_eq!(
             actual.soracloud_runtime.hf.import_file_allowlist,
             vec!["*.safetensors".to_string(), "config.json".to_string()]
         );
         assert_eq!(
             actual.soracloud_runtime.hf.inference_token.as_deref(),
             Some("secret-token")
+        );
+    }
+
+    #[test]
+    fn soracloud_runtime_json_deserialize_applies_inrou_archive_defaults() {
+        let parsed: SoracloudRuntime =
+            norito::json::from_json(r#"{"inrou":{}}"#).expect("runtime JSON should deserialize");
+
+        assert_eq!(
+            parsed.inrou.bundle_archive_max_compressed_bytes,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES
+        );
+        assert_eq!(
+            parsed.inrou.bundle_archive_max_decoded_bytes,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES
+        );
+        assert_eq!(
+            parsed.inrou.bundle_archive_max_entries,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES
+        );
+        assert_eq!(
+            parsed.inrou.bundle_archive_max_file_bytes,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES
+        );
+        assert_eq!(
+            parsed.inrou.bundle_archive_max_total_file_bytes,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES
         );
     }
 
@@ -34261,6 +35165,11 @@ publish_delay_seconds = 17
             "inrou":{
                 "max_concurrent_vms":5,
                 "proxy_only":true,
+                "bundle_archive_max_compressed_bytes":10000,
+                "bundle_archive_max_decoded_bytes":40000,
+                "bundle_archive_max_entries":123,
+                "bundle_archive_max_file_bytes":20000,
+                "bundle_archive_max_total_file_bytes":30000,
                 "start_grace_ms":7500,
                 "stop_grace_ms":9500
             },
@@ -34300,6 +35209,17 @@ publish_delay_seconds = 17
         );
         assert_eq!(parsed.inrou.max_concurrent_vms.get(), 5);
         assert!(parsed.inrou.proxy_only);
+        assert_eq!(
+            parsed.inrou.bundle_archive_max_compressed_bytes.get(),
+            10_000
+        );
+        assert_eq!(parsed.inrou.bundle_archive_max_decoded_bytes.get(), 40_000);
+        assert_eq!(parsed.inrou.bundle_archive_max_entries.get(), 123);
+        assert_eq!(parsed.inrou.bundle_archive_max_file_bytes.get(), 20_000);
+        assert_eq!(
+            parsed.inrou.bundle_archive_max_total_file_bytes.get(),
+            30_000
+        );
         assert!(parsed.egress.default_allow);
         assert_eq!(parsed.hf.inference_token.as_deref(), Some("secret-token"));
     }

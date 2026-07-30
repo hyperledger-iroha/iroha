@@ -38,6 +38,11 @@ use iroha_p2p::{
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
+#[cfg(test)]
+use crate::sumeragi::v2_core::{
+    production_reliable_flush_trace_refines_outbound_ownership_kernel,
+    production_reliable_flush_two_phase_link_kernel,
+};
 use crate::{
     merge::MergeLedgerCandidate,
     sumeragi::{
@@ -52,9 +57,9 @@ use crate::{
             IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE, IDENTITY_KIND_SIDECAR_SIBLING_STATE,
             IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE, IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE,
             ProductionReliableFlushApplicationProjection, ProductionReliableFlushTraceProjection,
-            production_reliable_flush_application_refines_source_lane_kernel,
-            production_reliable_flush_trace_refines_outbound_ownership_kernel,
-            production_reliable_flush_two_phase_link_kernel,
+            check_production_reliable_flush_application_transition,
+            check_production_reliable_flush_link_transition,
+            check_production_reliable_flush_worker_transition,
         },
         v2_lane_work::DurableMergeSidecarRolloverAuthority,
     },
@@ -848,12 +853,25 @@ impl CertifiedMergeSidecarChunkAdmission {
             ));
         }
         let occurrence = reliable_flush_application_occurrence_projection(self)?;
-        if trace.status != 2
-            || !production_reliable_flush_trace_refines_outbound_ownership_kernel(trace)
-            || !production_reliable_flush_two_phase_link_kernel(trace, occurrence)
-        {
+        if trace.status != 2 {
             return Err(MergeSidecarError::FlushIdentityMismatch(
                 "worker flush trace is not the accepted transition for this occurrence",
+            ));
+        }
+        let checked_worker = check_production_reliable_flush_worker_transition(trace).ok_or(
+            MergeSidecarError::FlushIdentityMismatch(
+                "worker flush trace is not the accepted transition for this occurrence",
+            ),
+        )?;
+        let checked_link = check_production_reliable_flush_link_transition(trace, occurrence)
+            .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                "worker flush trace is not the accepted transition for this occurrence",
+            ))?;
+        let trace = checked_worker.into_projection();
+        let (linked_worker, linked_occurrence) = checked_link.into_projection();
+        if linked_worker != trace || linked_occurrence != occurrence {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "checked worker flush token changed its exact occurrence",
             ));
         }
         self.confirmed_worker_trace = Some(trace);
@@ -3889,6 +3907,56 @@ struct ReliableFlushApplicationObservation {
     sibling_order_len_after: u64,
     shared_transfer_after: Option<ReliableFlushSharedTransferSnapshot>,
     sibling_state_after: ReliableFlushSiblingStateSnapshot,
+}
+
+fn predict_reliable_flush_application(
+    plan: &ReliableFlushApplicationPlan,
+    now: Instant,
+) -> ReliableFlushApplicationObservation {
+    let completed = plan.expected_cursor_after == plan.count;
+    let active_attempt = plan
+        .outbound
+        .attempt
+        .as_ref()
+        .map(|attempt| attempt.route_active);
+    let retains_target_attempt = active_attempt == Some(true) && !completed;
+    let retains_shared_transfer =
+        plan.outbound.shared_transfer_other_attempts_before || retains_target_attempt;
+    ReliableFlushApplicationObservation {
+        gate_marker_present_after: false,
+        gate_cursor_after: u64::try_from(plan.expected_cursor_after)
+            .expect("preflighted sidecar gate cursor remains representable"),
+        gate_complete_after: completed,
+        inserted_after: if retains_target_attempt {
+            plan.gate.inserted_before
+        } else {
+            now
+        },
+        target_gate_residual_after: plan.gate.residual_before.clone(),
+        outbound_cursor_after: u64::try_from(plan.expected_cursor_after)
+            .expect("preflighted sidecar outbound cursor remains representable"),
+        outbound_attempt_after: retains_target_attempt.then(|| {
+            plan.outbound
+                .attempt
+                .as_ref()
+                .expect("retained target attempt was preflighted present")
+                .residual_before
+                .clone()
+        }),
+        outbound_in_flight_after_present: false,
+        outbound_queued_after: retains_target_attempt,
+        outbound_order_count_after: u64::from(retains_target_attempt),
+        outbound_order_rank_after: if retains_target_attempt {
+            plan.sibling_order_len_before
+        } else {
+            0
+        },
+        sibling_order_len_after: plan.sibling_order_len_before,
+        shared_transfer_after: retains_shared_transfer
+            .then(|| plan.outbound.shared_transfer_before.clone())
+            .flatten(),
+        sibling_state_after: plan.sibling_state_before.clone(),
+    }
 }
 
 fn observe_reliable_flush_application(
@@ -8695,11 +8763,21 @@ impl MergeSidecarTransport {
                 .ok_or(MergeSidecarError::FlushIdentityMismatch(
                     "writer flush admission has no accepted worker transition",
                 ))?;
-        if !production_reliable_flush_trace_refines_outbound_ownership_kernel(worker_trace)
-            || !production_reliable_flush_two_phase_link_kernel(worker_trace, occurrence)
-        {
-            return Err(MergeSidecarError::FlushIdentityMismatch(
+        let checked_worker = check_production_reliable_flush_worker_transition(worker_trace)
+            .ok_or(MergeSidecarError::FlushIdentityMismatch(
                 "accepted worker transition differs from the lane occurrence",
+            ))?;
+        let checked_link =
+            check_production_reliable_flush_link_transition(worker_trace, occurrence).ok_or(
+                MergeSidecarError::FlushIdentityMismatch(
+                    "accepted worker transition differs from the lane occurrence",
+                ),
+            )?;
+        let worker_trace = checked_worker.into_projection();
+        let (linked_worker, linked_occurrence) = checked_link.into_projection();
+        if linked_worker != worker_trace || linked_occurrence != occurrence {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "checked worker flush token changed its exact occurrence",
             ));
         }
         let projection = admission.projection();
@@ -8747,6 +8825,30 @@ impl MergeSidecarTransport {
             expected_chunk_cursor_after,
             count,
         )?;
+        let prospective_observation = predict_reliable_flush_application(&plan, now);
+        let prospective_application =
+            reliable_flush_application_projection(&plan, &prospective_observation, now);
+        let Some(checked_application) =
+            check_production_reliable_flush_application_transition(prospective_application)
+        else {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "prospective writer flush application failed its source-lane gate",
+            ));
+        };
+        let Some(checked_link) =
+            check_production_reliable_flush_link_transition(worker_trace, prospective_application)
+        else {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "prospective writer flush application disconnected from its worker transition",
+            ));
+        };
+        let prospective_application = checked_application.into_projection();
+        let (linked_worker, linked_application) = checked_link.into_projection();
+        if linked_worker != worker_trace || linked_application != prospective_application {
+            return Err(MergeSidecarError::FlushIdentityMismatch(
+                "checked writer flush token changed its exact occurrence",
+            ));
+        }
         self.preflight_lifecycle_mutation()?;
 
         // This is the only linearization point. Every fallible identity,
@@ -8758,20 +8860,12 @@ impl MergeSidecarTransport {
         apply_reliable_flush_application(self, &plan, now);
         let observation = observe_reliable_flush_application(self, &plan);
         let application = reliable_flush_application_projection(&plan, &observation, now);
-        if !production_reliable_flush_application_refines_source_lane_kernel(application) {
+        if application != prospective_application {
             // The production caller holds `ConsensusFailStopOperation`; this
             // internal post-CAS invariant error drops that incomplete guard,
             // permanently closes exact output, and requires process restart.
             return Err(MergeSidecarError::FlushIdentityMismatch(
-                "writer flush application violated the source-lane refinement",
-            ));
-        }
-        if !production_reliable_flush_two_phase_link_kernel(worker_trace, application) {
-            // As above, a post-CAS disagreement is fail-stop. The pre-CAS
-            // occurrence check makes this branch an internal projection bug,
-            // never a recoverable user or network error.
-            return Err(MergeSidecarError::FlushIdentityMismatch(
-                "writer flush application disconnected from its accepted worker transition",
+                "writer flush application diverged from its checked prospective transition",
             ));
         }
         self.persist_lifecycle_state()?;

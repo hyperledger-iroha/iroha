@@ -36,28 +36,11 @@ final class KagemushaPeerTransportTests: XCTestCase {
 
         let tight = IrohaPeerWireLimitsV1(
             maximumCanonicalBytes: 32 * 1_024,
-            maximumOfflineNoteEncodedBytes: 24_576,
             maximumKagemushaEncodedBytes: payload.archive.count - 1
         )
         XCTAssertThrowsError(
             try IrohaPeerKagemushaAdapterV1.wrap(payload, limits: tight)
         )
-
-        let offline = try IrohaPeerWireMessageV1(
-            profile: .offlineNote,
-            kind: .receiveRequest,
-            schemaVersion: 1,
-            canonicalPayload: payload.archive
-        )
-        XCTAssertThrowsError(try IrohaPeerKagemushaAdapterV1.decode(
-            offline,
-            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-        )) {
-            XCTAssertEqual(
-                $0 as? IrohaPeerWireMessageErrorV1,
-                .unexpectedProfile(expected: .kagemusha, actual: .offlineNote)
-            )
-        }
     }
 
     func testFirstReleaseIdentifiersAreExactAndUnique() {

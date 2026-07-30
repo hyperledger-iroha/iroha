@@ -14,7 +14,7 @@ use iroha_data_model::privacy::{
     IrohaBootleLanternAnoncredStatementV1,
 };
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{
     params::{
@@ -74,6 +74,47 @@ impl Zeroize for BootleLanternPresentationWitnessV1 {
 }
 
 impl Drop for BootleLanternPresentationWitnessV1 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+/// Canonical secret application witness, zeroized before heap release.
+pub(crate) struct CanonicalSecretWitnessVectorV1 {
+    polynomials: Box<[ApplicationPolynomialV1; APPLICATION_WITNESS_POLYNOMIALS_V1]>,
+}
+
+impl CanonicalSecretWitnessVectorV1 {
+    fn zero() -> Self {
+        Self {
+            polynomials: Box::new(
+                [ApplicationPolynomialV1::ZERO; APPLICATION_WITNESS_POLYNOMIALS_V1],
+            ),
+        }
+    }
+
+    /// Borrow the fixed canonical secret ordering.
+    #[must_use]
+    pub(crate) fn polynomials(
+        &self,
+    ) -> &[ApplicationPolynomialV1; APPLICATION_WITNESS_POLYNOMIALS_V1] {
+        &self.polynomials
+    }
+}
+
+impl core::fmt::Debug for CanonicalSecretWitnessVectorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("CanonicalSecretWitnessVectorV1(<redacted>)")
+    }
+}
+
+impl Zeroize for CanonicalSecretWitnessVectorV1 {
+    fn zeroize(&mut self) {
+        self.polynomials.as_mut().zeroize();
+    }
+}
+
+impl Drop for CanonicalSecretWitnessVectorV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
@@ -278,14 +319,15 @@ pub fn validate_presentation_witness_v1(
     witness: &BootleLanternPresentationWitnessV1,
 ) -> Result<(), RelationErrorV1> {
     for (index, tag) in witness.tag.iter().enumerate() {
-        tag.to_direct_attribute()
-            .map_err(|_| RelationErrorV1::NonBinaryTag {
+        let _decoded_tag = Zeroizing::new(tag.to_direct_attribute().map_err(|_| {
+            RelationErrorV1::NonBinaryTag {
                 index: u8::try_from(index).expect("tag index fits u8"),
-            })?;
+            }
+        })?);
     }
-    for (index, attribute) in witness.attributes.iter().copied().enumerate() {
+    for (index, attribute) in witness.attributes.iter().enumerate() {
         if let Some(disclosed) = relation.disclosed_attribute(index)
-            && disclosed != attribute
+            && disclosed != *attribute
         {
             return Err(RelationErrorV1::DisclosedAttributeMismatch {
                 index: u8::try_from(index).expect("attribute index fits u8"),
@@ -293,34 +335,39 @@ pub fn validate_presentation_witness_v1(
         }
     }
 
-    let randomness_norm = witness
-        .randomness
-        .iter()
-        .map(ApplicationPolynomialV1::centered_squared_norm)
-        .sum::<u64>();
-    if randomness_norm > RANDOMNESS_NORM_SQUARED_BOUND_V1 {
+    let randomness_norm = Zeroizing::new(
+        witness
+            .randomness
+            .iter()
+            .map(ApplicationPolynomialV1::centered_squared_norm)
+            .sum::<u64>(),
+    );
+    if *randomness_norm > RANDOMNESS_NORM_SQUARED_BOUND_V1 {
         return Err(RelationErrorV1::RandomnessNormExceeded);
     }
-    let signature_norm = witness
-        .signature_one
-        .iter()
-        .chain(&witness.signature_two)
-        .map(ApplicationPolynomialV1::centered_squared_norm)
-        .sum::<u64>();
-    if signature_norm > SIGNATURE_NORM_SQUARED_BOUND_V1 {
+    let signature_norm = Zeroizing::new(
+        witness
+            .signature_one
+            .iter()
+            .chain(&witness.signature_two)
+            .map(ApplicationPolynomialV1::centered_squared_norm)
+            .sum::<u64>(),
+    );
+    if *signature_norm > SIGNATURE_NORM_SQUARED_BOUND_V1 {
         return Err(RelationErrorV1::SignatureNormExceeded);
     }
 
-    let witness_vector = witness_vector(witness, relation.disclosure_bitmap);
+    let witness_vector = canonical_witness_vector_v1(witness, relation.disclosure_bitmap);
     for row in 0..APPLICATION_ROWS_V1 {
-        let mut equation = relation.public_offset[row];
-        for (column, witness_polynomial) in witness_vector.iter().copied().enumerate() {
+        let mut equation = Zeroizing::new(relation.public_offset[row]);
+        for (column, witness_polynomial) in witness_vector.polynomials().iter().enumerate() {
             let matrix_polynomial = relation
                 .get(row, column)
                 .ok_or(RelationErrorV1::InternalInvariant)?;
-            equation = equation.add(matrix_polynomial.multiply(witness_polynomial));
+            let product = Zeroizing::new(matrix_polynomial.multiply(*witness_polynomial));
+            *equation = (*equation).add(*product);
         }
-        if equation != ApplicationPolynomialV1::ZERO {
+        if *equation != ApplicationPolynomialV1::ZERO {
             return Err(RelationErrorV1::ApplicationEquationFailed {
                 row: u8::try_from(row).expect("row fits u8"),
             });
@@ -329,35 +376,30 @@ pub fn validate_presentation_witness_v1(
     Ok(())
 }
 
-fn witness_vector(
-    witness: &BootleLanternPresentationWitnessV1,
-    disclosure_bitmap: u8,
-) -> [ApplicationPolynomialV1; APPLICATION_WITNESS_POLYNOMIALS_V1] {
-    let mut vector = [ApplicationPolynomialV1::ZERO; APPLICATION_WITNESS_POLYNOMIALS_V1];
-    vector[RANDOMNESS_START_V1..TAG_START_V1].copy_from_slice(&witness.randomness);
-    vector[TAG_START_V1..SIGNATURE_ONE_START_V1].copy_from_slice(&witness.tag);
-    vector[SIGNATURE_ONE_START_V1..SIGNATURE_TWO_START_V1].copy_from_slice(&witness.signature_one);
-    vector[SIGNATURE_TWO_START_V1..ATTRIBUTE_START_V1].copy_from_slice(&witness.signature_two);
-    for (index, attribute) in witness.attributes.iter().copied().enumerate() {
-        if disclosure_bitmap & (1_u8 << index) == 0 {
-            vector[ATTRIBUTE_START_V1 + index] =
-                ApplicationPolynomialV1::from_direct_attribute(attribute);
-        }
-    }
-    vector
-}
-
 /// Lift the canonical presentation witness into its fixed 48-polynomial
 /// application-relation order.
 ///
 /// Publicly disclosed attribute columns are represented by zero because their
 /// values are already accumulated into the relation's public offset.
 #[must_use]
-pub fn canonical_witness_vector_v1(
+pub(crate) fn canonical_witness_vector_v1(
     witness: &BootleLanternPresentationWitnessV1,
     disclosure_bitmap: u8,
-) -> [ApplicationPolynomialV1; APPLICATION_WITNESS_POLYNOMIALS_V1] {
-    witness_vector(witness, disclosure_bitmap)
+) -> CanonicalSecretWitnessVectorV1 {
+    let mut vector = CanonicalSecretWitnessVectorV1::zero();
+    vector.polynomials[RANDOMNESS_START_V1..TAG_START_V1].copy_from_slice(&witness.randomness);
+    vector.polynomials[TAG_START_V1..SIGNATURE_ONE_START_V1].copy_from_slice(&witness.tag);
+    vector.polynomials[SIGNATURE_ONE_START_V1..SIGNATURE_TWO_START_V1]
+        .copy_from_slice(&witness.signature_one);
+    vector.polynomials[SIGNATURE_TWO_START_V1..ATTRIBUTE_START_V1]
+        .copy_from_slice(&witness.signature_two);
+    for (index, attribute) in witness.attributes.iter().enumerate() {
+        if disclosure_bitmap & (1_u8 << index) == 0 {
+            vector.polynomials[ATTRIBUTE_START_V1 + index] =
+                ApplicationPolynomialV1::from_direct_attribute(*attribute);
+        }
+    }
+    vector
 }
 
 fn decode_issuer_matrix(
@@ -469,11 +511,12 @@ pub enum RelationErrorV1 {
 mod tests {
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPublicMatrixV1,
-        BootleLanternPolynomialV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
-        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+        PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
+        PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
 
     use super::*;
@@ -513,8 +556,9 @@ mod tests {
             issuer_id: PrivacyIssuerIdV1::new(raw(11)),
             policy_id: PrivacyPolicyIdV1::new(raw(12)),
             epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
             issuer_parameter_id: PrivacyParameterIdV1::new(raw(13)),
-            issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(14)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
             issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
             required_disclosure_bitmap: 0b0000_0010,
             allowed_values: (0..ATTRIBUTE_POLYNOMIALS_V1)
@@ -528,6 +572,9 @@ mod tests {
                 .collect(),
             record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
         };
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("issuer parameter digest");
         policy.record_digest = policy.computed_record_digest().expect("policy digest");
         policy.validate().expect("valid policy");
         policy
@@ -594,6 +641,31 @@ mod tests {
         );
         validate_presentation_witness_v1(&relation, &valid_witness())
             .expect("valid relation witness");
+    }
+
+    #[test]
+    fn canonical_secret_vector_is_heap_backed_and_debug_redacted() {
+        assert_eq!(
+            core::mem::size_of::<CanonicalSecretWitnessVectorV1>(),
+            core::mem::size_of::<Box<[ApplicationPolynomialV1; APPLICATION_WITNESS_POLYNOMIALS_V1]>>(
+            )
+        );
+        let mut witness = valid_witness();
+        witness.attributes[0] = [0xA5; 8];
+        let vector = canonical_witness_vector_v1(&witness, 0b10);
+
+        assert_ne!(
+            vector.polynomials()[ATTRIBUTE_START_V1],
+            ApplicationPolynomialV1::ZERO
+        );
+        assert_eq!(
+            vector.polynomials()[ATTRIBUTE_START_V1 + 1],
+            ApplicationPolynomialV1::ZERO
+        );
+        assert_eq!(
+            format!("{vector:?}"),
+            "CanonicalSecretWitnessVectorV1(<redacted>)"
+        );
     }
 
     #[test]

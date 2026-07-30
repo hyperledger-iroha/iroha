@@ -4753,7 +4753,8 @@ def validate_payload_free_summary_metadata(
                 validate_payload_free_deployment_context_metadata(field, value, errors)
             continue
         errors.append(f"{field} validator is not configured for `{gate.name}`")
-    validate_payload_free_cross_metadata_bindings(gate, payload, errors)
+    if payload.get("required_kinds") == list(gate.required_kinds):
+        validate_payload_free_cross_metadata_bindings(gate, payload, errors)
 
 
 def require_payload_free_artifact_fields(

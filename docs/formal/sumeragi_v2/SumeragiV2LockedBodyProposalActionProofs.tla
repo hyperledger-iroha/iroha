@@ -1,11 +1,12 @@
 ---- MODULE SumeragiV2LockedBodyProposalActionProofs ----
-EXTENDS SumeragiV2AsyncLivenessProofs
+EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs
 
 (***************************************************************************
 Minimal locked-body proposal corridor frames used by the action proof.
 The retained-lock and legitimate terminal predicates are defined by the
-asynchronous liveness module; no scheduler or temporal assumptions are
-introduced here.
+lower liveness vocabulary; this leaf imports only the proof-bearing shard
+prefix below the outstanding temporal debt.  No scheduler or temporal
+assumptions are introduced here.
 ***************************************************************************)
 
 LockedBodyProposalAttemptStableFrame(

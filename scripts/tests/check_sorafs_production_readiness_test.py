@@ -274,12 +274,16 @@ def foundational_cli_args() -> list[str]:
     ]
 
 
-def topology_cli_args(root: Path) -> list[str]:
+def topology_cli_args(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> list[str]:
     """Return the mandatory exact qualification input for CLI cases."""
 
     return [
         "--topology-qualification-summary",
-        str(write_topology_qualification(root)),
+        str(write_topology_qualification(root, deployment_id, environment)),
     ]
 
 
@@ -330,11 +334,20 @@ def write_json(path: Path, payload: dict) -> Path:
     return path
 
 
-def write_topology_qualification(root: Path) -> Path:
+def write_topology_qualification(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> Path:
     """Write the exact schema-qualified topology bytes used by all lanes."""
 
     path = root / "l1-topology-qualification.summary"
-    path.write_bytes(TOPOLOGY_QUALIFICATION_SUMMARY_BYTES)
+    payload = copy.deepcopy(TOPOLOGY_QUALIFICATION_SUMMARY)
+    payload["deployment"] = {
+        "deployment_id": deployment_id,
+        "environment": environment,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -1110,6 +1123,17 @@ def load_lane_fixture_module(gate_name: str):
     return fixture_module
 
 
+def normalize_fixture_evidence_context(
+    evidence_root: Path,
+) -> None:
+    """Retarget lane fixtures to the one production topology under test."""
+
+    for path in sorted(evidence_root.rglob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        normalize_deployment_context(payload, DEPLOYMENT_ID, ENVIRONMENT)
+        write_json(path, payload)
+
+
 def write_complete_lane_fixture_summary(
     gate_name: str,
     root: Path,
@@ -1118,15 +1142,19 @@ def write_complete_lane_fixture_summary(
     evidence_root = root / gate_name
     evidence_root.mkdir()
     summary = root / f"{gate_name}.json"
+    written_evidence = fixture_module.write_complete_evidence(evidence_root)
+    gate_evidence_root = (
+        written_evidence if isinstance(written_evidence, Path) else evidence_root
+    )
+    normalize_fixture_evidence_context(gate_evidence_root)
     topology_args = topology_cli_args(root)
 
     if gate_name == "pop_credentials":
-        evidence_dir = fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.MODULE.main(
             [
                 *topology_args,
                 "--evidence-dir",
-                str(evidence_dir),
+                str(gate_evidence_root),
                 "--summary-out",
                 str(summary),
                 "--now-unix",
@@ -1134,7 +1162,6 @@ def write_complete_lane_fixture_summary(
             ]
         )
     elif gate_name == "transparency":
-        fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.MODULE.main(
             [
                 *topology_args,
@@ -1147,7 +1174,6 @@ def write_complete_lane_fixture_summary(
             ]
         )
     elif gate_name == "reputation":
-        fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.run_gate(
             evidence_root,
             *topology_args,
@@ -1157,7 +1183,6 @@ def write_complete_lane_fixture_summary(
             str(summary),
         )
     elif gate_name == "gateway_compliance":
-        fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.MODULE.main(
             [
                 *topology_args,
@@ -1170,7 +1195,6 @@ def write_complete_lane_fixture_summary(
             ]
         )
     else:
-        fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.run_gate(
             evidence_root,
             *topology_args,
@@ -1228,6 +1252,7 @@ def write_normalized_complete_lane_summaries(
     for gate_name in MODULE.DEFAULT_REQUIRED_GATES:
         payload, now_unix = write_complete_lane_fixture_summary(gate_name, fixture_root)
         normalize_deployment_context(payload, DEPLOYMENT_ID, ENVIRONMENT)
+        payload["topology_qualification"] = copy.deepcopy(TOPOLOGY_QUALIFICATION)
         write_json(summary_root / f"{gate_name}.json", payload)
         now_values.append(now_unix)
     assert now_values

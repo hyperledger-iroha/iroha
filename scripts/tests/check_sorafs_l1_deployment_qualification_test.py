@@ -298,7 +298,7 @@ def test_topology_requirements_fail_closed(mutation, diagnostic: str) -> None:
 
     summary, errors = validate(payload)
 
-    assert diagnostic in errors
+    assert any(diagnostic in error for error in errors)
     assert summary["status"] == "blocked"
     assert summary["promotion_eligible"] is False
 

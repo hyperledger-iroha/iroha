@@ -112,6 +112,7 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
                     | IrohaRuntimeProviderSlotV1::EvidenceViewerErasure
                     | IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore
                     | IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive
+                    | IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner
             )
         }) {
             return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
@@ -266,6 +267,8 @@ pub struct RuntimeProviderBrokerBackendsV1 {
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreV1>>,
     evidence_viewer_compaction_archive:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>>,
+    soracloud_runtime_mutation_signer:
+        Option<Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>>,
 }
 
 impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
@@ -450,6 +453,10 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
                 "evidence_viewer_compaction_archive",
                 &self.evidence_viewer_compaction_archive.is_some(),
             )
+            .field(
+                "soracloud_runtime_mutation_signer",
+                &self.soracloud_runtime_mutation_signer.is_some(),
+            )
             .finish()
     }
 }
@@ -509,7 +516,18 @@ impl RuntimeProviderBrokerBackendsV1 {
             evidence_viewer_erasure: None,
             evidence_viewer_checkpoint_store: None,
             evidence_viewer_compaction_archive: None,
+            soracloud_runtime_mutation_signer: None,
         }
+    }
+
+    /// Attach the deployment-owned Soracloud transaction and provenance signer.
+    #[must_use]
+    pub fn with_soracloud_runtime_mutation_signer(
+        mut self,
+        signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
+    ) -> Self {
+        self.soracloud_runtime_mutation_signer = Some(signer);
+        self
     }
 
     /// Attach the deployment-owned PKCS#11/KMS quarantine-DEK wrapper.
@@ -1076,12 +1094,24 @@ pub fn serve_runtime_provider_broker_v1(
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod protocol {
+    #[cfg(not(target_pointer_width = "64"))]
+    compile_error!("the V1 runtime-provider broker requires a 64-bit address space");
+
+    use iroha_config::parameters::defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults;
     use norito::{
         DecodeLimits, NoritoDeserialize, NoritoSerialize,
         codec::{Decode, Encode},
     };
     use sorafs_manifest::GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1;
-    use std::{fmt, time::Duration};
+    use std::{
+        cell::RefCell,
+        fmt,
+        sync::{
+            Arc, Mutex, OnceLock,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use crate::{
         IrohaRuntimeDeps, RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerServerErrorV1,
@@ -1103,8 +1133,10 @@ mod protocol {
 
     const MAX_HANDSHAKE_FRAME_BYTES_V1: usize = 256 * 1024;
     // Appeal-finance configuration permits a 512 MiB canonical recovery
-    // checkpoint. The authenticated local frame ceiling must admit that exact
-    // public bound plus canonical wrapper overhead.
+    // checkpoint. V1 cannot safely retain that payload, its nested envelope,
+    // its typed decode, and a canonical re-encode in one unary broker call.
+    // TODO: add an authenticated streaming checkpoint protocol before lifting
+    // the enforced broker-unary ceiling below.
     const MAX_APPEAL_FINANCE_CHECKPOINT_BYTES_V1: usize = 512 * 1024 * 1024;
     const MAX_APPEAL_FINANCE_CHECKPOINT_RECORD_BYTES_V1: usize =
         MAX_APPEAL_FINANCE_CHECKPOINT_BYTES_V1
@@ -1112,29 +1144,88 @@ mod protocol {
                 APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1 as usize;
     const MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1: usize =
         MAX_APPEAL_FINANCE_CHECKPOINT_RECORD_BYTES_V1 + 128 * 1024;
-    const MAX_OPERATION_FRAME_BYTES_V1: usize = MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1;
+    const MAX_BROKER_FRAME_ENVELOPE_BYTES_V1: usize = 128 * 1024;
+    const MAX_BROKER_UNARY_PAYLOAD_BYTES_V1: usize = 32 * 1024 * 1024;
+    const MAX_BROKER_UNARY_FRAME_BYTES_V1: usize = 33 * 1024 * 1024;
+    const MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1: usize =
+        iroha_config::parameters::defaults::torii::
+            SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES as usize;
+    const MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1: usize =
+        MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1
+            + sorafs_node::appeal_finance_transaction_forwarder::
+                APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1 as usize
+            + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
+    const MAX_BROKER_PROVIDER_INGEST_CHECKPOINT_BYTES_V1: usize =
+        provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT as usize;
+    const MAX_BROKER_EVIDENCE_VIEWER_BULK_BYTES_V1: usize = MAX_EVIDENCE_VIEWER_ARCHIVE_BYTES_V1;
+    const MAX_BROKER_SHARED_DECODE_BYTES_V1: usize = if PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1
+        .max_composed_bytes
+        > GOVERNANCE_SEALED_STATE_DECODE_POLICY_V1.max_composed_bytes
+    {
+        PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1.max_composed_bytes
+    } else {
+        GOVERNANCE_SEALED_STATE_DECODE_POLICY_V1.max_composed_bytes
+    };
+    // The server admits raw request bodies under a separate process-wide
+    // semaphore before acquiring a composed decode reservation. This explicit
+    // sum is the maximum broker-owned raw plus decoded/canonical operation
+    // memory across all sessions; a stalled body can consume only the raw
+    // half, never the much larger decode pool.
+    const MAX_BROKER_PROCESS_OPERATION_BYTES_V1: usize =
+        MAX_OPERATION_FRAME_BYTES_V1 + MAX_BROKER_SHARED_DECODE_BYTES_V1;
+    const MAX_PROVIDER_INGEST_SOURCE_PLAN_HEAP_BYTES_V1: usize = 256 * 1024 * 1024;
     // The source-plan ceiling is independent of Governance DAG sealed-state
     // slots, whose limits are selected by
-    // `governance_dag_sealed_state_payload_max_bytes_v1`.
-    const MAX_PROVIDER_INGEST_SOURCE_PLAN_PAYLOAD_BYTES_V1: usize = 192 * 1024 * 1024;
+    // `governance_dag_sealed_state_payload_max_bytes_v1`. The CAR plan is
+    // unary metadata, so it is capped below the broker frame ceiling; larger
+    // plans require a future authenticated streaming-plan protocol.
+    // TODO: stream canonical CAR plan entries before raising this V1 cap.
+    const MAX_PROVIDER_INGEST_SOURCE_PLAN_PAYLOAD_BYTES_V1: usize =
+        MAX_BROKER_UNARY_PAYLOAD_BYTES_V1;
     // Keep the HSM transport exactly aligned with the canonical Governance
     // node/block/head encoder. A valid schema payload must never be rejected
     // only because signing crossed this process boundary.
     const MAX_SIGNING_PAYLOAD_BYTES_V1: usize =
         sorafs_manifest::GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1;
+    const MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1: usize =
+        MAX_SIGNING_PAYLOAD_BYTES_V1 + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
+    const MAX_GOVERNANCE_SEALED_STATE_PAYLOAD_BYTES_V1: usize =
+        sorafs_node::governance_dag_sealed_state_payload_max_bytes_v1(
+            sorafs_node::GovernanceDagSealedStateSlot::Checkpoint,
+        );
+    const MAX_GOVERNANCE_SEALED_STATE_RECORD_OVERHEAD_BYTES_V1: usize = 4 * 1024;
+    const MAX_GOVERNANCE_SEALED_STATE_RECORD_BYTES_V1: usize =
+        MAX_GOVERNANCE_SEALED_STATE_PAYLOAD_BYTES_V1
+            + MAX_GOVERNANCE_SEALED_STATE_RECORD_OVERHEAD_BYTES_V1;
+    const MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1: usize =
+        MAX_GOVERNANCE_SEALED_STATE_RECORD_BYTES_V1 + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
     const MAX_CHAIN_ID_BYTES_V1: usize = 1024;
     const MAX_PROVIDER_HANDLE_BYTES_V1: usize = 1024;
     const MAX_CATALOG_ENTRIES_V1: usize = 64;
-    const MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1: usize = 4 * 1024;
+    const MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1: usize =
+        provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1 as usize;
     const MAX_PROVIDER_INGEST_PUBLIC_KEY_BYTES_V1: usize = 16 * 1024;
-    const MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1: usize = 192 * 1024 * 1024;
-    const MAX_PROVIDER_INGEST_SIGNED_TRANSACTION_BYTES_V1: usize = 128 * 1024 * 1024;
+    const MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1: usize =
+        provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT as usize;
+    const MAX_PROVIDER_INGEST_SIGNED_TRANSACTION_BYTES_V1: usize =
+        provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT as usize;
     const MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1: usize = 64 * 1024;
     const MAX_PROVIDER_INGEST_CONTROL_FRAME_BYTES_V1: usize = 128 * 1024;
     const MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1: usize =
         MAX_PROVIDER_INGEST_SIGNED_TRANSACTION_BYTES_V1 + 128 * 1024;
+    const MAX_OPERATION_FRAME_BYTES_V1: usize = if MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1
+        > MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1
+    {
+        MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1
+    } else {
+        MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1
+    };
+    const MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1: usize =
+        MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1
+            + sorafs_node::provider_ingest_outbox::
+                PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1 as usize;
     const MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1: usize =
-        MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1 + 128 * 1024;
+        MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1 + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
     const MAX_PROVIDER_INGEST_RETENTION_FRAME_BYTES_V1: usize = 128 * 1024;
     const MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1: usize = 64 * 1024;
     const MAX_REPUTATION_RETENTION_FRAME_BYTES_V1: usize = 128 * 1024;
@@ -1238,6 +1329,12 @@ mod protocol {
         sorafs_manifest::GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1;
     const MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1: usize =
         MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1 + 256 * 1024;
+    const MAX_GOVERNANCE_BULK_FRAME_BYTES_V1: usize =
+        if MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1 > MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1 {
+            MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1
+        } else {
+            MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1
+        };
     const MAX_FENCED_PRIVACY_HEAD_EVIDENCE_ITEMS_V1: usize = 4_096;
     const MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1: usize = 2 * 1024 * 1024;
     const MAX_EVIDENCE_VIEWER_RP_ID_BYTES_V1: usize = 253;
@@ -1246,6 +1343,474 @@ mod protocol {
     // This mirrors the canonical CAR planner's fixed file ceiling. The plan's
     // own allocation-free validator remains authoritative after reconstruction.
     const MAX_PROVIDER_INGEST_SOURCE_PLAN_FILES_V1: usize = 1_000_000;
+    const _: () = assert!(
+        MAX_OPERATION_FRAME_BYTES_V1 <= u32::MAX as usize,
+        "V1 operation frames must fit their u32 length prefix"
+    );
+    const _: () = assert!(
+        MAX_OPERATION_FRAME_BYTES_V1 <= tokio::sync::Semaphore::MAX_PERMITS,
+        "V1 raw-frame ceiling must fit the Tokio semaphore"
+    );
+    const _: () = assert!(
+        MAX_BROKER_PROCESS_OPERATION_BYTES_V1 <= tokio::sync::Semaphore::MAX_PERMITS,
+        "V1 combined process ceiling must fit the platform semaphore counter"
+    );
+    const fn composed_decode_cap(
+        max_blob_bytes: usize,
+        max_total_allocated_bytes: usize,
+        live_decode_layers: usize,
+    ) -> usize {
+        let layer_bytes = match max_blob_bytes.checked_add(max_total_allocated_bytes) {
+            Some(bytes) => bytes,
+            None => panic!("decode-layer byte cap overflow"),
+        };
+        let decoded_bytes = match layer_bytes.checked_mul(live_decode_layers) {
+            Some(bytes) => bytes,
+            None => panic!("live decode-layer cap overflow"),
+        };
+        match max_blob_bytes.checked_add(decoded_bytes) {
+            Some(bytes) => bytes,
+            None => panic!("composed live-memory cap overflow"),
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct DecodeResourcePhaseCountsV1 {
+        raw_frames: usize,
+        retained_values: usize,
+        encoded_copies: usize,
+        decoded_values: usize,
+    }
+
+    // One admission covers either a complete client call (request construction,
+    // response validation, and caller result decode) or a complete server
+    // iteration (request validation, dispatch, response validation, and
+    // response encoding). These counts deliberately cover the longest nested
+    // validation paths: four retained caller/backend values, twelve canonical
+    // request/result/envelope copies, and sixteen decode-plus-reencode passes.
+    // Fenced privacy publication is the longest retained-value path because
+    // request validation, dispatch, and response validation each reconstruct
+    // one independently owned canonical publication request.
+    const OPERATION_CUMULATIVE_PHASES_V1: DecodeResourcePhaseCountsV1 =
+        DecodeResourcePhaseCountsV1 {
+            raw_frames: 1,
+            retained_values: 4,
+            encoded_copies: 12,
+            decoded_values: 16,
+        };
+    const FENCED_PRIVACY_SERVER_PHASES_V1: DecodeResourcePhaseCountsV1 =
+        DecodeResourcePhaseCountsV1 {
+            raw_frames: 1,
+            retained_values: 3,
+            encoded_copies: 5,
+            decoded_values: 12,
+        };
+    // Concrete deepest-path audits include response-carried client validation
+    // and reconciliation work, not just the initial request/response exchange.
+    const BILLING_PUBLISH_DEEPEST_PHASES_V1: DecodeResourcePhaseCountsV1 =
+        DecodeResourcePhaseCountsV1 {
+            raw_frames: 1,
+            retained_values: 1,
+            encoded_copies: 12,
+            decoded_values: 6,
+        };
+    const REPUTATION_THRESHOLD_DEEPEST_PHASES_V1: DecodeResourcePhaseCountsV1 =
+        DecodeResourcePhaseCountsV1 {
+            raw_frames: 1,
+            retained_values: 1,
+            encoded_copies: 9,
+            decoded_values: 6,
+        };
+    const fn phase_counts_fit(
+        required: DecodeResourcePhaseCountsV1,
+        inventory: DecodeResourcePhaseCountsV1,
+    ) -> bool {
+        required.raw_frames <= inventory.raw_frames
+            && required.retained_values <= inventory.retained_values
+            && required.encoded_copies <= inventory.encoded_copies
+            && required.decoded_values <= inventory.decoded_values
+    }
+    const _: () = assert!(
+        phase_counts_fit(
+            FENCED_PRIVACY_SERVER_PHASES_V1,
+            OPERATION_CUMULATIVE_PHASES_V1,
+        ),
+        "fenced privacy server phases must fit the operation inventory"
+    );
+    const _: () = assert!(
+        phase_counts_fit(
+            BILLING_PUBLISH_DEEPEST_PHASES_V1,
+            OPERATION_CUMULATIVE_PHASES_V1,
+        ),
+        "billing publication deepest phases must fit the operation inventory"
+    );
+    const _: () = assert!(
+        phase_counts_fit(
+            REPUTATION_THRESHOLD_DEEPEST_PHASES_V1,
+            OPERATION_CUMULATIVE_PHASES_V1,
+        ),
+        "reputation threshold deepest phases must fit the operation inventory"
+    );
+    const CONTROL_CUMULATIVE_PHASES_V1: DecodeResourcePhaseCountsV1 = DecodeResourcePhaseCountsV1 {
+        raw_frames: 1,
+        retained_values: 0,
+        encoded_copies: 2,
+        decoded_values: 4,
+    };
+    const SOURCE_STREAM_CUMULATIVE_PHASES_V1: DecodeResourcePhaseCountsV1 =
+        DecodeResourcePhaseCountsV1 {
+            raw_frames: 1,
+            retained_values: 1,
+            encoded_copies: 2,
+            decoded_values: 2,
+        };
+
+    const fn cumulative_decode_cap(
+        max_blob_bytes: usize,
+        max_total_allocated_bytes: usize,
+        phases: DecodeResourcePhaseCountsV1,
+    ) -> usize {
+        let raw_and_retained = match phases.raw_frames.checked_add(phases.retained_values) {
+            Some(count) => count,
+            None => panic!("canonical-copy phase count overflow"),
+        };
+        let copy_phases = match raw_and_retained.checked_add(phases.encoded_copies) {
+            Some(count) => count,
+            None => panic!("canonical-copy phase count overflow"),
+        };
+        let copy_bytes = match max_blob_bytes.checked_mul(copy_phases) {
+            Some(bytes) => bytes,
+            None => panic!("canonical-copy byte cap overflow"),
+        };
+        let decode_layer_bytes = match max_blob_bytes.checked_add(max_total_allocated_bytes) {
+            Some(bytes) => bytes,
+            None => panic!("cumulative decode-layer byte cap overflow"),
+        };
+        let decode_bytes = match decode_layer_bytes.checked_mul(phases.decoded_values) {
+            Some(bytes) => bytes,
+            None => panic!("cumulative decode byte cap overflow"),
+        };
+        match copy_bytes.checked_add(decode_bytes) {
+            Some(bytes) => bytes,
+            None => panic!("cumulative operation byte cap overflow"),
+        }
+    }
+
+    const fn operation_resource_caps(
+        max_blob_bytes: usize,
+        max_total_allocated_bytes: usize,
+        live_decode_layers: usize,
+    ) -> (usize, usize) {
+        (
+            composed_decode_cap(
+                max_blob_bytes,
+                max_total_allocated_bytes,
+                live_decode_layers,
+            ),
+            cumulative_decode_cap(
+                max_blob_bytes,
+                max_total_allocated_bytes,
+                OPERATION_CUMULATIVE_PHASES_V1,
+            ),
+        )
+    }
+
+    const fn control_resource_caps(
+        max_blob_bytes: usize,
+        max_total_allocated_bytes: usize,
+        live_decode_layers: usize,
+    ) -> (usize, usize) {
+        (
+            composed_decode_cap(
+                max_blob_bytes,
+                max_total_allocated_bytes,
+                live_decode_layers,
+            ),
+            cumulative_decode_cap(
+                max_blob_bytes,
+                max_total_allocated_bytes,
+                CONTROL_CUMULATIVE_PHASES_V1,
+            ),
+        )
+    }
+
+    const fn provider_ingest_checkpoint_external_decode_peak_bytes_v1() -> usize {
+        // At the external sealed-record decode peak, the request frame, request
+        // payload, semantic wrapper, decoded record allocation (4x the public
+        // record bound), and exact canonical re-encode can coexist.
+        let retained = match MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1.checked_mul(2) {
+            Some(bytes) => bytes,
+            None => panic!("provider checkpoint retained-byte cap overflow"),
+        };
+        let external_allocation =
+            match MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1.checked_mul(4) {
+                Some(bytes) => bytes,
+                None => panic!("provider checkpoint external allocation cap overflow"),
+            };
+        let with_retained =
+            match MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1.checked_add(retained) {
+                Some(bytes) => bytes,
+                None => panic!("provider checkpoint external peak overflow"),
+            };
+        let with_allocation = match with_retained.checked_add(external_allocation) {
+            Some(bytes) => bytes,
+            None => panic!("provider checkpoint external peak overflow"),
+        };
+        match with_allocation.checked_add(MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1) {
+            Some(bytes) => bytes,
+            None => panic!("provider checkpoint external peak overflow"),
+        }
+    }
+
+    const fn provider_ingest_checkpoint_live_cap_v1() -> usize {
+        let generic = composed_decode_cap(
+            MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+            PROVIDER_INGEST_CHECKPOINT_MAX_DECODE_ALLOCATION_BYTES_V1,
+            4,
+        );
+        let external = provider_ingest_checkpoint_external_decode_peak_bytes_v1();
+        if generic > external {
+            generic
+        } else {
+            external
+        }
+    }
+
+    // A framed control value retains the BrokerFrame, its typed body, and one
+    // semantic decode/re-encode at the same time.
+    const CONTROL_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 8 * 1024 * 1024;
+    const CONTROL_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (1024 * 1024, 1024 * 1024),
+        (2 * 1024 * 1024, CONTROL_MAX_DECODE_ALLOCATION_BYTES_V1),
+        (64 * 1024, 2 * 1024 * 1024),
+        32,
+        control_resource_caps(1024 * 1024, CONTROL_MAX_DECODE_ALLOCATION_BYTES_V1, 3),
+    );
+    // Standard operations retain the wire frame, operation envelope, up to
+    // two semantic cross-check decodes, and the caller's typed result.
+    const STANDARD_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 48 * 1024 * 1024;
+    const STANDARD_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_BROKER_UNARY_FRAME_BYTES_V1,
+            MAX_BROKER_UNARY_FRAME_BYTES_V1,
+        ),
+        (48 * 1024 * 1024, STANDARD_MAX_DECODE_ALLOCATION_BYTES_V1),
+        (1024 * 1024, 8 * 1024 * 1024),
+        32,
+        operation_resource_caps(
+            MAX_BROKER_UNARY_FRAME_BYTES_V1,
+            STANDARD_MAX_DECODE_ALLOCATION_BYTES_V1,
+            5,
+        ),
+    );
+    const OPAQUE_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 64 * 1024 * 1024;
+    const OPAQUE_BLOB_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_BROKER_UNARY_FRAME_BYTES_V1,
+            MAX_BROKER_UNARY_FRAME_BYTES_V1,
+        ),
+        (64 * 1024 * 1024, OPAQUE_MAX_DECODE_ALLOCATION_BYTES_V1),
+        (2 * 1024 * 1024, 16 * 1024 * 1024),
+        32,
+        operation_resource_caps(
+            MAX_BROKER_UNARY_FRAME_BYTES_V1,
+            OPAQUE_MAX_DECODE_ALLOCATION_BYTES_V1,
+            5,
+        ),
+    );
+    // Billing validation retains the framed response, operation envelope,
+    // request/result cross-checks, and caller result. The policy admits the
+    // service's full 128 MiB epoch-witness checkpoint.
+    const BILLING_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 160 * 1024 * 1024;
+    const BILLING_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
+            MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
+        ),
+        (192 * 1024 * 1024, BILLING_MAX_DECODE_ALLOCATION_BYTES_V1),
+        (8 * 1024 * 1024, 32 * 1024 * 1024),
+        64,
+        operation_resource_caps(
+            MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
+            BILLING_MAX_DECODE_ALLOCATION_BYTES_V1,
+            5,
+        ),
+    );
+    const REPUTATION_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 152 * 1024 * 1024;
+    const REPUTATION_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+            MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+        ),
+        (192 * 1024 * 1024, REPUTATION_MAX_DECODE_ALLOCATION_BYTES_V1),
+        (8 * 1024 * 1024, 24 * 1024 * 1024),
+        64,
+        operation_resource_caps(
+            MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+            REPUTATION_MAX_DECODE_ALLOCATION_BYTES_V1,
+            5,
+        ),
+    );
+    const GOVERNANCE_BULK_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 152 * 1024 * 1024;
+    const GOVERNANCE_BULK_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_GOVERNANCE_BULK_FRAME_BYTES_V1,
+            MAX_GOVERNANCE_BULK_FRAME_BYTES_V1,
+        ),
+        (
+            192 * 1024 * 1024,
+            GOVERNANCE_BULK_MAX_DECODE_ALLOCATION_BYTES_V1,
+        ),
+        (8 * 1024 * 1024, 24 * 1024 * 1024),
+        64,
+        operation_resource_caps(
+            MAX_GOVERNANCE_BULK_FRAME_BYTES_V1,
+            GOVERNANCE_BULK_MAX_DECODE_ALLOCATION_BYTES_V1,
+            5,
+        ),
+    );
+    const GOVERNANCE_SEALED_STATE_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 216 * 1024 * 1024;
+    const GOVERNANCE_SEALED_STATE_DECODE_POLICY_V1: DecodeResourcePolicyV1 =
+        DecodeResourcePolicyV1::new(
+            (
+                MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
+                MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
+            ),
+            (
+                224 * 1024 * 1024,
+                GOVERNANCE_SEALED_STATE_MAX_DECODE_ALLOCATION_BYTES_V1,
+            ),
+            (8 * 1024 * 1024, 24 * 1024 * 1024),
+            64,
+            operation_resource_caps(
+                MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
+                GOVERNANCE_SEALED_STATE_MAX_DECODE_ALLOCATION_BYTES_V1,
+                4,
+            ),
+        );
+    const APPEAL_CHECKPOINT_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 88 * 1024 * 1024;
+    const APPEAL_CHECKPOINT_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1,
+            MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1,
+        ),
+        (
+            96 * 1024 * 1024,
+            APPEAL_CHECKPOINT_MAX_DECODE_ALLOCATION_BYTES_V1,
+        ),
+        (4 * 1024 * 1024, 24 * 1024 * 1024),
+        64,
+        operation_resource_caps(
+            MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1,
+            APPEAL_CHECKPOINT_MAX_DECODE_ALLOCATION_BYTES_V1,
+            5,
+        ),
+    );
+    const PROVIDER_INGEST_CHECKPOINT_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 216 * 1024 * 1024;
+    const PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1: DecodeResourcePolicyV1 =
+        DecodeResourcePolicyV1::new(
+            (
+                MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+                MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+            ),
+            (
+                224 * 1024 * 1024,
+                PROVIDER_INGEST_CHECKPOINT_MAX_DECODE_ALLOCATION_BYTES_V1,
+            ),
+            (8 * 1024 * 1024, 24 * 1024 * 1024),
+            64,
+            (
+                provider_ingest_checkpoint_live_cap_v1(),
+                cumulative_decode_cap(
+                    MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+                    PROVIDER_INGEST_CHECKPOINT_MAX_DECODE_ALLOCATION_BYTES_V1,
+                    OPERATION_CUMULATIVE_PHASES_V1,
+                ),
+            ),
+        );
+    const EVIDENCE_BULK_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 88 * 1024 * 1024;
+    const EVIDENCE_BULK_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+            MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+        ),
+        (
+            96 * 1024 * 1024,
+            EVIDENCE_BULK_MAX_DECODE_ALLOCATION_BYTES_V1,
+        ),
+        (4 * 1024 * 1024, 24 * 1024 * 1024),
+        64,
+        operation_resource_caps(
+            MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+            EVIDENCE_BULK_MAX_DECODE_ALLOCATION_BYTES_V1,
+            5,
+        ),
+    );
+    // Source setup retains the wire frame, operation envelope, source header,
+    // and canonical CAR plan. Stream chunks use the separate transient policy.
+    const SOURCE_PLAN_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 80 * 1024 * 1024;
+    const SOURCE_PLAN_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+            MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+        ),
+        (64 * 1024 * 1024, SOURCE_PLAN_MAX_DECODE_ALLOCATION_BYTES_V1),
+        (4 * 1024 * 1024, 24 * 1024 * 1024),
+        64,
+        operation_resource_caps(
+            MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+            SOURCE_PLAN_MAX_DECODE_ALLOCATION_BYTES_V1,
+            4,
+        ),
+    );
+    const PROVIDER_INGEST_SIGN_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 88 * 1024 * 1024;
+    // Completion signing retains the wire frame and operation envelope, the
+    // signed result and original-request cross-check, and the caller's typed
+    // signed transaction. Each layer also has one exact canonical re-encode.
+    const PROVIDER_INGEST_SIGN_DECODE_POLICY_V1: DecodeResourcePolicyV1 =
+        DecodeResourcePolicyV1::new(
+            (
+                MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1,
+                MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1,
+            ),
+            (
+                96 * 1024 * 1024,
+                PROVIDER_INGEST_SIGN_MAX_DECODE_ALLOCATION_BYTES_V1,
+            ),
+            (4 * 1024 * 1024, 24 * 1024 * 1024),
+            64,
+            operation_resource_caps(
+                MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1,
+                PROVIDER_INGEST_SIGN_MAX_DECODE_ALLOCATION_BYTES_V1,
+                5,
+            ),
+        );
+    const SOURCE_STREAM_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 4 * 1024 * 1024;
+    const SOURCE_STREAM_FRAME_DECODE_POLICY_V1: DecodeResourcePolicyV1 =
+        DecodeResourcePolicyV1::new(
+            (
+                MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
+                MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
+            ),
+            (
+                2 * 1024 * 1024,
+                SOURCE_STREAM_MAX_DECODE_ALLOCATION_BYTES_V1,
+            ),
+            (64 * 1024, 1024 * 1024),
+            32,
+            (
+                composed_decode_cap(
+                    MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
+                    SOURCE_STREAM_MAX_DECODE_ALLOCATION_BYTES_V1,
+                    2,
+                ),
+                cumulative_decode_cap(
+                    MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
+                    SOURCE_STREAM_MAX_DECODE_ALLOCATION_BYTES_V1,
+                    SOURCE_STREAM_CUMULATIVE_PHASES_V1,
+                ),
+            ),
+        );
 
     const OPERATION_QUALIFY_V1: u16 = 1;
     const OPERATION_SIGN_V1: u16 = 2;
@@ -1333,6 +1898,7 @@ mod protocol {
     const OPERATION_BILLING_LOAD_LATEST_EPOCH_V1: u16 = 97;
     const OPERATION_BILLING_LOAD_EPOCH_V1: u16 = 98;
     const OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1: u16 = 99;
+    const OPERATION_SORACLOUD_PROVENANCE_SIGN_V1: u16 = 100;
 
     const STATUS_OK_V1: u8 = 0;
     const STATUS_REJECTED_V1: u8 = 1;
@@ -1369,6 +1935,7 @@ mod protocol {
     struct ScrubbedBytes {
         bytes: Vec<u8>,
         inbound_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+        decode_admission: Option<Arc<DecodeResourceAdmissionV1>>,
     }
 
     impl ScrubbedBytes {
@@ -1376,6 +1943,7 @@ mod protocol {
             Self {
                 bytes,
                 inbound_permit: None,
+                decode_admission: None,
             }
         }
 
@@ -1386,11 +1954,29 @@ mod protocol {
             Self {
                 bytes,
                 inbound_permit: Some(inbound_permit),
+                decode_admission: None,
+            }
+        }
+
+        fn with_decode_admission(
+            bytes: Vec<u8>,
+            decode_admission: Arc<DecodeResourceAdmissionV1>,
+        ) -> Self {
+            Self {
+                bytes,
+                inbound_permit: None,
+                decode_admission: Some(decode_admission),
             }
         }
 
         fn take(&mut self) -> Vec<u8> {
             std::mem::take(&mut self.bytes)
+        }
+
+        fn enter_decode_admission(&self) -> Option<DecodeResourceAdmissionScopeV1> {
+            self.decode_admission
+                .as_ref()
+                .map(DecodeResourceAdmissionV1::enter)
         }
     }
 
@@ -1414,6 +2000,7 @@ mod protocol {
                 .debug_struct("ScrubbedBytes")
                 .field("len", &self.bytes.len())
                 .field("inbound_budgeted", &self.inbound_permit.is_some())
+                .field("decode_budgeted", &self.decode_admission.is_some())
                 .finish_non_exhaustive()
         }
     }
@@ -1647,6 +2234,8 @@ mod protocol {
         public_key: iroha_crypto::PublicKey,
     }
 
+    const SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1: u8 = 5;
+
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerWebAuthnBindingWireV1 {
         rp_id: String,
@@ -1832,6 +2421,16 @@ mod protocol {
             }
         }
 
+        fn from_soracloud_binding(
+            binding: &crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1,
+        ) -> Self {
+            Self {
+                role: SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1,
+                authority: binding.authority().clone(),
+                public_key: binding.public_key().clone(),
+            }
+        }
+
         fn to_binding(
             &self,
             outer: &ProviderBindingWireV1,
@@ -1864,6 +2463,33 @@ mod protocol {
             .as_ref()
             .ok_or(BrokerError::BindingMismatch)?
             .to_binding(binding)
+    }
+
+    fn soracloud_runtime_signer_binding_from_wire(
+        binding: &ProviderBindingWireV1,
+    ) -> Result<crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1, BrokerError> {
+        if binding.slot != IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() {
+            return Err(BrokerError::BindingMismatch);
+        }
+        let inner = binding
+            .native_signer_binding
+            .as_ref()
+            .ok_or(BrokerError::BindingMismatch)?;
+        if inner.role != SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1 {
+            return Err(BrokerError::BindingMismatch);
+        }
+        crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1::try_new(
+            binding.handle.clone(),
+            inner.authority.clone(),
+            inner.public_key.clone(),
+            crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationV1::new(
+                binding.revision.ok_or(BrokerError::BindingMismatch)?,
+                binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+                true,
+                false,
+            ),
+        )
+        .map_err(|_| BrokerError::BindingMismatch)
     }
 
     impl ProviderBindingWireV1 {
@@ -1923,7 +2549,12 @@ mod protocol {
                     .map(PotrRuntimeBindingWireV1::from),
                 native_signer_binding: binding
                     .native_signer_binding()
-                    .map(NativeTransactionSignerBindingWireV1::from_binding),
+                    .map(NativeTransactionSignerBindingWireV1::from_binding)
+                    .or_else(|| {
+                        binding
+                            .soracloud_runtime_signer_binding()
+                            .map(NativeTransactionSignerBindingWireV1::from_soracloud_binding)
+                    }),
                 governance_request_auth_public_key: binding.governance_request_auth_public_key(),
                 governance_request_auth_max_body_bytes: binding
                     .governance_request_auth_max_body_bytes(),
@@ -2132,7 +2763,7 @@ mod protocol {
             if exact_ed25519_public_key_bytes(&exact.public_key).is_err()
                 || checkpoint_max_bytes == 0
                 || checkpoint_max_bytes
-                    > u64::try_from(MAX_APPEAL_FINANCE_CHECKPOINT_BYTES_V1)
+                    > u64::try_from(MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1)
                         .map_err(|_| BrokerError::Protocol)?
                 || binding.stream_token_signer_public_key.is_some()
                 || binding.appeal_finance_signer_binding.is_some()
@@ -2265,6 +2896,8 @@ mod protocol {
             || binding.slot == IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport.wire_id();
         let native_transaction_signer =
             native_transaction_signer_role_for_slot(binding.slot).is_some();
+        let soracloud_runtime_signer =
+            binding.slot == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
         let moderation_transaction_signer =
             binding.slot == IrohaRuntimeProviderSlotV1::ModerationTransactionSigner.wire_id();
         let moderation_delivery_boundary = binding.slot
@@ -2345,7 +2978,16 @@ mod protocol {
             }
             return Ok(());
         }
-        if native_transaction_signer {
+        if soracloud_runtime_signer {
+            soracloud_runtime_signer_binding_from_wire(binding)?;
+            if binding.governance_request_auth_public_key.is_some()
+                || binding.governance_request_auth_max_body_bytes.is_some()
+                || has_provider_ingest_metadata
+                || has_evidence_metadata
+            {
+                return Err(BrokerError::BindingMismatch);
+            }
+        } else if native_transaction_signer {
             native_transaction_signer_binding_from_wire(binding)?;
             if binding.governance_request_auth_public_key.is_some()
                 || binding.governance_request_auth_max_body_bytes.is_some()
@@ -2402,6 +3044,7 @@ mod protocol {
             || governance_request_auth
             || governance_checkpoint
             || native_transaction_signer
+            || soracloud_runtime_signer
         {
             if binding.provider_ingest_signer_binding.is_some()
                 || binding.provider_ingest_source_limits.is_some()
@@ -2442,7 +3085,7 @@ mod protocol {
             let max_signed = binding
                 .provider_ingest_max_signed_transaction_bytes
                 .ok_or(BrokerError::BindingMismatch)?;
-            if max_signed == 0
+            if max_signed < provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
                 || max_signed
                     > u64::try_from(MAX_PROVIDER_INGEST_SIGNED_TRANSACTION_BYTES_V1)
                         .map_err(|_| BrokerError::Protocol)?
@@ -2466,7 +3109,7 @@ mod protocol {
                 .ok_or(BrokerError::BindingMismatch)?;
             if max_checkpoint == 0
                 || max_checkpoint
-                    > u64::try_from(MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1)
+                    > u64::try_from(MAX_BROKER_PROVIDER_INGEST_CHECKPOINT_BYTES_V1)
                         .map_err(|_| BrokerError::Protocol)?
                 || binding.provider_ingest_signer_binding.is_some()
                 || binding.provider_ingest_source_limits.is_some()
@@ -2606,7 +3249,7 @@ mod protocol {
                 .is_err()
                 || max_bytes == 0
                 || max_bytes
-                    > u64::try_from(MAX_EVIDENCE_VIEWER_ARCHIVE_BYTES_V1)
+                    > u64::try_from(MAX_BROKER_EVIDENCE_VIEWER_BULK_BYTES_V1)
                         .map_err(|_| BrokerError::Protocol)?
                 || binding.evidence_viewer_webauthn_binding.is_some()
                 || binding.evidence_viewer_grant_ttl_ms.is_some()
@@ -2786,6 +3429,20 @@ mod protocol {
     struct QualificationResultWireV1 {
         revision: u64,
         policy_digest: [u8; 32],
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+    struct SoracloudSignerQualificationWireV1 {
+        revision: u64,
+        policy_digest: [u8; 32],
+        active: bool,
+        test_only: bool,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+    struct SoracloudProvenanceSignRequestWireV1 {
+        purpose: u8,
+        preimage: Vec<u8>,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
@@ -3306,24 +3963,74 @@ mod protocol {
             }
         }
 
+        fn matches_request(
+            &self,
+            request: &sorafs_node::FencedPrivacyPublicationRequestV1,
+        ) -> bool {
+            self.version == sorafs_node::FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1
+                && self.authorization
+                    == PrivacyPublicationAuthorizationWireV1::from_authorization(
+                        request.authorization(),
+                    )
+                && self.authorization_digest == request.authorization_digest()
+                && self.publication_idempotency_digest == request.publication_idempotency_digest()
+                && self.canonical_payload.as_slice() == request.canonical_payload()
+                && self.payload_digest == request.payload_digest()
+                && self.expected_authoritative_head
+                    == request
+                        .expected_authoritative_head()
+                        .map(FencedTransparencyTargetHeadWireV1::from_head)
+                && self.fencing_token == request.fencing_token()
+                && self.fencing_floor == request.fencing_floor()
+                && self.request_digest == request.request_digest()
+        }
+
         fn to_request(
             &self,
         ) -> Result<sorafs_node::FencedPrivacyPublicationRequestV1, BrokerError> {
-            if self.version != sorafs_node::FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1
-                || self.canonical_payload.is_empty()
-                || self.canonical_payload.len() > MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1
-            {
+            if let Some(admission) = current_decode_resource_admission() {
+                if admission.operation != Some(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1) {
+                    return Err(BrokerError::Protocol);
+                }
+                return self.to_request_with_admission(&admission);
+            }
+            let admission = DecodeResourceAdmissionV1::acquire_operation(
+                OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1,
+            )?;
+            let _scope = admission.enter();
+            self.to_request_with_admission(&admission)
+        }
+
+        fn to_request_with_admission(
+            &self,
+            admission: &DecodeResourceAdmissionV1,
+        ) -> Result<sorafs_node::FencedPrivacyPublicationRequestV1, BrokerError> {
+            if self.version != sorafs_node::FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1 {
                 return Err(BrokerError::Rejected);
             }
+            validate_fenced_privacy_publication_payload_len(self.canonical_payload.len())?;
+            let publication = decode_fenced_privacy_publication_with_admission(
+                &self.canonical_payload,
+                admission,
+            )?;
             let authorization = self.authorization.to_authorization()?;
-            let publication = norito::decode_from_bytes::<
-                sorafs_manifest::ModerationLedgerCyclePublicationV1,
-            >(&self.canonical_payload)
-            .map_err(|_| BrokerError::Rejected)?;
             let expected_authoritative_head = self
                 .expected_authoritative_head
                 .map(FencedTransparencyTargetHeadWireV1::to_head)
                 .transpose()?;
+            // `try_new` takes ownership of an independent payload and its
+            // final `validate` performs one more decode plus exact canonical
+            // re-encode. The input was already decoded canonically under
+            // explicit limits above; reserve both remaining phases before the
+            // clone or the constructor's trusted revalidation can allocate.
+            admission.reserve_retained_bytes(
+                self.canonical_payload.len(),
+                MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1,
+            )?;
+            admission.reserve_decode(
+                self.canonical_payload.len(),
+                MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1,
+            )?;
             let request = sorafs_node::FencedPrivacyPublicationRequestV1::try_new(
                 authorization,
                 &publication,
@@ -3332,11 +4039,45 @@ mod protocol {
                 self.fencing_floor,
             )
             .map_err(|_| BrokerError::Rejected)?;
-            if Self::from_request(&request) != *self {
+            if !self.matches_request(&request) {
                 return Err(BrokerError::Rejected);
             }
             Ok(request)
         }
+    }
+
+    fn validate_fenced_privacy_publication_payload_len(
+        payload_len: usize,
+    ) -> Result<(), BrokerError> {
+        if payload_len == 0 || payload_len > MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1 {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(())
+    }
+
+    fn decode_fenced_privacy_publication_with_admission(
+        bytes: &[u8],
+        admission: &DecodeResourceAdmissionV1,
+    ) -> Result<sorafs_manifest::ModerationLedgerCyclePublicationV1, BrokerError> {
+        validate_fenced_privacy_publication_payload_len(bytes.len())?;
+        // Canonical V1 payloads are never compressed. Inspect the fixed header
+        // before invoking any decoder so a tiny compressed frame cannot expand
+        // ahead of the broker's byte-derived allocation reservation.
+        const NORITO_V1_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
+        if bytes.get(NORITO_V1_COMPRESSION_OFFSET).copied() != Some(norito::Compression::None as u8)
+        {
+            return Err(BrokerError::Rejected);
+        }
+        let budget = admission
+            .reserve_decode(bytes.len(), MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1)?;
+        let limits = DecodeLimits::new(
+            budget.max_sequence_elements,
+            budget.max_blob_bytes,
+            budget.max_total_elements,
+            budget.max_total_allocated_bytes,
+            budget.max_nesting_depth,
+        );
+        norito::decode_canonical_with_limits(bytes, limits).map_err(|_| BrokerError::Rejected)
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
@@ -5546,6 +6287,330 @@ mod protocol {
         Ambiguous,
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct DecodeResourcePolicyV1 {
+        max_sequence_elements: usize,
+        max_blob_bytes: usize,
+        max_total_elements: usize,
+        max_total_allocated_bytes: usize,
+        element_headroom: usize,
+        allocation_headroom_bytes: usize,
+        max_nesting_depth: usize,
+        // Process-wide reservation for the audited maximum simultaneously
+        // live frame, typed value, and canonical-copy layers.
+        max_composed_bytes: usize,
+        // Per-call monotonic phase counter. Unlike the live reservation this
+        // is not acquired from the memory pool and may exceed the live peak.
+        max_cumulative_bytes: usize,
+    }
+
+    impl DecodeResourcePolicyV1 {
+        const fn new(
+            field_caps: (usize, usize),
+            total_caps: (usize, usize),
+            headroom: (usize, usize),
+            max_nesting_depth: usize,
+            resource_caps: (usize, usize),
+        ) -> Self {
+            Self {
+                max_sequence_elements: field_caps.0,
+                max_blob_bytes: field_caps.1,
+                max_total_elements: total_caps.0,
+                max_total_allocated_bytes: total_caps.1,
+                element_headroom: headroom.0,
+                allocation_headroom_bytes: headroom.1,
+                max_nesting_depth,
+                max_composed_bytes: resource_caps.0,
+                max_cumulative_bytes: resource_caps.1,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct DecodeResourceBudgetV1 {
+        max_sequence_elements: usize,
+        max_blob_bytes: usize,
+        max_total_elements: usize,
+        max_total_allocated_bytes: usize,
+        max_nesting_depth: usize,
+        composed_charge_bytes: usize,
+    }
+
+    fn decode_resource_budget(
+        encoded_len: usize,
+        semantic_wire_limit: usize,
+        policy: DecodeResourcePolicyV1,
+    ) -> Result<DecodeResourceBudgetV1, BrokerError> {
+        if encoded_len == 0
+            || semantic_wire_limit == 0
+            || encoded_len > semantic_wire_limit
+            || encoded_len > policy.max_blob_bytes
+            || policy.max_sequence_elements == 0
+            || policy.max_blob_bytes == 0
+            || policy.max_total_elements == 0
+            || policy.max_total_allocated_bytes == 0
+            || policy.max_nesting_depth == 0
+            || policy.max_composed_bytes == 0
+            || policy.max_cumulative_bytes < policy.max_composed_bytes
+        {
+            return Err(BrokerError::Protocol);
+        }
+        // Each allowance has an audited absolute ceiling. Wire length only
+        // reduces the allowance for a small value; it can never amplify it.
+        let max_total_elements = encoded_len
+            .checked_add(policy.element_headroom)
+            .ok_or(BrokerError::Protocol)?
+            .min(policy.max_total_elements);
+        let max_total_allocated_bytes = encoded_len
+            .checked_add(policy.allocation_headroom_bytes)
+            .ok_or(BrokerError::Protocol)?
+            .min(policy.max_total_allocated_bytes);
+        // A canonicality check allocates one exact re-encoding alongside the
+        // decoded value. Charge that headroom to the same operation admission.
+        let composed_charge_bytes = max_total_allocated_bytes
+            .checked_add(encoded_len)
+            .ok_or(BrokerError::Protocol)?;
+        Ok(DecodeResourceBudgetV1 {
+            max_sequence_elements: semantic_wire_limit.min(policy.max_sequence_elements),
+            max_blob_bytes: semantic_wire_limit.min(policy.max_blob_bytes),
+            max_total_elements,
+            max_total_allocated_bytes,
+            max_nesting_depth: policy.max_nesting_depth,
+            composed_charge_bytes,
+        })
+    }
+
+    #[derive(Debug)]
+    struct DecodeResourcePoolV1 {
+        max_bytes: usize,
+        used_bytes: AtomicUsize,
+    }
+
+    impl DecodeResourcePoolV1 {
+        const fn new(max_bytes: usize) -> Self {
+            Self {
+                max_bytes,
+                used_bytes: AtomicUsize::new(0),
+            }
+        }
+
+        fn try_acquire(
+            self: &Arc<Self>,
+            bytes: usize,
+        ) -> Result<DecodeResourcePoolPermitV1, BrokerError> {
+            if bytes == 0 || bytes > self.max_bytes {
+                return Err(BrokerError::Protocol);
+            }
+            let mut observed = self.used_bytes.load(Ordering::Acquire);
+            loop {
+                let next = observed.checked_add(bytes).ok_or(BrokerError::Protocol)?;
+                if next > self.max_bytes {
+                    return Err(BrokerError::Unavailable);
+                }
+                match self.used_bytes.compare_exchange_weak(
+                    observed,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        return Ok(DecodeResourcePoolPermitV1 {
+                            pool: Arc::clone(self),
+                            bytes,
+                        });
+                    }
+                    Err(current) => observed = current,
+                }
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct DecodeResourcePoolPermitV1 {
+        pool: Arc<DecodeResourcePoolV1>,
+        bytes: usize,
+    }
+
+    impl Drop for DecodeResourcePoolPermitV1 {
+        fn drop(&mut self) {
+            let previous = self.pool.used_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+            debug_assert!(previous >= self.bytes);
+        }
+    }
+
+    #[derive(Debug)]
+    struct DecodeResourceAdmissionV1 {
+        operation: Option<u16>,
+        policy: DecodeResourcePolicyV1,
+        usage: Mutex<DecodeResourceUsageV1>,
+        _permit: DecodeResourcePoolPermitV1,
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    struct DecodeResourceUsageV1 {
+        consumed_bytes: usize,
+    }
+
+    impl DecodeResourceAdmissionV1 {
+        fn acquire(
+            operation: Option<u16>,
+            policy: DecodeResourcePolicyV1,
+        ) -> Result<Arc<Self>, BrokerError> {
+            Self::acquire_from(shared_decode_resource_pool(), operation, policy)
+        }
+
+        fn acquire_operation(operation: u16) -> Result<Arc<Self>, BrokerError> {
+            Self::acquire(Some(operation), operation_decode_policy(operation))
+        }
+
+        fn acquire_operation_from(
+            pool: Arc<DecodeResourcePoolV1>,
+            operation: u16,
+        ) -> Result<Arc<Self>, BrokerError> {
+            Self::acquire_from(pool, Some(operation), operation_decode_policy(operation))
+        }
+
+        fn acquire_from(
+            pool: Arc<DecodeResourcePoolV1>,
+            operation: Option<u16>,
+            policy: DecodeResourcePolicyV1,
+        ) -> Result<Arc<Self>, BrokerError> {
+            let permit = pool.try_acquire(policy.max_composed_bytes)?;
+            Ok(Arc::new(Self {
+                operation,
+                policy,
+                usage: Mutex::new(DecodeResourceUsageV1::default()),
+                _permit: permit,
+            }))
+        }
+
+        fn reserve_raw_frame(
+            &self,
+            declared_len: usize,
+            semantic_wire_limit: usize,
+        ) -> Result<(), BrokerError> {
+            if declared_len == 0
+                || declared_len > semantic_wire_limit
+                || declared_len > self.policy.max_blob_bytes
+            {
+                return Err(BrokerError::Protocol);
+            }
+            let mut usage = self.usage.lock().map_err(|_| BrokerError::Protocol)?;
+            let next = usage
+                .consumed_bytes
+                .checked_add(declared_len)
+                .ok_or(BrokerError::Protocol)?;
+            if next > self.policy.max_cumulative_bytes {
+                return Err(BrokerError::Protocol);
+            }
+            usage.consumed_bytes = next;
+            Ok(())
+        }
+
+        fn reserve_encoded_copy(
+            &self,
+            encoded_len: usize,
+            semantic_wire_limit: usize,
+        ) -> Result<(), BrokerError> {
+            if encoded_len > semantic_wire_limit || encoded_len > self.policy.max_blob_bytes {
+                return Err(BrokerError::Rejected);
+            }
+            if encoded_len == 0 {
+                return Ok(());
+            }
+            self.reserve_bytes(encoded_len)
+        }
+
+        fn reserve_retained_bytes(
+            &self,
+            retained_len: usize,
+            semantic_wire_limit: usize,
+        ) -> Result<(), BrokerError> {
+            if retained_len > semantic_wire_limit || retained_len > self.policy.max_blob_bytes {
+                return Err(BrokerError::Rejected);
+            }
+            if retained_len == 0 {
+                return Ok(());
+            }
+            self.reserve_bytes(retained_len)
+        }
+
+        fn reserve_bytes(&self, bytes: usize) -> Result<(), BrokerError> {
+            let mut usage = self.usage.lock().map_err(|_| BrokerError::Protocol)?;
+            let next = usage
+                .consumed_bytes
+                .checked_add(bytes)
+                .ok_or(BrokerError::Protocol)?;
+            if next > self.policy.max_cumulative_bytes {
+                return Err(BrokerError::Protocol);
+            }
+            usage.consumed_bytes = next;
+            Ok(())
+        }
+
+        fn reserve_decode(
+            &self,
+            encoded_len: usize,
+            semantic_wire_limit: usize,
+        ) -> Result<DecodeResourceBudgetV1, BrokerError> {
+            let budget = decode_resource_budget(encoded_len, semantic_wire_limit, self.policy)?;
+            let mut usage = self.usage.lock().map_err(|_| BrokerError::Protocol)?;
+            let next = usage
+                .consumed_bytes
+                .checked_add(budget.composed_charge_bytes)
+                .ok_or(BrokerError::Protocol)?;
+            if next > self.policy.max_cumulative_bytes {
+                return Err(BrokerError::Protocol);
+            }
+            usage.consumed_bytes = next;
+            Ok(budget)
+        }
+
+        fn enter(self: &Arc<Self>) -> DecodeResourceAdmissionScopeV1 {
+            CURRENT_DECODE_ADMISSIONS_V1.with(|stack| {
+                stack.borrow_mut().push(Arc::clone(self));
+            });
+            DecodeResourceAdmissionScopeV1 {
+                admission: Arc::clone(self),
+            }
+        }
+    }
+
+    struct DecodeResourceAdmissionScopeV1 {
+        admission: Arc<DecodeResourceAdmissionV1>,
+    }
+
+    impl Drop for DecodeResourceAdmissionScopeV1 {
+        fn drop(&mut self) {
+            CURRENT_DECODE_ADMISSIONS_V1.with(|stack| {
+                let popped = stack.borrow_mut().pop();
+                debug_assert!(
+                    popped
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &self.admission))
+                );
+            });
+        }
+    }
+
+    thread_local! {
+        static CURRENT_DECODE_ADMISSIONS_V1:
+            RefCell<Vec<Arc<DecodeResourceAdmissionV1>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn current_decode_resource_admission() -> Option<Arc<DecodeResourceAdmissionV1>> {
+        CURRENT_DECODE_ADMISSIONS_V1.with(|stack| stack.borrow().last().cloned())
+    }
+
+    fn shared_decode_resource_pool() -> Arc<DecodeResourcePoolV1> {
+        static POOL: OnceLock<Arc<DecodeResourcePoolV1>> = OnceLock::new();
+        Arc::clone(
+            POOL.get_or_init(|| {
+                Arc::new(DecodeResourcePoolV1::new(MAX_BROKER_SHARED_DECODE_BYTES_V1))
+            }),
+        )
+    }
+
     fn source_stream_frame_count(content_length: u64) -> Result<u64, BrokerError> {
         if content_length == 0 {
             return Err(BrokerError::Rejected);
@@ -5581,10 +6646,30 @@ mod protocol {
         Ok(())
     }
 
+    fn source_retained_memory_bytes(plan: &sorafs_car::CarBuildPlan) -> Result<usize, BrokerError> {
+        let validation = plan
+            .validate_for_ingest_with_limit(MAX_PROVIDER_INGEST_SOURCE_PLAN_HEAP_BYTES_V1)
+            .map_err(|_| BrokerError::Rejected)?;
+        // The CAR validator's allocation-free estimate covers the decoded plan
+        // and ingest working set. Add the manifest's fixed public maximum
+        // rather than an attacker-controlled multiplier.
+        validation
+            .estimated_ingest_heap_bytes()
+            .checked_add(sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES)
+            .ok_or(BrokerError::Protocol)
+    }
+
+    fn acquire_source_retained_memory(
+        plan: &sorafs_car::CarBuildPlan,
+    ) -> Result<DecodeResourcePoolPermitV1, BrokerError> {
+        shared_decode_resource_pool().try_acquire(source_retained_memory_bytes(plan)?)
+    }
+
     fn source_plan_to_wire(
         plan: &sorafs_car::CarBuildPlan,
     ) -> Result<ProviderIngestCarPlanWireV1, BrokerError> {
-        plan.validate().map_err(|_| BrokerError::Rejected)?;
+        plan.validate_for_ingest_with_limit(MAX_PROVIDER_INGEST_SOURCE_PLAN_HEAP_BYTES_V1)
+            .map_err(|_| BrokerError::Rejected)?;
         validate_source_plan_counts(plan.chunks.len(), plan.files.len())?;
         let chunks = plan
             .chunks
@@ -5686,7 +6771,8 @@ mod protocol {
                 })
                 .collect::<Result<Vec<_>, BrokerError>>()?,
         };
-        plan.validate().map_err(|_| BrokerError::Rejected)?;
+        plan.validate_for_ingest_with_limit(MAX_PROVIDER_INGEST_SOURCE_PLAN_HEAP_BYTES_V1)
+            .map_err(|_| BrokerError::Rejected)?;
         Ok(plan)
     }
 
@@ -5701,19 +6787,12 @@ mod protocol {
         if bytes.is_empty() || bytes.len() > MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1 {
             return Err(BrokerError::Rejected);
         }
-        let limits = DecodeLimits::new(
-            sorafs_car::CAR_PLAN_MAX_CHUNKS,
+        let wire = decode_canonical_with_policy::<ProviderIngestCarPlanWireV1>(
+            bytes,
             MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1,
-            MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1,
-            MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1.saturating_mul(2),
-            64,
-        );
-        let wire =
-            norito::decode_from_bytes_with_limits::<ProviderIngestCarPlanWireV1>(bytes, limits)
-                .map_err(|_| BrokerError::Rejected)?;
-        if norito::to_bytes(&wire).map_err(|_| BrokerError::Protocol)? != bytes {
-            return Err(BrokerError::Rejected);
-        }
+            SOURCE_PLAN_DECODE_POLICY_V1,
+        )
+        .map_err(|_| BrokerError::Rejected)?;
         source_plan_from_wire(wire)
     }
 
@@ -5777,7 +6856,6 @@ mod protocol {
             || manifest.por_root != authorization.por_root()
             || manifest.content_length != authorization.content_length()
             || plan.content_length != authorization.content_length()
-            || plan.payload_digest.as_bytes() != &manifest.car_digest
             || sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks)
                 != authorization.chunk_digest_sha3_256()
             || u32::try_from(plan.chunk_profile.min_size).ok() != Some(manifest.chunking.min_size)
@@ -5832,14 +6910,18 @@ mod protocol {
         value: &T,
         limit: usize,
     ) -> Result<Vec<u8>, BrokerError> {
-        let exact = value.encoded_len_exact().ok_or(BrokerError::Rejected)?;
-        if exact > limit {
+        let framed_len =
+            norito::core::encoded_frame_len(value).map_err(|_| BrokerError::Protocol)?;
+        if framed_len == 0 || framed_len > limit {
             return Err(BrokerError::Rejected);
         }
+        if let Some(admission) = current_decode_resource_admission() {
+            admission.reserve_encoded_copy(framed_len, limit)?;
+        }
         let mut bytes =
-            ScrubbedBytes::new(norito::to_bytes(value).map_err(|_| BrokerError::Protocol)?);
-        if bytes.len() > limit || (bytes.is_empty() && exact != 0) {
-            return Err(BrokerError::Rejected);
+            ScrubbedBytes::new(norito::encode_canonical(value).map_err(|_| BrokerError::Protocol)?);
+        if bytes.len() != framed_len {
+            return Err(BrokerError::Protocol);
         }
         Ok(bytes.take())
     }
@@ -5856,7 +6938,7 @@ mod protocol {
         T: NoritoSerialize,
         for<'de> T: NoritoDeserialize<'de>,
     {
-        decode_canonical_with_allocation_limit(bytes, limit, limit.saturating_mul(2))
+        decode_canonical_with_policy(bytes, limit, CONTROL_DECODE_POLICY_V1)
     }
 
     fn decode_nested_canonical<T>(bytes: &[u8], limit: usize) -> Result<T, BrokerError>
@@ -5864,34 +6946,70 @@ mod protocol {
         T: NoritoSerialize,
         for<'de> T: NoritoDeserialize<'de>,
     {
-        // Norito charges nested owned byte vectors for their enclosing field,
-        // sequence elements, and owned allocation. Keep this larger budget
-        // local to small, explicitly bounded operation payloads and frames
-        // instead of widening the global decoder allocation ceiling.
-        decode_canonical_with_allocation_limit(bytes, limit, limit.saturating_mul(4))
+        decode_canonical_with_policy(bytes, limit, OPAQUE_BLOB_DECODE_POLICY_V1)
     }
 
-    fn decode_canonical_with_allocation_limit<T>(
+    fn decode_scrubbed_canonical<T>(bytes: &ScrubbedBytes, limit: usize) -> Result<T, BrokerError>
+    where
+        T: NoritoSerialize,
+        for<'de> T: NoritoDeserialize<'de>,
+    {
+        let _scope = bytes.enter_decode_admission();
+        decode_canonical(bytes, limit)
+    }
+
+    fn reserve_external_canonical_decode(
+        encoded_len: usize,
+        semantic_wire_limit: usize,
+    ) -> Result<(), BrokerError> {
+        // Leave semantic rejection (including empty and oversized records) to
+        // the external decoder so this accounting hook does not change its
+        // caller-visible error mapping.
+        if encoded_len == 0 || encoded_len > semantic_wire_limit {
+            return Ok(());
+        }
+        if let Some(admission) = current_decode_resource_admission() {
+            admission.reserve_decode(encoded_len, semantic_wire_limit)?;
+        }
+        Ok(())
+    }
+
+    fn decode_canonical_with_policy<T>(
         bytes: &[u8],
         limit: usize,
-        max_total_allocated_bytes: usize,
+        policy: DecodeResourcePolicyV1,
     ) -> Result<T, BrokerError>
     where
         T: NoritoSerialize,
         for<'de> T: NoritoDeserialize<'de>,
     {
-        if bytes.len() > limit {
-            return Err(BrokerError::Protocol);
+        if let Some(admission) = current_decode_resource_admission() {
+            return decode_canonical_with_admission(bytes, limit, &admission);
         }
-        let limits = DecodeLimits::new(limit, limit, limit, max_total_allocated_bytes, 32);
-        let value = norito::decode_from_bytes_with_limits::<T>(bytes, limits)
-            .map_err(|_| BrokerError::Protocol)?;
-        let canonical =
-            ScrubbedBytes::new(norito::to_bytes(&value).map_err(|_| BrokerError::Protocol)?);
-        if canonical.as_slice() != bytes {
-            return Err(BrokerError::Protocol);
-        }
-        Ok(value)
+        let admission = DecodeResourceAdmissionV1::acquire(None, policy)?;
+        admission.reserve_raw_frame(bytes.len(), limit)?;
+        let _scope = admission.enter();
+        decode_canonical_with_admission(bytes, limit, &admission)
+    }
+
+    fn decode_canonical_with_admission<T>(
+        bytes: &[u8],
+        limit: usize,
+        admission: &DecodeResourceAdmissionV1,
+    ) -> Result<T, BrokerError>
+    where
+        T: NoritoSerialize,
+        for<'de> T: NoritoDeserialize<'de>,
+    {
+        let budget = admission.reserve_decode(bytes.len(), limit)?;
+        let limits = DecodeLimits::new(
+            budget.max_sequence_elements,
+            budget.max_blob_bytes,
+            budget.max_total_elements,
+            budget.max_total_allocated_bytes,
+            budget.max_nesting_depth,
+        );
+        norito::decode_canonical_with_limits::<T>(bytes, limits).map_err(|_| BrokerError::Protocol)
     }
 
     fn encode_frame<T: NoritoSerialize>(
@@ -5914,19 +7032,7 @@ mod protocol {
         T: NoritoSerialize,
         for<'de> T: NoritoDeserialize<'de>,
     {
-        decode_frame_with_allocation_limit(bytes, expected_kind, limit, limit.saturating_mul(2))
-    }
-
-    fn decode_nested_frame<T>(
-        bytes: &[u8],
-        expected_kind: u8,
-        limit: usize,
-    ) -> Result<T, BrokerError>
-    where
-        T: NoritoSerialize,
-        for<'de> T: NoritoDeserialize<'de>,
-    {
-        decode_frame_with_allocation_limit(bytes, expected_kind, limit, limit.saturating_mul(4))
+        decode_frame_with_policy(bytes, expected_kind, limit, CONTROL_DECODE_POLICY_V1)
     }
 
     fn decode_operation_frame<T>(
@@ -5939,39 +7045,55 @@ mod protocol {
         for<'de> T: NoritoDeserialize<'de>,
     {
         let limit = operation_frame_limit(operation);
-        if matches!(
-            operation,
-            OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
-                | OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1
-        ) {
-            decode_nested_frame(bytes, expected_kind, limit)
-        } else {
-            decode_frame(bytes, expected_kind, limit)
+        if let Some(admission) = current_decode_resource_admission() {
+            if admission.operation != Some(operation) {
+                return Err(BrokerError::Protocol);
+            }
+            return decode_frame_with_admission(bytes, expected_kind, limit, &admission);
         }
+        let admission = DecodeResourceAdmissionV1::acquire_operation(operation)?;
+        admission.reserve_raw_frame(bytes.len(), limit)?;
+        let _scope = admission.enter();
+        decode_frame_with_admission(bytes, expected_kind, limit, &admission)
     }
 
-    fn decode_frame_with_allocation_limit<T>(
+    fn decode_frame_with_policy<T>(
         bytes: &[u8],
         expected_kind: u8,
         limit: usize,
-        max_total_allocated_bytes: usize,
+        policy: DecodeResourcePolicyV1,
     ) -> Result<T, BrokerError>
     where
         T: NoritoSerialize,
         for<'de> T: NoritoDeserialize<'de>,
     {
-        let frame = decode_canonical_with_allocation_limit::<BrokerFrameV1>(
-            bytes,
-            limit,
-            max_total_allocated_bytes,
-        )?;
+        if let Some(admission) = current_decode_resource_admission() {
+            return decode_frame_with_admission(bytes, expected_kind, limit, &admission);
+        }
+        let admission = DecodeResourceAdmissionV1::acquire(None, policy)?;
+        admission.reserve_raw_frame(bytes.len(), limit)?;
+        let _scope = admission.enter();
+        decode_frame_with_admission(bytes, expected_kind, limit, &admission)
+    }
+
+    fn decode_frame_with_admission<T>(
+        bytes: &[u8],
+        expected_kind: u8,
+        limit: usize,
+        admission: &DecodeResourceAdmissionV1,
+    ) -> Result<T, BrokerError>
+    where
+        T: NoritoSerialize,
+        for<'de> T: NoritoDeserialize<'de>,
+    {
+        let frame = decode_canonical_with_admission::<BrokerFrameV1>(bytes, limit, admission)?;
         if frame.magic != BROKER_MAGIC_V1
             || frame.version != BROKER_VERSION_V1
             || frame.kind != expected_kind
         {
             return Err(BrokerError::Protocol);
         }
-        decode_canonical_with_allocation_limit::<T>(&frame.body, limit, max_total_allocated_bytes)
+        decode_canonical_with_admission::<T>(&frame.body, limit, admission)
     }
 
     fn write_length_prefixed<W: std::io::Write>(
@@ -5996,6 +7118,7 @@ mod protocol {
         reader: &mut R,
         limit: usize,
         inbound_budget: Option<std::sync::Arc<tokio::sync::Semaphore>>,
+        decode_admission: Option<&DecodeResourceAdmissionV1>,
     ) -> Result<ScrubbedBytes, BrokerError> {
         let mut length_bytes = [0_u8; 4];
         reader
@@ -6005,6 +7128,9 @@ mod protocol {
             usize::try_from(u32::from_be_bytes(length_bytes)).map_err(|_| BrokerError::Protocol)?;
         if length == 0 || length > limit {
             return Err(BrokerError::Protocol);
+        }
+        if let Some(admission) = decode_admission {
+            admission.reserve_raw_frame(length, limit)?;
         }
         let inbound_permit = inbound_budget
             .map(|budget| {
@@ -6016,7 +7142,7 @@ mod protocol {
             .transpose()?;
         let mut frame = Vec::new();
         frame
-            .try_reserve_exact(length.min(64 * 1024))
+            .try_reserve_exact(length)
             .map_err(|_| BrokerError::Protocol)?;
         let mut remaining = length;
         let mut chunk = ScrubbedReadChunk([0_u8; 64 * 1024]);
@@ -6025,9 +7151,6 @@ mod protocol {
             reader
                 .read_exact(&mut chunk[..read_len])
                 .map_err(|_| BrokerError::Unavailable)?;
-            frame
-                .try_reserve_exact(read_len)
-                .map_err(|_| BrokerError::Protocol)?;
             frame.extend_from_slice(&chunk[..read_len]);
             chunk[..read_len].fill(0);
             remaining -= read_len;
@@ -6042,7 +7165,15 @@ mod protocol {
         reader: &mut R,
         limit: usize,
     ) -> Result<ScrubbedBytes, BrokerError> {
-        read_length_prefixed_inner(reader, limit, None)
+        read_length_prefixed_inner(reader, limit, None, None)
+    }
+
+    fn read_length_prefixed_with_decode_admission<R: std::io::Read>(
+        reader: &mut R,
+        limit: usize,
+        decode_admission: &DecodeResourceAdmissionV1,
+    ) -> Result<ScrubbedBytes, BrokerError> {
+        read_length_prefixed_inner(reader, limit, None, Some(decode_admission))
     }
 
     fn write_operation_request_frame<W: std::io::Write>(
@@ -6066,7 +7197,8 @@ mod protocol {
     fn read_operation_request_frame_inner<R: std::io::Read>(
         reader: &mut R,
         inbound_budget: Option<std::sync::Arc<tokio::sync::Semaphore>>,
-    ) -> Result<(u16, u16, ScrubbedBytes), BrokerError> {
+        decode_pool: Option<Arc<DecodeResourcePoolV1>>,
+    ) -> Result<(u16, u16, ScrubbedBytes, Arc<DecodeResourceAdmissionV1>), BrokerError> {
         let mut discriminator = [0_u8; 4];
         reader
             .read_exact(&mut discriminator)
@@ -6076,23 +7208,39 @@ mod protocol {
         if !operation_is_known(operation) {
             return Err(BrokerError::Protocol);
         }
-        let frame =
-            read_length_prefixed_inner(reader, operation_frame_limit(operation), inbound_budget)?;
-        Ok((slot, operation, frame))
+        let frame = read_length_prefixed_inner(
+            reader,
+            operation_frame_limit(operation),
+            inbound_budget,
+            None,
+        )?;
+        // The process-wide raw semaphore above is acquired from the declared
+        // length before allocation and remains attached to `frame`. Only after
+        // the complete bounded body arrives do we reserve the substantially
+        // larger composed decode budget, so a peer that stalls after the
+        // discriminator or length cannot monopolize decode capacity.
+        let decode_admission = match decode_pool {
+            Some(pool) => DecodeResourceAdmissionV1::acquire_operation_from(pool, operation)?,
+            None => DecodeResourceAdmissionV1::acquire_operation(operation)?,
+        };
+        decode_admission.reserve_raw_frame(frame.len(), operation_frame_limit(operation))?;
+        Ok((slot, operation, frame, decode_admission))
     }
 
     #[cfg(test)]
     fn read_operation_request_frame<R: std::io::Read>(
         reader: &mut R,
     ) -> Result<(u16, u16, ScrubbedBytes), BrokerError> {
-        read_operation_request_frame_inner(reader, None)
+        let (slot, operation, frame, _decode_admission) =
+            read_operation_request_frame_inner(reader, None, None)?;
+        Ok((slot, operation, frame))
     }
 
     fn read_operation_request_frame_with_budget<R: std::io::Read>(
         reader: &mut R,
         inbound_budget: std::sync::Arc<tokio::sync::Semaphore>,
-    ) -> Result<(u16, u16, ScrubbedBytes), BrokerError> {
-        read_operation_request_frame_inner(reader, Some(inbound_budget))
+    ) -> Result<(u16, u16, ScrubbedBytes, Arc<DecodeResourceAdmissionV1>), BrokerError> {
+        read_operation_request_frame_inner(reader, Some(inbound_budget), None)
     }
 
     fn catalog_digest(catalog: &[ProviderBindingWireV1]) -> Result<[u8; 32], BrokerError> {
@@ -6434,8 +7582,14 @@ mod protocol {
                     return Err(BrokerError::BindingMismatch);
                 }
             }
-            slot if native_transaction_signer_role_for_slot(slot).is_some() => {
-                native_transaction_signer_binding_from_wire(requested)?;
+            slot if native_transaction_signer_role_for_slot(slot).is_some()
+                || slot == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() =>
+            {
+                if native_transaction_signer_role_for_slot(slot).is_some() {
+                    native_transaction_signer_binding_from_wire(requested)?;
+                } else {
+                    soracloud_runtime_signer_binding_from_wire(requested)?;
+                }
                 if observed.signer_metadata.is_some()
                     || observed.moderation_quarantine_active_key_id.is_some()
                     || observed.provider_ingest_signer_binding.is_some()
@@ -8185,6 +9339,10 @@ mod protocol {
     fn reputation_governance_request_to_wire(
         request: &sorafs_node::reputation::runtime::ReputationGovernanceDagPublicationRequestV1,
     ) -> Result<ReputationGovernanceDagPublicationRequestWireV1, BrokerError> {
+        reserve_external_canonical_decode(
+            request.canonical_signed_result.len(),
+            MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+        )?;
         let decoded = sorafs_manifest::reputation::signed::decode_signed_reputation_snapshot(
             &request.canonical_signed_result,
         )
@@ -8216,6 +9374,10 @@ mod protocol {
         sorafs_node::reputation::runtime::ReputationGovernanceDagPublicationRequestV1,
         BrokerError,
     > {
+        reserve_external_canonical_decode(
+            wire.canonical_signed_result.len(),
+            MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+        )?;
         let signed_result = sorafs_manifest::reputation::signed::decode_signed_reputation_snapshot(
             &wire.canonical_signed_result,
         )
@@ -8272,12 +9434,70 @@ mod protocol {
         Ok(())
     }
 
-    const fn operation_frame_limit(operation: u16) -> usize {
+    const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
         match operation {
+            OPERATION_BILLING_IDENTITY_V1
+            | OPERATION_BILLING_READINESS_V1
+            | OPERATION_BILLING_QUERY_CAPABILITIES_V1
+            | OPERATION_BILLING_FINALIZED_HEAD_V1
+            | OPERATION_BILLING_QUERY_PAGE_V1
+            | OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1
+            | OPERATION_BILLING_VERIFY_PAGE_V1
+            | OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1
+            | OPERATION_BILLING_VERIFY_EPOCH_TRANSITION_V1
+            | OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1
+            | OPERATION_BILLING_PUBLISH_STATEMENT_V1
+            | OPERATION_BILLING_LOOKUP_PUBLICATION_V1
+            | OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1
+            | OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1
+            | OPERATION_BILLING_LOOKUP_ACKNOWLEDGEMENT_V1
+            | OPERATION_BILLING_LOAD_LATEST_EPOCH_V1
+            | OPERATION_BILLING_LOAD_EPOCH_V1
+            | OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1 => BILLING_DECODE_POLICY_V1,
+            OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1
+            | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
+            | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
+            | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1 => REPUTATION_DECODE_POLICY_V1,
+            OPERATION_SIGN_V1 | OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1 => {
+                GOVERNANCE_BULK_DECODE_POLICY_V1
+            }
+            OPERATION_SEALED_LOAD_V1
+            | OPERATION_SEALED_COMPARE_AND_SWAP_V1
+            | OPERATION_SEALED_DELETE_V1 => GOVERNANCE_SEALED_STATE_DECODE_POLICY_V1,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => SOURCE_PLAN_DECODE_POLICY_V1,
+            OPERATION_PROVIDER_INGEST_SIGN_V1 => PROVIDER_INGEST_SIGN_DECODE_POLICY_V1,
+            OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
+            | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                APPEAL_CHECKPOINT_DECODE_POLICY_V1
+            }
+            OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1
+            | OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1
+            }
+            OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1
+            | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
+            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1 => EVIDENCE_BULK_DECODE_POLICY_V1,
+            OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1
+            | OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1
+            | OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
+            | OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1
+            | OPERATION_EVIDENCE_VIEWER_VERIFY_AND_CONSUME_V1
+            | OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1
+            | OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1
+            | OPERATION_GATEWAY_COMPLIANCE_FETCH_V1 => OPAQUE_BLOB_DECODE_POLICY_V1,
+            _ => STANDARD_DECODE_POLICY_V1,
+        }
+    }
+
+    const fn operation_semantic_frame_limit(operation: u16) -> usize {
+        match operation {
+            OPERATION_SIGN_V1 => MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
             OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1 => {
                 MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1
             }
             OPERATION_NATIVE_TRANSACTION_SIGN_V1 => MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+            OPERATION_SORACLOUD_PROVENANCE_SIGN_V1 => MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
             OPERATION_STREAM_TOKEN_SIGN_V1 => MAX_STREAM_TOKEN_FRAME_BYTES_V1,
             OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1 => {
                 MAX_APPEAL_FINANCE_TRANSACTION_FRAME_BYTES_V1
@@ -8287,6 +9507,9 @@ mod protocol {
             | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
                 MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1
             }
+            OPERATION_SEALED_LOAD_V1
+            | OPERATION_SEALED_COMPARE_AND_SWAP_V1
+            | OPERATION_SEALED_DELETE_V1 => MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
             OPERATION_POTR_SIGN_V1 => MAX_POTR_FRAME_BYTES_V1,
             OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1 => MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
             OPERATION_MODERATION_PANEL_NOTIFICATION_DELIVER_ONCE_V1 => {
@@ -8331,8 +9554,8 @@ mod protocol {
             OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => {
                 MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
             }
-            OPERATION_QUALIFY_V1
-            | OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
+            OPERATION_QUALIFY_V1 => MAX_BROKER_UNARY_FRAME_BYTES_V1,
+            OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
             | OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1 => {
                 MAX_MODERATION_QUARANTINE_FRAME_BYTES_V1
             }
@@ -8387,7 +9610,55 @@ mod protocol {
             OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1 => {
                 MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1
             }
-            _ => MAX_OPERATION_FRAME_BYTES_V1,
+            _ => MAX_BROKER_UNARY_FRAME_BYTES_V1,
+        }
+    }
+
+    const fn operation_frame_limit(operation: u16) -> usize {
+        let semantic_limit = operation_semantic_frame_limit(operation);
+        let broker_limit = match operation {
+            OPERATION_SIGN_V1 => MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+            OPERATION_SEALED_LOAD_V1
+            | OPERATION_SEALED_COMPARE_AND_SWAP_V1
+            | OPERATION_SEALED_DELETE_V1 => MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
+            OPERATION_PROVIDER_INGEST_SIGN_V1 => MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1,
+            OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
+            | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1
+            }
+            OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1
+            | OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1
+            }
+            OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1
+            | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
+            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1 => MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+            OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1
+            | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
+            | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
+            | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1 => MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+            OPERATION_BILLING_QUERY_PAGE_V1
+            | OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1
+            | OPERATION_BILLING_VERIFY_PAGE_V1
+            | OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1
+            | OPERATION_BILLING_VERIFY_EPOCH_TRANSITION_V1
+            | OPERATION_BILLING_PUBLISH_STATEMENT_V1
+            | OPERATION_BILLING_LOOKUP_PUBLICATION_V1
+            | OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1
+            | OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1
+            | OPERATION_BILLING_LOAD_LATEST_EPOCH_V1
+            | OPERATION_BILLING_LOAD_EPOCH_V1
+            | OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1 => MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
+            OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1 => {
+                MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1
+            }
+            _ => MAX_BROKER_UNARY_FRAME_BYTES_V1,
+        };
+        if semantic_limit < broker_limit {
+            semantic_limit
+        } else {
+            broker_limit
         }
     }
 
@@ -8398,6 +9669,7 @@ mod protocol {
                 | OPERATION_SIGN_V1
                 | OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1
                 | OPERATION_NATIVE_TRANSACTION_SIGN_V1
+                | OPERATION_SORACLOUD_PROVENANCE_SIGN_V1
                 | OPERATION_STREAM_TOKEN_SIGN_V1
                 | OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1
                 | OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1
@@ -8492,11 +9764,8 @@ mod protocol {
         ),
         BrokerError,
     > {
-        if context.provider_owner.is_empty()
-            || context.provider_owner.len() > MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1
-            || context.finalized_height == 0
-            || context.finalized_block_hash == [0; 32]
-        {
+        validate_provider_ingest_account_canonical_bytes(&context.provider_owner)?;
+        if context.finalized_height == 0 || context.finalized_block_hash == [0; 32] {
             return Err(BrokerError::Rejected);
         }
         let owner = decode_canonical::<iroha_data_model::account::AccountId>(
@@ -8510,6 +9779,17 @@ mod protocol {
                 block_hash: context.finalized_block_hash,
             },
         ))
+    }
+
+    fn validate_provider_ingest_account_canonical_bytes(
+        canonical_account: &[u8],
+    ) -> Result<(), BrokerError> {
+        if canonical_account.is_empty()
+            || canonical_account.len() > MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1
+        {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(())
     }
 
     fn provider_ingest_signer_context_to_wire(
@@ -8937,6 +10217,8 @@ mod protocol {
             IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id();
         let evidence_archive_slot =
             IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id();
+        let soracloud_runtime_signer_slot =
+            IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
         match (request.binding.slot, request.operation) {
             (slot, OPERATION_QUALIFY_V1)
                 if slot == moderation_quarantine_slot
@@ -8970,6 +10252,7 @@ mod protocol {
                     || slot == billing_statement_publisher_slot
                     || slot == billing_acknowledgement_authority_slot
                     || slot == billing_epoch_witness_store_slot
+                    || slot == soracloud_runtime_signer_slot
                     || native_transaction_signer_role_for_slot(slot).is_some() =>
             {
                 decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
@@ -9289,6 +10572,36 @@ mod protocol {
                 if payload.authority() != expected.authority() {
                     return Err(BrokerError::Rejected);
                 }
+            }
+            (slot, OPERATION_NATIVE_TRANSACTION_SIGN_V1)
+                if slot == soracloud_runtime_signer_slot =>
+            {
+                let expected = soracloud_runtime_signer_binding_from_wire(&request.binding)?;
+                let payload = decode_native_transaction_payload(&request.payload)?;
+                if payload.authority() != expected.authority() {
+                    return Err(BrokerError::Rejected);
+                }
+            }
+            (slot, OPERATION_SORACLOUD_PROVENANCE_SIGN_V1)
+                if slot == soracloud_runtime_signer_slot =>
+            {
+                let sign = decode_canonical::<SoracloudProvenanceSignRequestWireV1>(
+                    &request.payload,
+                    MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                )?;
+                let purpose = iroha_data_model::soracloud::
+                    SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(sign.purpose)
+                    .map_err(|_| BrokerError::Rejected)?;
+                if sign.preimage.is_empty()
+                    || sign.preimage.len() > MAX_NATIVE_TRANSACTION_PAYLOAD_BYTES_V1
+                {
+                    return Err(BrokerError::Rejected);
+                }
+                iroha_data_model::soracloud::validate_soracloud_runtime_provenance_preimage_v1(
+                    purpose,
+                    &sign.preimage,
+                )
+                .map_err(|_| BrokerError::Rejected)?;
             }
             (slot, OPERATION_STREAM_TOKEN_SIGN_V1) if slot == stream_token_slot => {
                 let signing = decode_canonical::<SignRequestWireV1>(
@@ -9701,6 +11014,9 @@ mod protocol {
                     .binding
                     .provider_ingest_checkpoint_max_bytes
                     .ok_or(BrokerError::BindingMismatch)?;
+                let checkpoint_limit =
+                    usize::try_from(checkpoint_max).map_err(|_| BrokerError::Rejected)?;
+                reserve_external_canonical_decode(compare.next_record.len(), checkpoint_limit)?;
                 sorafs_node::ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
                     &compare.next_record,
                     checkpoint_max,
@@ -9727,6 +11043,10 @@ mod protocol {
                 if compare.expected_revision == Some([0; 32]) {
                     return Err(BrokerError::Rejected);
                 }
+                reserve_external_canonical_decode(
+                    compare.next_record.len(),
+                    MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1,
+                )?;
                 let next = iroha_core::query::provider_ingest_finalized::
                     ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(
                         &compare.next_record,
@@ -9762,6 +11082,10 @@ mod protocol {
                 {
                     return Err(BrokerError::Rejected);
                 }
+                reserve_external_canonical_decode(
+                    compare.next_record.len(),
+                    MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1,
+                )?;
                 let next = iroha_core::query::reputation_finalized::
                     ReputationFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(
                         &compare.next_record,
@@ -9947,6 +11271,41 @@ mod protocol {
         request: &OperationRequestV1,
         response: &OperationResponseV1,
     ) -> Result<(), BrokerError> {
+        validate_operation_response_envelope(request, response)?;
+        match response.status {
+            STATUS_OK_V1
+            | STATUS_REJECTED_V1
+            | STATUS_CONFLICT_V1
+            | STATUS_STALE_OR_REVOKED_V1
+            | STATUS_AMBIGUOUS_V1
+            | STATUS_UNAVAILABLE_V1 => {
+                validate_operation_result(request, response.status, &response.result)
+            }
+            _ => Err(BrokerError::Protocol),
+        }
+    }
+
+    fn validate_operation_response_for_client(
+        request: &OperationRequestV1,
+        response: &OperationResponseV1,
+    ) -> Result<(), BrokerError> {
+        validate_operation_response_envelope(request, response)?;
+        if response.status == STATUS_OK_V1
+            && request.operation == OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1
+        {
+            // The caller decodes and validates the full sealed record exactly
+            // once while the response-owned admission remains live. Repeating
+            // the 192 MiB typed decode here would require a multi-gigabyte
+            // composed reservation.
+            return Ok(());
+        }
+        validate_operation_result(request, response.status, &response.result)
+    }
+
+    fn validate_operation_response_envelope(
+        request: &OperationRequestV1,
+        response: &OperationResponseV1,
+    ) -> Result<(), BrokerError> {
         if response.session_id != request.session_id
             || response.request_id != request.request_id
             || response.request_digest != request.request_digest
@@ -9973,17 +11332,18 @@ mod protocol {
         if operation_response_digest(&fields)? != response.response_digest {
             return Err(BrokerError::Protocol);
         }
-        match response.status {
+        if !matches!(
+            response.status,
             STATUS_OK_V1
-            | STATUS_REJECTED_V1
-            | STATUS_CONFLICT_V1
-            | STATUS_STALE_OR_REVOKED_V1
-            | STATUS_AMBIGUOUS_V1
-            | STATUS_UNAVAILABLE_V1 => {
-                validate_operation_result(request, response.status, &response.result)
-            }
-            _ => Err(BrokerError::Protocol),
+                | STATUS_REJECTED_V1
+                | STATUS_CONFLICT_V1
+                | STATUS_STALE_OR_REVOKED_V1
+                | STATUS_AMBIGUOUS_V1
+                | STATUS_UNAVAILABLE_V1
+        ) {
+            return Err(BrokerError::Protocol);
         }
+        Ok(())
     }
 
     fn validate_operation_result(
@@ -10064,8 +11424,13 @@ mod protocol {
                         result, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1
                     )?;
                     let expected = decode_native_transaction_payload(&request.payload)?;
+                    let soracloud_runtime_signer = request.binding.slot
+                        == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
                     if signed.payload() != &expected
                         || signed.authority() != expected.authority()
+                        || (soracloud_runtime_signer
+                            && (signed.attachments().is_some()
+                                || signed.multisig_signatures().is_some()))
                         || signed.verify_signature().is_err()
                     {
                         return Err(BrokerError::Protocol);
@@ -10076,9 +11441,54 @@ mod protocol {
                             return Err(BrokerError::Protocol);
                         }
                     } else if request.binding.slot
+                        == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id()
+                    {
+                        let exact = soracloud_runtime_signer_binding_from_wire(&request.binding)?;
+                        if expected.authority() != exact.authority() {
+                            return Err(BrokerError::Protocol);
+                        }
+                    } else if request.binding.slot
                         != IrohaRuntimeProviderSlotV1::ModerationTransactionSigner.wire_id()
                     {
                         return Err(BrokerError::BindingMismatch);
+                    }
+                }
+                OPERATION_SORACLOUD_PROVENANCE_SIGN_V1 => {
+                    let signature = decode_canonical::<iroha_crypto::Signature>(
+                        result,
+                        MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                    )?;
+                    let sign = decode_canonical::<SoracloudProvenanceSignRequestWireV1>(
+                        &request.payload,
+                        MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                    )?;
+                    let exact = soracloud_runtime_signer_binding_from_wire(&request.binding)?;
+                    let purpose = iroha_data_model::soracloud::
+                        SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(sign.purpose)
+                        .map_err(|_| BrokerError::Protocol)?;
+                    iroha_data_model::soracloud::validate_soracloud_runtime_provenance_preimage_v1(
+                        purpose,
+                        &sign.preimage,
+                    )
+                    .map_err(|_| BrokerError::Protocol)?;
+                    signature
+                        .verify(exact.public_key(), &sign.preimage)
+                        .map_err(|_| BrokerError::Protocol)?;
+                }
+                OPERATION_QUALIFY_V1
+                    if request.binding.slot
+                        == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() =>
+                {
+                    let qualification = decode_canonical::<SoracloudSignerQualificationWireV1>(
+                        result,
+                        MAX_OPERATION_FRAME_BYTES_V1,
+                    )?;
+                    if Some(qualification.revision) != request.binding.revision
+                        || Some(qualification.policy_digest) != request.binding.policy_digest
+                        || !qualification.active
+                        || qualification.test_only
+                    {
+                        return Err(BrokerError::Protocol);
                     }
                 }
                 OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1 => {
@@ -10140,6 +11550,10 @@ mod protocol {
                         1 if !outcome.canonical_result.is_empty()
                             && outcome.failure_receipt == [0; 32] =>
                         {
+                            reserve_external_canonical_decode(
+                                outcome.canonical_result.len(),
+                                MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+                            )?;
                             let signed = sorafs_manifest::reputation::signed::
                                 decode_signed_reputation_snapshot(&outcome.canonical_result)
                                 .map_err(|_| BrokerError::Protocol)?;
@@ -10890,6 +12304,10 @@ mod protocol {
                         {
                             return Err(BrokerError::Protocol);
                         }
+                        reserve_external_canonical_decode(
+                            record.len(),
+                            MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1,
+                        )?;
                         iroha_core::query::reputation_finalized::
                             ReputationFinalizedArchiveRetentionApprovalRecordV1::
                                 from_canonical_bytes(&record)
@@ -11061,12 +12479,23 @@ mod protocol {
         revision: [u8; 32],
         payload: &[u8],
     ) -> Result<(), BrokerError> {
+        validate_sealed_payload_len(slot, payload.len())?;
         if generation == 0
             || revision == [0; 32]
-            || payload.is_empty()
-            || payload.len() > sorafs_node::governance_dag_sealed_state_payload_max_bytes_v1(slot)
             || sorafs_node::governance_dag_sealed_state_revision(slot, generation, payload)
                 != revision
+        {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(())
+    }
+
+    fn validate_sealed_payload_len(
+        slot: sorafs_node::GovernanceDagSealedStateSlot,
+        payload_len: usize,
+    ) -> Result<(), BrokerError> {
+        if payload_len == 0
+            || payload_len > sorafs_node::governance_dag_sealed_state_payload_max_bytes_v1(slot)
         {
             return Err(BrokerError::Rejected);
         }
@@ -12180,6 +13609,22 @@ mod protocol {
                     qualify_native_transaction_signer_backend(binding, backends)?;
                 }
                 slot if slot
+                    == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() =>
+                {
+                    let exact = soracloud_runtime_signer_binding_from_wire(binding)
+                        .map_err(server_error)?;
+                    crate::soracloud_runtime_signer::qualify_soracloud_runtime_mutation_signer_v1(
+                        exact,
+                        Arc::clone(
+                            backends
+                                .soracloud_runtime_mutation_signer
+                                .as_ref()
+                                .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?,
+                        ),
+                    )
+                    .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                }
+                slot if slot
                     == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id() =>
                 {
                     let source = backends
@@ -12665,7 +14110,9 @@ mod protocol {
                     && requested(IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore)
                         == backends.evidence_viewer_checkpoint_store.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive)
-                        == backends.evidence_viewer_compaction_archive.is_some();
+                        == backends.evidence_viewer_compaction_archive.is_some()
+                    && requested(IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner)
+                        == backends.soracloud_runtime_mutation_signer.is_some();
             if !exact_backend_set {
                 return Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch);
             }
@@ -12924,6 +14371,66 @@ mod protocol {
             }
         }
 
+        fn soracloud_runtime_signer_qualification_error(
+            error: crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationErrorV1,
+        ) -> BrokerError {
+            use crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationErrorV1 as Error;
+
+            match error {
+                Error::ProviderUnavailable => BrokerError::Unavailable,
+                Error::InvalidProviderHandle
+                | Error::InvalidProviderQualification
+                | Error::ProviderInactive
+                | Error::TestProviderRejected
+                | Error::UnsupportedProviderKeyAlgorithm
+                | Error::HandleMismatch
+                | Error::AuthorityMismatch
+                | Error::PublicKeyMismatch
+                | Error::ProviderAuthorityKeyMismatch
+                | Error::RevisionMismatch
+                | Error::PolicyDigestMismatch
+                | Error::ProviderDrift => BrokerError::StaleOrRevoked,
+            }
+        }
+
+        fn qualified_soracloud_runtime_signer(
+            state: &BrokerServerStateV1,
+            binding: &ProviderBindingWireV1,
+        ) -> Result<
+            Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
+            BrokerError,
+        > {
+            let exact = soracloud_runtime_signer_binding_from_wire(binding)?;
+            crate::soracloud_runtime_signer::qualify_soracloud_runtime_mutation_signer_v1(
+                exact,
+                Arc::clone(
+                    state
+                        .backends
+                        .soracloud_runtime_mutation_signer
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?,
+                ),
+            )
+            .map_err(soracloud_runtime_signer_qualification_error)
+        }
+
+        fn map_soracloud_runtime_signing_error(
+            error: crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1,
+        ) -> BrokerError {
+            use crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1 as Error;
+
+            match error {
+                Error::Unavailable => BrokerError::Unavailable,
+                Error::Refused
+                | Error::InputAuthorityMismatch
+                | Error::InvalidProvenancePreimage => BrokerError::Rejected,
+                Error::SubstitutedTransaction | Error::InvalidProvenanceSignature => {
+                    BrokerError::Ambiguous
+                }
+                Error::QualificationChanged => BrokerError::StaleOrRevoked,
+            }
+        }
+
         fn sign_moderation_transaction(
             state: &BrokerServerStateV1,
             payload: iroha_data_model::transaction::TransactionPayload,
@@ -13164,6 +14671,8 @@ mod protocol {
                 IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id();
             let evidence_archive_slot =
                 IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id();
+            let soracloud_runtime_signer_slot =
+                IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
 
             let result = match (request.binding.slot, request.operation) {
                 (slot, OPERATION_QUALIFY_V1) if slot == moderation_quarantine_slot => {
@@ -13311,6 +14820,21 @@ mod protocol {
                             revision: qualification.revision,
                             policy_digest: qualification.policy_digest,
                             signer_binding,
+                        },
+                        MAX_OPERATION_FRAME_BYTES_V1,
+                    )
+                }
+                (slot, OPERATION_QUALIFY_V1) if slot == soracloud_runtime_signer_slot => {
+                    let signer = qualified_soracloud_runtime_signer(state, &request.binding)?;
+                    let qualification = signer
+                        .qualification()
+                        .map_err(|_| BrokerError::Unavailable)?;
+                    encode_canonical(
+                        &SoracloudSignerQualificationWireV1 {
+                            revision: qualification.revision(),
+                            policy_digest: qualification.policy_digest(),
+                            active: qualification.active(),
+                            test_only: qualification.test_only(),
                         },
                         MAX_OPERATION_FRAME_BYTES_V1,
                     )
@@ -15674,6 +17198,54 @@ mod protocol {
                     encode_canonical(&signed, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
+                (slot, OPERATION_NATIVE_TRANSACTION_SIGN_V1)
+                    if slot == soracloud_runtime_signer_slot =>
+                {
+                    let payload = decode_native_transaction_payload(&request.payload)?;
+                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    let signer = qualified_soracloud_runtime_signer(state, &request.binding)?;
+                    let signed = signer
+                        .sign_transaction(payload)
+                        .map_err(map_soracloud_runtime_signing_error)?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(&signed, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
+                        .map_err(|_| BrokerError::Ambiguous)
+                }
+                (slot, OPERATION_SORACLOUD_PROVENANCE_SIGN_V1)
+                    if slot == soracloud_runtime_signer_slot =>
+                {
+                    let request_payload = decode_canonical::<SoracloudProvenanceSignRequestWireV1>(
+                        &request.payload,
+                        MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                    )?;
+                    let purpose = iroha_data_model::soracloud::
+                        SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(
+                            request_payload.purpose,
+                        )
+                        .map_err(|_| BrokerError::Rejected)?;
+                    iroha_data_model::soracloud::validate_soracloud_runtime_provenance_preimage_v1(
+                        purpose,
+                        &request_payload.preimage,
+                    )
+                    .map_err(|_| BrokerError::Rejected)?;
+                    let signer = qualified_soracloud_runtime_signer(state, &request.binding)?;
+                    let signature = signer
+                        .sign_provenance(purpose, &request_payload.preimage)
+                        .map_err(map_soracloud_runtime_signing_error)?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(&signature, MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1)
+                        .map_err(|_| BrokerError::Ambiguous)
+                }
                 (slot, OPERATION_SIGN_V1) if slot == governance_signer_slot => {
                     let sign = decode_canonical::<SignRequestWireV1>(
                         &request.payload,
@@ -16022,6 +17594,9 @@ mod protocol {
                         .binding
                         .provider_ingest_checkpoint_max_bytes
                         .ok_or(BrokerError::BindingMismatch)?;
+                    let max_bytes_limit =
+                        usize::try_from(max_bytes).map_err(|_| BrokerError::Rejected)?;
+                    reserve_external_canonical_decode(compare.next_record.len(), max_bytes_limit)?;
                     let next =
                         sorafs_node::ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
                             &compare.next_record,
@@ -16142,6 +17717,10 @@ mod protocol {
                     if compare.chain_id != state.chain_id {
                         return Err(BrokerError::BindingMismatch);
                     }
+                    reserve_external_canonical_decode(
+                        compare.next_record.len(),
+                        MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1,
+                    )?;
                     let next = iroha_core::query::provider_ingest_finalized::
                         ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::
                             from_canonical_bytes(&compare.next_record)
@@ -16278,6 +17857,10 @@ mod protocol {
                     {
                         return Err(BrokerError::BindingMismatch);
                     }
+                    reserve_external_canonical_decode(
+                        compare.next_record.len(),
+                        MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1,
+                    )?;
                     let next = iroha_core::query::reputation_finalized::
                         ReputationFinalizedArchiveRetentionApprovalRecordV1::
                             from_canonical_bytes(&compare.next_record)
@@ -16930,6 +18513,9 @@ mod protocol {
             deadline: std::time::Instant,
         ) -> Result<(), BrokerError> {
             apply_source_socket_deadline(stream, deadline)?;
+            let admission =
+                DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)?;
+            let _scope = admission.enter();
             let frame = encode_frame(
                 FRAME_KIND_PROVIDER_INGEST_SOURCE_TRAILER_V1,
                 &trailer,
@@ -17001,42 +18587,49 @@ mod protocol {
                 source_deadline_remaining(deadline)?,
             )?;
             validate_source_payload_metadata(&authorization, &fetched.manifest, &fetched.plan)?;
-            let manifest = fetched
-                .manifest
-                .encode()
-                .map_err(|_| BrokerError::Rejected)?;
-            let plan = encode_source_plan(&fetched.plan)?;
-            validate_source_metadata_lengths(manifest.len(), plan.len())?;
-            if sorafs_manifest::decode_manifest_v1_canonical(&manifest)
-                .map_err(|_| BrokerError::Rejected)?
-                != fetched.manifest
-            {
-                return Err(BrokerError::Rejected);
-            }
+            let _retained_memory = acquire_source_retained_memory(&fetched.plan)?;
             let content_length = authorization.content_length();
             let frame_count = source_stream_frame_count(content_length)?;
-            let header = ProviderIngestSourceHeaderWireV1 {
-                manifest,
-                plan,
-                content_length,
-                frame_count,
+            let mut transcript = {
+                let initial_admission = DecodeResourceAdmissionV1::acquire_operation(
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                )?;
+                let _initial_scope = initial_admission.enter();
+                let manifest = fetched
+                    .manifest
+                    .encode()
+                    .map_err(|_| BrokerError::Rejected)?;
+                let plan = encode_source_plan(&fetched.plan)?;
+                validate_source_metadata_lengths(manifest.len(), plan.len())?;
+                if sorafs_manifest::decode_manifest_v1_canonical(&manifest)
+                    .map_err(|_| BrokerError::Rejected)?
+                    != fetched.manifest
+                {
+                    return Err(BrokerError::Rejected);
+                }
+                let header = ProviderIngestSourceHeaderWireV1 {
+                    manifest,
+                    plan,
+                    content_length,
+                    frame_count,
+                };
+                let result =
+                    encode_canonical(&header, MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1)?;
+                let response = make_operation_response(request, STATUS_OK_V1, result)?;
+                let response_frame = encode_frame(
+                    FRAME_KIND_OPERATION_RESPONSE_V1,
+                    &response,
+                    MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+                )?;
+                apply_source_socket_deadline(&stream, deadline)?;
+                write_length_prefixed(
+                    &mut stream,
+                    &response_frame,
+                    MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+                )?;
+                source_stream_transcript(request, &response)
             };
-            let result =
-                encode_canonical(&header, MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1)?;
-            let response = make_operation_response(request, STATUS_OK_V1, result)?;
-            let response_frame = encode_frame(
-                FRAME_KIND_OPERATION_RESPONSE_V1,
-                &response,
-                MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
-            )?;
-            apply_source_socket_deadline(&stream, deadline)?;
-            write_length_prefixed(
-                &mut stream,
-                &response_frame,
-                MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
-            )?;
 
-            let mut transcript = source_stream_transcript(request, &response);
             let mut payload_hasher = blake3::Hasher::new();
             let mut offset = 0_u64;
             for sequence in 0..frame_count {
@@ -17050,6 +18643,13 @@ mod protocol {
                     ),
                 )
                 .map_err(|_| BrokerError::Protocol)?;
+                let chunk_admission =
+                    DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)?;
+                chunk_admission.reserve_retained_bytes(
+                    chunk_len,
+                    MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
+                )?;
+                let _chunk_scope = chunk_admission.enter();
                 let mut bytes = Vec::new();
                 bytes
                     .try_reserve_exact(chunk_len)
@@ -17187,11 +18787,12 @@ mod protocol {
             let mut expected_request_id = 1_u64;
             let mut pop_session = PopBrokerServerSessionV1::default();
             loop {
-                let (announced_slot, announced_operation, request_frame) =
+                let (announced_slot, announced_operation, request_frame, decode_admission) =
                     read_operation_request_frame_with_budget(
                         &mut stream,
                         Arc::clone(&inbound_operation_budget),
                     )?;
+                let _decode_scope = decode_admission.enter();
                 let request = decode_operation_frame::<OperationRequestV1>(
                     &request_frame,
                     FRAME_KIND_OPERATION_REQUEST_V1,
@@ -17243,9 +18844,14 @@ mod protocol {
                         return Ok(());
                     };
                     // A stalled source stream consumes only its independently
-                    // configured stream permit after the authenticated request
-                    // has been classified; unary session capacity is released.
+                    // configured stream and retained-plan permits after the
+                    // authenticated request has been classified. Release both
+                    // the unary session and the full initial-frame admission
+                    // before entering the payload stream.
                     drop(session_permit.take());
+                    drop(_decode_scope);
+                    drop(decode_admission);
+                    drop(request_frame);
                     let _source_stream_permit = source_stream_permit;
                     return serve_provider_ingest_source_fetch(stream, state, &request);
                 }
@@ -17354,8 +18960,11 @@ mod protocol {
                 // compromised same-UID peer can therefore occupy at most one
                 // maximum-sized operation across all accepted sessions, and a
                 // length prefix alone never triggers a maximum-sized allocation.
-                let inbound_operation_budget =
-                    Arc::new(tokio::sync::Semaphore::new(MAX_OPERATION_FRAME_BYTES_V1));
+                let inbound_operation_budget = Arc::new(tokio::sync::Semaphore::new(
+                    MAX_BROKER_PROCESS_OPERATION_BYTES_V1
+                        .checked_sub(MAX_BROKER_SHARED_DECODE_BYTES_V1)
+                        .expect("combined broker memory ceiling includes raw frames"),
+                ));
                 let source_stream_limit = state
                     .catalog
                     .iter()
@@ -17521,21 +19130,56 @@ mod protocol {
                 }
             }
 
-            fn decode_result<T>(&self, bytes: &[u8]) -> Result<T, BrokerError>
+            fn decode_result<T>(&self, bytes: &ScrubbedBytes) -> Result<T, BrokerError>
             where
                 T: NoritoSerialize,
                 for<'de> T: NoritoDeserialize<'de>,
             {
+                let _scope = bytes.enter_decode_admission();
                 decode_canonical::<T>(bytes, MAX_OPERATION_FRAME_BYTES_V1).inspect_err(|_| {
                     self.poison();
                 })
             }
 
-            fn decode_nested_result<T>(&self, bytes: &[u8], limit: usize) -> Result<T, BrokerError>
+            fn decode_operation_result<T>(
+                &self,
+                bytes: &ScrubbedBytes,
+                operation: u16,
+            ) -> Result<T, BrokerError>
             where
                 T: NoritoSerialize,
                 for<'de> T: NoritoDeserialize<'de>,
             {
+                if bytes
+                    .decode_admission
+                    .as_ref()
+                    .and_then(|admission| admission.operation)
+                    .is_some_and(|active| active != operation)
+                {
+                    self.poison();
+                    return Err(BrokerError::Protocol);
+                }
+                let _scope = bytes.enter_decode_admission();
+                decode_canonical_with_policy::<T>(
+                    bytes,
+                    operation_frame_limit(operation),
+                    operation_decode_policy(operation),
+                )
+                .inspect_err(|_| {
+                    self.poison();
+                })
+            }
+
+            fn decode_nested_result<T>(
+                &self,
+                bytes: &ScrubbedBytes,
+                limit: usize,
+            ) -> Result<T, BrokerError>
+            where
+                T: NoritoSerialize,
+                for<'de> T: NoritoDeserialize<'de>,
+            {
+                let _scope = bytes.enter_decode_admission();
                 decode_nested_canonical::<T>(bytes, limit).inspect_err(|_| {
                     self.poison();
                 })
@@ -17548,7 +19192,15 @@ mod protocol {
                 operation: u16,
                 payload: Vec<u8>,
                 mutating: bool,
-            ) -> Result<Vec<u8>, BrokerError> {
+            ) -> Result<ScrubbedBytes, BrokerError> {
+                let frame_limit = operation_frame_limit(operation);
+                // Reserve the full audited operation ceiling before retaining
+                // the caller's payload or constructing any canonical request
+                // copies. The same reservation follows the response into the
+                // caller's typed result decode.
+                let decode_admission = DecodeResourceAdmissionV1::acquire_operation(operation)?;
+                decode_admission.reserve_retained_bytes(payload.len(), frame_limit)?;
+                let decode_scope = decode_admission.enter();
                 let mut connection = self
                     .connection
                     .lock()
@@ -17569,7 +19221,6 @@ mod protocol {
                     operation,
                     payload,
                 )?;
-                let frame_limit = operation_frame_limit(operation);
                 let request_frame =
                     encode_frame(FRAME_KIND_OPERATION_REQUEST_V1, &request, frame_limit)?;
                 // Retire the identifier before the first write so a partially
@@ -17585,8 +19236,12 @@ mod protocol {
                         BrokerError::Unavailable
                     });
                 }
-                let response_frame = match read_length_prefixed(&mut connection.stream, frame_limit)
-                {
+                drop(request_frame);
+                let response_frame = match read_length_prefixed_with_decode_admission(
+                    &mut connection.stream,
+                    frame_limit,
+                    &decode_admission,
+                ) {
                     Ok(frame) => frame,
                     Err(_) => {
                         connection.poisoned = true;
@@ -17612,7 +19267,7 @@ mod protocol {
                         });
                     }
                 };
-                if let Err(error) = validate_operation_response(&request, &response) {
+                if let Err(error) = validate_operation_response_for_client(&request, &response) {
                     connection.poisoned = true;
                     return Err(if mutating {
                         BrokerError::Ambiguous
@@ -17621,7 +19276,14 @@ mod protocol {
                     });
                 }
                 match response.status {
-                    STATUS_OK_V1 => Ok(std::mem::take(&mut response.result)),
+                    STATUS_OK_V1 => {
+                        let result = std::mem::take(&mut response.result);
+                        drop(decode_scope);
+                        Ok(ScrubbedBytes::with_decode_admission(
+                            result,
+                            decode_admission,
+                        ))
+                    }
                     STATUS_REJECTED_V1 => Err(BrokerError::Rejected),
                     STATUS_CONFLICT_V1 => Err(BrokerError::Conflict),
                     STATUS_STALE_OR_REVOKED_V1 => {
@@ -17662,7 +19324,6 @@ mod protocol {
                     payload.take(),
                     mutating,
                 )
-                .map(ScrubbedBytes::new)
             }
         }
 
@@ -17685,6 +19346,7 @@ mod protocol {
             transcript: blake3::Hasher,
             finished: bool,
             poisoned: bool,
+            _retained_memory: Option<DecodeResourcePoolPermitV1>,
         }
 
         impl fmt::Debug for ProviderIngestBrokerSourceReader {
@@ -17725,15 +19387,21 @@ mod protocol {
                     return Err(self.poison(std::io::ErrorKind::InvalidData));
                 }
                 self.apply_deadline()?;
-                let frame = read_length_prefixed(
+                let decode_admission =
+                    DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)
+                        .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
+                let frame = read_length_prefixed_with_decode_admission(
                     &mut self.stream,
                     MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
+                    &decode_admission,
                 )
                 .map_err(|_| self.transport_failure())?;
-                let chunk = decode_nested_frame::<ProviderIngestSourceChunkWireV1>(
+                let _decode_scope = decode_admission.enter();
+                let chunk = decode_frame_with_policy::<ProviderIngestSourceChunkWireV1>(
                     &frame,
                     FRAME_KIND_PROVIDER_INGEST_SOURCE_CHUNK_V1,
                     MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
+                    SOURCE_STREAM_FRAME_DECODE_POLICY_V1,
                 )
                 .map_err(|_| self.poison(std::io::ErrorKind::InvalidData))?;
                 let expected_len = usize::try_from(
@@ -17783,15 +19451,21 @@ mod protocol {
                     return Err(self.poison(std::io::ErrorKind::UnexpectedEof));
                 }
                 self.apply_deadline()?;
-                let frame = read_length_prefixed(
+                let decode_admission =
+                    DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)
+                        .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
+                let frame = read_length_prefixed_with_decode_admission(
                     &mut self.stream,
                     MAX_PROVIDER_INGEST_SOURCE_TRAILER_FRAME_BYTES_V1,
+                    &decode_admission,
                 )
                 .map_err(|_| self.transport_failure())?;
-                let trailer = decode_frame::<ProviderIngestSourceTrailerWireV1>(
+                let _decode_scope = decode_admission.enter();
+                let trailer = decode_frame_with_policy::<ProviderIngestSourceTrailerWireV1>(
                     &frame,
                     FRAME_KIND_PROVIDER_INGEST_SOURCE_TRAILER_V1,
                     MAX_PROVIDER_INGEST_SOURCE_TRAILER_FRAME_BYTES_V1,
+                    SOURCE_STREAM_FRAME_DECODE_POLICY_V1,
                 )
                 .map_err(|_| self.poison(std::io::ErrorKind::InvalidData))?;
                 let payload_digest = *self.payload_hasher.clone().finalize().as_bytes();
@@ -17951,6 +19625,10 @@ mod protocol {
                     return Err(BrokerError::StaleOrRevoked);
                 }
                 apply_source_socket_deadline(&connection.stream, deadline)?;
+                let decode_admission = DecodeResourceAdmissionV1::acquire_operation(
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                )?;
+                let decode_scope = decode_admission.enter();
                 let payload =
                     encode_canonical(&fetch, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)?;
                 let operation_request = make_operation_request(
@@ -17971,14 +19649,16 @@ mod protocol {
                     &operation_request,
                     &request_frame,
                 )?;
-                let response_frame = read_length_prefixed(
+                drop(request_frame);
+                let response_frame = read_length_prefixed_with_decode_admission(
                     &mut connection.stream,
                     MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+                    &decode_admission,
                 )?;
-                let response = decode_frame::<OperationResponseV1>(
+                let response = decode_operation_frame::<OperationResponseV1>(
                     &response_frame,
                     FRAME_KIND_OPERATION_RESPONSE_V1,
-                    MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
                 )?;
                 validate_operation_response(&operation_request, &response)?;
                 match response.status {
@@ -17987,9 +19667,10 @@ mod protocol {
                     STATUS_STALE_OR_REVOKED_V1 => return Err(BrokerError::StaleOrRevoked),
                     _ => return Err(BrokerError::Protocol),
                 }
-                let header = decode_canonical::<ProviderIngestSourceHeaderWireV1>(
+                let header = decode_canonical_with_policy::<ProviderIngestSourceHeaderWireV1>(
                     &response.result,
                     MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+                    SOURCE_PLAN_DECODE_POLICY_V1,
                 )?;
                 validate_source_metadata_lengths(header.manifest.len(), header.plan.len())?;
                 if header.content_length != fetch.authorization.content_length()
@@ -18001,22 +19682,32 @@ mod protocol {
                     .map_err(|_| BrokerError::Rejected)?;
                 let plan = decode_source_plan(&header.plan)?;
                 validate_source_payload_metadata(&fetch.authorization, &manifest, &plan)?;
+                let retained_memory = acquire_source_retained_memory(&plan)?;
+                let content_length = header.content_length;
+                let frame_count = header.frame_count;
+                let transcript = source_stream_transcript(&operation_request, &response);
+                drop(decode_scope);
+                drop(decode_admission);
+                drop(response_frame);
+                drop(response);
+                drop(header);
                 let expected_payload_digest = *plan.payload_digest.as_bytes();
                 let reader = ProviderIngestBrokerSourceReader {
                     stream: connection.stream,
                     deadline,
-                    content_length: header.content_length,
-                    remaining: header.content_length,
-                    frame_count: header.frame_count,
+                    content_length,
+                    remaining: content_length,
+                    frame_count,
                     next_sequence: 0,
                     pending: Vec::new(),
                     pending_offset: 0,
                     expected_payload_digest,
                     expected_provider_metadata_digest: metadata_digest,
                     payload_hasher: blake3::Hasher::new(),
-                    transcript: source_stream_transcript(&operation_request, &response),
+                    transcript,
                     finished: false,
                     poisoned: false,
+                    _retained_memory: Some(retained_memory),
                 };
                 Ok(
                     crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1::new(
@@ -19068,12 +20759,13 @@ mod protocol {
                 result
             }
 
-            fn decode<T>(&self, bytes: &[u8]) -> Result<T, BrokerError>
+            fn decode<T>(&self, bytes: &ScrubbedBytes, max_bytes: usize) -> Result<T, BrokerError>
             where
                 T: NoritoSerialize,
                 for<'de> T: NoritoDeserialize<'de>,
             {
-                decode_canonical::<T>(bytes, MAX_POP_RUNTIME_FRAME_BYTES_V1).inspect_err(|_| {
+                let _scope = bytes.enter_decode_admission();
+                decode_canonical::<T>(bytes, max_bytes).inspect_err(|_| {
                     self.session.poison();
                 })
             }
@@ -19182,7 +20874,10 @@ mod protocol {
                     .map_err(pop_registry_error)?;
                 let outcome = self
                     .provider
-                    .decode::<PopRuntimeResolveResultWireV1>(&result)
+                    .decode::<PopRuntimeResolveResultWireV1>(
+                        &result,
+                        MAX_POP_RUNTIME_FRAME_BYTES_V1,
+                    )
                     .map_err(pop_registry_error)?;
                 validate_pop_resolve_result(&outcome, exact).map_err(pop_registry_error)?;
                 let enrollment_recipient_secret = iroha_crypto::HybridSecretKey::from_bytes(
@@ -19280,7 +20975,7 @@ mod protocol {
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 let signed = self
                     .provider
-                    .decode::<PopIssuerSignResultWireV1>(&result)
+                    .decode::<PopIssuerSignResultWireV1>(&result, MAX_POP_RUNTIME_FRAME_BYTES_V1)
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 verify_evidence_viewer_ed25519_signature(
                     self.public_key,
@@ -19328,7 +21023,10 @@ mod protocol {
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 let principal = self
                     .provider
-                    .decode::<PopAuthenticatedPrincipalWireV1>(&result)
+                    .decode::<PopAuthenticatedPrincipalWireV1>(
+                        &result,
+                        MAX_POP_RUNTIME_FRAME_BYTES_V1,
+                    )
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 validate_pop_principal(principal, &wire)
                     .map_err(|error| self.provider.redacted_string_error(error))?;
@@ -19370,7 +21068,7 @@ mod protocol {
                     .call(OPERATION_POP_REGISTRY_SUBMIT_V1, payload, true)
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 self.provider
-                    .decode::<()>(&result)
+                    .decode::<()>(&result, MAX_POP_RUNTIME_FRAME_BYTES_V1)
                     .map_err(|error| self.provider.redacted_string_error(error))
             }
         }
@@ -19407,11 +21105,10 @@ mod protocol {
                     .provider
                     .call(OPERATION_POP_REGISTRY_NEXT_V1, payload, false)
                     .map_err(|error| self.provider.redacted_string_error(error))?;
-                let outcome = decode_canonical::<PopRegistryNextResultWireV1>(
-                    &result,
-                    MAX_POP_PROJECTION_BYTES_V1,
-                )
-                .map_err(|error| self.provider.redacted_string_error(error))?;
+                let outcome = self
+                    .provider
+                    .decode::<PopRegistryNextResultWireV1>(&result, MAX_POP_PROJECTION_BYTES_V1)
+                    .map_err(|error| self.provider.redacted_string_error(error))?;
                 if let Some(projection) = outcome.projection.as_ref() {
                     let exact = self
                         .provider
@@ -19465,7 +21162,7 @@ mod protocol {
                     .map_err(|_| Error::Unavailable)?;
                 let outcome = self
                     .provider
-                    .decode::<PopIssuanceDraftResultWireV1>(&result)
+                    .decode::<PopIssuanceDraftResultWireV1>(&result, MAX_POP_RUNTIME_FRAME_BYTES_V1)
                     .map_err(|_| Error::Unavailable)?;
                 let exact = self
                     .provider
@@ -19518,7 +21215,7 @@ mod protocol {
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 let wrapped = self
                     .provider
-                    .decode::<PopWalletWrapDekResultWireV1>(&result)
+                    .decode::<PopWalletWrapDekResultWireV1>(&result, MAX_POP_RUNTIME_FRAME_BYTES_V1)
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 if wrapped.wrapped_dek.is_empty()
                     || wrapped.wrapped_dek.len() > MAX_POP_WRAPPED_DEK_BYTES_V1
@@ -19555,7 +21252,10 @@ mod protocol {
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 let unwrapped = self
                     .provider
-                    .decode::<PopWalletUnwrapDekResultWireV1>(&result)
+                    .decode::<PopWalletUnwrapDekResultWireV1>(
+                        &result,
+                        MAX_POP_RUNTIME_FRAME_BYTES_V1,
+                    )
                     .map_err(|error| self.provider.redacted_string_error(error))?;
                 if unwrapped.dek == [0; 32] {
                     self.provider.session.poison();
@@ -19609,7 +21309,7 @@ mod protocol {
                     .map_err(|_| Error::Unavailable)?;
                 let witness = self
                     .provider
-                    .decode::<PopMembershipWitnessWireV1>(&result)
+                    .decode::<PopMembershipWitnessWireV1>(&result, MAX_POP_RUNTIME_FRAME_BYTES_V1)
                     .map_err(|_| Error::Unavailable)?;
                 validate_pop_witness_wire(&witness).map_err(|_| Error::Unavailable)?;
                 Ok(witness.into_witness())
@@ -19643,7 +21343,7 @@ mod protocol {
                     .map_err(|_| Error::Unavailable)?;
                 let sample = self
                     .provider
-                    .decode::<PopFinalizedTimeResultWireV1>(&result)
+                    .decode::<PopFinalizedTimeResultWireV1>(&result, MAX_POP_RUNTIME_FRAME_BYTES_V1)
                     .map_err(|_| Error::Unavailable)?;
                 validate_pop_finalized_time(sample).map_err(|_| Error::Unavailable)?;
                 Ok(iroha_torii::sorafs::pop_api::PopFinalizedTimeSampleV1 {
@@ -19764,7 +21464,7 @@ mod protocol {
                     self.session.poison();
                     return Err(sorafs_node::PrivacyCyclePrfProviderErrorV1::Unavailable);
                 }
-                let output = decode_canonical::<PrivacyCyclePrfOutputWireV1>(
+                let output = decode_scrubbed_canonical::<PrivacyCyclePrfOutputWireV1>(
                     &result,
                     MAX_TRANSPARENCY_PRF_FRAME_BYTES_V1,
                 )
@@ -19834,7 +21534,7 @@ mod protocol {
                 operation: u16,
                 payload: Vec<u8>,
                 mutating: bool,
-            ) -> Result<Vec<u8>, BrokerError> {
+            ) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
                 let result = self.session.call(
                     &self.binding,
@@ -19888,7 +21588,7 @@ mod protocol {
                         false,
                     )
                     .map_err(privacy_release_anchor_error)?;
-                let head = decode_canonical::<PrivacyReleaseAnchorHeadWireV1>(
+                let head = decode_scrubbed_canonical::<PrivacyReleaseAnchorHeadWireV1>(
                     &result,
                     MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1,
                 )
@@ -19926,12 +21626,11 @@ mod protocol {
                         true,
                     )
                     .map_err(privacy_release_anchor_error)?;
-                decode_canonical::<()>(&result, MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1).map_err(
-                    |error| {
+                decode_scrubbed_canonical::<()>(&result, MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1)
+                    .map_err(|error| {
                         self.session.poison();
                         privacy_release_anchor_error(error)
-                    },
-                )
+                    })
             }
         }
 
@@ -20000,7 +21699,7 @@ mod protocol {
                 Ok(exact.qualification())
             }
 
-            fn call(&self, operation: u16, payload: Vec<u8>) -> Result<Vec<u8>, BrokerError> {
+            fn call(&self, operation: u16, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
                 let result = self.session.call(
                     &self.binding,
@@ -20049,7 +21748,7 @@ mod protocol {
                 let result = self
                     .call(OPERATION_TRANSPARENCY_LEADER_LEASE_ACQUIRE_V1, payload)
                     .map_err(transparency_leader_lease_error)?;
-                let grant = decode_canonical::<TransparencyLeaderLeaseGrantWireV1>(
+                let grant = decode_scrubbed_canonical::<TransparencyLeaderLeaseGrantWireV1>(
                     &result,
                     MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1,
                 )
@@ -20084,7 +21783,7 @@ mod protocol {
                 let result = self
                     .call(OPERATION_TRANSPARENCY_LEADER_LEASE_RENEW_V1, payload)
                     .map_err(transparency_leader_lease_error)?;
-                let grant = decode_canonical::<TransparencyLeaderLeaseGrantWireV1>(
+                let grant = decode_scrubbed_canonical::<TransparencyLeaderLeaseGrantWireV1>(
                     &result,
                     MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1,
                 )
@@ -20119,9 +21818,10 @@ mod protocol {
                 let result = self
                     .call(OPERATION_TRANSPARENCY_LEADER_LEASE_RELEASE_V1, payload)
                     .map_err(transparency_leader_lease_error)?;
-                let receipt = decode_canonical::<TransparencyLeaderLeaseReleaseReceiptWireV1>(
-                    &result,
-                    MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1,
+                let receipt = decode_scrubbed_canonical::<
+                    TransparencyLeaderLeaseReleaseReceiptWireV1,
+                >(
+                    &result, MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1
                 )
                 .and_then(|wire| wire.to_receipt())
                 .map_err(|_| {
@@ -20200,7 +21900,7 @@ mod protocol {
                 Ok(expected)
             }
 
-            fn call(&self, payload: Vec<u8>) -> Result<Vec<u8>, BrokerError> {
+            fn call(&self, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
                 let result = self.session.call(
                     &self.binding,
@@ -20249,7 +21949,7 @@ mod protocol {
                 let qualification = self
                     .expected_qualification()
                     .map_err(fenced_privacy_broker_error)?;
-                let receipt = decode_canonical::<FencedPrivacyPublicationReceiptWireV1>(
+                let receipt = decode_scrubbed_canonical::<FencedPrivacyPublicationReceiptWireV1>(
                     &result,
                     MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1,
                 )
@@ -20305,7 +22005,7 @@ mod protocol {
                 Ok(expected)
             }
 
-            fn call(&self, payload: Vec<u8>) -> Result<Vec<u8>, BrokerError> {
+            fn call(&self, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
                 let result = self.session.call(
                     &self.binding,
@@ -20345,7 +22045,7 @@ mod protocol {
                 let payload = encode_canonical(&wire, MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1)
                     .map_err(redacted_provider_error)?;
                 let result = self.call(payload).map_err(redacted_provider_error)?;
-                decode_canonical::<FencedTransparencyHeadAncestryProofWireV1>(
+                decode_scrubbed_canonical::<FencedTransparencyHeadAncestryProofWireV1>(
                     &result,
                     MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1,
                 )
@@ -20397,7 +22097,7 @@ mod protocol {
                 operation: u16,
                 payload: Vec<u8>,
                 mutating: bool,
-            ) -> Result<Vec<u8>, BrokerError> {
+            ) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_binding()?;
                 let result = self.session.call(
                     &self.binding,
@@ -20417,11 +22117,12 @@ mod protocol {
                 Ok(result)
             }
 
-            fn decode<T>(&self, bytes: &[u8], max_bytes: usize) -> Result<T, BrokerError>
+            fn decode<T>(&self, bytes: &ScrubbedBytes, max_bytes: usize) -> Result<T, BrokerError>
             where
                 T: NoritoSerialize,
                 for<'de> T: NoritoDeserialize<'de>,
             {
+                let _scope = bytes.enter_decode_admission();
                 decode_canonical(bytes, max_bytes).inspect_err(|_| self.session.poison())
             }
         }
@@ -20994,10 +22695,9 @@ mod protocol {
                         false,
                     )
                     .map_err(moderation_signing_error)?;
-                let signed = decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
-                    &result,
-                    MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1,
-                )
+                let signed = decode_scrubbed_canonical::<
+                    iroha_data_model::transaction::SignedTransaction,
+                >(&result, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
                 .map_err(|_| {
                     self.session.poison();
                     iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1::Refused
@@ -21160,7 +22860,7 @@ mod protocol {
                         true,
                     )
                     .map_err(moderation_handoff_error)?;
-                let outcome = decode_canonical::<ModerationDurableHandoffOutcomeWireV1>(
+                let outcome = decode_scrubbed_canonical::<ModerationDurableHandoffOutcomeWireV1>(
                     &result,
                     MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
                 )
@@ -21255,15 +22955,16 @@ mod protocol {
                         true,
                     )
                     .map_err(moderation_panel_notification_error)?;
-                let receipt = decode_canonical::<ModerationPanelNotificationReceiptWireV1>(
-                    &result,
-                    MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1,
-                )
-                .map_err(|_| {
-                    self.provider.session.poison();
-                    sorafs_node::moderation_orchestrator::
+                let receipt =
+                    decode_scrubbed_canonical::<ModerationPanelNotificationReceiptWireV1>(
+                        &result,
+                        MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1,
+                    )
+                    .map_err(|_| {
+                        self.provider.session.poison();
+                        sorafs_node::moderation_orchestrator::
                         ModerationPanelNotificationFailureV1::Ambiguous
-                })?;
+                    })?;
                 let receipt = validate_moderation_panel_notification_receipt(receipt, &wire)
                     .map_err(|_| {
                         self.provider.session.poison();
@@ -21302,7 +23003,7 @@ mod protocol {
                     payload,
                     false,
                 )?;
-                let qualification = decode_canonical::<QualificationResultWireV1>(
+                let qualification = decode_scrubbed_canonical::<QualificationResultWireV1>(
                     &result,
                     MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
                 )
@@ -21339,7 +23040,7 @@ mod protocol {
                     payload,
                     true,
                 )?;
-                decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
+                decode_scrubbed_canonical::<iroha_data_model::transaction::SignedTransaction>(
                     &result,
                     MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1,
                 )
@@ -21554,6 +23255,200 @@ mod protocol {
             Orderbook,
             qualify_sorafs_orderbook_transaction_signer_v1
         );
+
+        #[derive(Clone)]
+        struct SoracloudRuntimeBrokerSigner {
+            session: Arc<BrokerSession>,
+            binding: ProviderBindingWireV1,
+            metadata_digest: [u8; 32],
+            exact_binding: crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1,
+        }
+
+        impl SoracloudRuntimeBrokerSigner {
+            fn live_qualification(
+                &self,
+            ) -> Result<
+                crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationV1,
+                BrokerError,
+            > {
+                let payload = encode_canonical(&(), MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1)?;
+                let result = self.session.call(
+                    &self.binding,
+                    self.metadata_digest,
+                    OPERATION_QUALIFY_V1,
+                    payload,
+                    false,
+                )?;
+                let qualification =
+                    decode_scrubbed_canonical::<SoracloudSignerQualificationWireV1>(
+                        &result,
+                        MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                    )
+                    .inspect_err(|_| self.session.poison())?;
+                let expected = self.exact_binding.qualification();
+                let projected =
+                    soracloud_runtime_signer_binding_from_wire(&self.binding).map_err(|error| {
+                        self.session.poison();
+                        error
+                    })?;
+                if qualification.revision != expected.revision()
+                    || qualification.policy_digest != expected.policy_digest()
+                    || !qualification.active
+                    || qualification.test_only
+                    || projected != self.exact_binding
+                {
+                    self.session.poison();
+                    return Err(BrokerError::StaleOrRevoked);
+                }
+                Ok(expected)
+            }
+
+            fn signing_error(
+                &self,
+                error: BrokerError,
+            ) -> crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1 {
+                use crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1 as Error;
+
+                match error {
+                    BrokerError::Unavailable => Error::Unavailable,
+                    BrokerError::Rejected => Error::Refused,
+                    BrokerError::BindingMismatch | BrokerError::StaleOrRevoked => {
+                        self.session.poison();
+                        Error::QualificationChanged
+                    }
+                    BrokerError::Protocol | BrokerError::Conflict | BrokerError::Ambiguous => {
+                        self.session.poison();
+                        Error::SubstitutedTransaction
+                    }
+                }
+            }
+        }
+
+        impl crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1
+            for SoracloudRuntimeBrokerSigner
+        {
+            fn handle(&self) -> &str {
+                self.exact_binding.handle()
+            }
+
+            fn authority(&self) -> iroha_data_model::account::AccountId {
+                self.exact_binding.authority().clone()
+            }
+
+            fn public_key(
+                &self,
+            ) -> Result<
+                iroha_crypto::PublicKey,
+                crate::soracloud_runtime_signer::SoracloudRuntimeSignerProbeErrorV1,
+            > {
+                self.live_qualification().map_err(|error| {
+                    if error == BrokerError::Rejected {
+                        crate::soracloud_runtime_signer::SoracloudRuntimeSignerProbeErrorV1::Refused
+                    } else {
+                        crate::soracloud_runtime_signer::SoracloudRuntimeSignerProbeErrorV1::Unavailable
+                    }
+                })?;
+                Ok(self.exact_binding.public_key().clone())
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<
+                crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationV1,
+                crate::soracloud_runtime_signer::SoracloudRuntimeSignerProbeErrorV1,
+            > {
+                self.live_qualification().map_err(|error| {
+                    if error == BrokerError::Rejected {
+                        crate::soracloud_runtime_signer::SoracloudRuntimeSignerProbeErrorV1::Refused
+                    } else {
+                        crate::soracloud_runtime_signer::SoracloudRuntimeSignerProbeErrorV1::Unavailable
+                    }
+                })
+            }
+
+            fn sign_transaction(
+                &self,
+                payload: iroha_data_model::transaction::TransactionPayload,
+            ) -> Result<
+                iroha_data_model::transaction::SignedTransaction,
+                crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1,
+            > {
+                if payload.authority() != self.exact_binding.authority() {
+                    return Err(
+                        crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1::
+                            InputAuthorityMismatch,
+                    );
+                }
+                ensure_transaction_session_chain(&payload, &self.session.chain_id)
+                    .map_err(|error| self.signing_error(error))?;
+                let payload = encode_native_transaction_payload(&payload)
+                    .map_err(|error| self.signing_error(error))?;
+                let result = self
+                    .session
+                    .call(
+                        &self.binding,
+                        self.metadata_digest,
+                        OPERATION_NATIVE_TRANSACTION_SIGN_V1,
+                        payload,
+                        true,
+                    )
+                    .map_err(|error| self.signing_error(error))?;
+                decode_scrubbed_canonical::<iroha_data_model::transaction::SignedTransaction>(
+                    &result,
+                    MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1,
+                )
+                .map_err(|error| self.signing_error(error))
+            }
+
+            fn sign_provenance(
+                &self,
+                purpose: iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1,
+                preimage: &[u8],
+            ) -> Result<
+                iroha_crypto::Signature,
+                crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1,
+            > {
+                if preimage.is_empty() || preimage.len() > MAX_NATIVE_TRANSACTION_PAYLOAD_BYTES_V1 {
+                    return Err(
+                        crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1::Refused,
+                    );
+                }
+                iroha_data_model::soracloud::validate_soracloud_runtime_provenance_preimage_v1(
+                    purpose, preimage,
+                )
+                .map_err(|_| {
+                    crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1::
+                            InvalidProvenancePreimage
+                })?;
+                let payload = encode_canonical(
+                    &SoracloudProvenanceSignRequestWireV1 {
+                        purpose: purpose.wire_id(),
+                        preimage: preimage.to_vec(),
+                    },
+                    MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                )
+                .map_err(|error| self.signing_error(error))?;
+                let result = self
+                    .session
+                    .call(
+                        &self.binding,
+                        self.metadata_digest,
+                        OPERATION_SORACLOUD_PROVENANCE_SIGN_V1,
+                        payload,
+                        true,
+                    )
+                    .map_err(|error| self.signing_error(error))?;
+                decode_scrubbed_canonical::<iroha_crypto::Signature>(
+                    &result,
+                    MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                )
+                .map_err(|_| {
+                    self.session.poison();
+                    crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1::
+                        InvalidProvenanceSignature
+                })
+            }
+        }
 
         #[derive(Clone)]
         struct GovernanceDagBrokerSigner {
@@ -22048,7 +23943,7 @@ mod protocol {
                     payload,
                     false,
                 )?;
-                let qualification = decode_canonical::<QualificationResultWireV1>(
+                let qualification = decode_scrubbed_canonical::<QualificationResultWireV1>(
                     &result,
                     MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                 )
@@ -22099,6 +23994,7 @@ mod protocol {
                 T: NoritoSerialize,
                 for<'de> T: NoritoDeserialize<'de>,
             {
+                let _scope = result.enter_decode_admission();
                 decode_canonical::<T>(result, limit).inspect_err(|_| self.session.poison())
             }
         }
@@ -22979,9 +24875,13 @@ mod protocol {
                     payload,
                     false,
                 )?;
+                let _scope = result.enter_decode_admission();
                 let record_bytes = self.session.decode_result::<Option<Vec<u8>>>(&result)?;
+                let checkpoint_limit = usize::try_from(self.checkpoint_max_bytes)
+                    .map_err(|_| BrokerError::Protocol)?;
                 record_bytes
                     .map(|bytes| {
+                        reserve_external_canonical_decode(bytes.len(), checkpoint_limit)?;
                         sorafs_node::ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
                             &bytes,
                             self.checkpoint_max_bytes,
@@ -23206,12 +25106,17 @@ mod protocol {
                     payload,
                     false,
                 )?;
+                let _scope = result.enter_decode_admission();
                 let record_bytes = self.session.decode_result::<Option<Vec<u8>>>(&result)?;
                 let record = record_bytes
                     .map(|bytes| {
                         if bytes.len() > MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1 {
                             return Err(BrokerError::Protocol);
                         }
+                        reserve_external_canonical_decode(
+                            bytes.len(),
+                            MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1,
+                        )?;
                         iroha_core::query::provider_ingest_finalized::
                             ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::
                                 from_canonical_bytes(&bytes)
@@ -23473,6 +25378,7 @@ mod protocol {
                     payload,
                     false,
                 )?;
+                let _scope = result.enter_decode_admission();
                 let record_bytes = self.session.decode_result::<Option<Vec<u8>>>(&result)?;
                 let record = record_bytes
                     .map(|bytes| {
@@ -23481,6 +25387,10 @@ mod protocol {
                         {
                             return Err(BrokerError::Protocol);
                         }
+                        reserve_external_canonical_decode(
+                            bytes.len(),
+                            MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1,
+                        )?;
                         iroha_core::query::reputation_finalized::
                             ReputationFinalizedArchiveRetentionApprovalRecordV1::
                                 from_canonical_bytes(&bytes)
@@ -23909,6 +25819,7 @@ mod protocol {
                     .map_err(|_| {
                         ReputationBrokerProvider::request_failure(request.idempotency_key)
                     })?;
+                let _scope = result.enter_decode_admission();
                 let wire = self
                     .provider
                     .session
@@ -23922,6 +25833,14 @@ mod protocol {
                         Ok(None)
                     }
                     1 if !wire.canonical_result.is_empty() && wire.failure_receipt == [0; 32] => {
+                        reserve_external_canonical_decode(
+                            wire.canonical_result.len(),
+                            MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+                        )
+                        .map_err(|_| {
+                            self.provider.session.poison();
+                            ReputationBrokerProvider::request_failure(request.idempotency_key)
+                        })?;
                         let signed =
                             sorafs_manifest::reputation::signed::decode_signed_reputation_snapshot(
                                 &wire.canonical_result,
@@ -24104,7 +26023,10 @@ mod protocol {
                 )?;
                 let observed = self
                     .session
-                    .decode_result::<QualificationResultWireV1>(&result)?;
+                    .decode_operation_result::<QualificationResultWireV1>(
+                        &result,
+                        OPERATION_QUALIFY_V1,
+                    )?;
                 let expected = self.expected_qualification()?;
                 if observed.revision != expected.revision()
                     || observed.policy_digest != expected.policy_digest()
@@ -24124,7 +26046,8 @@ mod protocol {
                     payload,
                     false,
                 )?;
-                self.session.decode_result::<()>(&result)
+                self.session
+                    .decode_operation_result::<()>(&result, operation)
             }
 
             fn ensure_chain_id(
@@ -24149,7 +26072,10 @@ mod protocol {
                 )?;
                 let identity = self
                     .session
-                    .decode_result::<BillingAdapterIdentityWireV1>(&result)?;
+                    .decode_operation_result::<BillingAdapterIdentityWireV1>(
+                        &result,
+                        OPERATION_BILLING_IDENTITY_V1,
+                    )?;
                 if identity.handle != self.binding.handle {
                     self.session.poison();
                     return Err(BrokerError::BindingMismatch);
@@ -24168,7 +26094,10 @@ mod protocol {
                 )?;
                 let identity = self
                     .session
-                    .decode_result::<BillingStatementSignerIdentityWireV1>(&result)?;
+                    .decode_operation_result::<BillingStatementSignerIdentityWireV1>(
+                        &result,
+                        OPERATION_BILLING_IDENTITY_V1,
+                    )?;
                 if identity.provider_handle != self.binding.handle
                     || !validate_billing_public_identity_text(
                         &identity.signer_id,
@@ -24195,7 +26124,10 @@ mod protocol {
                 )?;
                 let identity = self
                     .session
-                    .decode_result::<BillingStatementPublisherIdentityWireV1>(&result)?;
+                    .decode_operation_result::<BillingStatementPublisherIdentityWireV1>(
+                        &result,
+                        OPERATION_BILLING_IDENTITY_V1,
+                    )?;
                 if identity.provider_handle != self.binding.handle
                     || !validate_billing_public_identity_text(
                         &identity.publisher_id,
@@ -24243,9 +26175,13 @@ mod protocol {
                     Err(_) if after_write => return Err(BrokerError::Ambiguous),
                     Err(error) => return Err(error),
                 };
+                let _scope = result.enter_decode_admission();
                 let publication = self
                     .session
-                    .decode_result::<Option<BillingAuthoritativePublicationWireV1>>(&result)
+                    .decode_operation_result::<Option<BillingAuthoritativePublicationWireV1>>(
+                        &result,
+                        OPERATION_BILLING_LOOKUP_PUBLICATION_V1,
+                    )
                     .map_err(|error| {
                         self.session.poison();
                         if after_write {
@@ -24311,10 +26247,10 @@ mod protocol {
                 };
                 let record = self
                     .session
-                    .decode_result::<Option<
+                    .decode_operation_result::<Option<
                         sorafs_node::hedging_billing_service::
                             HedgingBillingEpochWitnessRecordV1,
-                    >>(&result)
+                    >>(&result, operation)
                     .map_err(|error| {
                         self.session.poison();
                         if after_write {
@@ -24443,7 +26379,10 @@ mod protocol {
                     return false;
                 };
                 self.session
-                    .decode_result::<BillingFinalizedQueryCapabilitiesWireV1>(&result)
+                    .decode_operation_result::<BillingFinalizedQueryCapabilitiesWireV1>(
+                        &result,
+                        OPERATION_BILLING_QUERY_CAPABILITIES_V1,
+                    )
                     .map(|capabilities| capabilities.supplies_period_closes)
                     .unwrap_or_else(|_| {
                         self.session.poison();
@@ -24471,10 +26410,10 @@ mod protocol {
                     .map_err(billing_client_external_error)?;
                 let head = self
                     .session
-                    .decode_result::<
+                    .decode_operation_result::<
                         sorafs_node::hedging_billing_service::
                             HedgingBillingFinalizedCursorV1,
-                    >(&result)
+                    >(&result, OPERATION_BILLING_FINALIZED_HEAD_V1)
                     .map_err(billing_client_external_error)?;
                 validate_billing_cursor(head).map_err(|error| {
                     self.session.poison();
@@ -24522,10 +26461,10 @@ mod protocol {
                     .map_err(billing_client_external_error)?;
                 let page = self
                     .session
-                    .decode_result::<Option<
+                    .decode_operation_result::<Option<
                         sorafs_node::hedging_billing_service::
                             HedgingBillingFinalizedEventPageV1,
-                    >>(&result)
+                    >>(&result, OPERATION_BILLING_QUERY_PAGE_V1)
                     .map_err(billing_client_external_error)?;
                 if let Some(page) = page.as_ref() {
                     validate_billing_page_shape(page, Some((position, max_events))).map_err(
@@ -24577,9 +26516,9 @@ mod protocol {
                     .map_err(billing_client_external_error)?;
                 let close = self
                     .session
-                    .decode_result::<Option<
+                    .decode_operation_result::<Option<
                         sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1,
-                    >>(&result)
+                    >>(&result, OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1)
                     .map_err(billing_client_external_error)?;
                 if let Some(close) = close.as_ref() {
                     validate_billing_period_close_shape(close, Some(period_end_unix)).map_err(
@@ -24659,7 +26598,7 @@ mod protocol {
                     )
                     .map_err(billing_client_external_error)?;
                 self.session
-                    .decode_result::<()>(&result)
+                    .decode_operation_result::<()>(&result, OPERATION_BILLING_VERIFY_PAGE_V1)
                     .map_err(billing_client_external_error)
             }
 
@@ -24697,7 +26636,10 @@ mod protocol {
                     )
                     .map_err(billing_client_external_error)?;
                 self.session
-                    .decode_result::<()>(&result)
+                    .decode_operation_result::<()>(
+                        &result,
+                        OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1,
+                    )
                     .map_err(billing_client_external_error)
             }
 
@@ -24738,7 +26680,10 @@ mod protocol {
                     )
                     .map_err(billing_client_external_error)?;
                 self.session
-                    .decode_result::<()>(&result)
+                    .decode_operation_result::<()>(
+                        &result,
+                        OPERATION_BILLING_VERIFY_EPOCH_TRANSITION_V1,
+                    )
                     .map_err(billing_client_external_error)
             }
         }
@@ -24797,9 +26742,13 @@ mod protocol {
                         false,
                     )
                     .map_err(billing_client_external_error)?;
+                let _scope = result.enter_decode_admission();
                 let signed = self
                     .session
-                    .decode_result::<BillingSignDigestResultWireV1>(&result)
+                    .decode_operation_result::<BillingSignDigestResultWireV1>(
+                        &result,
+                        OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1,
+                    )
                     .map_err(billing_client_external_error)?;
                 let identity_after = self.signer_identity().map_err(|error| {
                     self.session.poison();
@@ -24880,12 +26829,13 @@ mod protocol {
                         true,
                     )
                     .map_err(billing_client_external_error)?;
+                let _scope = result.enter_decode_admission();
                 let receipt = self
                     .session
-                    .decode_result::<
+                    .decode_operation_result::<
                         sorafs_node::hedging_billing_service::
                             BillingStatementPublicationReceiptV1,
-                    >(&result)
+                    >(&result, OPERATION_BILLING_PUBLISH_STATEMENT_V1)
                     .map_err(|_| {
                         self.session.poison();
                         sorafs_node::hedging_billing_service::
@@ -24999,7 +26949,10 @@ mod protocol {
                     )
                     .map_err(billing_client_external_error)?;
                 self.session
-                    .decode_result::<()>(&result)
+                    .decode_operation_result::<()>(
+                        &result,
+                        OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1,
+                    )
                     .map_err(billing_client_external_error)
             }
 
@@ -25030,12 +26983,13 @@ mod protocol {
                         true,
                     )
                     .map_err(billing_client_external_error)?;
+                let _scope = result.enter_decode_admission();
                 let recorded = self
                     .session
-                    .decode_result::<
+                    .decode_operation_result::<
                         sorafs_node::hedging_billing_service::
                             BillingStatementAcknowledgementV1,
-                    >(&result)
+                    >(&result, OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1)
                     .map_err(|_| {
                         self.session.poison();
                         sorafs_node::hedging_billing_service::
@@ -25098,11 +27052,14 @@ mod protocol {
                         false,
                     )
                     .map_err(billing_client_external_error)?;
+                let _scope = result.enter_decode_admission();
                 let acknowledgement =
                     self.session
-                        .decode_result::<Option<
+                        .decode_operation_result::<Option<
                             sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1,
-                        >>(&result)
+                        >>(
+                            &result, OPERATION_BILLING_LOOKUP_ACKNOWLEDGEMENT_V1
+                        )
                         .map_err(billing_client_external_error)?;
                 if let Some(acknowledgement) = acknowledgement.as_ref() {
                     validate_billing_acknowledgement_shape(acknowledgement, statement_id).map_err(
@@ -25202,10 +27159,16 @@ mod protocol {
                         true,
                     )
                     .map_err(billing_client_external_error)?;
-                self.session.decode_result::<()>(&result).map_err(|_| {
-                    self.session.poison();
-                    sorafs_node::hedging_billing_service::HedgingBillingExternalError::Ambiguous
-                })?;
+                let _scope = result.enter_decode_admission();
+                self.session
+                    .decode_operation_result::<()>(
+                        &result,
+                        OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1,
+                    )
+                    .map_err(|_| {
+                        self.session.poison();
+                        sorafs_node::hedging_billing_service::HedgingBillingExternalError::Ambiguous
+                    })?;
                 let latest = self
                     .load_epoch_record(OPERATION_BILLING_LOAD_LATEST_EPOCH_V1, None, true)
                     .map_err(billing_client_external_error)?;
@@ -25977,6 +27940,22 @@ mod protocol {
                         };
                     }
                     slot if slot
+                        == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() =>
+                    {
+                        let exact_binding =
+                            soracloud_runtime_signer_binding_from_wire(binding)
+                                .map_err(registry_error)?;
+                        let signer = Arc::new(SoracloudRuntimeBrokerSigner {
+                            session: Arc::clone(&session),
+                            binding: binding.clone(),
+                            metadata_digest: observation.metadata_digest,
+                            exact_binding,
+                        });
+                        signer.live_qualification().map_err(registry_error)?;
+                        dependencies =
+                            dependencies.with_soracloud_runtime_mutation_signer(signer);
+                    }
+                    slot if slot
                         == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
                             .wire_id() =>
                     {
@@ -26372,6 +28351,649 @@ mod protocol {
                 "authority://sorafs/billing/acknowledgement-primary";
             const SERVER_TEST_BILLING_EPOCH_STORE_HANDLE: &str =
                 "sealed-cas://sorafs/billing/epoch-witness-primary";
+
+            #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+            struct NestedDecodeBudgetProbeV1 {
+                first: Vec<u8>,
+                second: Vec<u8>,
+            }
+
+            #[test]
+            fn decode_policies_are_explicit_and_cover_supported_operation_frames() {
+                let tiny = decode_resource_budget(
+                    1,
+                    MAX_OPERATION_FRAME_BYTES_V1,
+                    STANDARD_DECODE_POLICY_V1,
+                )
+                .expect("derive tiny fixed-headroom budget");
+                assert_eq!(
+                    tiny.max_total_allocated_bytes,
+                    1 + STANDARD_DECODE_POLICY_V1.allocation_headroom_bytes
+                );
+                assert!(
+                    tiny.max_total_allocated_bytes
+                        <= STANDARD_DECODE_POLICY_V1.max_total_allocated_bytes,
+                    "wire length may reduce, but never amplify, an audited cap"
+                );
+                for operation in 0..=u16::MAX {
+                    if !operation_is_known(operation) {
+                        continue;
+                    }
+                    let limit = operation_frame_limit(operation);
+                    let policy = operation_decode_policy(operation);
+                    assert!(limit <= MAX_OPERATION_FRAME_BYTES_V1);
+                    if matches!(
+                        operation,
+                        OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
+                            | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1
+                    ) {
+                        assert_eq!(limit, MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1);
+                        assert!(operation_semantic_frame_limit(operation) > limit);
+                    } else {
+                        assert_eq!(
+                            limit,
+                            operation_semantic_frame_limit(operation),
+                            "operation {operation} must expose its full supported protocol frame"
+                        );
+                    }
+                    assert!(
+                        limit <= policy.max_blob_bytes,
+                        "operation {operation} frame is unsupported by its decode policy"
+                    );
+                    assert!(
+                        policy.max_composed_bytes <= MAX_BROKER_SHARED_DECODE_BYTES_V1,
+                        "operation {operation} live peak exceeds the process-wide pool"
+                    );
+                    assert!(
+                        policy.max_cumulative_bytes >= policy.max_composed_bytes,
+                        "operation {operation} cumulative cap is smaller than its live peak"
+                    );
+                    decode_resource_budget(limit, limit, policy).unwrap_or_else(|error| {
+                        panic!("operation {operation} exact supported frame must budget: {error:?}")
+                    });
+                }
+
+                for (operation, supported_limit, expected_policy) in [
+                    (
+                        OPERATION_SIGN_V1,
+                        MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+                        GOVERNANCE_BULK_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_SEALED_COMPARE_AND_SWAP_V1,
+                        MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
+                        GOVERNANCE_SEALED_STATE_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1,
+                        MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1,
+                        GOVERNANCE_BULK_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                        MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1,
+                        APPEAL_CHECKPOINT_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_PROVIDER_INGEST_SIGN_V1,
+                        MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1,
+                        PROVIDER_INGEST_SIGN_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                        MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+                        PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_EVIDENCE_VIEWER_VERIFY_AND_CONSUME_V1,
+                        MAX_EVIDENCE_VIEWER_CONTROL_FRAME_BYTES_V1,
+                        OPAQUE_BLOB_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1,
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                        EVIDENCE_BULK_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                        EVIDENCE_BULK_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1,
+                        MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
+                        BILLING_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_GATEWAY_COMPLIANCE_FETCH_V1,
+                        MAX_GATEWAY_COMPLIANCE_FRAME_BYTES_V1,
+                        OPAQUE_BLOB_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                        MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
+                        SOURCE_PLAN_DECODE_POLICY_V1,
+                    ),
+                    (
+                        OPERATION_REPUTATION_JOURNAL_SUBMIT_V1,
+                        MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+                        REPUTATION_DECODE_POLICY_V1,
+                    ),
+                ] {
+                    assert_eq!(operation_frame_limit(operation), supported_limit);
+                    assert_eq!(operation_decode_policy(operation), expected_policy);
+                    assert!(expected_policy.max_blob_bytes >= supported_limit);
+                    assert!(
+                        expected_policy.max_composed_bytes <= MAX_BROKER_SHARED_DECODE_BYTES_V1
+                    );
+                    assert!(
+                        expected_policy.max_cumulative_bytes >= expected_policy.max_composed_bytes
+                    );
+                    decode_resource_budget(supported_limit, supported_limit, expected_policy)
+                        .expect("exact supported wire maximum has a checked budget");
+                    assert_eq!(
+                        decode_resource_budget(
+                            supported_limit
+                                .checked_add(1)
+                                .expect("test supported maximum increments"),
+                            supported_limit,
+                            expected_policy,
+                        ),
+                        Err(BrokerError::Protocol),
+                        "operation {operation} rejects cap + 1 before decode allocation"
+                    );
+                }
+
+                decode_resource_budget(
+                    MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1,
+                    MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1,
+                    SOURCE_PLAN_DECODE_POLICY_V1,
+                )
+                .expect("exact source-plan maximum has a checked structured budget");
+                assert_eq!(
+                    MAX_BROKER_PROCESS_OPERATION_BYTES_V1,
+                    MAX_OPERATION_FRAME_BYTES_V1 + MAX_BROKER_SHARED_DECODE_BYTES_V1
+                );
+                assert!(
+                    PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1.max_composed_bytes
+                        >= provider_ingest_checkpoint_external_decode_peak_bytes_v1(),
+                    "live provider-checkpoint reservation covers the external 4x record decoder"
+                );
+                assert_eq!(
+                    validate_sealed_payload_len(
+                        sorafs_node::GovernanceDagSealedStateSlot::Checkpoint,
+                        MAX_GOVERNANCE_SEALED_STATE_PAYLOAD_BYTES_V1,
+                    ),
+                    Ok(())
+                );
+                assert_eq!(
+                    validate_sealed_payload_len(
+                        sorafs_node::GovernanceDagSealedStateSlot::Checkpoint,
+                        MAX_GOVERNANCE_SEALED_STATE_PAYLOAD_BYTES_V1 + 1,
+                    ),
+                    Err(BrokerError::Rejected)
+                );
+                assert!(MAX_OPERATION_FRAME_BYTES_V1 <= u32::MAX as usize);
+                assert!(
+                    MAX_BROKER_PROCESS_OPERATION_BYTES_V1 <= tokio::sync::Semaphore::MAX_PERMITS
+                );
+                assert_eq!(
+                    decode_resource_budget(usize::MAX, usize::MAX, BILLING_DECODE_POLICY_V1),
+                    Err(BrokerError::Protocol),
+                    "amplification arithmetic must fail closed"
+                );
+            }
+
+            #[test]
+            fn cumulative_admission_rejects_layers_that_individually_fit() {
+                let policy =
+                    DecodeResourcePolicyV1::new((64, 64), (128, 32), (0, 0), 8, (100, 100));
+                let pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+                let admission = DecodeResourceAdmissionV1::acquire_from(pool, None, policy)
+                    .expect("acquire compact test admission");
+                admission
+                    .reserve_raw_frame(20, 64)
+                    .expect("reserve raw frame");
+                admission
+                    .reserve_decode(20, 64)
+                    .expect("first decoded layer fits");
+                admission
+                    .reserve_decode(20, 64)
+                    .expect("second decoded layer fits exactly");
+                assert_eq!(
+                    admission.reserve_decode(20, 64),
+                    Err(BrokerError::Protocol),
+                    "resetting a per-layer budget must not bypass the aggregate cap"
+                );
+                assert_eq!(
+                    decode_resource_budget(65, 64, policy),
+                    Err(BrokerError::Protocol)
+                );
+            }
+
+            fn assert_exact_maximal_phase_profile_without_allocation(
+                operation: u16,
+                frame_bytes: usize,
+                policy: DecodeResourcePolicyV1,
+                phases: DecodeResourcePhaseCountsV1,
+            ) {
+                assert_eq!(operation_frame_limit(operation), frame_bytes);
+                assert_eq!(operation_decode_policy(operation), policy);
+                assert!(phase_counts_fit(phases, OPERATION_CUMULATIVE_PHASES_V1));
+                let over_limit = frame_bytes
+                    .checked_add(1)
+                    .expect("audited frame limit increments");
+                assert_eq!(
+                    decode_resource_budget(over_limit, frame_bytes, policy),
+                    Err(BrokerError::Protocol),
+                    "operation {operation} rejects its exact frame limit plus one"
+                );
+                let decode_budget = decode_resource_budget(frame_bytes, frame_bytes, policy)
+                    .expect("exact operation frame has a checked decode budget");
+                let copy_phases = phases
+                    .raw_frames
+                    .checked_add(phases.retained_values)
+                    .and_then(|count| count.checked_add(phases.encoded_copies))
+                    .expect("audited copy phase count");
+                let exact_cumulative_bytes = frame_bytes
+                    .checked_mul(copy_phases)
+                    .and_then(|bytes| {
+                        decode_budget
+                            .composed_charge_bytes
+                            .checked_mul(phases.decoded_values)
+                            .and_then(|decoded| bytes.checked_add(decoded))
+                    })
+                    .expect("audited cumulative phase bytes");
+                assert_eq!(
+                    exact_cumulative_bytes,
+                    cumulative_decode_cap(frame_bytes, policy.max_total_allocated_bytes, phases,),
+                    "the exact frame saturates the operation's allocation allowance"
+                );
+                assert!(exact_cumulative_bytes <= policy.max_cumulative_bytes);
+                let exact_policy = DecodeResourcePolicyV1 {
+                    max_cumulative_bytes: exact_cumulative_bytes,
+                    ..policy
+                };
+                let pool = Arc::new(DecodeResourcePoolV1::new(exact_policy.max_composed_bytes));
+                let admission =
+                    DecodeResourceAdmissionV1::acquire_from(pool, Some(operation), exact_policy)
+                        .expect("reserve exact-profile live peak");
+                for _ in 0..phases.raw_frames {
+                    admission
+                        .reserve_raw_frame(frame_bytes, frame_bytes)
+                        .expect("reserve maximal raw frame phase");
+                }
+                for _ in 0..phases.retained_values {
+                    admission
+                        .reserve_retained_bytes(frame_bytes, frame_bytes)
+                        .expect("reserve maximal retained phase");
+                }
+                for _ in 0..phases.encoded_copies {
+                    admission
+                        .reserve_encoded_copy(frame_bytes, frame_bytes)
+                        .expect("reserve maximal canonical encode phase");
+                }
+                for _ in 0..phases.decoded_values {
+                    admission
+                        .reserve_decode(frame_bytes, frame_bytes)
+                        .expect("reserve maximal decode and canonical-reencode phase");
+                }
+                assert_eq!(
+                    admission
+                        .usage
+                        .lock()
+                        .expect("phase usage lock")
+                        .consumed_bytes,
+                    exact_cumulative_bytes
+                );
+                assert_eq!(
+                    admission.reserve_encoded_copy(1, frame_bytes),
+                    Err(BrokerError::Protocol),
+                    "the audited profile's exact cumulative boundary rejects one extra byte"
+                );
+            }
+
+            #[test]
+            fn billing_publish_deepest_phase_profile_fits_exact_limit_without_allocation() {
+                assert_eq!(BILLING_PUBLISH_DEEPEST_PHASES_V1.encoded_copies, 12);
+                assert_eq!(BILLING_PUBLISH_DEEPEST_PHASES_V1.decoded_values, 6);
+                assert_exact_maximal_phase_profile_without_allocation(
+                    OPERATION_BILLING_PUBLISH_STATEMENT_V1,
+                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
+                    BILLING_DECODE_POLICY_V1,
+                    BILLING_PUBLISH_DEEPEST_PHASES_V1,
+                );
+            }
+
+            #[test]
+            fn reputation_threshold_deepest_phase_profile_fits_exact_limit_without_allocation() {
+                assert_eq!(REPUTATION_THRESHOLD_DEEPEST_PHASES_V1.encoded_copies, 9);
+                assert_eq!(REPUTATION_THRESHOLD_DEEPEST_PHASES_V1.decoded_values, 6);
+                assert_exact_maximal_phase_profile_without_allocation(
+                    OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1,
+                    MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+                    REPUTATION_DECODE_POLICY_V1,
+                    REPUTATION_THRESHOLD_DEEPEST_PHASES_V1,
+                );
+            }
+
+            #[test]
+            fn provider_checkpoint_maximal_phase_sequence_fits_without_allocation() {
+                let policy = PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1;
+                let frame_bytes = MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1;
+                let pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+                let admission = DecodeResourceAdmissionV1::acquire_from(
+                    pool,
+                    Some(OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1),
+                    policy,
+                )
+                .expect("reserve provider-checkpoint live peak");
+                admission
+                    .reserve_raw_frame(frame_bytes, frame_bytes)
+                    .expect("reserve maximal raw frame");
+                for _ in 0..OPERATION_CUMULATIVE_PHASES_V1.retained_values {
+                    admission
+                        .reserve_retained_bytes(frame_bytes, frame_bytes)
+                        .expect("reserve maximal retained phase");
+                }
+                for _ in 0..OPERATION_CUMULATIVE_PHASES_V1.encoded_copies {
+                    admission
+                        .reserve_encoded_copy(frame_bytes, frame_bytes)
+                        .expect("reserve maximal canonical encode phase");
+                }
+                for _ in 0..OPERATION_CUMULATIVE_PHASES_V1.decoded_values {
+                    admission
+                        .reserve_decode(frame_bytes, frame_bytes)
+                        .expect("reserve maximal decode and canonical-reencode phase");
+                }
+                assert_eq!(
+                    admission
+                        .usage
+                        .lock()
+                        .expect("phase usage lock")
+                        .consumed_bytes,
+                    policy.max_cumulative_bytes
+                );
+                assert_eq!(
+                    admission.reserve_encoded_copy(1, frame_bytes),
+                    Err(BrokerError::Protocol),
+                    "the explicit full-call phase inventory remains a hard cumulative ceiling"
+                );
+            }
+
+            #[test]
+            fn compact_server_sequence_exceeds_live_peak_but_fits_cumulative_cap() {
+                let state = prepare_server_state(&server_test_catalog(), server_test_backends())
+                    .expect("prepare governance signer server state");
+                let payload = encode_canonical(
+                    &SignRequestWireV1 {
+                        payload: vec![0xA5; 16 * 1024],
+                    },
+                    MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+                )
+                .expect("encode compact signing payload");
+                let request = make_operation_request(
+                    TEST_SESSION_ID,
+                    1,
+                    state.catalog[0].clone(),
+                    state.observations[0].metadata_digest,
+                    OPERATION_SIGN_V1,
+                    payload,
+                )
+                .expect("build compact operation request");
+                let request_frame = encode_frame(
+                    FRAME_KIND_OPERATION_REQUEST_V1,
+                    &request,
+                    MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+                )
+                .expect("encode compact request frame");
+                let max_blob = 64 * 1024;
+                let max_allocation = 64 * 1024;
+                let compact_policy = DecodeResourcePolicyV1::new(
+                    (max_blob, max_blob),
+                    (128 * 1024, max_allocation),
+                    (8 * 1024, 16 * 1024),
+                    32,
+                    (
+                        128 * 1024,
+                        cumulative_decode_cap(
+                            max_blob,
+                            max_allocation,
+                            OPERATION_CUMULATIVE_PHASES_V1,
+                        ),
+                    ),
+                );
+                let pool = Arc::new(DecodeResourcePoolV1::new(compact_policy.max_composed_bytes));
+                let admission = DecodeResourceAdmissionV1::acquire_from(
+                    pool,
+                    Some(OPERATION_SIGN_V1),
+                    compact_policy,
+                )
+                .expect("reserve compact live peak");
+                admission
+                    .reserve_raw_frame(request_frame.len(), MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1)
+                    .expect("reserve compact raw frame");
+                let scope = admission.enter();
+                let decoded_request = decode_operation_frame::<OperationRequestV1>(
+                    &request_frame,
+                    FRAME_KIND_OPERATION_REQUEST_V1,
+                    OPERATION_SIGN_V1,
+                )
+                .expect("decode compact request");
+                validate_operation_request(&decoded_request).expect("validate compact request");
+                let result =
+                    dispatch_server_operation(&state, &decoded_request).expect("dispatch request");
+                let response =
+                    make_operation_response_scrubbed(&decoded_request, STATUS_OK_V1, result)
+                        .expect("build and validate compact response");
+                encode_frame(
+                    FRAME_KIND_OPERATION_RESPONSE_V1,
+                    &response,
+                    MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+                )
+                .expect("encode compact response");
+                drop(scope);
+                let consumed = admission
+                    .usage
+                    .lock()
+                    .expect("compact usage lock")
+                    .consumed_bytes;
+                assert!(
+                    consumed > compact_policy.max_composed_bytes,
+                    "the end-to-end server sequence must exercise cumulative, not live, accounting"
+                );
+                assert!(consumed <= compact_policy.max_cumulative_bytes);
+            }
+
+            #[test]
+            fn decode_limits_reject_allocation_bombs_depth_and_trailing_bytes() {
+                let bomb = NestedDecodeBudgetProbeV1 {
+                    first: vec![0xA5; 64],
+                    second: vec![0x5A; 64],
+                };
+                let bomb_bytes = norito::to_bytes(&bomb).expect("encode allocation bomb");
+                let allocation_policy =
+                    DecodeResourcePolicyV1::new((1024, 1024), (1024, 32), (0, 0), 8, (4096, 4096));
+                let allocation_pool = Arc::new(DecodeResourcePoolV1::new(4096));
+                let allocation_admission = DecodeResourceAdmissionV1::acquire_from(
+                    allocation_pool,
+                    None,
+                    allocation_policy,
+                )
+                .expect("acquire allocation-bomb admission");
+                allocation_admission
+                    .reserve_raw_frame(bomb_bytes.len(), 1024)
+                    .expect("reserve bomb wire bytes");
+                let allocation_scope = allocation_admission.enter();
+                assert_eq!(
+                    decode_canonical_with_policy::<NestedDecodeBudgetProbeV1>(
+                        &bomb_bytes,
+                        1024,
+                        allocation_policy,
+                    ),
+                    Err(BrokerError::Protocol)
+                );
+                drop(allocation_scope);
+
+                let nested = vec![vec![vec![0xA5_u8]]];
+                let nested_bytes = norito::to_bytes(&nested).expect("encode deep value");
+                let depth_policy = DecodeResourcePolicyV1::new(
+                    (1024, 1024),
+                    (1024, 1024),
+                    (0, 0),
+                    1,
+                    (4096, 4096),
+                );
+                let depth_pool = Arc::new(DecodeResourcePoolV1::new(4096));
+                let depth_admission =
+                    DecodeResourceAdmissionV1::acquire_from(depth_pool, None, depth_policy)
+                        .expect("acquire depth admission");
+                depth_admission
+                    .reserve_raw_frame(nested_bytes.len(), 1024)
+                    .expect("reserve deep wire bytes");
+                let depth_scope = depth_admission.enter();
+                assert_eq!(
+                    decode_canonical_with_policy::<Vec<Vec<Vec<u8>>>>(
+                        &nested_bytes,
+                        1024,
+                        depth_policy,
+                    ),
+                    Err(BrokerError::Protocol)
+                );
+                drop(depth_scope);
+
+                let mut trailing = norito::to_bytes(&7_u64).expect("encode canonical integer");
+                trailing.push(0);
+                assert_eq!(
+                    decode_canonical_with_policy::<u64>(
+                        &trailing,
+                        trailing.len(),
+                        CONTROL_DECODE_POLICY_V1,
+                    ),
+                    Err(BrokerError::Protocol)
+                );
+            }
+
+            #[test]
+            fn operation_policies_decode_actual_request_and_response_frames() {
+                let binding = signer_binding();
+                let metadata_digest = observation(&binding).metadata_digest;
+                let payload = encode_canonical(
+                    &SignRequestWireV1 {
+                        payload: vec![0xA5; 16 * 1024],
+                    },
+                    MAX_OPERATION_FRAME_BYTES_V1,
+                )
+                .expect("encode sign request");
+                let request = make_operation_request(
+                    TEST_SESSION_ID,
+                    1,
+                    binding,
+                    metadata_digest,
+                    OPERATION_SIGN_V1,
+                    payload,
+                )
+                .expect("build operation request");
+                let response = operation_response(
+                    &request,
+                    STATUS_OK_V1,
+                    encode_canonical(
+                        &SignResultWireV1 {
+                            signature: [0x44; 64],
+                        },
+                        MAX_OPERATION_FRAME_BYTES_V1,
+                    )
+                    .expect("encode sign result"),
+                );
+                let limit = operation_frame_limit(OPERATION_SIGN_V1);
+                let policy = operation_decode_policy(OPERATION_SIGN_V1);
+
+                let request_frame = encode_frame(FRAME_KIND_OPERATION_REQUEST_V1, &request, limit)
+                    .expect("encode request frame");
+                let request_pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+                let request_admission = DecodeResourceAdmissionV1::acquire_from(
+                    request_pool,
+                    Some(OPERATION_SIGN_V1),
+                    policy,
+                )
+                .expect("acquire request admission");
+                request_admission
+                    .reserve_raw_frame(request_frame.len(), limit)
+                    .expect("reserve request frame");
+                let request_scope = request_admission.enter();
+                let decoded_request = decode_operation_frame::<OperationRequestV1>(
+                    &request_frame,
+                    FRAME_KIND_OPERATION_REQUEST_V1,
+                    OPERATION_SIGN_V1,
+                )
+                .expect("decode actual request frame");
+                validate_operation_request(&decoded_request).expect("validate decoded request");
+                drop(request_scope);
+
+                let response_frame =
+                    encode_frame(FRAME_KIND_OPERATION_RESPONSE_V1, &response, limit)
+                        .expect("encode response frame");
+                let response_pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+                let response_admission = DecodeResourceAdmissionV1::acquire_from(
+                    response_pool,
+                    Some(OPERATION_SIGN_V1),
+                    policy,
+                )
+                .expect("acquire response admission");
+                response_admission
+                    .reserve_raw_frame(response_frame.len(), limit)
+                    .expect("reserve response frame");
+                let response_scope = response_admission.enter();
+                let decoded_response = decode_operation_frame::<OperationResponseV1>(
+                    &response_frame,
+                    FRAME_KIND_OPERATION_RESPONSE_V1,
+                    OPERATION_SIGN_V1,
+                )
+                .expect("decode actual response frame");
+                validate_operation_response(&request, &decoded_response)
+                    .expect("validate decoded response");
+                drop(response_scope);
+            }
+
+            #[test]
+            fn outbound_admission_is_process_wide_and_follows_result_lifetime() {
+                let operation = OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1;
+                let policy = operation_decode_policy(operation);
+                let pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+                let first =
+                    DecodeResourceAdmissionV1::acquire_operation_from(Arc::clone(&pool), operation)
+                        .expect("acquire first large outbound operation");
+                first
+                    .reserve_retained_bytes(
+                        MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1,
+                        operation_frame_limit(operation),
+                    )
+                    .expect("account large outbound payload before encoding");
+
+                let attempted_encode = Arc::new(AtomicBool::new(false));
+                let attempted_encode_thread = Arc::clone(&attempted_encode);
+                let pool_thread = Arc::clone(&pool);
+                let contender = thread::spawn(move || {
+                    if DecodeResourceAdmissionV1::acquire_operation_from(pool_thread, operation)
+                        .is_ok()
+                    {
+                        attempted_encode_thread.store(true, Ordering::Release);
+                    }
+                });
+                contender.join().expect("join outbound contender");
+                assert!(
+                    !attempted_encode.load(Ordering::Acquire),
+                    "a concurrent large request must be rejected before canonical encoding"
+                );
+
+                let result = ScrubbedBytes::with_decode_admission(vec![0xA5], first);
+                assert_eq!(
+                    pool.used_bytes.load(Ordering::Acquire),
+                    policy.max_composed_bytes
+                );
+                drop(result);
+                assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+            }
 
             struct ServerTestPrivacyCyclePrfProvider {
                 revision: AtomicU64,
@@ -28461,10 +31083,18 @@ mod protocol {
             ) {
                 let plan =
                     sorafs_car::CarBuildPlan::single_file(&payload).expect("build source plan");
-                let root_cid = sorafs_manifest::canonical_manifest_root_cid([0x45; 32]);
+                let car_stats = sorafs_car::CarWriter::new(&plan, &payload)
+                    .expect("prepare source CAR")
+                    .write_to(std::io::sink())
+                    .expect("compute source CAR");
+                let root_cid = car_stats
+                    .root_cids
+                    .first()
+                    .cloned()
+                    .expect("source CAR root");
                 let manifest = sorafs_manifest::ManifestBuilder::new()
                     .root_cid(root_cid.clone())
-                    .dag_codec(sorafs_manifest::DagCodecId(0x71))
+                    .dag_codec(sorafs_manifest::DagCodecId(car_stats.dag_codec))
                     .chunking_from_profile(
                         sorafs_chunker::ChunkProfile::DEFAULT,
                         sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -28475,8 +31105,8 @@ mod protocol {
                             .expect("derive source PoR root"),
                     )
                     .content_length(plan.content_length)
-                    .car_digest(*plan.payload_digest.as_bytes())
-                    .car_size(plan.content_length)
+                    .car_digest(*car_stats.car_archive_digest.as_bytes())
+                    .car_size(car_stats.car_size)
                     .pin_policy(sorafs_manifest::PinPolicy::default())
                     .build()
                     .expect("build source manifest");
@@ -30770,6 +33400,114 @@ mod protocol {
             }
 
             #[test]
+            fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
+                let checkpoint_public_key = iroha_crypto::PublicKey::from_bytes(
+                    iroha_crypto::Algorithm::Ed25519,
+                    &TEST_SIGNER_KEY,
+                )
+                .expect("construct checkpoint Ed25519 public key");
+                let mut appeal = plain_runtime_binding(
+                    IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint,
+                    "hsm://sorafs/appeal-finance/checkpoint-primary",
+                );
+                appeal.appeal_finance_checkpoint_binding =
+                    Some(AppealFinanceCheckpointBindingWireV1 {
+                        public_key: checkpoint_public_key,
+                    });
+                appeal.appeal_finance_checkpoint_max_bytes =
+                    Some(MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1 as u64);
+                assert_eq!(validate_wire_binding(&appeal), Ok(()));
+                let mut appeal_too_large = appeal;
+                appeal_too_large.appeal_finance_checkpoint_max_bytes =
+                    Some(MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1 as u64 + 1);
+                assert_eq!(
+                    validate_wire_binding(&appeal_too_large),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                let mut provider_checkpoint = plain_runtime_binding(
+                    IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
+                    "sealed://sorafs/provider-ingest/checkpoint-primary",
+                );
+                provider_checkpoint.provider_ingest_checkpoint_max_bytes =
+                    Some(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES.0);
+                assert_eq!(validate_wire_binding(&provider_checkpoint), Ok(()));
+                provider_checkpoint.provider_ingest_checkpoint_max_bytes =
+                    Some(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT);
+                assert_eq!(validate_wire_binding(&provider_checkpoint), Ok(()));
+                provider_checkpoint.provider_ingest_checkpoint_max_bytes =
+                    Some(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT + 1);
+                assert_eq!(
+                    validate_wire_binding(&provider_checkpoint),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                let signer_details = ProviderIngestSignerBindingWireV1 {
+                    runtime_handle: "pkcs11://sorafs/provider-ingest/signer-primary".to_owned(),
+                    adapter_revision: 3,
+                    signer_policy_id: [0xA1; 32],
+                    signer_policy_revision: 1,
+                    signer_policy_predecessor_digest: None,
+                    signer_policy_digest: [0xA2; 32],
+                    algorithm: 1,
+                    public_key: TEST_SIGNER_KEY.to_vec(),
+                };
+                let mut provider_signer = plain_runtime_binding(
+                    IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner,
+                    &signer_details.runtime_handle,
+                );
+                provider_signer.revision = Some(signer_details.adapter_revision);
+                provider_signer.policy_digest = Some(signer_details.signer_policy_digest);
+                provider_signer.provider_ingest_signer_binding = Some(signer_details);
+                provider_signer.provider_ingest_max_signed_transaction_bytes =
+                    Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT);
+                assert_eq!(validate_wire_binding(&provider_signer), Ok(()));
+                provider_signer.provider_ingest_max_signed_transaction_bytes =
+                    Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT + 1);
+                assert_eq!(
+                    validate_wire_binding(&provider_signer),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                let mut evidence_checkpoint = evidence_viewer_binding(
+                    IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore,
+                );
+                assert_eq!(validate_wire_binding(&evidence_checkpoint), Ok(()));
+                evidence_checkpoint.evidence_viewer_checkpoint_max_bytes =
+                    Some(MAX_EVIDENCE_VIEWER_CHECKPOINT_BYTES_V1 as u64 + 1);
+                assert_eq!(
+                    validate_wire_binding(&evidence_checkpoint),
+                    Err(BrokerError::BindingMismatch)
+                );
+                let mut evidence_archive = evidence_viewer_binding(
+                    IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive,
+                );
+                assert_eq!(validate_wire_binding(&evidence_archive), Ok(()));
+                evidence_archive.evidence_viewer_archive_max_bytes =
+                    Some(MAX_BROKER_EVIDENCE_VIEWER_BULK_BYTES_V1 as u64 + 1);
+                assert_eq!(
+                    validate_wire_binding(&evidence_archive),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                assert_eq!(
+                    validate_provider_ingest_account_canonical_bytes(&vec![
+                        0xA5;
+                        MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1
+                    ]),
+                    Ok(())
+                );
+                assert_eq!(
+                    validate_provider_ingest_account_canonical_bytes(&vec![
+                        0xA5;
+                        MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1
+                            + 1
+                    ]),
+                    Err(BrokerError::Rejected)
+                );
+            }
+
+            #[test]
             fn broker_server_rejects_existing_socket_without_unlinking_it() {
                 let (_directory, path, policy, listener) = bind_fake_broker();
                 let before = endpoint_identity(&policy).expect("capture existing socket identity");
@@ -31156,6 +33894,7 @@ mod protocol {
                         transcript: transcript.clone(),
                         finished: false,
                         poisoned: false,
+                        _retained_memory: None,
                     },
                     writer_stream,
                     transcript,
@@ -31546,6 +34285,43 @@ mod protocol {
             }
 
             #[test]
+            fn source_streams_transfer_to_actual_retained_plan_reservations() {
+                let payload = vec![0xAB; 512 * 1024 + 3];
+                let plan = sorafs_car::CarBuildPlan::single_file(&payload)
+                    .expect("build retained-memory test plan");
+                let retained =
+                    source_retained_memory_bytes(&plan).expect("derive retained plan reservation");
+                assert!(
+                    retained < SOURCE_PLAN_DECODE_POLICY_V1.max_composed_bytes,
+                    "a validated plan must not retain its full initial decode ceiling"
+                );
+                let pool_bytes = retained
+                    .checked_mul(2)
+                    .and_then(|bytes| {
+                        bytes.checked_add(SOURCE_STREAM_FRAME_DECODE_POLICY_V1.max_composed_bytes)
+                    })
+                    .expect("test pool arithmetic");
+                let pool = Arc::new(DecodeResourcePoolV1::new(pool_bytes));
+                let first = pool
+                    .try_acquire(retained)
+                    .expect("retain first validated source plan");
+                let second = pool
+                    .try_acquire(retained)
+                    .expect("retain second validated source plan");
+                let chunk = DecodeResourceAdmissionV1::acquire_from(
+                    Arc::clone(&pool),
+                    None,
+                    SOURCE_STREAM_FRAME_DECODE_POLICY_V1,
+                )
+                .expect("admit transient chunk beside retained plans");
+                assert_eq!(pool.used_bytes.load(Ordering::Acquire), pool_bytes);
+                drop(chunk);
+                drop(second);
+                drop(first);
+                assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+            }
+
+            #[test]
             fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
                 let request =
                     make_handshake_request("test-chain", vec![signer_binding()], [0x42; 32])
@@ -31685,14 +34461,117 @@ mod protocol {
                 budget_exhaustion.extend_from_slice(&operation.to_be_bytes());
                 budget_exhaustion.extend_from_slice(&9_u32.to_be_bytes());
                 budget_exhaustion.extend_from_slice(&[0xAA; 9]);
-                assert_eq!(
-                    read_operation_request_frame_with_budget(
-                        &mut Cursor::new(budget_exhaustion),
-                        Arc::new(tokio::sync::Semaphore::new(8)),
+                assert!(
+                    matches!(
+                        read_operation_request_frame_with_budget(
+                            &mut Cursor::new(budget_exhaustion),
+                            Arc::new(tokio::sync::Semaphore::new(8)),
+                        ),
+                        Err(BrokerError::Unavailable)
                     ),
-                    Err(BrokerError::Unavailable),
                     "declared inbound bytes must fit the single shared operation budget"
                 );
+            }
+
+            #[test]
+            fn stalled_operation_body_does_not_reserve_composed_decode_pool() {
+                struct StalledBodyReader {
+                    prefix: Cursor<Vec<u8>>,
+                    decode_pool: Arc<DecodeResourcePoolV1>,
+                    observed_body_read: Arc<AtomicBool>,
+                }
+
+                impl std::io::Read for StalledBodyReader {
+                    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                        if usize::try_from(self.prefix.position()).unwrap_or(usize::MAX)
+                            < self.prefix.get_ref().len()
+                        {
+                            return std::io::Read::read(&mut self.prefix, output);
+                        }
+                        assert_eq!(
+                            self.decode_pool.used_bytes.load(Ordering::Acquire),
+                            0,
+                            "the composed pool is acquired only after the full raw frame"
+                        );
+                        self.observed_body_read.store(true, Ordering::Release);
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "simulated stalled operation body",
+                        ))
+                    }
+                }
+
+                let operation = OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1;
+                let policy = operation_decode_policy(operation);
+                let decode_pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+                let observed_body_read = Arc::new(AtomicBool::new(false));
+                let mut prefix = Vec::new();
+                prefix.extend_from_slice(
+                    &IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore
+                        .wire_id()
+                        .to_be_bytes(),
+                );
+                prefix.extend_from_slice(&operation.to_be_bytes());
+                prefix.extend_from_slice(&16_u32.to_be_bytes());
+                let mut reader = StalledBodyReader {
+                    prefix: Cursor::new(prefix),
+                    decode_pool: Arc::clone(&decode_pool),
+                    observed_body_read: Arc::clone(&observed_body_read),
+                };
+                let raw_budget = Arc::new(tokio::sync::Semaphore::new(16));
+                assert!(matches!(
+                    read_operation_request_frame_inner(
+                        &mut reader,
+                        Some(Arc::clone(&raw_budget)),
+                        Some(Arc::clone(&decode_pool)),
+                    ),
+                    Err(BrokerError::Unavailable)
+                ));
+                assert!(observed_body_read.load(Ordering::Acquire));
+                assert_eq!(decode_pool.used_bytes.load(Ordering::Acquire), 0);
+                assert_eq!(
+                    raw_budget.available_permits(),
+                    16,
+                    "failed body reads release the declared-byte reservation"
+                );
+            }
+
+            #[test]
+            fn length_prefixed_reader_preallocates_large_frame_once_and_reads_in_chunks() {
+                struct CountingReader {
+                    inner: Cursor<Vec<u8>>,
+                    body_reads: usize,
+                }
+
+                impl std::io::Read for CountingReader {
+                    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                        let body = self.inner.position() >= 4;
+                        let read = std::io::Read::read(&mut self.inner, output)?;
+                        if body && read != 0 {
+                            self.body_reads += 1;
+                        }
+                        Ok(read)
+                    }
+                }
+
+                let frame_len = 2 * 1024 * 1024 + 17;
+                let payload = vec![0xA5; frame_len];
+                let mut framed = Vec::with_capacity(frame_len + 4);
+                framed.extend_from_slice(
+                    &u32::try_from(frame_len)
+                        .expect("test frame length fits u32")
+                        .to_be_bytes(),
+                );
+                framed.extend_from_slice(&payload);
+                let mut reader = CountingReader {
+                    inner: Cursor::new(framed),
+                    body_reads: 0,
+                };
+                let frame =
+                    read_length_prefixed(&mut reader, frame_len).expect("read bounded large frame");
+                assert_eq!(frame.as_slice(), payload);
+                assert!(frame.bytes.capacity() >= frame_len);
+                assert_eq!(reader.body_reads, frame_len.div_ceil(64 * 1024));
             }
 
             #[test]
@@ -31988,6 +34867,127 @@ mod protocol {
                 ));
                 prepare_server_state(&catalog, native_signer_test_backends())
                     .expect("accept all four independently injected native signer roles");
+            }
+
+            #[test]
+            fn canonical_broker_codec_accounts_for_variable_payload_frame_header() {
+                let value = SoracloudProvenanceSignRequestWireV1 {
+                    purpose: iroha_data_model::soracloud::
+                        SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert
+                        .wire_id(),
+                    preimage: vec![0xA5; 257],
+                };
+                let bare_payload_len = value
+                    .encoded_len_exact()
+                    .expect("variable request has an exact bare payload length");
+                let framed_len =
+                    norito::core::encoded_frame_len(&value).expect("compute exact framed length");
+                assert!(
+                    framed_len > bare_payload_len,
+                    "the outer Norito frame must be included in broker limits"
+                );
+
+                let pool = Arc::new(DecodeResourcePoolV1::new(
+                    CONTROL_DECODE_POLICY_V1.max_composed_bytes,
+                ));
+                let admission =
+                    DecodeResourceAdmissionV1::acquire_from(pool, None, CONTROL_DECODE_POLICY_V1)
+                        .expect("acquire isolated broker admission");
+                let framed = {
+                    let _scope = admission.enter();
+                    encode_canonical(&value, framed_len)
+                        .expect("encode at the exact canonical frame limit")
+                };
+                assert_eq!(framed.len(), framed_len);
+                assert_eq!(
+                    admission
+                        .usage
+                        .lock()
+                        .expect("read isolated broker admission")
+                        .consumed_bytes,
+                    framed_len,
+                    "encoder admission must charge the full canonical frame"
+                );
+                assert_eq!(
+                    encode_canonical(&value, framed_len - 1),
+                    Err(BrokerError::Rejected),
+                    "a limit that excludes one frame byte must fail closed"
+                );
+                assert_eq!(
+                    decode_canonical::<SoracloudProvenanceSignRequestWireV1>(&framed, framed_len)
+                        .expect("decode the exact canonical variable request"),
+                    value
+                );
+            }
+
+            #[test]
+            fn soracloud_broker_admission_rejects_explicit_purpose_mismatch() {
+                let native = proof_native_signer_test_catalog();
+                let mut binding = ProviderBindingWireV1::try_from_binding(
+                    native.iter().next().expect("proof signer binding"),
+                )
+                .expect("project signer binding");
+                binding.slot = IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
+                binding.handle = "hsm://soracloud/runtime-broker-primary".to_owned();
+                binding
+                    .native_signer_binding
+                    .as_mut()
+                    .expect("signer identity")
+                    .role = SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1;
+                validate_wire_binding(&binding).expect("accept Soracloud signer binding");
+
+                let preimage =
+                    iroha_data_model::soracloud::
+                        encode_soracloud_runtime_provenance_preimage_v1(
+                            iroha_data_model::soracloud::
+                                SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+                            b"canonical semantic payload",
+                        )
+                        .expect("encode purpose-bound preimage");
+                let valid_payload = encode_canonical(
+                    &SoracloudProvenanceSignRequestWireV1 {
+                        purpose: iroha_data_model::soracloud::
+                            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert
+                                .wire_id(),
+                        preimage: preimage.clone(),
+                    },
+                    MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                )
+                .expect("encode valid request");
+                let valid = make_operation_request(
+                    TEST_SESSION_ID,
+                    1,
+                    binding.clone(),
+                    [0xC1; 32],
+                    OPERATION_SORACLOUD_PROVENANCE_SIGN_V1,
+                    valid_payload,
+                )
+                .expect("seal valid request");
+                validate_operation_request(&valid).expect("accept matching purpose");
+
+                let mismatched_payload = encode_canonical(
+                    &SoracloudProvenanceSignRequestWireV1 {
+                        purpose: iroha_data_model::soracloud::
+                            SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat
+                                .wire_id(),
+                        preimage,
+                    },
+                    MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+                )
+                .expect("encode mismatched request");
+                let mismatched = make_operation_request(
+                    TEST_SESSION_ID,
+                    2,
+                    binding,
+                    [0xC1; 32],
+                    OPERATION_SORACLOUD_PROVENANCE_SIGN_V1,
+                    mismatched_payload,
+                )
+                .expect("seal mismatched request");
+                assert_eq!(
+                    validate_operation_request(&mismatched),
+                    Err(BrokerError::Rejected)
+                );
             }
 
             #[test]
@@ -35186,6 +38186,150 @@ mod protocol {
             }
 
             #[test]
+            fn fenced_privacy_nested_payload_rejects_compressed_noncanonical_and_allocation_bombs()
+            {
+                assert_eq!(
+                    validate_fenced_privacy_publication_payload_len(
+                        MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1,
+                    ),
+                    Ok(())
+                );
+                assert_eq!(
+                    validate_fenced_privacy_publication_payload_len(
+                        MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1 + 1,
+                    ),
+                    Err(BrokerError::Rejected),
+                    "cap + 1 is rejected without allocating the claimed payload"
+                );
+
+                let request = sample_fenced_privacy_request();
+                let wire = FencedPrivacyPublicationRequestWireV1::from_request(&request);
+                let canonical = request.canonical_payload().to_vec();
+                let publication = norito::decode_canonical::<
+                    sorafs_manifest::ModerationLedgerCyclePublicationV1,
+                >(&canonical)
+                .expect("decode trusted canonical fenced-publication fixture");
+                let compressed = norito::to_compressed_bytes(
+                    &publication,
+                    Some(norito::CompressionConfig::default()),
+                )
+                .expect("encode compressed fenced-publication negative");
+                let alternate_flags =
+                    norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+                let noncanonical = {
+                    let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                    norito::core::to_bytes(&publication)
+                        .expect("encode alternate-layout fenced-publication negative")
+                };
+                assert_ne!(noncanonical, canonical);
+                let mut trailing = canonical.clone();
+                trailing.push(0);
+
+                for invalid in [
+                    compressed.as_slice(),
+                    noncanonical.as_slice(),
+                    trailing.as_slice(),
+                ] {
+                    let mut invalid_wire = wire.clone();
+                    invalid_wire.canonical_payload = invalid.to_vec();
+                    let policy =
+                        operation_decode_policy(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1);
+                    let pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+                    let admission = DecodeResourceAdmissionV1::acquire_from(
+                        pool,
+                        Some(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1),
+                        policy,
+                    )
+                    .expect("acquire fenced-publication negative admission");
+                    let _scope = admission.enter();
+                    assert_eq!(
+                        invalid_wire.to_request(),
+                        Err(BrokerError::Rejected),
+                        "the wire entrypoint rejects the nested representation before reconstruction"
+                    );
+                }
+
+                // A valid payload under a one-byte decoded-allocation ceiling
+                // models an attacker-controlled sequence allocation bomb while
+                // retaining the exact production schema and outer framing.
+                let bomb_policy = DecodeResourcePolicyV1::new(
+                    (
+                        MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1,
+                        MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1,
+                    ),
+                    (MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1, 1),
+                    (0, 0),
+                    64,
+                    (
+                        MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1,
+                        2 * MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1,
+                    ),
+                );
+                let bomb_pool = Arc::new(DecodeResourcePoolV1::new(bomb_policy.max_composed_bytes));
+                let bomb_admission = DecodeResourceAdmissionV1::acquire_from(
+                    bomb_pool,
+                    Some(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1),
+                    bomb_policy,
+                )
+                .expect("acquire allocation-bomb admission");
+                let _bomb_scope = bomb_admission.enter();
+                assert_eq!(
+                    decode_fenced_privacy_publication_with_admission(&canonical, &bomb_admission),
+                    Err(BrokerError::Rejected),
+                    "nested decoded allocations obey the active broker admission"
+                );
+            }
+
+            #[test]
+            fn fenced_privacy_nested_payload_charges_full_broker_admission() {
+                let request = sample_fenced_privacy_request();
+                let wire = FencedPrivacyPublicationRequestWireV1::from_request(&request);
+                let policy =
+                    operation_decode_policy(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1);
+                let expected_decode = decode_resource_budget(
+                    wire.canonical_payload.len(),
+                    MAX_FENCED_PRIVACY_PUBLICATION_PAYLOAD_BYTES_V1,
+                    policy,
+                )
+                .expect("derive fenced-publication nested decode budget");
+                let expected_charge = expected_decode
+                    .composed_charge_bytes
+                    .checked_mul(2)
+                    .and_then(|bytes| bytes.checked_add(wire.canonical_payload.len()))
+                    .expect("fenced-publication accounting charge fits usize");
+                let pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+                let admission = DecodeResourceAdmissionV1::acquire_from(
+                    pool,
+                    Some(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1),
+                    policy,
+                )
+                .expect("acquire fenced-publication accounting admission");
+                let scope = admission.enter();
+                assert_eq!(
+                    wire.to_request()
+                        .expect("reconstruct bounded fenced publication"),
+                    request
+                );
+                drop(scope);
+                assert_eq!(
+                    admission
+                        .usage
+                        .lock()
+                        .expect("fenced-publication usage lock")
+                        .consumed_bytes,
+                    expected_charge,
+                    "one retained clone and both decode-plus-canonical-encode phases are charged"
+                );
+                assert!(
+                    OPERATION_CUMULATIVE_PHASES_V1.retained_values
+                        >= FENCED_PRIVACY_SERVER_PHASES_V1.retained_values
+                        && OPERATION_CUMULATIVE_PHASES_V1.decoded_values
+                            >= FENCED_PRIVACY_SERVER_PHASES_V1.decoded_values,
+                    "the full server validation/dispatch/response path remains within inventory"
+                );
+            }
+
+            #[test]
             fn fenced_privacy_publisher_operation_is_canonical_bounded_and_read_back() {
                 assert!(operation_is_known(
                     OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1
@@ -35211,6 +38355,17 @@ mod protocol {
                 };
                 let publish = sample_fenced_privacy_request();
                 let wire = FencedPrivacyPublicationRequestWireV1::from_request(&publish);
+                let decode_policy =
+                    operation_decode_policy(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1);
+                let decode_pool =
+                    Arc::new(DecodeResourcePoolV1::new(decode_policy.max_composed_bytes));
+                let decode_admission = DecodeResourceAdmissionV1::acquire_from(
+                    decode_pool,
+                    Some(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1),
+                    decode_policy,
+                )
+                .expect("acquire fenced-publication operation admission");
+                let _decode_scope = decode_admission.enter();
                 assert_eq!(
                     wire.to_request()
                         .expect("reconstruct canonical fenced publication"),
@@ -35816,13 +38971,21 @@ mod protocol {
                     )
                     .expect("encode valid compliance request"),
                 );
-                let invalid_ambiguity = make_operation_response(
+                let invalid_ambiguity = operation_response(
                     &compliance_request,
                     STATUS_AMBIGUOUS_V1,
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                         .expect("encode empty ambiguous result"),
-                )
-                .expect("construct compliance ambiguous response");
+                );
+                let invalid_frame = encode_frame(
+                    FRAME_KIND_OPERATION_RESPONSE_V1,
+                    &invalid_ambiguity,
+                    MAX_GATEWAY_COMPLIANCE_FRAME_BYTES_V1,
+                );
+                assert!(
+                    invalid_frame.is_ok(),
+                    "the canonical invalid-status fixture is within the compliance wire cap"
+                );
                 assert_eq!(
                     validate_operation_response(&compliance_request, &invalid_ambiguity),
                     Err(BrokerError::Protocol)
@@ -36891,6 +40054,17 @@ mod protocol {
                     evidence_viewer_archive_max_bytes: None,
                 };
                 assert_eq!(validate_wire_binding(&resolver), Ok(()));
+                let mut exact_minimum = resolver.clone();
+                exact_minimum.provider_ingest_max_signed_transaction_bytes =
+                    Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN);
+                assert_eq!(validate_wire_binding(&exact_minimum), Ok(()));
+                let mut below_minimum = resolver.clone();
+                below_minimum.provider_ingest_max_signed_transaction_bytes =
+                    Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN - 1);
+                assert_eq!(
+                    validate_wire_binding(&below_minimum),
+                    Err(BrokerError::BindingMismatch)
+                );
 
                 let mut leaf = resolver.clone();
                 leaf.slot = IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner.wire_id();
@@ -37010,8 +40184,8 @@ mod protocol {
                     ..=OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
                 {
                     assert!(
-                        operation_frame_limit(operation) < MAX_OPERATION_FRAME_BYTES_V1,
-                        "provider-ingest operation {operation} must not inherit the appeal-finance ceiling"
+                        operation_frame_limit(operation) <= MAX_OPERATION_FRAME_BYTES_V1,
+                        "provider-ingest operation {operation} must stay within the process raw-frame ceiling"
                     );
                 }
 

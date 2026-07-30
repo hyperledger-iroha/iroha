@@ -139,7 +139,8 @@ mod candidate {
 #[cfg(feature = "json")]
 impl JsonSerialize for Trigger {
     fn json_serialize(&self, out: &mut String) {
-        let bytes = norito::to_bytes(self).expect("Trigger Norito serialization must succeed");
+        let bytes = norito::encode_canonical(self)
+            .expect("Trigger canonical Norito serialization must succeed");
         let encoded = STANDARD.encode(bytes);
         json::JsonSerialize::json_serialize(&encoded, out);
     }
@@ -152,9 +153,7 @@ impl JsonDeserialize for Trigger {
         let bytes = STANDARD
             .decode(encoded.as_str())
             .map_err(|err| json::Error::Message(err.to_string()))?;
-        let archived = norito::from_bytes::<Trigger>(&bytes)
-            .map_err(|err| json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
+        norito::decode_canonical::<Trigger>(&bytes)
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
@@ -639,6 +638,24 @@ pub mod action {
             let json = norito::json::to_json(&action).expect("serialize action to json");
             let restored: Action = norito::json::from_json(&json).expect("deserialize action");
             assert_eq!(restored, action);
+
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            {
+                let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                assert_eq!(
+                    norito::json::to_json(&action)
+                        .expect("serialize action under alternate ambient layout"),
+                    json
+                );
+            }
+            let alternate_frame = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&action).expect("encode alternate-layout action")
+            };
+            let alternate_json = format!("\"{}\"", STANDARD.encode(alternate_frame));
+            norito::json::from_json::<Action>(&alternate_json)
+                .expect_err("alternate-layout action JSON must be rejected");
         }
 
         #[cfg(feature = "json")]
@@ -854,7 +871,8 @@ pub mod action {
     #[cfg(feature = "json")]
     impl JsonSerialize for Action {
         fn json_serialize(&self, out: &mut String) {
-            let bytes = norito::to_bytes(self).expect("Action Norito serialization must succeed");
+            let bytes = norito::encode_canonical(self)
+                .expect("Action canonical Norito serialization must succeed");
             let encoded = STANDARD.encode(bytes);
             json::JsonSerialize::json_serialize(&encoded, out);
         }
@@ -867,9 +885,7 @@ pub mod action {
             let bytes = STANDARD
                 .decode(encoded.as_str())
                 .map_err(|err| json::Error::Message(err.to_string()))?;
-            let archived = norito::from_bytes::<Action>(&bytes)
-                .map_err(|err| json::Error::Message(err.to_string()))?;
-            norito::core::NoritoDeserialize::try_deserialize(archived)
+            norito::decode_canonical::<Action>(&bytes)
                 .map_err(|err| json::Error::Message(err.to_string()))
         }
     }
@@ -877,8 +893,8 @@ pub mod action {
     #[cfg(feature = "json")]
     impl JsonSerialize for TimeTriggerRetryPolicy {
         fn json_serialize(&self, out: &mut String) {
-            let bytes = norito::to_bytes(self)
-                .expect("TimeTriggerRetryPolicy Norito serialization must succeed");
+            let bytes = norito::encode_canonical(self)
+                .expect("TimeTriggerRetryPolicy canonical Norito serialization must succeed");
             let encoded = STANDARD.encode(bytes);
             json::JsonSerialize::json_serialize(&encoded, out);
         }
@@ -891,9 +907,7 @@ pub mod action {
             let bytes = STANDARD
                 .decode(encoded.as_str())
                 .map_err(|err| json::Error::Message(err.to_string()))?;
-            let archived = norito::from_bytes::<TimeTriggerRetryPolicy>(&bytes)
-                .map_err(|err| json::Error::Message(err.to_string()))?;
-            norito::core::NoritoDeserialize::try_deserialize(archived)
+            norito::decode_canonical::<TimeTriggerRetryPolicy>(&bytes)
                 .map_err(|err| json::Error::Message(err.to_string()))
         }
     }

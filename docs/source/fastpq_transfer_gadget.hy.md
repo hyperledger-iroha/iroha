@@ -2,7 +2,7 @@
 lang: hy
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount` (համօգտագործվող RNS տարրալուծմամբ միջակայքի հարմարանք):
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Փաթեթավորված է հատուկ դարպասի մեջ, այնպես որ բոլոր երեք հավասարումները սպառում են մեկ տող խումբ:2. **Պոսեյդոնի պարտավորությունների բլոկ**
+   - Փաթեթավորված է հատուկ դարպասի մեջ, այնպես որ բոլոր երեք հավասարումները սպառում են մեկ տող խումբ:
+
+2. **Պոսեյդոնի պարտավորությունների բլոկ**
    - Վերահաշվարկում է `poseidon_preimage_digest`-ը՝ օգտագործելով Poseidon-ի ընդհանուր որոնման աղյուսակը, որն արդեն օգտագործվում է այլ հարմարանքներում: Հետքում Պոսեյդոնի պտույտներ չկան յուրաքանչյուր փոխանցման համար:
 
 3. **Merkle Path Block**
@@ -96,7 +98,9 @@ struct TransferDeltaTranscript {
 5. **Խմբաքանակային հանգույց **
    - Ծրագրերը զանգահարում են `transfer_v1_batch_begin()` `transfer_asset` կառուցողներից առաջ և `transfer_v1_batch_end()`-ից հետո: Մինչ շրջանակն ակտիվ է, հյուրընկալողը բուֆերացնում է յուրաքանչյուր փոխանցում և վերարտադրում դրանք որպես մեկ `TransferAssetBatch`՝ կրկին օգտագործելով Poseidon/SMT համատեքստը մեկ խմբաքանակի համար: Յուրաքանչյուր լրացուցիչ դելտա ավելացնում է միայն թվաբանական և երկու տերևային ստուգումներ: Տառադարձման ապակոդավորիչն այժմ ընդունում է բազմադելտա խմբաքանակներ և դրանք դնում է որպես `TransferGadgetInput::deltas`, որպեսզի պլանավորողը կարողանա ծալել վկաներին՝ առանց Norito վերընթերցելու: Պայմանագրերը, որոնք արդեն ունեն Norito օգտակար բեռնվածություն (օրինակ՝ CLI/SDK) կարող են ամբողջությամբ բաց թողնել շրջանակը՝ զանգահարելով `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`, որը հոսթին հանձնում է ամբողջությամբ կոդավորված խմբաքանակ մեկ syscall-ում:
 
-# Հյուրընկալողի և պրովերի փոփոխություններ| Շերտ | Փոփոխություններ |
+# Հյուրընկալողի և պրովերի փոփոխություններ
+
+| Շերտ | Փոփոխություններ |
 |-------|---------|
 | `ivm::syscalls` | Ավելացրեք `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`), որպեսզի ծրագրերը կարողանան փակագծել բազմաթիվ `transfer_v1` համակարգային զանգեր՝ առանց միջանկյալ ISI-ներ արձակելու, գումարած I01: (`0x2B`) նախապես կոդավորված խմբաքանակների համար: |
 | `ivm::host` & թեստեր | Հիմնական/Լռակյաց հոստերները վերաբերվում են `transfer_v1`-ին որպես խմբաքանակի հավելված, քանի դեռ շրջանակն ակտիվ է, `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` մակերևույթը, իսկ WSV-ի ծաղրական հաղորդիչը բուֆերացնում է մուտքերը նախքան կատարելը, որպեսզի ռեգրեսիայի թեստերը կարողանան հաստատել դետերմինիստական հավասարակշռություն: թարմացումներ։【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```Արտանետվող JSON-ը արտացոլում է FASTPQ խմբաքանակի արտեֆակտները, որոնք `iroha_cli audit witness`-ն այժմ արտանետում է լռելյայն (անցեք `--no-fastpq-batches`՝ դրանք ճնշելու համար), այնպես որ `scripts/fastpq/check_row_usage.py`-ը և CI դարպասը կարող են տարբերել սինթետիկ պլանների նկարահանումները նախորդ վավերացման ժամանակ:
+```
+
+Արտանետվող JSON-ը արտացոլում է FASTPQ խմբաքանակի արտեֆակտները, որոնք `iroha_cli audit witness`-ն այժմ արտանետում է լռելյայն (անցեք `--no-fastpq-batches`՝ դրանք ճնշելու համար), այնպես որ `scripts/fastpq/check_row_usage.py`-ը և CI դարպասը կարող են տարբերել սինթետիկ պլանների նկարահանումները նախորդ վավերացման ժամանակ:
 
 # Տարածման պլան
 
@@ -134,7 +140,7 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
 3. **TF-3 (Խմբաքանակի օգնական)**. Միացրեք խմբաքանակի syscall + Kotodama ստեղծողը, ներառյալ հոսթի մակարդակի հաջորդական հավելվածը և հարմարանքների հանգույցը:
 4. **TF-4 (Telemetry & Docs)**. Թարմացրեք `fastpq_plan.md`, `fastpq_migration_guide.md` և վահանակի սխեմաները՝ փոխանցման տողերի մակերեսի բաշխման համար այլ հարմարանքների նկատմամբ:
 
-#Բաց Հարցեր
+# Բաց Հարցեր
 
 - **Դոմենի սահմանները**. ներկայիս FFT պլանավորողը խուճապի է մատնվում 2¹4 տողից ավելի հետքերի համար: TF-2-ը պետք է կա՛մ բարձրացնի տիրույթի չափը, կա՛մ փաստաթղթավորի նվազեցված հենանիշային թիրախ:
 - **Բազմ ակտիվների խմբաքանակ**. սկզբնական հարմարանքը ենթադրում է նույն ակտիվի ID-ն մեկ դելտայի համար: Եթե ​​մեզ անհրաժեշտ են տարասեռ խմբաքանակներ, մենք պետք է ապահովենք, որ Պոսեյդոնի վկան ամեն անգամ ներառի ակտիվը, որպեսզի կանխենք խաչաձև ակտիվների կրկնությունը:

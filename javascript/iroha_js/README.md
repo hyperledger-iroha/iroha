@@ -17,6 +17,54 @@ npm install
 npm run build:native
 ```
 
+The native build writes strict V3 provenance with the execution policy
+`trusted-local-cargo-v1`. It binds the exact source seal observed before and
+after one local Cargo invocation to the exact compiled bytes. Its private
+source snapshot is owner-read-only and isolates ordinary concurrent checkout
+changes, but the attestation deliberately trusts the invoking user, local
+peer processes, toolchain, build scripts, procedural macros, dependencies, and
+build environment. It is not a reproducible-build or hostile-executor proof.
+Release processes that require that stronger property must compare matching
+artifacts from independent controlled rebuilders.
+
+Native publication also assumes that the configured Cargo target is on a
+single-host local, hard-link-capable filesystem and that cooperating builders
+share one PID namespace. Its durable owner record recovers an interrupted
+publisher only after that exact local PID is no longer live; foreign-host,
+malformed, and ambiguous lock state is preserved and rejected. Do not publish
+the native host through a network filesystem or a volume without hard-link
+support. Concurrent publishers must all run the current owner-record protocol;
+mixing an older empty-directory lock implementation with this one is
+unsupported. Recovery retains a tiny owner-specific tombstone as an ABA guard
+so a delayed recovery process cannot displace a newer live publisher.
+
+Each operating-system temporary build run is likewise published only after an
+off-name initializer contains a complete, fsynced owner record binding the
+exact directory identity, hostname, PID, and effective UID where the platform
+exposes one. Before starting another build, the janitor reaps only exact
+current-host/current-user run names whose recorded PID is definitely absent.
+Live, foreign, malformed, partial, symlinked, and unknown prefix-matching
+artifacts are preserved. A dead run is first identity-revalidated and renamed
+into an exact trash namespace; payload deletion is resumable, and the owner
+record moves to a terminal sidecar before the empty trash directory is
+removed. This prevents a process killed during recursive cleanup from leaving
+a semantic run name or an unrecoverable ownerless deletion state.
+
+The temporary-run janitor relies on the same trusted-user boundary as the
+native build itself: same-UID local processes are trusted, and Windows
+installations must provide an equivalent private ACL. It never follows a
+symlink or replacement root, but Node.js has no portable descriptor-relative
+recursive deletion API. Its explicit guarantee is recovery from process
+interruption, including `SIGKILL`. Owner and rename transitions are fsynced,
+but durability across sudden host power loss still depends on the operating
+system and filesystem honoring file and directory sync semantics; temporary
+payload loss after such an event does not constitute published build evidence.
+
+Cargo may expose the validated profile-root `cdylib` as a hard link to its
+`deps` artifact. The builder accepts that exact Cargo-JSON-validated path only
+as an input, copies it into a private singly linked seal, and publishes from
+that seal. Staging and final native binaries remain strictly singly linked.
+
 When upgrading a source checkout from a revision that tracked the checksum
 manifest but ignored the generated binary, Git can remove the manifest while
 leaving an old `native/iroha_js_host.node`. The publisher intentionally rejects
@@ -122,35 +170,23 @@ boundaries.
 
 ## Native Privacy Bridge
 
-The privacy native surface is intentionally exposed as a generic raw Norito
-archive bridge: `isPrivacyNativeAvailable()`, `privacyCapabilitiesV1()`,
-`privacyBuildProofV1(requestArchive)`, and
-`privacyVerifyProofV1(requestArchive)`. The JS SDK does not expose
-algorithm-specific production proof builders while the privacy rows remain
-gated. Native availability requires native bridge ABI 6 or later plus successful
-`capabilities`, `build`, and `verify` probes whose operation-specific result
-schema bytes match the called entry point.
+The first-release native surface is capability-only:
+`isPrivacyNativeAvailable()` and `privacyCapabilitiesV1()`. The latter returns
+the canonical Norito `PrivacyCapabilitySnapshotV1` archive. The generic
+request/build/verify dispatcher and its free-form algorithm aliases do not
+exist; proving is exposed only by protocol-specific typed APIs.
 
-All privacy request and response payloads must stay as raw Norito archives.
-JavaScript validates archive magic, length, CRC, the 64 MiB native size cap, and
-the operation-specific result schema before returning bytes to callers.
-`getPrivacyCapabilities()` reports `privacy-production-gate-v1`, keeps
-`productionReady = false`, and remains fail-closed with missing production
-gates and no audit references until real proving, verification, chain
-admission, witness privacy checks, deterministic testing, negative/adversarial
-testing, replay/nullifier rejection testing, parser/verifier fuzzing,
-performance gates, and external audit signoff are complete.
-
-JavaScript also exposes the deterministic privacy FFI status/error-code contract
-for diagnostics and cross-language parity:
-`PRIVACY_FFI_STATUS_ERROR`, `PRIVACY_FFI_ERROR_NULL_POINTER`,
-`PRIVACY_FFI_ERROR_MALFORMED_NORITO`,
-`PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM`,
-`PRIVACY_FFI_ERROR_PRODUCTION_DISABLED`, and
-`PRIVACY_FFI_ERROR_INVALID_REQUEST`. The stable wire values are
-`status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
-`unsupported_algorithm = 3`, `production_disabled = 4`, and
-`invalid_request = 5`; treat them as sanitized status metadata, not proof success.
+`PRIVACY_PROTOCOL_IDS_V1` is the closed registry of exactly twelve identities,
+in wire order: `zk-ace-pq-authorization-v0`,
+`anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
+`iroha-zk-x509-stark-p256-v0`,
+`iroha-jindo-polynomial-commitment-v0`,
+`iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
+`monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
+`pq-masp-stark-v0`. Capability JSON parsing requires the exact version,
+fields, row count, and ordering. Unknown fields, aliases, duplicates,
+case-folded labels, and whitespace-normalized labels fail closed.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
@@ -2791,6 +2827,8 @@ import {
 
 const plainElectorateRules = {
   voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
+  bond_escrow_account: BOND_ESCROW_ACCOUNT_ID,
+  slash_receiver_account: SLASH_RECEIVER_ACCOUNT_ID,
   ballot_amount: "150",
   ballot_duration_blocks: "3600",
   citizenship_amount: "10000",

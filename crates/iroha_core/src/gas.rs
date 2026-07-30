@@ -23,7 +23,7 @@ use iroha_data_model::{
     proof::ProofAttachment,
     zk::OpenVerifyEnvelope,
 };
-use norito::decode_from_bytes;
+use norito::decode_canonical;
 #[cfg(test)]
 use parking_lot::ReentrantMutex;
 
@@ -182,7 +182,7 @@ fn halo2_public_input_count(attachment: &ProofAttachment) -> Option<u64> {
     {
         return None;
     }
-    let env: OpenVerifyEnvelope = decode_from_bytes(&attachment.proof.bytes).ok()?;
+    let env: OpenVerifyEnvelope = decode_canonical(&attachment.proof.bytes).ok()?;
     let len = env.public_inputs.len();
     let stride = FIELD_ELEMENT_BYTES as u64;
     if len == 0 {
@@ -771,6 +771,49 @@ mod tests {
             + schedule.per_proof_byte.saturating_mul(proof_bytes);
         assert_eq!(gas, expected);
         assert_eq!(confidential_gas_cost(&instruction), expected);
+    }
+
+    #[test]
+    fn proof_public_input_gas_rejects_alternate_norito_layout() {
+        use iroha_data_model::proof::VerifyingKeyId;
+
+        let fixture = halo2_fixture_envelope("halo2/ipa:canonical-gas-meter", [0u8; 32]);
+        let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(&fixture.proof_bytes)
+            .expect("fixture proof envelope is canonical");
+        let canonical_attachment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            fixture.proof_box("halo2/ipa"),
+            VerifyingKeyId::new("halo2/ipa", "vk-canonical-gas"),
+        );
+        assert_eq!(
+            super::halo2_public_input_count(&canonical_attachment),
+            Some(
+                u64::try_from(fixture.public_inputs.len() / super::FIELD_ELEMENT_BYTES)
+                    .expect("fixture public-input count fits u64")
+            )
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_bytes = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope).expect("encode alternate-layout proof envelope")
+        };
+        assert_ne!(alternate_bytes, fixture.proof_bytes);
+        assert!(
+            norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate_bytes).is_ok(),
+            "ordinary Norito must accept its advertised alternate layout"
+        );
+        let alternate_attachment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), alternate_bytes),
+            VerifyingKeyId::new("halo2/ipa", "vk-alternate-gas"),
+        );
+        assert_eq!(
+            super::halo2_public_input_count(&alternate_attachment),
+            None,
+            "non-canonical envelopes must not supply consensus-visible gas metadata"
+        );
     }
 
     #[test]

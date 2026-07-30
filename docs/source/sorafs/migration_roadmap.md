@@ -67,11 +67,15 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-signatures-out artifacts/docs/book/manifest_signatures.json \
   --car-out artifacts/docs/book/content.car \
   --chunk-fetch-plan-out artifacts/docs/book/fetch_plan.json \
-  --car-digest=<expected-lowercase-hex> \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=<expected-bytes> \
   --root-cid=<expected-cid> \
   --dag-codec=0x71
 ```
+
+The `--car-digest` placeholder is the lowercase BLAKE3-256 digest of the
+complete canonical CARv2 archive (pragma, header, embedded CARv1 payload, and
+index). It is not the SF1 chunk-plan SHA3-256 digest.
 
 Release automation must source the expectations from the reviewed release
 bundle, not copy placeholder values from documentation. The manifest and

@@ -2907,7 +2907,7 @@ mod tests {
             max_active_entries: 32,
             max_terminal_entries: 32,
             max_attempts: 4,
-            checkpoint_max_bytes: 8 * 1024 * 1024,
+            checkpoint_max_bytes: 16 * 1024 * 1024,
             checkpoint_operation_timeout_ms: 250,
             source_lease_ttl_ms: 20,
             retry_base_delay_ms: 10_000,

@@ -46,10 +46,6 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-mod offline_note_compat;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub use offline_note_compat::*;
 /// Constant-depth Pasta IPA accumulation and terminal decisions for Kagemusha.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_accumulation;
@@ -735,8 +731,13 @@ fn normalize_native_halo2_pasta_backend_label(backend: &str) -> Option<String> {
 }
 
 fn halo2_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
-    if production_verify_backend_tag(backend)
-        != Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+            circuit_id,
+        )
+        || production_verify_backend_tag(backend)
+            != Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
     {
         return false;
     }
@@ -750,6 +751,14 @@ fn halo2_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str)
 }
 
 fn halo2_open_verify_circuit_id_is_halo2_family(circuit_id: &str) -> bool {
+    if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+            circuit_id,
+        )
+    {
+        return false;
+    }
     if halo2_open_verify_circuit_id_uses_reserved_proof_family(circuit_id) {
         return false;
     }
@@ -1025,7 +1034,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         proof_bytes: proof_payload,
         aux: Vec::new(),
     };
-    let encoded = norito::to_bytes(&envelope)
+    let encoded = norito::encode_canonical(&envelope)
         .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
     Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
 }
@@ -1089,7 +1098,12 @@ pub(crate) fn normalize_stark_fri_circuit_id_for_backend(
 }
 
 fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
-    if !is_stark_fri_v1_backend(backend)
+    if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+            circuit_id,
+        )
+        || !is_stark_fri_v1_backend(backend)
         || normalize_stark_fri_circuit_id_for_backend(backend, circuit_id).is_none()
     {
         return false;
@@ -1139,7 +1153,12 @@ fn stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(fragment: &s
         || is_trusted_setup_backend_label(&lower)
 }
 
-fn normalized_zk_ace_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
+/// Normalize the retired generic-STARK ZK-ACE relation id.
+///
+/// This is a tombstone only: callers must use the typed privacy protocol and
+/// the dedicated native engine. Keeping this closed rejection prevents an old
+/// generic `OpenVerify` wire from being reintroduced under a backend alias.
+fn normalized_retired_zk_ace_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
     normalize_stark_fri_circuit_id_for_backend(
         backend,
         iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
@@ -1193,8 +1212,6 @@ const STARK_BINDING_AIR_Z_COEFF: u64 = 19;
 const STARK_GOLDILOCKS_MODULUS: u128 = (1u128 << 64) - (1u128 << 32) + 1;
 #[cfg(feature = "zk-stark")]
 pub(crate) const STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1: &str = "IROHA-STARK-AIR-V1";
-#[cfg(feature = "zk-stark")]
-const STARK_ZK_ACE_AIR_TRANSCRIPT_LABEL_V1: &str = "IROHA-STARK-ZK-ACE-AIR-V1";
 
 #[cfg(feature = "zk-stark")]
 fn stark_binding_air_preimage(
@@ -1346,7 +1363,7 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
         return Err("STARK verifying key backend mismatch".to_owned());
     }
     let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-        norito::decode_from_bytes(&vk_box.bytes)
+        norito::decode_canonical(&vk_box.bytes)
             .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
     if vk_payload.version != 1 {
         return Err("unsupported STARK verifying key payload version".to_owned());
@@ -1384,11 +1401,11 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     {
         return Err("IVM execution STARK prover requires single-row public inputs".to_owned());
     }
-    if normalized_zk_ace_stark_circuit_id_for_backend(backend).as_deref()
+    if normalized_retired_zk_ace_stark_circuit_id_for_backend(backend).as_deref()
         == Some(env_circuit_id.as_str())
     {
         return Err(
-            "generic STARK OpenVerify proof cannot target the ZK-ACE circuit; use the ZK-ACE STARK prover"
+            "generic STARK OpenVerify proof cannot target the retired ZK-ACE relation; use SubmitPrivacyProofV1"
                 .to_owned(),
         );
     }
@@ -1473,602 +1490,13 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
         circuit_id: circuit_id.to_owned(),
         vk_hash,
         public_inputs: schema_descriptor.to_vec(),
-        proof_bytes: norito::to_bytes(&open)
+        proof_bytes: norito::encode_canonical(&open)
             .map_err(|err| format!("failed to encode STARK wrapper payload: {err}"))?,
         aux: Vec::new(),
     };
-    let bytes = norito::to_bytes(&env)
+    let bytes = norito::encode_canonical(&env)
         .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
     Ok(ProofBox::new(backend.to_owned(), bytes))
-}
-
-/// Build a ZK-ACE-specific STARK/FRI `OpenVerifyEnvelope`.
-#[cfg(feature = "zk-stark")]
-pub fn prove_stark_fri_zk_ace_open_verify_envelope(
-    backend: &str,
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
-    public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
-    witness: &iroha_data_model::zk::ZkAceWitnessV1,
-) -> Result<ProofBox, String> {
-    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
-
-    if !is_stark_fri_v1_backend(backend) {
-        return Err("backend is not a STARK/FRI V1 backend".to_owned());
-    }
-    if backend != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
-        return Err(format!(
-            "ZK-ACE STARK proof must use `{}` backend",
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-        ));
-    }
-    if vk_box.backend != backend {
-        return Err("STARK verifying key backend mismatch".to_owned());
-    }
-    if circuit_id != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
-        return Err("ZK-ACE STARK proof must use zk_ace_pq_authorization_v0".to_owned());
-    }
-    let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-        norito::decode_from_bytes(&vk_box.bytes)
-            .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
-    crate::zk_stark::validate_zk_ace_stark_fri_verifying_key_payload(&vk_payload)
-        .map_err(|err| format!("invalid ZK-ACE STARK verifying key payload: {err}"))?;
-    let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
-        .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
-    let vk_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
-        .ok_or_else(|| "invalid STARK verifying key circuit_id".to_owned())?;
-    if env_circuit_id != vk_circuit_id {
-        return Err("STARK verifying key circuit_id mismatch".to_owned());
-    }
-    let expected_hash_fn = if backend == ZK_BACKEND_STARK_FRI_V1 {
-        vk_payload.hash_fn
-    } else if backend.contains("/sha256-") {
-        crate::zk_stark::STARK_HASH_SHA256_V1
-    } else if backend.contains("/poseidon2-") {
-        crate::zk_stark::STARK_HASH_POSEIDON2_V1
-    } else {
-        return Err("unsupported STARK/FRI backend variant".to_owned());
-    };
-    if vk_payload.hash_fn != expected_hash_fn {
-        return Err("STARK verifying key hash_fn mismatch".to_owned());
-    }
-
-    let public_inputs_bytes = norito::to_bytes(public_inputs)
-        .map_err(|err| format!("failed to encode ZK-ACE public inputs: {err}"))?;
-    let stark_public_word = iroha_data_model::zk::derive_zk_ace_public_inputs_digest(public_inputs)
-        .map_err(|err| format!("failed to digest ZK-ACE public inputs: {err}"))?;
-    let stark_public_inputs = vec![vec![stark_public_word]];
-    let vk_hash = hash_vk(vk_box);
-    let domain_tag = stark_open_verify_domain_tag_current(
-        backend,
-        circuit_id,
-        vk_hash,
-        &public_inputs_bytes,
-        &stark_public_inputs,
-    );
-    let params = crate::zk_stark::StarkFriParamsV1 {
-        version: 1,
-        n_log2: vk_payload.n_log2,
-        blowup_log2: vk_payload.blowup_log2,
-        fold_arity: vk_payload.fold_arity,
-        queries: vk_payload.queries,
-        merkle_arity: vk_payload.merkle_arity,
-        hash_fn: vk_payload.hash_fn,
-        domain_tag,
-    };
-    let air_public_digest = iroha_data_model::zk::derive_zk_ace_air_public_digest(public_inputs)
-        .map_err(|err| format!("failed to derive ZK-ACE AIR public digest: {err}"))?;
-    let envelope_bytes = crate::zk_stark::prove_stark_fri_zk_ace_air_envelope_bytes(
-        params,
-        STARK_ZK_ACE_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
-        circuit_id.to_owned(),
-        air_public_digest,
-        public_inputs,
-        witness,
-    )?;
-    let open = StarkFriOpenProofV1 {
-        version: 1,
-        public_inputs: stark_public_inputs,
-        envelope_bytes,
-    };
-    let env = OpenVerifyEnvelope {
-        backend: BackendTag::Stark,
-        circuit_id: circuit_id.to_owned(),
-        vk_hash,
-        public_inputs: public_inputs_bytes,
-        proof_bytes: norito::to_bytes(&open)
-            .map_err(|err| format!("failed to encode STARK wrapper payload: {err}"))?,
-        aux: Vec::new(),
-    };
-    let bytes = norito::to_bytes(&env)
-        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
-    Ok(ProofBox::new(backend.to_owned(), bytes))
-}
-
-#[cfg(all(test, feature = "zk-stark"))]
-mod zk_ace_stark_prover_tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        account::AccountId,
-        asset::AssetDefinitionId,
-        domain::DomainId,
-        proof::{VerifyingKeyBox, VerifyingKeyId},
-        zk::{
-            OpenVerifyEnvelope, StarkFriOpenProofV1, ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG, ZkAcePublicInputsV1, ZkAceWitnessV1,
-        },
-    };
-
-    use super::*;
-
-    fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid account keypair");
-        AccountId::new(key_pair.public_key().clone())
-    }
-
-    #[test]
-    fn account_fixture_uses_checked_seed_derivation() {
-        assert!(
-            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
-            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
-        );
-        assert!(
-            account(1) != account(2),
-            "distinct fixture seeds must derive distinct accounts"
-        );
-    }
-
-    fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain"),
-            "xor".parse().expect("asset name"),
-        )
-    }
-
-    fn public_inputs_and_witness() -> (ZkAcePublicInputsV1, ZkAceWitnessV1) {
-        let witness = ZkAceWitnessV1 {
-            identity_root: [0x11; 32],
-            identity_blinding: [0x22; 32],
-            replay_secret: [0x33; 32],
-        };
-        let policy_hash = [0x44; 32];
-        let chain_id: iroha_data_model::ChainId = "zk-ace-test-chain".parse().expect("chain id");
-        let from = account(1);
-        let to = account(2);
-        let asset = asset_definition_id();
-        let amount = 17;
-        let verifier_key_id = VerifyingKeyId::new(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-        );
-        let identity_commitment = iroha_data_model::zk::derive_zk_ace_identity_commitment(
-            &witness.identity_root,
-            &witness.identity_blinding,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        );
-        let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
-            &from,
-            &to,
-            &asset,
-            amount,
-            &chain_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            &policy_hash,
-        );
-        let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
-            &witness.replay_secret,
-            &tx_digest,
-            &chain_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        );
-        let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
-            identity_commitment,
-            tx_digest,
-            tx_digest,
-            chain_id,
-            replay_nullifier,
-            policy_hash,
-            from,
-            to,
-            asset,
-            amount,
-            verifier_key_id,
-        );
-        (public_inputs, witness)
-    }
-
-    fn zk_ace_stark_vk_box() -> VerifyingKeyBox {
-        let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
-            merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
-        };
-        VerifyingKeyBox::new(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-            norito::to_bytes(&payload).expect("encode ZK-ACE STARK VK"),
-        )
-    }
-
-    fn zk_ace_stark_vk_box_for_backend(backend: &str) -> VerifyingKeyBox {
-        let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
-            merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
-        };
-        VerifyingKeyBox::new(
-            backend.to_owned(),
-            norito::to_bytes(&payload).expect("encode backend-variant ZK-ACE STARK VK"),
-        )
-    }
-
-    fn sample_zk_ace_stark_open_verify_proof() -> (VerifyingKeyBox, ProofBox) {
-        let vk_box = zk_ace_stark_vk_box();
-        let (public_inputs, witness) = public_inputs_and_witness();
-        let proof = prove_stark_fri_zk_ace_open_verify_envelope(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            &vk_box,
-            &public_inputs,
-            &witness,
-        )
-        .expect("ZK-ACE STARK OpenVerify proof");
-        (vk_box, proof)
-    }
-
-    fn forged_zk_ace_stark_open_verify_proof_for_backend(
-        backend: &str,
-    ) -> (VerifyingKeyBox, ProofBox) {
-        let vk_box = zk_ace_stark_vk_box_for_backend(backend);
-        let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-            norito::decode_from_bytes(&vk_box.bytes).expect("decode ZK-ACE STARK VK");
-        let (public_inputs, witness) = public_inputs_and_witness();
-        let public_inputs_bytes =
-            norito::to_bytes(&public_inputs).expect("encode ZK-ACE public inputs");
-        let stark_public_word =
-            iroha_data_model::zk::derive_zk_ace_public_inputs_digest(&public_inputs)
-                .expect("derive ZK-ACE public inputs digest");
-        let stark_public_inputs = vec![vec![stark_public_word]];
-        let vk_hash = hash_vk(&vk_box);
-        let domain_tag = stark_open_verify_domain_tag_current(
-            backend,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            vk_hash,
-            &public_inputs_bytes,
-            &stark_public_inputs,
-        );
-        let params = crate::zk_stark::StarkFriParamsV1 {
-            version: 1,
-            n_log2: vk_payload.n_log2,
-            blowup_log2: vk_payload.blowup_log2,
-            fold_arity: vk_payload.fold_arity,
-            queries: vk_payload.queries,
-            merkle_arity: vk_payload.merkle_arity,
-            hash_fn: vk_payload.hash_fn,
-            domain_tag,
-        };
-        let air_public_digest =
-            iroha_data_model::zk::derive_zk_ace_air_public_digest(&public_inputs)
-                .expect("derive ZK-ACE AIR public digest");
-        let envelope_bytes = crate::zk_stark::prove_stark_fri_zk_ace_air_envelope_bytes(
-            params,
-            STARK_ZK_ACE_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            air_public_digest,
-            &public_inputs,
-            &witness,
-        )
-        .expect("forge backend-variant ZK-ACE STARK AIR envelope");
-        let open = iroha_data_model::zk::StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: stark_public_inputs,
-            envelope_bytes,
-        };
-        let outer = iroha_data_model::zk::OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Stark,
-            circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            vk_hash,
-            public_inputs: public_inputs_bytes,
-            proof_bytes: norito::to_bytes(&open).expect("encode ZK-ACE STARK open proof"),
-            aux: Vec::new(),
-        };
-        let proof = ProofBox::new(
-            backend.to_owned(),
-            norito::to_bytes(&outer).expect("encode backend-variant ZK-ACE OpenVerify envelope"),
-        );
-        (vk_box, proof)
-    }
-
-    fn sample_zk_ace_stark_open_verify_proof_with_stark_public_inputs(
-        stark_public_inputs: Vec<Vec<[u8; 32]>>,
-    ) -> (VerifyingKeyBox, ProofBox) {
-        sample_zk_ace_stark_open_verify_proof_with_stark_public_inputs_and_transcript_label(
-            stark_public_inputs,
-            STARK_ZK_ACE_AIR_TRANSCRIPT_LABEL_V1,
-        )
-    }
-
-    fn sample_zk_ace_stark_open_verify_proof_with_air_transcript_label(
-        transcript_label: &str,
-    ) -> (VerifyingKeyBox, ProofBox) {
-        let (public_inputs, _witness) = public_inputs_and_witness();
-        let stark_public_word =
-            iroha_data_model::zk::derive_zk_ace_public_inputs_digest(&public_inputs)
-                .expect("derive ZK-ACE public inputs digest");
-        sample_zk_ace_stark_open_verify_proof_with_stark_public_inputs_and_transcript_label(
-            vec![vec![stark_public_word]],
-            transcript_label,
-        )
-    }
-
-    fn sample_zk_ace_stark_open_verify_proof_with_stark_public_inputs_and_transcript_label(
-        stark_public_inputs: Vec<Vec<[u8; 32]>>,
-        transcript_label: &str,
-    ) -> (VerifyingKeyBox, ProofBox) {
-        let vk_box = zk_ace_stark_vk_box();
-        let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-            norito::decode_from_bytes(&vk_box.bytes).expect("decode ZK-ACE STARK VK");
-        let (public_inputs, witness) = public_inputs_and_witness();
-        let public_inputs_bytes =
-            norito::to_bytes(&public_inputs).expect("encode ZK-ACE public inputs");
-        let vk_hash = hash_vk(&vk_box);
-        let domain_tag = stark_open_verify_domain_tag_current(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            vk_hash,
-            &public_inputs_bytes,
-            &stark_public_inputs,
-        );
-        let params = crate::zk_stark::StarkFriParamsV1 {
-            version: 1,
-            n_log2: vk_payload.n_log2,
-            blowup_log2: vk_payload.blowup_log2,
-            fold_arity: vk_payload.fold_arity,
-            queries: vk_payload.queries,
-            merkle_arity: vk_payload.merkle_arity,
-            hash_fn: vk_payload.hash_fn,
-            domain_tag,
-        };
-        let air_public_digest =
-            iroha_data_model::zk::derive_zk_ace_air_public_digest(&public_inputs)
-                .expect("derive ZK-ACE AIR public digest");
-        let envelope_bytes = crate::zk_stark::prove_stark_fri_zk_ace_air_envelope_bytes(
-            params,
-            transcript_label.to_owned(),
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            air_public_digest,
-            &public_inputs,
-            &witness,
-        )
-        .expect("ZK-ACE STARK AIR envelope");
-        let open = iroha_data_model::zk::StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: stark_public_inputs,
-            envelope_bytes,
-        };
-        let outer = iroha_data_model::zk::OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Stark,
-            circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            vk_hash,
-            public_inputs: public_inputs_bytes,
-            proof_bytes: norito::to_bytes(&open).expect("encode ZK-ACE STARK open proof"),
-            aux: Vec::new(),
-        };
-        let proof = ProofBox::new(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-            norito::to_bytes(&outer).expect("encode ZK-ACE STARK OpenVerify envelope"),
-        );
-        (vk_box, proof)
-    }
-
-    fn attach_auxiliary_composition_to_zk_ace_open_verify_proof(proof: &ProofBox) -> ProofBox {
-        let mut outer: iroha_data_model::zk::OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.bytes).expect("decode outer ZK-ACE STARK envelope");
-        let mut open: iroha_data_model::zk::StarkFriOpenProofV1 =
-            norito::decode_from_bytes(&outer.proof_bytes).expect("decode ZK-ACE STARK open proof");
-        let mut inner: crate::zk_stark::StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&open.envelope_bytes)
-                .expect("decode inner ZK-ACE STARK envelope");
-        let leaf = 0_u64;
-        let (comp_root, path) = crate::zk_stark::stark_merkle_root_and_path_from_field_values_v1(
-            &inner.params,
-            &[leaf],
-            0,
-        )
-        .expect("derive auxiliary ZK-ACE composition commitment");
-        let comp_value = crate::zk_stark::StarkCompositionValueV1 {
-            leaf,
-            constant: 0,
-            z_coeff: 0,
-            aux_terms: Vec::new(),
-            path,
-        };
-        inner.proof.commits.comp_root = Some(comp_root);
-        inner.proof.comp_values = Some(vec![comp_value; inner.proof.queries.len()]);
-        open.envelope_bytes =
-            norito::to_bytes(&inner).expect("encode auxiliary inner ZK-ACE STARK envelope");
-        outer.proof_bytes = norito::to_bytes(&open).expect("encode auxiliary ZK-ACE open proof");
-        ProofBox::new(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-            norito::to_bytes(&outer).expect("encode auxiliary outer ZK-ACE STARK envelope"),
-        )
-    }
-
-    #[test]
-    fn zk_ace_stark_prover_emits_verifiable_open_verify_envelope() {
-        let (vk_box, proof) = sample_zk_ace_stark_open_verify_proof();
-        let report =
-            verify_backend_with_timing(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, &proof, Some(&vk_box));
-        assert!(report.ok);
-    }
-
-    #[test]
-    fn zk_ace_stark_open_verify_rejects_inner_auxiliary_composition_commitments() {
-        let (vk_box, proof) = sample_zk_ace_stark_open_verify_proof();
-        let tampered = attach_auxiliary_composition_to_zk_ace_open_verify_proof(&proof);
-        let report = verify_backend_with_timing(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            &tampered,
-            Some(&vk_box),
-        );
-        assert!(!report.ok);
-    }
-
-    #[test]
-    fn zk_ace_stark_open_verify_rejects_stark_public_input_digest_retarget() {
-        let wrong_stark_public_inputs = vec![vec![[0xA5; 32]]];
-        let (vk_box, proof) = sample_zk_ace_stark_open_verify_proof_with_stark_public_inputs(
-            wrong_stark_public_inputs,
-        );
-        let report =
-            verify_backend_with_timing(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, &proof, Some(&vk_box));
-        assert!(!report.ok);
-    }
-
-    #[test]
-    fn zk_ace_stark_open_verify_rejects_noncanonical_air_transcript_label() {
-        let (vk_box, proof) = sample_zk_ace_stark_open_verify_proof_with_air_transcript_label(
-            "IROHA-STARK-ZK-ACE-AIR-V1-ALT",
-        );
-        let report =
-            verify_backend_with_timing(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, &proof, Some(&vk_box));
-        assert!(!report.ok);
-    }
-
-    #[test]
-    fn zk_ace_stark_prover_rejects_below_floor_verifying_key_payload() {
-        let weak_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
-            merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
-        };
-        let vk_box = VerifyingKeyBox::new(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-            norito::to_bytes(&weak_payload).expect("encode weak ZK-ACE STARK VK"),
-        );
-        let (public_inputs, witness) = public_inputs_and_witness();
-        let err = prove_stark_fri_zk_ace_open_verify_envelope(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            &vk_box,
-            &public_inputs,
-            &witness,
-        )
-        .expect_err("ZK-ACE prover must reject below-floor STARK VK payloads");
-        assert!(
-            err.contains("below consensus floor"),
-            "unexpected weak VK rejection: {err}"
-        );
-    }
-
-    #[test]
-    fn zk_ace_stark_prover_rejects_verifying_key_backend_mismatch() {
-        let valid_vk = zk_ace_stark_vk_box();
-        let vk_box = VerifyingKeyBox::new("stark/fri".into(), valid_vk.bytes);
-        let (public_inputs, witness) = public_inputs_and_witness();
-        let err = prove_stark_fri_zk_ace_open_verify_envelope(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            &vk_box,
-            &public_inputs,
-            &witness,
-        )
-        .expect_err("ZK-ACE prover must reject a verifier key tagged for another backend");
-        assert!(
-            err.contains("backend mismatch"),
-            "unexpected VK backend mismatch rejection: {err}"
-        );
-    }
-
-    #[test]
-    fn zk_ace_stark_prover_rejects_noncanonical_backend_even_when_vk_matches() {
-        let backend = super::ZK_BACKEND_STARK_FRI_V1;
-        let vk_box = zk_ace_stark_vk_box_for_backend(backend);
-        let (public_inputs, witness) = public_inputs_and_witness();
-        let err = prove_stark_fri_zk_ace_open_verify_envelope(
-            backend,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            &vk_box,
-            &public_inputs,
-            &witness,
-        )
-        .expect_err("ZK-ACE prover must reject noncanonical STARK backend labels");
-        assert!(
-            err.contains(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND),
-            "unexpected noncanonical backend rejection: {err}"
-        );
-    }
-
-    #[test]
-    fn zk_ace_stark_verifier_rejects_noncanonical_backend_even_when_shape_matches() {
-        let backend = super::ZK_BACKEND_STARK_FRI_V1;
-        let (vk_box, proof) = forged_zk_ace_stark_open_verify_proof_for_backend(backend);
-        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
-        assert!(
-            !report.ok,
-            "ZK-ACE STARK verification must require the canonical ZK-ACE backend"
-        );
-    }
-
-    #[test]
-    fn zk_ace_stark_prover_emits_canonical_native_air_circuit_id() {
-        let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
-            merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
-        };
-        let vk_box = VerifyingKeyBox::new(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-            norito::to_bytes(&payload).expect("encode canonical ZK-ACE STARK VK"),
-        );
-        let (public_inputs, witness) = public_inputs_and_witness();
-        let proof = prove_stark_fri_zk_ace_open_verify_envelope(
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            &vk_box,
-            &public_inputs,
-            &witness,
-        )
-        .expect("build valid ZK-ACE STARK proof");
-        let envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.bytes).expect("decode ZK-ACE OpenVerifyEnvelope");
-        let open: StarkFriOpenProofV1 =
-            norito::decode_from_bytes(&envelope.proof_bytes).expect("decode STARK wrapper");
-        let native: crate::zk_stark::StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&open.envelope_bytes).expect("decode native ZK-ACE AIR");
-        let air = native.proof.air.expect("ZK-ACE proof carries native AIR");
-
-        assert_eq!(air.circuit_id, ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID);
-        assert!(
-            crate::zk_stark::verify_stark_fri_zk_ace_envelope_with_limits(
-                &open.envelope_bytes,
-                &crate::zk_stark::StarkVerifierLimits::default(),
-                &public_inputs,
-            )
-        );
-    }
 }
 
 /// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
@@ -2205,8 +1633,8 @@ pub mod test_utils {
             proof_bytes: proof_payload,
             aux: Vec::new(),
         };
-        let proof_bytes =
-            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
+        let proof_bytes = norito::encode_canonical(&envelope)
+            .expect("OpenVerifyEnvelope Norito serialization must work");
         FixtureEnvelope {
             proof_bytes,
             public_inputs,
@@ -2310,8 +1738,8 @@ pub mod test_utils {
             proof_bytes,
             aux: Vec::new(),
         };
-        let proof_bytes =
-            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
+        let proof_bytes = norito::encode_canonical(&envelope)
+            .expect("OpenVerifyEnvelope Norito serialization must work");
         FixtureEnvelope {
             proof_bytes,
             public_inputs,
@@ -2435,8 +1863,8 @@ pub mod test_utils {
             proof_bytes,
             aux: Vec::new(),
         };
-        let proof_bytes =
-            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
+        let proof_bytes = norito::encode_canonical(&envelope)
+            .expect("OpenVerifyEnvelope Norito serialization must work");
         FixtureEnvelope {
             proof_bytes,
             public_inputs,
@@ -2568,8 +1996,8 @@ pub mod test_utils {
             proof_bytes,
             aux: Vec::new(),
         };
-        let proof_bytes =
-            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
+        let proof_bytes = norito::encode_canonical(&envelope)
+            .expect("OpenVerifyEnvelope Norito serialization must work");
         FixtureEnvelope {
             proof_bytes,
             public_inputs,
@@ -6104,7 +5532,7 @@ fn preverify_open_verify_envelope_metadata(
         return Ok(());
     };
     let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
-        norito::decode_from_bytes(&proof.bytes).map_err(|_| PreverifyResult::MalformedProof)?;
+        norito::decode_canonical(&proof.bytes).map_err(|_| PreverifyResult::MalformedProof)?;
     envelope.validate_for_admission().map_err(|err| {
         if err == iroha_data_model::zk::OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash {
             PreverifyResult::VerifyingKeyMismatch
@@ -6129,30 +5557,10 @@ fn preverify_open_verify_envelope_metadata(
         else {
             return Err(PreverifyResult::MalformedProof);
         };
-        if normalized_zk_ace_stark_circuit_id_for_backend(&proof.backend).as_deref()
+        if normalized_retired_zk_ace_stark_circuit_id_for_backend(&proof.backend).as_deref()
             == Some(env_circuit_id.as_str())
         {
-            if proof.backend != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
-                return Err(PreverifyResult::MalformedProof);
-            }
-            if envelope.circuit_id != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
-                return Err(PreverifyResult::MalformedProof);
-            }
-            let public_inputs: iroha_data_model::zk::ZkAcePublicInputsV1 =
-                norito::decode_from_bytes(&envelope.public_inputs)
-                    .map_err(|_| PreverifyResult::MalformedProof)?;
-            let expected_stark_public_word =
-                iroha_data_model::zk::derive_zk_ace_public_inputs_digest(&public_inputs)
-                    .map_err(|_| PreverifyResult::MalformedProof)?;
-            let open: iroha_data_model::zk::StarkFriOpenProofV1 =
-                norito::decode_from_bytes(&envelope.proof_bytes)
-                    .map_err(|_| PreverifyResult::MalformedProof)?;
-            if open.version != 1
-                || open.envelope_bytes.is_empty()
-                || open.public_inputs != vec![vec![expected_stark_public_word]]
-            {
-                return Err(PreverifyResult::MalformedProof);
-            }
+            return Err(PreverifyResult::MalformedProof);
         }
         if normalized_bfv_full_bootstrap_stark_circuit_id_for_backend(&proof.backend).as_deref()
             == Some(env_circuit_id.as_str())
@@ -6167,7 +5575,7 @@ fn preverify_open_verify_envelope_metadata(
                 return Err(PreverifyResult::MalformedProof);
             }
             let open: iroha_data_model::zk::StarkFriOpenProofV1 =
-                norito::decode_from_bytes(&envelope.proof_bytes)
+                norito::decode_canonical(&envelope.proof_bytes)
                     .map_err(|_| PreverifyResult::MalformedProof)?;
             if open.version != 1
                 || open.envelope_bytes.is_empty()
@@ -6324,6 +5732,13 @@ pub fn preverify_with_budget(
 /// Backends without a real verifier return `false` (unsupported).
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn halo2_ipa_backend_from_circuit_id(circuit_id: &str) -> Option<String> {
+    if !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+            circuit_id,
+        )
+    {
+        return None;
+    }
     let trimmed = circuit_id.trim();
     if trimmed.is_empty() {
         return None;
@@ -6355,7 +5770,7 @@ fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> 
     let Some(vk_box) = vk else {
         return false;
     };
-    let env: OpenVerifyEnvelope = match norito::decode_from_bytes(&proof.bytes) {
+    let env: OpenVerifyEnvelope = match norito::decode_canonical(&proof.bytes) {
         Ok(env) => env,
         Err(_) => return false,
     };
@@ -6413,7 +5828,7 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         false
     };
 
-    let env: OpenVerifyEnvelope = match norito::decode_from_bytes(&proof.bytes) {
+    let env: OpenVerifyEnvelope = match norito::decode_canonical(&proof.bytes) {
         Ok(env) => env,
         Err(_) => return reject("invalid OpenVerifyEnvelope payload"),
     };
@@ -6450,7 +5865,7 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
 
     // Decode and validate the STARK verifying key payload. This pins the verifier
     // parameters so a prover cannot select weaker hash/query settings at runtime.
-    let vk_payload: StarkFriVerifyingKeyV1 = match norito::decode_from_bytes(&vk_box.bytes) {
+    let vk_payload: StarkFriVerifyingKeyV1 = match norito::decode_canonical(&vk_box.bytes) {
         Ok(vk) => vk,
         Err(_) => return reject("invalid STARK verifying key payload"),
     };
@@ -6479,8 +5894,11 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         Some(id) => id,
         None => return reject("invalid STARK envelope circuit_id"),
     };
-    let is_zk_ace_circuit = normalized_zk_ace_stark_circuit_id_for_backend(backend).as_deref()
-        == Some(env_circuit_id.as_str());
+    if normalized_retired_zk_ace_stark_circuit_id_for_backend(backend).as_deref()
+        == Some(env_circuit_id.as_str())
+    {
+        return reject("retired generic ZK-ACE relation requires typed privacy verification");
+    }
     let is_bfv_full_bootstrap_circuit =
         normalized_bfv_full_bootstrap_stark_circuit_id_for_backend(backend).as_deref()
             == Some(env_circuit_id.as_str());
@@ -6495,23 +5913,12 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if env_circuit_id != vk_circuit_id {
         return reject("STARK verifying key circuit_id mismatch");
     }
-    if is_zk_ace_circuit {
-        if backend != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
-            return reject("ZK-ACE STARK backend must be canonical");
-        }
-        if env.circuit_id != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
-            return reject("ZK-ACE STARK circuit id must be canonical");
-        }
-        if crate::zk_stark::validate_zk_ace_stark_fri_verifying_key_payload(&vk_payload).is_err() {
-            return reject("invalid ZK-ACE STARK verifying key payload");
-        }
-    }
     if is_bfv_full_bootstrap_circuit {
         return reject("BFV full-bootstrap STARK circuit requires BFV-specific verification");
     }
 
     // Decode the STARK wrapper payload.
-    let open: StarkFriOpenProofV1 = match norito::decode_from_bytes(&env.proof_bytes) {
+    let open: StarkFriOpenProofV1 = match norito::decode_canonical(&env.proof_bytes) {
         Ok(open) => open,
         Err(_) => return reject("invalid STARK wrapper payload"),
     };
@@ -6546,16 +5953,11 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         &open.public_inputs,
     );
     let inner: crate::zk_stark::StarkVerifyEnvelopeV1 =
-        match norito::decode_from_bytes(&open.envelope_bytes) {
+        match norito::decode_canonical(&open.envelope_bytes) {
             Ok(inner) => inner,
             Err(_) => return reject("invalid inner STARK envelope payload"),
         };
-    let expected_transcript_label = if is_zk_ace_circuit {
-        STARK_ZK_ACE_AIR_TRANSCRIPT_LABEL_V1
-    } else {
-        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1
-    };
-    if inner.transcript_label != expected_transcript_label {
+    if inner.transcript_label != STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1 {
         return reject("STARK OpenVerifyEnvelope transcript label mismatch");
     }
     if inner.proof.commits.comp_root.is_some() || inner.proof.comp_values.is_some() {
@@ -6582,46 +5984,20 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         return reject("domain tag integrity mismatch");
     }
 
-    let zk_ace_public_inputs = if is_zk_ace_circuit {
-        match norito::decode_from_bytes::<iroha_data_model::zk::ZkAcePublicInputsV1>(
-            &env.public_inputs,
-        ) {
-            Ok(public_inputs) => Some(public_inputs),
-            Err(_) => return reject("invalid ZK-ACE public inputs payload"),
-        }
-    } else {
-        None
-    };
-    let expected_public_digest = if let Some(public_inputs) = zk_ace_public_inputs.as_ref() {
-        let expected_stark_public_word =
-            match iroha_data_model::zk::derive_zk_ace_public_inputs_digest(public_inputs) {
-                Ok(digest) => digest,
-                Err(_) => return reject("ZK-ACE STARK public inputs reconstruction failed"),
-            };
-        let expected_stark_public_inputs = vec![vec![expected_stark_public_word]];
-        if open.public_inputs != expected_stark_public_inputs {
-            return reject("ZK-ACE STARK public inputs mismatch");
-        }
-        match iroha_data_model::zk::derive_zk_ace_air_public_digest(public_inputs) {
-            Ok(digest) => digest,
-            Err(_) => return reject("ZK-ACE AIR public digest reconstruction failed"),
-        }
-    } else {
-        let expected_terms = stark_binding_air_terms(
-            backend,
-            &env.circuit_id,
-            env.vk_hash,
-            &env.public_inputs,
-            &open.public_inputs,
-        );
-        match crate::zk_stark::stark_air_public_digest_from_composition(
-            STARK_BINDING_AIR_CONSTANT,
-            STARK_BINDING_AIR_Z_COEFF,
-            &expected_terms,
-        ) {
-            Ok(digest) => digest,
-            Err(_) => return reject("STARK AIR public digest reconstruction failed"),
-        }
+    let expected_terms = stark_binding_air_terms(
+        backend,
+        &env.circuit_id,
+        env.vk_hash,
+        &env.public_inputs,
+        &open.public_inputs,
+    );
+    let expected_public_digest = match crate::zk_stark::stark_air_public_digest_from_composition(
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        &expected_terms,
+    ) {
+        Ok(digest) => digest,
+        Err(_) => return reject("STARK AIR public digest reconstruction failed"),
     };
     let Some(air) = inner.proof.air.as_ref() else {
         return reject("missing STARK AIR section");
@@ -6637,15 +6013,8 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if air.public_digest != expected_public_digest {
         return reject("STARK AIR public digest mismatch");
     }
-    let stark_ok = if let Some(public_inputs) = zk_ace_public_inputs.as_ref() {
-        crate::zk_stark::verify_stark_fri_zk_ace_envelope_with_limits(
-            &open.envelope_bytes,
-            limits,
-            public_inputs,
-        )
-    } else {
-        crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits)
-    };
+    let stark_ok =
+        crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits);
     if !stark_ok {
         return reject("inner STARK/FRI verifier rejected proof");
     }
@@ -6802,11 +6171,16 @@ mod debug_backend_tests {
 #[cfg(test)]
 mod stark_backend_tag_tests {
     use super::{
-        ZK_BACKEND_STARK_FRI_V1, is_developer_only_backend_label, is_ivm_execution_backend,
+        ZK_BACKEND_HALO2_IPA, ZK_BACKEND_STARK_FRI_V1,
+        halo2_open_verify_circuit_id_is_halo2_family, halo2_open_verify_circuit_id_matches_backend,
+        is_developer_only_backend_label, is_ivm_execution_backend,
         is_production_claim_backend_label, is_production_verify_backend_label,
-        is_stark_fri_v1_backend, is_trusted_setup_backend_label, production_verify_backend_tag,
-        stark_open_verify_circuit_id_matches_backend, verify_backend,
+        is_stark_fri_v1_backend, is_trusted_setup_backend_label,
+        is_verifier_backend_registry_label_v1, is_verifier_readiness_claim_label,
+        production_verify_backend_tag, stark_open_verify_circuit_id_matches_backend,
+        verifier_backend_registry_tag_v1, verify_backend,
     };
+    use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
     use iroha_data_model::zk::BackendTag;
 
@@ -7331,6 +6705,88 @@ mod stark_backend_tag_tests {
     }
 
     #[test]
+    fn generic_open_verify_matchers_reserve_all_privacy_protocol_labels() {
+        fn assert_reserved(label: &str) {
+            for circuit_id in [
+                label.to_owned(),
+                format!("halo2/ipa::{label}"),
+                format!("halo2/pasta/{label}"),
+                format!("stark/fri:{label}"),
+                format!("stark/fri/sha256-goldilocks:{label}"),
+                format!("generic/namespace/{label}"),
+            ] {
+                assert!(
+                    !halo2_open_verify_circuit_id_is_halo2_family(&circuit_id),
+                    "Halo2 generic admission must reject privacy circuit id {circuit_id:?}"
+                );
+                assert!(
+                    !halo2_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_HALO2_IPA,
+                        &circuit_id,
+                    ),
+                    "Halo2 backend matching must reject privacy circuit id {circuit_id:?}"
+                );
+                assert!(
+                    !stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &circuit_id,
+                    ),
+                    "base STARK generic admission must reject privacy circuit id {circuit_id:?}"
+                );
+                assert!(
+                    !stark_open_verify_circuit_id_matches_backend(
+                        "stark/fri/sha256-goldilocks",
+                        &circuit_id,
+                    ),
+                    "profile STARK admission must reject privacy circuit id {circuit_id:?}"
+                );
+            }
+
+            for malformed_alias in [
+                format!(" {label}"),
+                format!("{label} "),
+                label.to_ascii_uppercase(),
+            ] {
+                assert!(
+                    !halo2_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_HALO2_IPA,
+                        &malformed_alias,
+                    ),
+                    "non-portable Halo2 alias {malformed_alias:?} must fail closed"
+                );
+                assert!(
+                    !stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &malformed_alias,
+                    ),
+                    "non-portable STARK alias {malformed_alias:?} must fail closed"
+                );
+            }
+
+            for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
+                assert!(
+                    halo2_open_verify_circuit_id_is_halo2_family(&near_miss),
+                    "portable Halo2 near miss {near_miss:?} must remain available"
+                );
+                assert!(
+                    stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &near_miss,
+                    ),
+                    "portable STARK near miss {near_miss:?} must remain available"
+                );
+            }
+        }
+
+        for protocol in PrivacyProtocolIdV1::ALL {
+            assert_reserved(protocol.canonical_label());
+        }
+        for label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
+            assert_reserved(label);
+        }
+    }
+
+    #[test]
     fn developer_only_classifier_is_ascii_case_insensitive() {
         for backend in [
             "debug",
@@ -7401,9 +6857,9 @@ mod stark_prover_tests {
         verify_backend_with_timing,
     };
     use crate::zk_stark::{
-        STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkCompositionValueV1, StarkFriParamsV1,
-        StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1, ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-        ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+        STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        STARK_FRI_CONSENSUS_MIN_QUERIES, STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1,
+        StarkCompositionValueV1, StarkFriParamsV1, StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1,
     };
     use iroha_crypto::Hash;
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
@@ -7424,10 +6880,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -7448,10 +6904,10 @@ mod stark_prover_tests {
         StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id,
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: if backend.contains("/poseidon2-") {
                 crate::zk_stark::STARK_HASH_POSEIDON2_V1
@@ -7634,10 +7090,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -7666,10 +7122,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -7753,10 +7209,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.to_owned(),
-                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7842,10 +7298,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.to_owned(),
-                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7879,10 +7335,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7915,10 +7371,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7951,10 +7407,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7987,10 +7443,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -8027,10 +7483,10 @@ mod stark_prover_tests {
                 let vk_payload = StarkFriVerifyingKeyV1 {
                     version: 1,
                     circuit_id: circuit_id.clone(),
-                    n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                    blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                     fold_arity: 2,
-                    queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
                     merkle_arity: 2,
                     hash_fn: if backend.contains("/poseidon2-") {
                         STARK_HASH_POSEIDON2_V1
@@ -8072,10 +7528,10 @@ mod stark_prover_tests {
                 let vk_payload = StarkFriVerifyingKeyV1 {
                     version: 1,
                     circuit_id: circuit_id.clone(),
-                    n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                    blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                     fold_arity: 2,
-                    queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
                     merkle_arity: 2,
                     hash_fn: if backend.contains("/poseidon2-") {
                         STARK_HASH_POSEIDON2_V1
@@ -8165,6 +7621,108 @@ mod stark_prover_tests {
         let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
         let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
         assert!(report.ok);
+    }
+
+    #[test]
+    fn prove_stark_open_verify_envelope_rejects_alternate_layout_verifying_key() {
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = format!("{backend}:alternate-layout-vk");
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let canonical_vk =
+            norito::encode_canonical(&vk_payload).expect("encode canonical STARK VK");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_vk = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&vk_payload).expect("encode alternate-layout STARK VK")
+        };
+        assert_ne!(alternate_vk, canonical_vk);
+        norito::decode_from_bytes::<StarkFriVerifyingKeyV1>(&alternate_vk)
+            .expect("ordinary Norito accepts the advertised layout");
+
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), alternate_vk);
+        let err = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"alternate-layout-vk:schema:v1",
+            vec![vec![[0x11; 32]]],
+        )
+        .expect_err("alternate-layout STARK VK must be rejected before proving");
+        assert!(
+            err.contains("invalid STARK verifying key payload"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_alternate_layout_outer() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let outer: OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.bytes).expect("decode canonical outer");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_outer = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&outer).expect("encode alternate-layout outer envelope")
+        };
+        assert_ne!(alternate_outer, proof.bytes);
+        norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate_outer)
+            .expect("ordinary Norito accepts the advertised layout");
+
+        let alternate_proof = ProofBox::new(backend.to_owned(), alternate_outer);
+        assert!(
+            !verify_backend_with_timing(backend, &alternate_proof, Some(&vk_box)).ok,
+            "alternate-layout outer envelope must be rejected"
+        );
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_alternate_layout_wrapper() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.bytes).expect("decode canonical outer");
+        let open: StarkFriOpenProofV1 =
+            norito::decode_canonical(&outer.proof_bytes).expect("decode canonical STARK wrapper");
+        let canonical_wrapper = outer.proof_bytes.clone();
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_wrapper = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&open).expect("encode alternate-layout STARK wrapper")
+        };
+        assert_ne!(alternate_wrapper, canonical_wrapper);
+        assert_eq!(
+            norito::decode_from_bytes::<StarkFriOpenProofV1>(&alternate_wrapper)
+                .expect("ordinary Norito accepts the advertised layout"),
+            open
+        );
+
+        outer.proof_bytes = alternate_wrapper;
+        let alternate_proof = ProofBox::new(
+            backend.to_owned(),
+            norito::encode_canonical(&outer)
+                .expect("encode canonical outer around alternate wrapper"),
+        );
+
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert!(
+            verify_backend_with_timing(backend, &proof, Some(&vk_box)).ok,
+            "canonical STARK proof must verify independently of ambient layout"
+        );
+        assert!(
+            !verify_backend_with_timing(backend, &alternate_proof, Some(&vk_box)).ok,
+            "alternate-layout STARK wrapper must be rejected inside a canonical outer envelope"
+        );
     }
 
     #[test]
@@ -8336,10 +7894,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -8366,10 +7924,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -8570,49 +8128,59 @@ pub fn verify_backend_with_timing_guardrails(
             };
         }
 
-        // Best-effort: when the payload is a Norito `OpenVerifyEnvelope`, enforce the inner
-        // proof-bytes cap. (Some halo2 backends may accept raw proof bytes, so decode failure
-        // is not treated as a hard reject here.)
-        if let Ok(env) =
-            norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&proof.bytes)
-        {
-            if env.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
-                iroha_logger::debug!(
-                    backend,
-                    "halo2 OpenVerifyEnvelope backend tag does not match verifier backend"
-                );
-                return VerifyReport {
-                    ok: false,
-                    elapsed: Duration::ZERO,
-                };
-            }
-            if let Err(err) =
-                env.validate_with_bounds(iroha_data_model::zk::OpenVerifyEnvelopeBounds {
-                    max_proof_bytes: guardrails.halo2_max_proof_bytes,
-                    ..iroha_data_model::zk::OpenVerifyEnvelopeBounds::default()
-                })
-            {
+        // V1 Halo2 proof inputs are always canonical `OpenVerifyEnvelope` frames.
+        // Raw backend-native payloads are accepted only after this boundary has
+        // decoded and authenticated the outer envelope.
+        let env = match norito::decode_canonical::<iroha_data_model::zk::OpenVerifyEnvelope>(
+            &proof.bytes,
+        ) {
+            Ok(env) => env,
+            Err(err) => {
                 iroha_logger::debug!(
                     backend,
                     error = %err,
-                    "halo2 OpenVerifyEnvelope failed guardrail validation"
+                    "halo2 proof payload is not a canonical OpenVerifyEnvelope"
                 );
                 return VerifyReport {
                     ok: false,
                     elapsed: Duration::ZERO,
                 };
             }
-            if !halo2_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
-                iroha_logger::debug!(
-                    backend,
-                    circuit_id = env.circuit_id.as_str(),
-                    "halo2 OpenVerifyEnvelope circuit id does not match verifier backend"
-                );
-                return VerifyReport {
-                    ok: false,
-                    elapsed: Duration::ZERO,
-                };
-            }
+        };
+        if env.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+            iroha_logger::debug!(
+                backend,
+                "halo2 OpenVerifyEnvelope backend tag does not match verifier backend"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+        if let Err(err) = env.validate_with_bounds(iroha_data_model::zk::OpenVerifyEnvelopeBounds {
+            max_proof_bytes: guardrails.halo2_max_proof_bytes,
+            ..iroha_data_model::zk::OpenVerifyEnvelopeBounds::default()
+        }) {
+            iroha_logger::debug!(
+                backend,
+                error = %err,
+                "halo2 OpenVerifyEnvelope failed guardrail validation"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+        if !halo2_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
+            iroha_logger::debug!(
+                backend,
+                circuit_id = env.circuit_id.as_str(),
+                "halo2 OpenVerifyEnvelope circuit id does not match verifier backend"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
         }
     }
 
@@ -8637,7 +8205,7 @@ pub fn verify_backend_with_timing_guardrails(
                 elapsed: Duration::ZERO,
             };
         }
-        let env = match norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(
+        let env = match norito::decode_canonical::<iroha_data_model::zk::OpenVerifyEnvelope>(
             &proof.bytes,
         ) {
             Ok(env) => env,
@@ -8688,7 +8256,7 @@ pub fn verify_backend_with_timing_guardrails(
                 elapsed: Duration::ZERO,
             };
         }
-        let open = match norito::decode_from_bytes::<iroha_data_model::zk::StarkFriOpenProofV1>(
+        let open = match norito::decode_canonical::<iroha_data_model::zk::StarkFriOpenProofV1>(
             &env.proof_bytes,
         ) {
             Ok(open) => open,
@@ -8954,6 +8522,7 @@ mod guardrails_tests {
             "verange",
             "zk-ams-recursive-admission-v0",
             "zk-x509-onchain-identity-v0",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints",
         ] {
             let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
@@ -9549,9 +9118,8 @@ mod guardrails_tests {
     #[test]
     fn guardrails_stark_proof_limit_applies_to_inner_envelope_not_outer_wrapper() {
         use crate::zk_stark::{
-            STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-            ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            STARK_FRI_CONSENSUS_MIN_QUERIES, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
         };
 
         let backend = "stark/fri/sha256-goldilocks";
@@ -9559,10 +9127,10 @@ mod guardrails_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -9607,9 +9175,8 @@ mod guardrails_tests {
     #[test]
     fn guardrails_reject_stark_proof_backend_alias_mismatch_before_dispatch() {
         use crate::zk_stark::{
-            STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-            ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            STARK_FRI_CONSENSUS_MIN_QUERIES, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
         };
 
         let backend = "stark/fri/sha256-goldilocks";
@@ -9617,10 +9184,10 @@ mod guardrails_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -9662,6 +9229,7 @@ mod guardrails_tests {
 
 #[cfg(test)]
 mod halo2_ipa_alias_tests {
+    use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 
     use super::*;
@@ -9685,6 +9253,36 @@ mod halo2_ipa_alias_tests {
             Some("halo2/pasta/ipa/tiny-add")
         );
         assert!(halo2_ipa_backend_from_circuit_id("").is_none());
+    }
+
+    #[test]
+    fn halo2_backend_mapping_rejects_every_reserved_privacy_label() {
+        let assert_reserved = |label: &str| {
+            for circuit_id in [
+                label.to_owned(),
+                format!("halo2/ipa::{label}"),
+                format!("halo2/pasta/{label}"),
+                format!("generic/namespace/{label}"),
+            ] {
+                assert!(
+                    halo2_ipa_backend_from_circuit_id(&circuit_id).is_none(),
+                    "reserved privacy circuit id {circuit_id:?} must not map to Halo2"
+                );
+            }
+            for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
+                assert!(
+                    halo2_ipa_backend_from_circuit_id(&near_miss).is_some(),
+                    "portable near miss {near_miss:?} must remain mappable"
+                );
+            }
+        };
+
+        for protocol in PrivacyProtocolIdV1::ALL {
+            assert_reserved(protocol.canonical_label());
+        }
+        for label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
+            assert_reserved(label);
+        }
     }
 
     #[test]
@@ -9894,7 +9492,7 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
         norito_helpers::{self as nh, DecodedEnvelope},
     };
     // Decode Norito envelope
-    let env: OpenVerifyEnvelope = match norito::decode_from_bytes(&proof.bytes) {
+    let env: OpenVerifyEnvelope = match norito::decode_canonical(&proof.bytes) {
         Ok(x) => x,
         Err(_) => return false,
     };
@@ -10220,198 +9818,9 @@ mod pasta_tiny {
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::pasta::Fp as Scalar,
-        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
         poly::Rotation,
     };
-
-    /// Semantic circuit retained for the BOI legacy note load/audit/redeem API.
-    ///
-    /// This circuit is not a peer-payment mode. ABI-21/V4 `cash_handoff_v1`
-    /// remains the only runtime-advertised peer handoff. The compatibility
-    /// circuit proves the bounded note corridor used when old BOI clients load
-    /// a note, optionally anchor an audit, or redeem it online.
-    #[derive(Clone)]
-    pub struct OfflineNoteSemantic {
-        /// Public values bound to the proof envelope.
-        pub public_values: [Scalar; super::OFFLINE_NOTE_INSTANCE_COLUMNS],
-        /// Private, scale-normalized input amount slots.
-        pub input_amounts: [Scalar; super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
-        /// Private, scale-normalized output amount slots.
-        pub output_amounts: [Scalar; super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
-    }
-
-    impl Default for OfflineNoteSemantic {
-        fn default() -> Self {
-            Self {
-                public_values: [Scalar::from(0); super::OFFLINE_NOTE_INSTANCE_COLUMNS],
-                input_amounts: [Scalar::from(0); super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
-                output_amounts: [Scalar::from(0); super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
-            }
-        }
-    }
-
-    impl Circuit<Scalar> for OfflineNoteSemantic {
-        type Config = (
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
-                super::OFFLINE_NOTE_INSTANCE_COLUMNS],
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
-                super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
-                super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
-                super::OFFLINE_NOTE_INSTANCE_COLUMNS],
-            Selector,
-        );
-        type FloorPlanner = SimpleFloorPlanner;
-        type Params = ();
-
-        fn without_witnesses(&self) -> Self {
-            Self::default()
-        }
-
-        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-            meta.set_minimum_degree(6);
-            let public_adv = std::array::from_fn(|_| meta.advice_column());
-            let input_adv = std::array::from_fn(|_| meta.advice_column());
-            let output_adv = std::array::from_fn(|_| meta.advice_column());
-            let inst = std::array::from_fn(|_| meta.instance_column());
-            let selector = meta.selector();
-            meta.create_gate("offline_note_semantic", |meta| {
-                let enabled = meta.query_selector(selector);
-                let constant = |value: u64| Expression::Constant(Scalar::from(value));
-                let public = public_adv
-                    .iter()
-                    .map(|column| meta.query_advice(*column, Rotation::cur()))
-                    .collect::<Vec<_>>();
-                let inputs = input_adv
-                    .iter()
-                    .map(|column| meta.query_advice(*column, Rotation::cur()))
-                    .collect::<Vec<_>>();
-                let outputs = output_adv
-                    .iter()
-                    .map(|column| meta.query_advice(*column, Rotation::cur()))
-                    .collect::<Vec<_>>();
-
-                let mode = public[4].clone();
-                let input_count = public[5].clone();
-                let output_count = public[6].clone();
-                let input_sum_public = public[7].clone();
-                let output_sum_public = public[8].clone();
-                let mut constraints = Vec::with_capacity(30);
-
-                for index in 0..super::OFFLINE_NOTE_INSTANCE_COLUMNS {
-                    constraints.push(
-                        enabled.clone()
-                            * (public[index].clone()
-                                - meta.query_instance(inst[index], Rotation::cur())),
-                    );
-                }
-
-                // Mode is redeem or audit; counts remain within the old BOI
-                // proof shape, with redeem fixed to one output.
-                constraints.push(
-                    enabled.clone()
-                        * (mode.clone() - constant(super::OFFLINE_NOTE_MODE_REDEEM))
-                        * (mode - constant(super::OFFLINE_NOTE_MODE_AUDIT)),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (input_count.clone() - constant(1))
-                        * (input_count.clone() - constant(2))
-                        * (input_count.clone() - constant(3))
-                        * (input_count.clone() - constant(4)),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (output_count.clone() - constant(1))
-                        * (output_count.clone() - constant(2)),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (public[4].clone() - constant(super::OFFLINE_NOTE_MODE_AUDIT))
-                        * (output_count.clone() - constant(1)),
-                );
-
-                let input_sum_private = inputs
-                    .iter()
-                    .cloned()
-                    .reduce(|a, b| a + b)
-                    .expect("the offline compatibility circuit has at least one input slot");
-                let output_sum_private = outputs
-                    .iter()
-                    .cloned()
-                    .reduce(|a, b| a + b)
-                    .expect("the offline compatibility circuit has at least one output slot");
-                constraints.push(enabled.clone() * (input_sum_private - input_sum_public.clone()));
-                constraints
-                    .push(enabled.clone() * (output_sum_private - output_sum_public.clone()));
-                constraints.push(enabled.clone() * (input_sum_public - output_sum_public));
-
-                // Unused private amount slots must be zero.
-                constraints.push(
-                    enabled.clone()
-                        * inputs[1].clone()
-                        * (input_count.clone() - constant(2))
-                        * (input_count.clone() - constant(3))
-                        * (input_count.clone() - constant(4)),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * inputs[2].clone()
-                        * (input_count.clone() - constant(3))
-                        * (input_count.clone() - constant(4)),
-                );
-                constraints.push(enabled.clone() * inputs[3].clone() * (input_count - constant(4)));
-                constraints.push(enabled * outputs[1].clone() * (output_count - constant(2)));
-                constraints
-            });
-            (public_adv, input_adv, output_adv, inst, selector)
-        }
-
-        fn synthesize(
-            &self,
-            (public_adv, input_adv, output_adv, _inst, selector): Self::Config,
-            mut layouter: impl Layouter<Scalar>,
-        ) -> Result<(), PlonkError> {
-            let public_values = self.public_values;
-            let input_amounts = self.input_amounts;
-            let output_amounts = self.output_amounts;
-            layouter.assign_region(
-                || "offline_note_semantic",
-                |mut region| {
-                    selector.enable(&mut region, 0)?;
-                    for (index, column) in public_adv.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("public{index}"),
-                            *column,
-                            0,
-                            || Value::known(public_values[index]),
-                        )?;
-                    }
-                    for (index, column) in input_adv.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("input_amount{index}"),
-                            *column,
-                            0,
-                            || Value::known(input_amounts[index]),
-                        )?;
-                    }
-                    for (index, column) in output_adv.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("output_amount{index}"),
-                            *column,
-                            0,
-                            || Value::known(output_amounts[index]),
-                        )?;
-                    }
-                    Ok(())
-                },
-            )
-        }
-    }
 
     #[derive(Clone, Default)]
     pub struct Add;
@@ -14290,27 +13699,6 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 &col_refs,
             )
         }
-        "halo2/pasta/offline-note-recursive" => {
-            if col_refs.len() != OFFLINE_NOTE_INSTANCE_COLUMNS
-                || col_refs.iter().any(|column| column.len() != 1)
-            {
-                return false;
-            }
-            cached_vk_for!(
-                &params,
-                normalized.as_str(),
-                vk_box,
-                pasta_tiny::OfflineNoteSemantic::default(),
-                |vk| {
-                    verify_halo2_ipa_payload_columns(
-                        &params,
-                        vk,
-                        proof_payload.as_slice(),
-                        &col_refs,
-                    )
-                }
-            )
-        }
         "halo2/pasta/tiny-anon-transfer-2x2" => {
             let circuit = pasta_tiny::AnonTransfer2x2;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -14790,13 +14178,9 @@ mod trace_proving_queue_tests {
 
 #[cfg(test)]
 mod preverified_key_tests {
-    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        account::AccountId,
-        asset::AssetDefinitionId,
-        domain::DomainId,
         proof::VerifyingKeyId,
-        zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1, ZkAcePublicInputsV1},
+        zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
 
     use super::*;
@@ -14826,7 +14210,7 @@ mod preverified_key_tests {
         };
         ProofBox::new(
             backend.to_owned(),
-            norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope).expect("encode OpenVerifyEnvelope"),
         )
     }
 
@@ -14845,102 +14229,12 @@ mod preverified_key_tests {
             circuit_id: circuit_id.to_owned(),
             vk_hash,
             public_inputs: ivm_execution_public_inputs_schema_descriptor().to_vec(),
-            proof_bytes: norito::to_bytes(&open).expect("encode IVM STARK wrapper"),
+            proof_bytes: norito::encode_canonical(&open).expect("encode IVM STARK wrapper"),
             aux: Vec::new(),
         };
         ProofBox::new(
             backend.to_owned(),
-            norito::to_bytes(&envelope).expect("encode IVM STARK OpenVerifyEnvelope"),
-        )
-    }
-
-    fn preverify_account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid account keypair");
-        AccountId::new(key_pair.public_key().clone())
-    }
-
-    fn preverify_zk_ace_public_inputs() -> ZkAcePublicInputsV1 {
-        let identity_root = [0x11; 32];
-        let identity_blinding = [0x22; 32];
-        let replay_secret = [0x33; 32];
-        let policy_hash = [0x44; 32];
-        let chain_id: iroha_data_model::ChainId =
-            "zk-ace-preverify-chain".parse().expect("chain id");
-        let from = preverify_account(1);
-        let to = preverify_account(2);
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain"),
-            "xor".parse().expect("asset name"),
-        );
-        let amount = 17;
-        let identity_commitment = iroha_data_model::zk::derive_zk_ace_identity_commitment(
-            &identity_root,
-            &identity_blinding,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        );
-        let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
-            &from,
-            &to,
-            &asset,
-            amount,
-            &chain_id,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            &policy_hash,
-        );
-        let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
-            &replay_secret,
-            &tx_digest,
-            &chain_id,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        );
-        ZkAcePublicInputsV1::transparent_transfer(
-            identity_commitment,
-            tx_digest,
-            tx_digest,
-            chain_id,
-            replay_nullifier,
-            policy_hash,
-            from,
-            to,
-            asset,
-            amount,
-            VerifyingKeyId::new(
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            ),
-        )
-    }
-
-    fn preverify_zk_ace_stark_proof(vk_hash: [u8; 32]) -> ProofBox {
-        preverify_zk_ace_stark_proof_for_backend(
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            vk_hash,
-        )
-    }
-
-    fn preverify_zk_ace_stark_proof_for_backend(backend: &str, vk_hash: [u8; 32]) -> ProofBox {
-        let public_inputs = preverify_zk_ace_public_inputs();
-        let stark_public_word =
-            iroha_data_model::zk::derive_zk_ace_public_inputs_digest(&public_inputs)
-                .expect("derive ZK-ACE STARK public word");
-        let open = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![stark_public_word]],
-            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
-        };
-        let envelope = OpenVerifyEnvelope {
-            backend: BackendTag::Stark,
-            circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            vk_hash,
-            public_inputs: norito::to_bytes(&public_inputs).expect("encode ZK-ACE public inputs"),
-            proof_bytes: norito::to_bytes(&open).expect("encode ZK-ACE STARK wrapper"),
-            aux: Vec::new(),
-        };
-        ProofBox::new(
-            backend.to_owned(),
-            norito::to_bytes(&envelope).expect("encode ZK-ACE OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope).expect("encode IVM STARK OpenVerifyEnvelope"),
         )
     }
 
@@ -14949,9 +14243,9 @@ mod preverified_key_tests {
         mutate: impl FnOnce(&mut OpenVerifyEnvelope),
     ) -> ProofBox {
         let mut envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope");
+            norito::decode_canonical(&proof.bytes).expect("decode OpenVerifyEnvelope");
         mutate(&mut envelope);
-        proof.bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
+        proof.bytes = norito::encode_canonical(&envelope).expect("encode OpenVerifyEnvelope");
         proof
     }
 
@@ -15306,11 +14600,30 @@ mod preverified_key_tests {
         let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA5, 0x5A]);
         let expected = hash_vk(&vk);
         let proof = preverify_enveloped_proof(expected);
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.bytes).expect("decode canonical Halo2 envelope");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_layout_proof = {
+            let alternate_bytes = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&envelope).expect("encode alternate-layout Halo2 envelope")
+            };
+            assert_ne!(alternate_bytes, proof.bytes);
+            norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate_bytes)
+                .expect("ordinary Norito accepts the advertised layout");
+            ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), alternate_bytes)
+        };
 
         for (case, tampered, expected_result) in [
             (
                 "raw_payload",
                 ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "alternate_layout",
+                alternate_layout_proof,
                 PreverifyResult::MalformedProof,
             ),
             (
@@ -15509,161 +14822,35 @@ mod preverified_key_tests {
     }
 
     #[test]
-    fn preverify_rejects_noncanonical_zk_ace_stark_open_verify_circuit_before_dedup() {
+    fn preverify_rejects_every_retired_generic_zk_ace_alias_before_dedup() {
         let backend = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND;
-        let canonical_circuit_id = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
+        let retired = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
         let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0x5A, 0xC3, 0xA5]);
         let expected = hash_vk(&vk);
-        let canonical = preverify_zk_ace_stark_proof(expected);
-        let prefixed_circuit_id = format!("{backend}:{canonical_circuit_id}");
-        let prefixed = preverify_enveloped_proof_for_backend(
+        let accepted = preverify_enveloped_proof_for_backend(
             backend,
             BackendTag::Stark,
-            &prefixed_circuit_id,
-            expected,
-        );
-        let slash_circuit_id = format!("{backend}/{canonical_circuit_id}");
-        let slash = preverify_enveloped_proof_for_backend(
-            backend,
-            BackendTag::Stark,
-            &slash_circuit_id,
+            &format!("{backend}:zk_ace_near_miss"),
             expected,
         );
 
-        let mut canonical_dedup = DedupCache::new();
-        assert_eq!(
-            preverify_with_budget(
-                &canonical,
-                Some(&vk),
-                &mut canonical_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted,
-            "canonical ZK-ACE circuit id must remain preverify-admissible for the dedicated wrapper"
-        );
-
-        for (case, proof) in [
-            ("backend-prefixed ZK-ACE circuit id", prefixed),
-            ("slash-form ZK-ACE circuit id", slash),
-        ] {
-            let mut dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &proof,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
-                "case {case}"
-            );
-            assert_eq!(
-                preverify_with_budget(
-                    &canonical,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
-                "case {case} must not poison dedup"
-            );
-        }
-    }
-
-    #[test]
-    fn preverify_rejects_malformed_zk_ace_stark_open_verify_shape_before_dedup() {
-        let backend = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND;
-        let canonical = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
-        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0x5A, 0xC3, 0xA5]);
-        let expected = hash_vk(&vk);
-        let accepted = preverify_zk_ace_stark_proof(expected);
-
-        for (case, proof) in [
+        for (case, circuit_id) in [
+            ("bare retired relation", retired.to_owned()),
             (
-                "canonical ZK-ACE circuit id with generic public inputs",
-                preverify_enveloped_proof_for_backend(
-                    backend,
-                    BackendTag::Stark,
-                    canonical,
-                    expected,
-                ),
+                "backend-prefixed retired relation",
+                format!("{backend}:{retired}"),
             ),
             (
-                "ZK-ACE circuit id with malformed wrapper",
-                mutate_preverify_envelope(accepted.clone(), |envelope| {
-                    envelope.proof_bytes = vec![0xAA, 0xBB, 0xCC];
-                }),
-            ),
-            (
-                "ZK-ACE circuit id with wrong wrapper version",
-                mutate_preverify_envelope(accepted.clone(), |envelope| {
-                    let open = StarkFriOpenProofV1 {
-                        version: 2,
-                        public_inputs: vec![vec![[0x11; 32]]],
-                        envelope_bytes: vec![0xAA, 0xBB, 0xCC],
-                    };
-                    envelope.proof_bytes =
-                        norito::to_bytes(&open).expect("encode wrong-version ZK-ACE wrapper");
-                }),
-            ),
-            (
-                "ZK-ACE circuit id with empty inner envelope",
-                mutate_preverify_envelope(accepted.clone(), |envelope| {
-                    let public_inputs: ZkAcePublicInputsV1 =
-                        norito::decode_from_bytes(&envelope.public_inputs)
-                            .expect("decode accepted ZK-ACE public inputs");
-                    let stark_public_word =
-                        iroha_data_model::zk::derive_zk_ace_public_inputs_digest(&public_inputs)
-                            .expect("derive accepted ZK-ACE STARK word");
-                    let open = StarkFriOpenProofV1 {
-                        version: 1,
-                        public_inputs: vec![vec![stark_public_word]],
-                        envelope_bytes: Vec::new(),
-                    };
-                    envelope.proof_bytes =
-                        norito::to_bytes(&open).expect("encode empty-inner ZK-ACE wrapper");
-                }),
-            ),
-            (
-                "ZK-ACE circuit id with wrong STARK public word",
-                mutate_preverify_envelope(accepted.clone(), |envelope| {
-                    let open = StarkFriOpenProofV1 {
-                        version: 1,
-                        public_inputs: vec![vec![[0xA5; 32]]],
-                        envelope_bytes: vec![0xAA, 0xBB, 0xCC],
-                    };
-                    envelope.proof_bytes =
-                        norito::to_bytes(&open).expect("encode wrong-public-word ZK-ACE wrapper");
-                }),
-            ),
-            (
-                "ZK-ACE circuit id with extra STARK public word",
-                mutate_preverify_envelope(accepted.clone(), |envelope| {
-                    let public_inputs: ZkAcePublicInputsV1 =
-                        norito::decode_from_bytes(&envelope.public_inputs)
-                            .expect("decode accepted ZK-ACE public inputs");
-                    let stark_public_word =
-                        iroha_data_model::zk::derive_zk_ace_public_inputs_digest(&public_inputs)
-                            .expect("derive accepted ZK-ACE STARK word");
-                    let open = StarkFriOpenProofV1 {
-                        version: 1,
-                        public_inputs: vec![vec![stark_public_word, [0xA5; 32]]],
-                        envelope_bytes: vec![0xAA, 0xBB, 0xCC],
-                    };
-                    envelope.proof_bytes =
-                        norito::to_bytes(&open).expect("encode extra-public-word ZK-ACE wrapper");
-                }),
+                "slash-prefixed retired relation",
+                format!("{backend}/{retired}"),
             ),
         ] {
+            let proof = preverify_enveloped_proof_for_backend(
+                backend,
+                BackendTag::Stark,
+                &circuit_id,
+                expected,
+            );
             let mut dedup = DedupCache::new();
             assert_eq!(
                 preverify_with_budget(
@@ -15692,49 +14879,6 @@ mod preverified_key_tests {
                 "case {case} must not poison dedup"
             );
         }
-    }
-
-    #[test]
-    fn preverify_rejects_zk_ace_noncanonical_backend_before_dedup() {
-        let backend = ZK_BACKEND_STARK_FRI_V1;
-        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0x5A, 0xC3, 0xA5]);
-        let expected = hash_vk(&vk);
-        let proof = preverify_zk_ace_stark_proof_for_backend(backend, expected);
-
-        let canonical_vk = VerifyingKeyBox::new(
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.to_owned(),
-            vec![0x5A, 0xC3, 0xA5],
-        );
-        let canonical_expected = hash_vk(&canonical_vk);
-        let accepted = preverify_zk_ace_stark_proof(canonical_expected);
-
-        let mut dedup = DedupCache::new();
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::MalformedProof,
-            "canonical ZK-ACE circuit must not preverify under generic STARK backend"
-        );
-        assert_eq!(
-            preverify_with_budget(
-                &accepted,
-                Some(&canonical_vk),
-                &mut dedup,
-                0,
-                Some(canonical_expected),
-                Some(canonical_expected),
-                true,
-            ),
-            PreverifyResult::Accepted,
-            "noncanonical backend rejection must not poison canonical ZK-ACE preverify"
-        );
     }
 
     #[test]
@@ -16347,6 +15491,7 @@ mod preverified_key_tests {
             "fcmp++",
             "fcmp-plus-plus-curve-tree",
             "lattice-pcs-sis",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints",
             "miden-stark",
             "stark/fri/miden",

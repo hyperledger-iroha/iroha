@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/examples/sorafs_manifest/cli_end_to_end.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a8209e602132efb6c29962bf09aea8cd74f972fa956ea8a7a1dbac08a7f6f00f
+source_hash: 1714067fcb692281b2b579cd3309a04049bf3b827744195448a5356877872366
 source_last_modified: "2026-01-04T10:50:53.612671+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -32,12 +32,12 @@ teams can embed the same steps in CI.
 ## Step 1 — Generate manifest, CAR, signatures, and fetch plan
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
   --chunk-fetch-plan-out target/sorafs/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=429391872 \
   --root-cid=f40101d0cfa9be459f4a4ba4da51990b75aef262ef546270db0e42d37728755d \
   --dag-codec=0x71 \
@@ -93,7 +93,7 @@ Once the Pin Registry is deployed (Milestone M2 in the migration roadmap),
 submit the manifest through the CLI:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

@@ -13,10 +13,7 @@ use iroha_data_model::{
         BlobCodec, BlobDigest, ExtraMetadata, MetadataEntry, MetadataVisibility, StorageTicketId,
     },
 };
-use norito::{
-    codec::{Decode, Encode},
-    to_bytes,
-};
+use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::query::{
@@ -200,7 +197,8 @@ impl QueryProjectionShardArchive {
     ///
     /// Returns [`QueryProjectionShardArchiveError::Encode`] if the locator cannot be encoded.
     pub fn client_blob_id(&self) -> Result<BlobDigest, QueryProjectionShardArchiveError> {
-        let bytes = to_bytes(&self.locator()).map_err(QueryProjectionShardArchiveError::Encode)?;
+        let bytes = norito::encode_canonical(&self.locator())
+            .map_err(QueryProjectionShardArchiveError::Encode)?;
         Ok(BlobDigest::from_hash(blake3::hash(&bytes)))
     }
 
@@ -210,7 +208,7 @@ impl QueryProjectionShardArchive {
     ///
     /// Returns [`QueryProjectionShardArchiveError::Encode`] when serialization fails.
     pub fn encode_archive(&self) -> Result<Vec<u8>, QueryProjectionShardArchiveError> {
-        to_bytes(self).map_err(QueryProjectionShardArchiveError::Encode)
+        norito::encode_canonical(self).map_err(QueryProjectionShardArchiveError::Encode)
     }
 
     /// Encode the archive as zstd-compressed DA payload bytes.
@@ -323,7 +321,6 @@ fn metadata_entry(key: impl Into<String>, value: Vec<u8>) -> MetadataEntry {
 mod tests {
     use super::*;
     use iroha_crypto::Hash;
-    use norito::decode_from_bytes;
 
     fn sample_hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new([byte; Hash::LENGTH]))
@@ -388,9 +385,37 @@ mod tests {
         );
 
         let bytes = archive.encode_archive().expect("encode archive");
+        let blob_id = archive.client_blob_id().expect("derive client blob id");
         let decoded: QueryProjectionShardArchive =
-            decode_from_bytes(&bytes).expect("decode archive");
+            norito::decode_canonical(&bytes).expect("decode archive");
         assert_eq!(decoded, archive);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&archive).expect("encode alternate-layout archive")
+        };
+        assert_ne!(
+            alternate, bytes,
+            "fixture must exercise a distinct non-canonical archive layout"
+        );
+        assert!(norito::decode_canonical::<QueryProjectionShardArchive>(&alternate).is_err());
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                archive
+                    .encode_archive()
+                    .expect("encode archive under alternate ambient layout"),
+                bytes
+            );
+            assert_eq!(
+                archive
+                    .client_blob_id()
+                    .expect("derive blob id under alternate ambient layout"),
+                blob_id
+            );
+        }
     }
 
     #[test]
@@ -424,7 +449,7 @@ mod tests {
         let decompressed = zstd::bulk::decompress(&first_payload.payload, expected_archive.len())
             .expect("decompress payload");
         let decoded: QueryProjectionShardArchive =
-            decode_from_bytes(&decompressed).expect("decode compressed archive");
+            norito::decode_canonical(&decompressed).expect("decode compressed archive");
         assert_eq!(decoded, archive);
 
         let metadata_keys: Vec<&str> = first_payload

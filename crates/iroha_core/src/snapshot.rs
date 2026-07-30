@@ -4310,14 +4310,18 @@ mod tests {
         assert!(disabled_with_authority.validate().is_err());
     }
 
-    fn state_factory_with_kura(kura: Arc<Kura>) -> State {
+    fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> State {
         let query_handle = LiveQueryStore::start_test();
         State::new_with_chain(
             crate::queue::tests::world_with_test_domains(),
             kura,
             query_handle,
-            ChainId::from(TEST_CHAIN_ID),
+            chain_id,
         )
+    }
+
+    fn state_factory_with_kura(kura: Arc<Kura>) -> State {
+        state_factory_with_kura_and_chain(kura, ChainId::from(TEST_CHAIN_ID))
     }
 
     fn state_factory() -> State {
@@ -4456,8 +4460,10 @@ mod tests {
             .store_v2_finality_artifact(&finality.finality_artifact)
             .expect("persist exact SCCP finality artifact");
 
-        let mut state = state_factory_with_kura(Arc::clone(&kura));
-        state.chain_id = ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+        let mut state = state_factory_with_kura_and_chain(
+            Arc::clone(&kura),
+            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        );
         state.push_block_hash_for_testing(block.hash());
         let (_, source_identity, trust_anchor) =
             iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
@@ -5373,9 +5379,10 @@ mod tests {
     async fn signed_snapshot_rejects_malformed_historical_commit_qc_archive_entries() {
         let tmp_root = tempdir().expect("snapshot tempdir");
         let kura = Kura::blank_kura_for_testing();
-        let mut state = state_factory_with_kura(Arc::clone(&kura));
-        state.chain_id =
-            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+        let mut state = state_factory_with_kura_and_chain(
+            Arc::clone(&kura),
+            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        );
         let block = signed_block_with_transaction(accepted_log_transaction(
             "malformed-historical-commit-qc-archive",
         ));
@@ -5441,9 +5448,10 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let mut state = state_factory_with_kura(Arc::clone(&kura));
-        state.chain_id =
-            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+        let mut state = state_factory_with_kura_and_chain(
+            Arc::clone(&kura),
+            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        );
         let block =
             signed_block_with_transaction(accepted_log_transaction("exact-sccp-registry-snapshot"));
         store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
@@ -5669,9 +5677,10 @@ mod tests {
             let tmp_root = tempdir().expect("temporary snapshot root");
             let store_dir = tmp_root.path().join("snapshot");
             let kura = Kura::blank_kura_for_testing();
-            let mut state = state_factory_with_kura(Arc::clone(&kura));
-            state.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            let state = state_factory_with_kura_and_chain(
+                Arc::clone(&kura),
+                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            );
             let mut serialized = String::new();
             serialize_state_snapshot(&state, &mut serialized, true);
             let mut snapshot: json::Value =
