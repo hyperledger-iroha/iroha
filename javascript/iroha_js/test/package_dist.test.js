@@ -595,11 +595,12 @@ test("package Nexus browser defaults build, finalize, and submit the shared cano
       gasLimit: nexusFixture.transfer_input.fee_payment.value.gas_limit,
     },
     metadata: nexusFixture.transfer_input.metadata,
-    feePayment: {
-      payer: nexusFixture.transfer_input.fee_payment.payer,
-      chargeLimits: nexusFixture.transfer_input.fee_payment.value.charge_limits,
-    },
   });
+  assert.equal(draft.signable.payloadHashHex, nexusFixture.expected.payload_hash_hex);
+  assert.deepEqual(
+    Uint8Array.from(draft.signable.payloadBytes),
+    hexBytes(nexusFixture.expected.payload_bytes_hex),
+  );
   const receipt = await client.finalizeAndSubmit(
     draft.signable,
     hexBytes(nexusFixture.expected.wallet_signature_hex),

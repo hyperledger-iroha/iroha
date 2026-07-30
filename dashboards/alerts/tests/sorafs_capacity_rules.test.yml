@@ -27,6 +27,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS replication backlog above threshold"
+              description: |
+                Pending replication orders stayed above 10 for 10 minutes
+                (value=11). Reassign manifests or investigate
+                stalled providers before deadlines expire.
       - alertname: SoraFSCapacityPressure
         eval_time: 3m
         exp_alerts: []
@@ -38,6 +42,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS provider utilisation over 90%"
+              description: |
+                Provider provider-a is consuming 95% of
+                its effective capacity for 5 minutes. Add headroom or pause new
+                replication orders for the provider before saturation causes SLA
+                misses.
       - alertname: SoraFSOutstandingDemandSpike
         eval_time: 3m
         exp_alerts: []
@@ -49,6 +58,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS outstanding reservations exceed 40% of declaration"
+              description: |
+                Provider provider-a has more than 40% of its declared
+                GiB tied up in outstanding reservations (value=50%).
+                Audit replication scheduler backlog and confirm incentives before
+                accepting additional capacity from this provider.
       - alertname: SoraFSReplicationExpiredOrders
         eval_time: 2m
         exp_alerts: []
@@ -56,9 +70,15 @@ tests:
         eval_time: 8m
         exp_alerts:
           - exp_labels:
+              status: expired
               severity: warning
             exp_annotations:
               summary: "SoraFS replication orders expired"
+              description: |
+                At least one replication order expired within the last 5 minutes.
+                Review torii_sorafs_registry_orders_total{status="expired"} to
+                identify the provider and manifest combinations that need manual
+                intervention.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_replication_backlog_total'
@@ -105,6 +125,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Capacity ledger reconciliation drift detected"
+              description: |
+                The capacity reconciliation textfile reported missing/overpaid settlements or
+                unexpected provider transfers. Check the latest `capacity_reconcile.py` run,
+                compare the `/v1/sorafs/capacity/state` snapshot against the executed XOR
+                ledger export, and block treasury approval until the mismatch is resolved.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_egress_drift_ratio{provider="provider-a",source="gateway"}'
@@ -124,6 +149,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS egress counter drift detected"
+              description: |
+                Provider provider-a has gateway egress byte counters
+                more than 10% away from billing `RecordCapacityTelemetry.egress_bytes` for
+                10 minutes (ratio=0.12). Reconcile gateway,
+                orchestrator, and billing windows before approving capacity settlement.
   - interval: 1m
     input_series:
       - series: 'sorafs_reserve_ledger_rent_due_xor{label="cycle-a"}'
@@ -149,6 +179,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve ledger projects a top-up requirement"
+              description: |
+                The latest `sorafs reserve ledger` digest (label=cycle-a)
+                indicates a positive top-up shortfall (value=5 XOR).
+                Trigger the reserve funding workflow before rent transfers are posted.
       - alertname: SoraFSReserveLedgerUnderwritingBreach
         eval_time: 3m
         exp_alerts:
@@ -157,6 +191,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "Reserve ledger fails underwriting gate"
+              description: |
+                Ledger digest (label=cycle-a) reported `meets_underwriting=0`.
+                Halt rent disbursements and investigate the underwriting inputs before
+                approving the transfer batch.
       - alertname: SoraFSReserveLedgerInstructionMissing
         eval_time: 6m
         exp_alerts:
@@ -165,6 +203,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve ledger emitted no transfer instructions"
+              description: |
+                Ledger digest (label=cycle-a) reported zero transfer instructions
+                for at least 5 minutes. Re-run `sorafs reserve ledger` and confirm the CLI
+                produced both rent and reserve transfers before publishing the digest.
       - alertname: SoraFSReserveLedgerRentTransferMissing
         eval_time: 1m
         exp_alerts: []
@@ -176,6 +218,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve ledger missing reserve top-up transfer entry"
+              description: |
+                Ledger digest (label=cycle-a) reports a top-up shortfall, but the
+                transfer feed has no `reserve_top_up` entry. Regenerate the digest and confirm
+                the Norito transfer plan is included before approving the reserve batch.
       - alertname: SoraFSReserveTransferRentMismatch
         eval_time: 2m
         exp_alerts:
@@ -184,6 +230,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve ledger rent transfer mismatch"
+              description: |
+                The ledger digest (label=cycle-a) shows rent due that is not matched
+                by the transfer feed (delta=5 XOR). Re-run `sorafs reserve ledger`
+                and regenerate the Prometheus textfile export before approving treasury transfers.
       - alertname: SoraFSReserveTransferTopUpMismatch
         eval_time: 2m
         exp_alerts:
@@ -192,6 +242,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve ledger reserve top-up mismatch"
+              description: |
+                Ledger digest (label=cycle-a) reports a reserve shortfall that is not
+                covered by the transfer feed (delta=5 XOR). Refresh the digest/textfile
+                export so dashboards and treasury runners see the corrected transfer set.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_reserve_defaulted_providers'
@@ -219,6 +273,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "Reserve finalized projection is unavailable"
+              description: |
+                The reserve telemetry projection has not caught up and reconciled
+                against one finalized ledger view for 5 minutes. Treat all reserve
+                economic panels as stale and pause dependent promotion decisions.
       - alertname: SoraFSReserveFinalizedProjectionFailures
         eval_time: 3m
         exp_alerts:
@@ -226,6 +284,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve finalized projection refresh failed"
+              description: |
+                At least one reserve projection refresh failed in the last 5 minutes.
+                Inspect payload-free Torii logs and reconcile the finalized event
+                cursor with committed provider pending-movement and appeal counts.
       - alertname: SoraFSReserveFinalizedDefaults
         eval_time: 3m
         exp_alerts: []
@@ -236,6 +298,11 @@ tests:
               severity: critical
             exp_annotations:
               summary: "Reserve finalized ledger reports defaulted providers"
+              description: |
+                The finalized reserve projection reports at least one defaulted provider
+                for 5 minutes (value=1). Pause new reserve
+                admissions for affected providers and reconcile lifecycle state before
+                automatic enforcement or slashing is applied.
       - alertname: SoraFSReserveFinalizedCreditShortfall
         eval_time: 7m
         exp_alerts:
@@ -243,6 +310,11 @@ tests:
               severity: critical
             exp_annotations:
               summary: "Reserve finalized ledger reports uncovered credit shortfall"
+              description: |
+                Finalized reserve accounts show uncovered credit-line
+                shortfall for 5 minutes (micro-XOR=5000000).
+                Review provider credit status and block settlement until a committed
+                account mutation or governance override clears the shortfall.
       - alertname: SoraFSReserveAppealBacklogHigh
         eval_time: 10m
         exp_alerts: []
@@ -253,6 +325,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve appeal backlog above operator threshold"
+              description: |
+                More than 10 reserve appeals have remained open for 15 minutes
+                (value=11). Add operator capacity or pause
+                automatic lifecycle escalation for affected providers until appeals
+                are reviewed.
       - alertname: SoraFSReserveMovementRejected
         eval_time: 3m
         exp_alerts:
@@ -261,6 +338,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve movement rejected during chain reconciliation"
+              description: |
+                At least one finalized reserve movement is terminally rejected on-chain
+                (value=1). Reconcile the movement ledger,
+                provider balance, and reserve transfer evidence before accepting new
+                movements for the same reserve account.
       - alertname: SoraFSReserveServiceRateLimited
         eval_time: 6m
         exp_alerts:
@@ -270,6 +352,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve service rate limits are firing"
+              description: |
+                Reserve service route top_up hit rate-limit reason
+                quota in the last 5 minutes. Check caller behavior,
+                request signing, and route quotas before clients back off into
+                stale lifecycle or movement state.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_gc_runs_total{result="error"}'
@@ -285,9 +372,14 @@ tests:
         eval_time: 16m
         exp_alerts:
           - exp_labels:
+              result: error
               severity: warning
             exp_annotations:
               summary: "SoraFS GC sweeps reporting errors"
+              description: |
+                GC sweeps reported errors within the last 15 minutes. Check
+                torii_sorafs_gc_runs_total{result="error"} and logs for failed
+                evictions or storage access issues before capacity pressure builds.
       - alertname: SoraFSGCBlocked
         eval_time: 16m
         exp_alerts:
@@ -296,6 +388,9 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS GC evictions blocked"
+              description: |
+                GC reported blocked evictions in the last 15 minutes (reason=repair_active).
+                Resolve active repairs or policy constraints preventing retention cleanup.
       - alertname: SoraFSGCStalled
         eval_time: 31m
         exp_alerts:
@@ -303,6 +398,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS retention expiry backlog is not clearing"
+              description: |
+                At least one manifest is past retention expiry, but no GC evictions
+                were recorded for 30 minutes. Investigate GC scheduling, repair
+                backlogs, and retention grace settings.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_repair_queue_depth{provider="provider-a"}'
@@ -320,6 +419,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS repair backlog above SLA thresholds"
+              description: |
+                Repair backlog exceeded thresholds for 10 minutes: queue depth over 50 tickets or
+                oldest queued ticket older than 4 hours. Check worker availability, per-provider
+                queue depth, and SLA timer configuration before the backlog escalates to slashes.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_repair_queue_depth{provider="provider-b"}'
@@ -337,6 +440,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS repair backlog above SLA thresholds"
+              description: |
+                Repair backlog exceeded thresholds for 10 minutes: queue depth over 50 tickets or
+                oldest queued ticket older than 4 hours. Check worker availability, per-provider
+                queue depth, and SLA timer configuration before the backlog escalates to slashes.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_repair_tasks_total{status="escalated"}'
@@ -348,16 +455,25 @@ tests:
         eval_time: 6m
         exp_alerts:
           - exp_labels:
+              status: escalated
               severity: critical
             exp_annotations:
               summary: "SoraFS repair escalations elevated"
+              description: |
+                More than 3 repair tickets escalated within the last hour (SLA breaches). Review
+                audit evidence, verify worker health, and consider pausing new pins for affected
+                providers while the backlog is cleared.
       - alertname: SoraFSRepairLeaseExpirySpike
         eval_time: 6m
         exp_alerts:
           - exp_labels:
+              outcome: requeued
               severity: warning
             exp_annotations:
               summary: "SoraFS repair lease expiries spiking"
+              description: |
+                Repair worker leases expired more than 5 times within the last hour. Investigate
+                worker crashes, clock skew, or stalled repair execution before SLA deadlines are missed.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_gc_blocked_total{reason="repair_active"}'
@@ -371,3 +487,6 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS retention evictions blocked by active repairs"
+              description: |
+                Retention evictions were blocked by active repair tickets in the last 15 minutes.
+                Resolve outstanding repairs or reassign workers to unblock retention cleanup.

@@ -13,9 +13,9 @@
 //! through the manifest predecessor chain until an explicit, Kura-authenticated
 //! retention fence installs a content-addressed virtual base. Compacted feeds
 //! then expose a rolling prefix commitment plus retained suffix pagination,
-//! while a bounded authenticated journal source-head index preserves exact
-//! source replay; full-history reads fail with a typed `HistoryPruned`
-//! condition. A
+//! while a bounded authenticated journal source-head index and complete
+//! inter-checkpoint lifecycle suffix preserve exact source replay;
+//! full-history reads fail with a typed `HistoryPruned` condition. A
 //! policy-first crash leaves a
 //! validated, bounded, immutable cache entry: restart retains and accounts for
 //! it, but it cannot qualify an archive without a referenced anchor.
@@ -779,52 +779,169 @@ fn journal_source_head_commitment(
     Ok((heads, count, root))
 }
 
+fn journal_prefix_after_events(
+    prefix: ReputationFeedPrefixSummaryV1,
+    events: &[ReputationJournalFinalizedEventV1],
+) -> Result<ReputationFeedPrefixSummaryV1, ReputationFinalizedArchiveError> {
+    validate_retained_feed(prefix, events, journal_event_identity)?;
+    let mut next = prefix;
+    for event in events {
+        next.rolling_prefix_digest = rolling_domain_digest(
+            JOURNAL_PREFIX_DIGEST_DOMAIN_V1,
+            next.rolling_prefix_digest,
+            event,
+        )?;
+        next.pruned_event_count = next.pruned_event_count.checked_add(1).ok_or(
+            ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint journal prefix overflowed while authenticating source lineage",
+            },
+        )?;
+        next.pruned_through = Some(event_position(journal_event_identity(event)));
+    }
+    next.validate()?;
+    Ok(next)
+}
+
+fn validate_journal_source_head_delta_standalone(
+    checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,
+) -> Result<(), ReputationFinalizedArchiveError> {
+    let complete_prefix = journal_prefix_after_events(
+        checkpoint.journal_prefix,
+        &checkpoint.journal_retained_suffix,
+    )?;
+    let delta_len = bounded_len(checkpoint.journal_source_head_delta.len())?;
+    if delta_len > complete_prefix.pruned_event_count {
+        return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+            reason: "checkpoint source-lineage delta exceeds the journal high-water mark",
+        });
+    }
+    let delta_prefix_count = complete_prefix
+        .pruned_event_count
+        .checked_sub(delta_len)
+        .ok_or(ReputationFinalizedArchiveError::InvalidCheckpoint {
+            reason: "checkpoint source-lineage delta sequence range overflowed",
+        })?;
+    let first_sequence = if delta_len == 0 {
+        0
+    } else {
+        delta_prefix_count.checked_add(1).ok_or(
+            ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-lineage delta sequence range overflowed",
+            },
+        )?
+    };
+    let finalized_cursor = ReputationJournalFinalizedCursorV1 {
+        height: checkpoint.retention_floor.height,
+        block_hash: checkpoint.retention_floor.block_hash,
+        finalized_at_unix_ms: checkpoint.retention_floor_finalized_at_unix_ms,
+    };
+    let mut previous = None;
+    let mut previous_recorded_at_unix_ms = None;
+    let mut event_ids = BTreeSet::new();
+    for (offset, event) in checkpoint.journal_source_head_delta.iter().enumerate() {
+        event.validate(finalized_cursor).map_err(|_| {
+            ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-lineage delta contains an invalid finalized event",
+            }
+        })?;
+        let offset = bounded_len(offset)?;
+        let expected_sequence = first_sequence.checked_add(offset).ok_or(
+            ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-lineage delta sequence overflowed",
+            },
+        )?;
+        let identity = journal_event_identity(event);
+        let canonical_position =
+            previous.map_or(event.event_index == 0, |previous: EventIdentity| {
+                if identity.block_height == previous.block_height {
+                    identity.block_hash == previous.block_hash
+                        && previous.event_index.checked_add(1) == Some(identity.event_index)
+                } else {
+                    identity.block_height > previous.block_height && identity.event_index == 0
+                }
+            });
+        if identity.sequence != expected_sequence
+            || !canonical_position
+            || previous_recorded_at_unix_ms
+                .is_some_and(|timestamp| event.recorded_at_unix_ms < timestamp)
+            || !event_ids.insert(event.entry.event_id)
+        {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-lineage delta is not a complete canonical journal suffix",
+            });
+        }
+        previous = Some(identity);
+        previous_recorded_at_unix_ms = Some(event.recorded_at_unix_ms);
+    }
+    if previous.is_some() && previous != complete_prefix.pruned_through.map(position_identity) {
+        return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+            reason: "checkpoint source-lineage delta does not reach the journal terminal",
+        });
+    }
+
+    let (complete_heads, _, _) = journal_source_head_commitment(
+        &checkpoint.journal_prefix_source_heads,
+        &checkpoint.journal_retained_suffix,
+    )?;
+    let mut block_hashes = BTreeMap::new();
+    if let Some(terminal) = complete_prefix.pruned_through {
+        record_retained_feed_block_hash(&mut block_hashes, position_identity(terminal))?;
+    }
+    for identity in complete_heads.iter().map(journal_event_identity).chain(
+        checkpoint
+            .journal_source_head_delta
+            .iter()
+            .map(journal_event_identity),
+    ) {
+        record_retained_feed_block_hash(&mut block_hashes, identity)?;
+    }
+
+    if checkpoint.checkpoint_generation == 1 {
+        let expected_prefix = journal_prefix_after_events(
+            ReputationFeedPrefixSummaryV1::default(),
+            &checkpoint.journal_source_head_delta,
+        )?;
+        let expected_heads =
+            merge_journal_source_heads(&[], &checkpoint.journal_source_head_delta)?;
+        if expected_prefix != complete_prefix || expected_heads != complete_heads {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "initial checkpoint source-lineage delta is incomplete or substituted",
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_journal_source_head_lineage(
     previous: &ReputationFinalizedVirtualBaseCheckpointV1,
     current: &ReputationFinalizedVirtualBaseCheckpointV1,
 ) -> Result<(), ReputationFinalizedArchiveError> {
-    let previous_high_water = previous.journal_prefix.pruned_event_count;
-    for previous_head in &previous.journal_prefix_source_heads {
-        let current_head = current
-            .journal_prefix_source_heads
-            .binary_search_by_key(&previous_head.entry.source_id, |event| {
-                event.entry.source_id
-            })
-            .ok()
-            .map(|index| &current.journal_prefix_source_heads[index])
-            .ok_or(ReputationFinalizedArchiveError::InvalidCheckpoint {
-                reason: "checkpoint source-head lineage omitted an existing source",
-            })?;
-        if current_head == previous_head {
-            continue;
-        }
-        if current_head.sequence <= previous_high_water
-            || previous_head.entry.source_kind() != current_head.entry.source_kind()
-            || previous_head.entry.source_revision.checked_add(1)
-                != Some(current_head.entry.source_revision)
-            || current_head.entry.predecessor_event_id != Some(previous_head.entry.event_id)
-        {
-            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
-                reason: "checkpoint source-head lineage rolled back or substituted an existing source",
-            });
-        }
+    validate_journal_source_head_delta_standalone(current)?;
+    let (previous_heads, _, _) = journal_source_head_commitment(
+        &previous.journal_prefix_source_heads,
+        &previous.journal_retained_suffix,
+    )?;
+    let (current_heads, _, _) = journal_source_head_commitment(
+        &current.journal_prefix_source_heads,
+        &current.journal_retained_suffix,
+    )?;
+    let previous_prefix =
+        journal_prefix_after_events(previous.journal_prefix, &previous.journal_retained_suffix)?;
+    let current_prefix =
+        journal_prefix_after_events(current.journal_prefix, &current.journal_retained_suffix)?;
+    let expected_prefix =
+        journal_prefix_after_events(previous_prefix, &current.journal_source_head_delta)?;
+    if expected_prefix != current_prefix {
+        return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+            reason: "checkpoint source-lineage delta does not extend the authenticated journal prefix",
+        });
     }
-    for current_head in &current.journal_prefix_source_heads {
-        if previous
-            .journal_prefix_source_heads
-            .binary_search_by_key(&current_head.entry.source_id, |event| event.entry.source_id)
-            .is_ok()
-        {
-            continue;
-        }
-        if current_head.sequence <= previous_high_water
-            || current_head.entry.source_revision != 1
-            || current_head.entry.predecessor_event_id.is_some()
-        {
-            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
-                reason: "checkpoint source-head lineage introduced a stale or noncanonical source",
-            });
-        }
+    let expected_heads =
+        merge_journal_source_heads(&previous_heads, &current.journal_source_head_delta)?;
+    if expected_heads != current_heads {
+        return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+            reason: "checkpoint source-head lineage omitted, rolled back, or substituted a source",
+        });
     }
     Ok(())
 }
@@ -1208,6 +1325,10 @@ struct ReputationFinalizedVirtualBaseCheckpointV1 {
     // content-addressed sharded/Merkle source-index artifacts before the
     // unique-source population can grow indefinitely.
     journal_prefix_source_heads: Vec<ReputationJournalFinalizedEventV1>,
+    // Complete journal suffix since the predecessor checkpoint. This
+    // checkpoint-authenticated history proves source-head lifecycle changes
+    // that cannot be reconstructed from latest-head snapshots alone.
+    journal_source_head_delta: Vec<ReputationJournalFinalizedEventV1>,
     repair_prefix: ReputationFeedPrefixSummaryV1,
     orderbook_prefix: ReputationFeedPrefixSummaryV1,
     reserve_prefix: ReputationFeedPrefixSummaryV1,
@@ -1387,6 +1508,7 @@ impl PersistedReputationFinalizedVirtualBaseCheckpointV1 {
             &checkpoint.retention_floor,
             reserve_event_identity,
         )?;
+        validate_journal_source_head_delta_standalone(checkpoint)?;
         ReputationReconstructionStateV1::from_checkpoint(checkpoint)?;
         let expected_summary = checkpoint_validation_summary(checkpoint)?;
         if checkpoint.validation_summary != expected_summary
@@ -1705,35 +1827,43 @@ fn journal_source_view(
     finalized_at_unix_ms: u64,
     prefix_source_heads: &[ReputationJournalFinalizedEventV1],
     retained_suffix: &[ReputationJournalFinalizedEventV1],
+    expected_source_head_count: u64,
+    expected_source_head_root: [u8; 32],
     source_id: ReputationJournalSourceIdV1,
-) -> ReputationFinalizedArchiveJournalSourceViewV1 {
-    let event = retained_suffix
-        .iter()
-        .rev()
-        .find(|event| event.entry.source_id == source_id)
-        .or_else(|| {
-            prefix_source_heads
-                .binary_search_by_key(&source_id, |event| event.entry.source_id)
-                .ok()
-                .map(|index| &prefix_source_heads[index])
-        })
-        .cloned();
-    ReputationFinalizedArchiveJournalSourceViewV1 {
+) -> Result<ReputationFinalizedArchiveJournalSourceViewV1, ReputationFinalizedArchiveError> {
+    let (source_heads, source_head_count, source_head_root) =
+        journal_source_head_commitment(prefix_source_heads, retained_suffix)?;
+    if source_head_count != expected_source_head_count
+        || source_head_root != expected_source_head_root
+    {
+        return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+            reason: "journal source view disagrees with its immutable anchor commitment",
+        });
+    }
+    let event = source_heads
+        .binary_search_by_key(&source_id, |event| event.entry.source_id)
+        .ok()
+        .map(|index| source_heads[index].clone());
+    Ok(ReputationFinalizedArchiveJournalSourceViewV1 {
         key: key.clone(),
         finalized_at_unix_ms,
         event,
-    }
+    })
 }
 
 fn journal_source_view_from_state(
     state: &ReputationReconstructionStateV1,
+    expected_source_head_count: u64,
+    expected_source_head_root: [u8; 32],
     source_id: ReputationJournalSourceIdV1,
-) -> ReputationFinalizedArchiveJournalSourceViewV1 {
+) -> Result<ReputationFinalizedArchiveJournalSourceViewV1, ReputationFinalizedArchiveError> {
     journal_source_view(
         &state.key,
         state.finalized_at_unix_ms,
         &state.journal_prefix_source_heads,
         &state.journal_events.retained_suffix,
+        expected_source_head_count,
+        expected_source_head_root,
         source_id,
     )
 }
@@ -2037,9 +2167,12 @@ struct ReputationFinalizedArchiveCompactionProposalMaterialV1 {
     fence: ReputationFinalizedArchiveRetentionFenceV1,
     checkpoint_digest: [u8; 32],
     checkpoint_canonical_digest: [u8; 32],
+    journal_source_head_count: u64,
+    journal_source_head_root: [u8; 32],
 }
 
-/// Exact canonical checkpoint and fence submitted for external approval.
+/// Exact canonical checkpoint, source-head summary, and fence submitted for
+/// external approval.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationFinalizedArchiveCompactionProposalV1 {
     material: ReputationFinalizedArchiveCompactionProposalMaterialV1,
@@ -2051,12 +2184,16 @@ impl ReputationFinalizedArchiveCompactionProposalV1 {
         fence: ReputationFinalizedArchiveRetentionFenceV1,
         checkpoint_digest: [u8; 32],
         checkpoint_canonical_digest: [u8; 32],
+        journal_source_head_count: u64,
+        journal_source_head_root: [u8; 32],
     ) -> Result<Self, ReputationFinalizedArchiveError> {
         let material = ReputationFinalizedArchiveCompactionProposalMaterialV1 {
             version: ARCHIVE_VERSION_V1,
             fence,
             checkpoint_digest,
             checkpoint_canonical_digest,
+            journal_source_head_count,
+            journal_source_head_root,
         };
         let proposal_digest =
             canonical_domain_digest(RETENTION_PROPOSAL_DIGEST_DOMAIN_V1, &material)?;
@@ -2080,6 +2217,7 @@ impl ReputationFinalizedArchiveCompactionProposalV1 {
             || self.material.fence.expected_generation == 0
             || self.material.checkpoint_digest == [0; 32]
             || self.material.checkpoint_canonical_digest == [0; 32]
+            || self.material.journal_source_head_root == [0; 32]
             || canonical_domain_digest(RETENTION_PROPOSAL_DIGEST_DOMAIN_V1, &self.material)?
                 != self.proposal_digest
         {
@@ -2106,6 +2244,18 @@ impl ReputationFinalizedArchiveCompactionProposalV1 {
     #[must_use]
     pub const fn checkpoint_canonical_digest(&self) -> [u8; 32] {
         self.material.checkpoint_canonical_digest
+    }
+
+    /// Return the externally approved complete source-head count.
+    #[must_use]
+    pub const fn journal_source_head_count(&self) -> u64 {
+        self.material.journal_source_head_count
+    }
+
+    /// Return the externally approved complete source-head root.
+    #[must_use]
+    pub const fn journal_source_head_root(&self) -> [u8; 32] {
+        self.material.journal_source_head_root
     }
 
     /// Return the digest naming this exact proposal.
@@ -3972,13 +4122,13 @@ impl ReputationFinalizedArchive {
     ) -> Result<ReputationFinalizedArchiveCompactionOutcomeV1, ReputationFinalizedArchiveError>
     {
         proposal.validate()?;
-        assert_retention_authority_identity(binding, authority)?;
         let fence = proposal.fence();
         let mut index = self.write_index()?;
         let prepared = self.prepare_compaction_locked(&index, fence, kura)?;
         if compaction_proposal(&prepared, fence)? != *proposal {
             return Err(ReputationFinalizedArchiveError::RetentionProposalMismatch);
         }
+        assert_retention_authority_identity(binding, authority)?;
 
         let chain_id = fence.compact_through();
         let chain_id = &chain_id.chain_id;
@@ -4113,78 +4263,6 @@ impl ReputationFinalizedArchive {
                 })
                 .collect::<Vec<_>>(),
         )?;
-        let boundary = kura.exact_replay_boundary().map_err(|error| {
-            ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "freeze reputation compaction Kura boundary",
-                detail: error.to_string(),
-            }
-        })?;
-        if let Some(active) = index.checkpoints.get(chain_id) {
-            let material = &active.persisted.checkpoint;
-            authenticate_archive_anchor_against_kura(
-                &material.retention_floor,
-                material.retention_floor_finalized_at_unix_ms,
-                kura,
-                &boundary,
-            )?;
-            let (artifact, _) = kura
-                .v2_finality_artifact_with_receipt(material.retention_floor.height)
-                .map_err(
-                    |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                        operation: "re-read prior retention-floor finality artifact",
-                        detail: error.to_string(),
-                    },
-                )?
-                .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    chain_id: chain_id.clone(),
-                    height: material.retention_floor.height,
-                    reason: "prior virtual base has no canonical V2 finality artifact",
-                })?;
-            if canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?
-                != material.kura_finality_artifact_digest
-            {
-                return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    chain_id: chain_id.clone(),
-                    height: material.retention_floor.height,
-                    reason: "prior virtual-base finality artifact digest changed",
-                });
-            }
-        }
-        for entry in &anchors {
-            authenticate_archive_anchor_against_kura(
-                &entry.manifest.key,
-                entry.manifest.finalized_at_unix_ms,
-                kura,
-                &boundary,
-            )?;
-        }
-        if kura.exact_replay_boundary().map_err(|error| {
-            ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "re-read reputation compaction Kura boundary",
-                detail: error.to_string(),
-            }
-        })? != boundary
-        {
-            return Err(
-                ReputationFinalizedArchiveError::QualificationBoundaryChanged { boundary: "Kura" },
-            );
-        }
-        let (artifact, _) = kura
-            .v2_finality_artifact_with_receipt(fence.compact_through.height)
-            .map_err(
-                |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                    operation: "read retention-floor finality artifact",
-                    detail: error.to_string(),
-                },
-            )?
-            .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                chain_id: chain_id.clone(),
-                height: fence.compact_through.height,
-                reason: "retention floor has no canonical V2 finality artifact",
-            })?;
-        let kura_finality_artifact_digest =
-            canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?;
-
         let newly_pruned_bytes = anchors.iter().try_fold(0_u64, |total, entry| {
             let bytes = direct_archive_file_metadata(&entry.path, self.bounds.max_record_bytes)
                 .map_err(|source| ReputationFinalizedArchiveError::Read {
@@ -4284,7 +4362,10 @@ impl ReputationFinalizedArchive {
             retention_floor: state.key.clone(),
             retention_floor_finalized_at_unix_ms: state.finalized_at_unix_ms,
             retention_floor_anchor_digest: fence.compact_through_anchor_digest,
-            kura_finality_artifact_digest,
+            // The finality digest is fixed-width. A nonzero placeholder lets
+            // the exact production checkpoint shape hit local resource gates
+            // before any Kura authentication or retention CAS.
+            kura_finality_artifact_digest: [1; 32],
             prior_checkpoint_digest,
             checkpoint_generation,
             cumulative_pruned_anchor_count,
@@ -4303,6 +4384,7 @@ impl ReputationFinalizedArchive {
                 journal_event_identity,
             )?,
             journal_prefix_source_heads,
+            journal_source_head_delta: state.journal_events.retained_suffix.clone(),
             repair_prefix: compact_retained_feed(
                 REPAIR_PREFIX_DIGEST_DOMAIN_V1,
                 &state.repair_events,
@@ -4339,27 +4421,87 @@ impl ReputationFinalizedArchive {
             CHECKPOINT_VALIDATION_DIGEST_DOMAIN_V1,
             &checkpoint.validation_summary,
         )?;
-        let persisted = PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(checkpoint)?;
-        let checkpoint_bytes = encode_bounded_artifact(&persisted, self.bounds)?;
-        let checkpoint_bytes_len = bounded_bytes_len(&checkpoint_bytes);
-        if index.checkpoint_count >= self.bounds.max_entries.get()
-            || index
-                .total_bytes
-                .checked_add(checkpoint_bytes_len)
-                .is_none_or(|bytes| bytes > self.bounds.max_total_bytes)
-        {
-            return Err(ReputationFinalizedArchiveError::RetentionRequired {
-                proposed_entries: index.anchor_count,
-                maximum_entries: self.bounds.max_entries.get(),
-                proposed_policy_entries: index.policy_count,
-                maximum_policy_entries: self.bounds.max_entries.get(),
-                proposed_bytes: index
-                    .total_bytes
-                    .checked_add(checkpoint_bytes_len)
-                    .unwrap_or(u64::MAX),
-                maximum_bytes: self.bounds.max_total_bytes,
-            });
+        if let Some(previous) = previous_checkpoint {
+            validate_journal_source_head_lineage(&previous.persisted.checkpoint, &checkpoint)?;
         }
+        let preflight =
+            PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(checkpoint.clone())?;
+        prepare_checkpoint_publication(index, self.bounds, &preflight)?;
+
+        let boundary = kura.exact_replay_boundary().map_err(|error| {
+            ReputationFinalizedArchiveError::KuraAuthentication {
+                operation: "freeze reputation compaction Kura boundary",
+                detail: error.to_string(),
+            }
+        })?;
+        if let Some(active) = index.checkpoints.get(chain_id) {
+            let material = &active.persisted.checkpoint;
+            authenticate_archive_anchor_against_kura(
+                &material.retention_floor,
+                material.retention_floor_finalized_at_unix_ms,
+                kura,
+                &boundary,
+            )?;
+            let (artifact, _) = kura
+                .v2_finality_artifact_with_receipt(material.retention_floor.height)
+                .map_err(
+                    |error| ReputationFinalizedArchiveError::KuraAuthentication {
+                        operation: "re-read prior retention-floor finality artifact",
+                        detail: error.to_string(),
+                    },
+                )?
+                .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
+                    chain_id: chain_id.clone(),
+                    height: material.retention_floor.height,
+                    reason: "prior virtual base has no canonical V2 finality artifact",
+                })?;
+            if canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?
+                != material.kura_finality_artifact_digest
+            {
+                return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
+                    chain_id: chain_id.clone(),
+                    height: material.retention_floor.height,
+                    reason: "prior virtual-base finality artifact digest changed",
+                });
+            }
+        }
+        for entry in &anchors {
+            authenticate_archive_anchor_against_kura(
+                &entry.manifest.key,
+                entry.manifest.finalized_at_unix_ms,
+                kura,
+                &boundary,
+            )?;
+        }
+        if kura.exact_replay_boundary().map_err(|error| {
+            ReputationFinalizedArchiveError::KuraAuthentication {
+                operation: "re-read reputation compaction Kura boundary",
+                detail: error.to_string(),
+            }
+        })? != boundary
+        {
+            return Err(
+                ReputationFinalizedArchiveError::QualificationBoundaryChanged { boundary: "Kura" },
+            );
+        }
+        let (artifact, _) = kura
+            .v2_finality_artifact_with_receipt(fence.compact_through.height)
+            .map_err(
+                |error| ReputationFinalizedArchiveError::KuraAuthentication {
+                    operation: "read retention-floor finality artifact",
+                    detail: error.to_string(),
+                },
+            )?
+            .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
+                chain_id: chain_id.clone(),
+                height: fence.compact_through.height,
+                reason: "retention floor has no canonical V2 finality artifact",
+            })?;
+        checkpoint.kura_finality_artifact_digest =
+            canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?;
+
+        let persisted = PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(checkpoint)?;
+        let checkpoint_bytes = prepare_checkpoint_publication(index, self.bounds, &persisted)?;
         let expected_archive_generation = index.generation.checked_add(1).ok_or(
             ReputationFinalizedArchiveError::InvalidCheckpoint {
                 reason: "archive generation overflowed during checkpoint publication",
@@ -4553,8 +4695,14 @@ impl ReputationFinalizedArchive {
                     checkpoint.retention_floor_finalized_at_unix_ms,
                     &checkpoint.journal_prefix_source_heads,
                     &checkpoint.journal_retained_suffix,
+                    checkpoint
+                        .validation_summary
+                        .journal_prefix_source_head_count,
+                    checkpoint
+                        .validation_summary
+                        .journal_prefix_source_head_root,
                     source_id,
-                )));
+                )?));
             }
         }
         let Some(entry) = index.by_height.get(&(key.chain_id.clone(), key.height)) else {
@@ -4564,7 +4712,12 @@ impl ReputationFinalizedArchive {
             return Ok(None);
         }
         let state = self.reconstruct_state(&index, entry)?;
-        Ok(Some(journal_source_view_from_state(&state, source_id)))
+        Ok(Some(journal_source_view_from_state(
+            &state,
+            entry.manifest.journal_source_head_count,
+            entry.manifest.journal_source_head_root,
+            source_id,
+        )?))
     }
 
     /// Read the latest journal event for one source at the highest finalized
@@ -4614,7 +4767,12 @@ impl ReputationFinalizedArchive {
             .map(|(_, entry)| entry)
         {
             let state = self.reconstruct_state(&index, entry)?;
-            return Ok(Some(journal_source_view_from_state(&state, source_id)));
+            return Ok(Some(journal_source_view_from_state(
+                &state,
+                entry.manifest.journal_source_head_count,
+                entry.manifest.journal_source_head_root,
+                source_id,
+            )?));
         }
         if let Some(checkpoint) = checkpoint {
             return Ok(Some(journal_source_view(
@@ -4622,8 +4780,14 @@ impl ReputationFinalizedArchive {
                 checkpoint.retention_floor_finalized_at_unix_ms,
                 &checkpoint.journal_prefix_source_heads,
                 &checkpoint.journal_retained_suffix,
+                checkpoint
+                    .validation_summary
+                    .journal_prefix_source_head_count,
+                checkpoint
+                    .validation_summary
+                    .journal_prefix_source_head_root,
                 source_id,
-            )));
+            )?));
         }
         Ok(None)
     }
@@ -5688,6 +5852,9 @@ impl ReputationFinalizedArchive {
                         });
                     }
                 }
+                if let Some(previous) = previous {
+                    validate_journal_source_head_lineage(&previous.persisted.checkpoint, material)?;
+                }
                 previous = Some(checkpoint);
             }
             let active = lineage
@@ -5813,14 +5980,24 @@ impl ReputationFinalizedArchive {
                 && persisted.manifest.key.height
                     <= checkpoint.persisted.checkpoint.retention_floor.height
             {
-                if persisted.manifest.key == checkpoint.persisted.checkpoint.retention_floor
-                    && persisted.anchor_digest()?
+                if persisted.manifest.key == checkpoint.persisted.checkpoint.retention_floor {
+                    let checkpoint = &checkpoint.persisted.checkpoint;
+                    if persisted.anchor_digest()? != checkpoint.retention_floor_anchor_digest {
+                        return Err(ReputationFinalizedArchiveError::CheckpointDigestMismatch);
+                    }
+                    if persisted.manifest.journal_source_head_count
                         != checkpoint
-                            .persisted
-                            .checkpoint
-                            .retention_floor_anchor_digest
-                {
-                    return Err(ReputationFinalizedArchiveError::CheckpointDigestMismatch);
+                            .validation_summary
+                            .journal_prefix_source_head_count
+                        || persisted.manifest.journal_source_head_root
+                            != checkpoint
+                                .validation_summary
+                                .journal_prefix_source_head_root
+                    {
+                        return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                            reason: "retention-floor anchor and checkpoint source-head commitments disagree",
+                        });
+                    }
                 }
                 continue;
             }
@@ -5953,6 +6130,7 @@ fn compaction_proposal(
     prepared: &PreparedReputationFinalizedArchiveCompactionV1,
     fence: &ReputationFinalizedArchiveRetentionFenceV1,
 ) -> Result<ReputationFinalizedArchiveCompactionProposalV1, ReputationFinalizedArchiveError> {
+    let source_summary = &prepared.persisted.checkpoint.validation_summary;
     ReputationFinalizedArchiveCompactionProposalV1::try_new(
         fence.clone(),
         prepared.persisted.checkpoint_digest,
@@ -5960,6 +6138,8 @@ fn compaction_proposal(
             RETENTION_CHECKPOINT_BYTES_DIGEST_DOMAIN_V1,
             &prepared.checkpoint_bytes,
         ),
+        source_summary.journal_prefix_source_head_count,
+        source_summary.journal_prefix_source_head_root,
     )
 }
 
@@ -5982,6 +6162,16 @@ fn validate_approval_checkpoint(
             != fence.compact_through_anchor_digest()
         || checkpoint.checkpoint.prior_checkpoint_digest != approval.predecessor_checkpoint_digest()
         || checkpoint.checkpoint_digest != approval.proposal().checkpoint_digest()
+        || checkpoint
+            .checkpoint
+            .validation_summary
+            .journal_prefix_source_head_count
+            != approval.proposal().journal_source_head_count()
+        || checkpoint
+            .checkpoint
+            .validation_summary
+            .journal_prefix_source_head_root
+            != approval.proposal().journal_source_head_root()
         || canonical_bytes_domain_digest(
             RETENTION_CHECKPOINT_BYTES_DIGEST_DOMAIN_V1,
             &canonical_bytes,
@@ -6049,6 +6239,18 @@ fn validate_approval_for_prepared(
         || approval.predecessor_checkpoint_digest() != predecessor_checkpoint_digest
         || prepared.persisted.checkpoint.prior_checkpoint_digest != predecessor_checkpoint_digest
         || prepared.persisted.checkpoint_digest != proposal.checkpoint_digest()
+        || prepared
+            .persisted
+            .checkpoint
+            .validation_summary
+            .journal_prefix_source_head_count
+            != proposal.journal_source_head_count()
+        || prepared
+            .persisted
+            .checkpoint
+            .validation_summary
+            .journal_prefix_source_head_root
+            != proposal.journal_source_head_root()
         || canonical_bytes_domain_digest(
             RETENTION_CHECKPOINT_BYTES_DIGEST_DOMAIN_V1,
             &prepared.checkpoint_bytes,
@@ -6783,6 +6985,10 @@ fn checkpoint_content_digest(
 fn checkpoint_validation_summary(
     checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,
 ) -> Result<ReputationCheckpointValidationSummaryV1, ReputationFinalizedArchiveError> {
+    let (_, journal_source_head_count, journal_source_head_root) = journal_source_head_commitment(
+        &checkpoint.journal_prefix_source_heads,
+        &checkpoint.journal_retained_suffix,
+    )?;
     let high_water_marks = ReputationFeedHighWaterMarksV1 {
         proof_outcomes: checkpoint
             .proof_prefix
@@ -6826,12 +7032,8 @@ fn checkpoint_validation_summary(
             POLICY_RECORD_DIGEST_DOMAIN_V1,
             &checkpoint.authority_policy,
         )?,
-        journal_prefix_source_head_count: bounded_len(
-            checkpoint.journal_prefix_source_heads.len(),
-        )?,
-        journal_prefix_source_head_root: journal_prefix_source_head_root(
-            &checkpoint.journal_prefix_source_heads,
-        )?,
+        journal_prefix_source_head_count: journal_source_head_count,
+        journal_prefix_source_head_root: journal_source_head_root,
         reserve_provider_count: bounded_len(checkpoint.reserve_providers.len())?,
         reserve_provider_state_root: reserve_provider_state_root(&checkpoint.reserve_providers)?,
     })
@@ -6856,6 +7058,34 @@ fn encode_bounded_artifact<T: norito::core::NoritoSerialize>(
         });
     }
     Ok(bytes)
+}
+
+fn prepare_checkpoint_publication(
+    index: &ArchiveIndex,
+    bounds: ReputationFinalizedArchiveBounds,
+    persisted: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
+) -> Result<Vec<u8>, ReputationFinalizedArchiveError> {
+    let checkpoint_bytes = encode_bounded_artifact(persisted, bounds)?;
+    let checkpoint_bytes_len = bounded_bytes_len(&checkpoint_bytes);
+    if index.checkpoint_count >= bounds.max_entries.get()
+        || index
+            .total_bytes
+            .checked_add(checkpoint_bytes_len)
+            .is_none_or(|bytes| bytes > bounds.max_total_bytes)
+    {
+        return Err(ReputationFinalizedArchiveError::RetentionRequired {
+            proposed_entries: index.anchor_count,
+            maximum_entries: bounds.max_entries.get(),
+            proposed_policy_entries: index.policy_count,
+            maximum_policy_entries: bounds.max_entries.get(),
+            proposed_bytes: index
+                .total_bytes
+                .checked_add(checkpoint_bytes_len)
+                .unwrap_or(u64::MAX),
+            maximum_bytes: bounds.max_total_bytes,
+        });
+    }
+    Ok(checkpoint_bytes)
 }
 
 fn bounded_bytes_len(bytes: &[u8]) -> u64 {
@@ -9548,6 +9778,9 @@ mod tests {
         latest: Mutex<Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>>,
         behavior: Mutex<TestRetentionCasBehavior>,
         competing: Mutex<Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>>,
+        qualification_count: Mutex<usize>,
+        load_count: Mutex<usize>,
+        cas_count: Mutex<usize>,
     }
 
     impl TestRetentionAuthority {
@@ -9560,6 +9793,9 @@ mod tests {
                 latest: Mutex::new(None),
                 behavior: Mutex::new(TestRetentionCasBehavior::Apply),
                 competing: Mutex::new(None),
+                qualification_count: Mutex::new(0),
+                load_count: Mutex::new(0),
+                cas_count: Mutex::new(0),
             }
         }
 
@@ -9579,6 +9815,21 @@ mod tests {
         fn set_competing(&self, record: ReputationFinalizedArchiveRetentionApprovalRecordV1) {
             *self.competing.lock().expect("lock competing approval") = Some(record);
         }
+
+        fn load_count(&self) -> usize {
+            *self.load_count.lock().expect("lock load count")
+        }
+
+        fn qualification_count(&self) -> usize {
+            *self
+                .qualification_count
+                .lock()
+                .expect("lock qualification count")
+        }
+
+        fn cas_count(&self) -> usize {
+            *self.cas_count.lock().expect("lock CAS count")
+        }
     }
 
     impl ReputationFinalizedArchiveRetentionAuthorityV1 for TestRetentionAuthority {
@@ -9592,6 +9843,10 @@ mod tests {
             ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
         > {
+            *self
+                .qualification_count
+                .lock()
+                .expect("lock qualification count") += 1;
             Ok(self.qualification)
         }
 
@@ -9602,6 +9857,7 @@ mod tests {
             Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
         > {
+            *self.load_count.lock().expect("lock load count") += 1;
             Ok(self.latest.lock().expect("lock latest approval").clone())
         }
 
@@ -9611,6 +9867,7 @@ mod tests {
             expected_revision: Option<[u8; 32]>,
             next: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
         ) -> Result<(), ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1> {
+            *self.cas_count.lock().expect("lock CAS count") += 1;
             let mut latest = self.latest.lock().expect("lock latest approval");
             if latest
                 .as_ref()
@@ -9662,6 +9919,8 @@ mod tests {
             fence,
             [marker.wrapping_add(2); 32],
             [marker.wrapping_add(3); 32],
+            1,
+            [marker.wrapping_add(4); 32],
         )
         .expect("valid retention test proposal")
     }
@@ -10266,6 +10525,7 @@ mod tests {
                 &state.journal_events.retained_suffix,
             )
             .expect("compact journal source-head index"),
+            journal_source_head_delta: state.journal_events.retained_suffix.clone(),
             repair_prefix: compact_retained_feed(
                 REPAIR_PREFIX_DIGEST_DOMAIN_V1,
                 &state.repair_events,
@@ -10509,7 +10769,9 @@ mod tests {
                 archive_root(&directory),
                 bounds(),
             ),
-            Err(ReputationFinalizedArchiveError::CheckpointDigestMismatch)
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "initial checkpoint source-lineage delta is incomplete or substituted",
+            })
         ));
 
         let (root_directory, mut substituted_root) = archive_with_two_source_checkpoint();
@@ -10535,8 +10797,698 @@ mod tests {
         ));
     }
 
+    fn archive_with_source_revision_checkpoint() -> (
+        tempfile::TempDir,
+        PersistedReputationFinalizedVirtualBaseCheckpointV1,
+        ReputationJournalFinalizedEventV1,
+        ReputationJournalFinalizedEventV1,
+        ReputationJournalFinalizedEventV1,
+    ) {
+        let directory = tempdir().expect("create archive directory");
+        let mut projection = sample_projection(7, [0x71; 32]);
+        let opened = opened_dispute_journal_event(
+            &projection.authority_policy.policy,
+            1,
+            projection.key.height,
+            projection.key.block_hash,
+            0,
+            0x61,
+        );
+        let resolved = resolved_dispute_journal_event(
+            &projection.authority_policy.policy,
+            2,
+            projection.key.height,
+            projection.key.block_hash,
+            1,
+            &opened,
+        );
+        let mut terminal = journal_event(
+            &projection.authority_policy.policy,
+            3,
+            projection.key.height,
+            projection.key.block_hash,
+            0x71,
+        );
+        terminal.event_index = 2;
+        terminal.recorded_at_unix_ms = resolved.recorded_at_unix_ms + 1;
+        projection.journal_events = vec![opened.clone(), resolved.clone(), terminal.clone()];
+        let persisted = {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(projection.clone())
+                .expect("insert source-revision checkpoint projection");
+            publish_test_checkpoint(&archive, &projection.key)
+        };
+        (directory, persisted, opened, resolved, terminal)
+    }
+
+    fn approved_cleaned_source_revision_checkpoint() -> (
+        tempfile::TempDir,
+        PersistedReputationFinalizedVirtualBaseCheckpointV1,
+        ReputationJournalFinalizedEventV1,
+        ReputationJournalFinalizedEventV1,
+        ReputationJournalFinalizedEventV1,
+        TestRetentionAuthority,
+    ) {
+        let (directory, persisted, opened, resolved, terminal) =
+            archive_with_source_revision_checkpoint();
+        let fence = ReputationFinalizedArchiveRetentionFenceV1::try_new(
+            persisted.checkpoint.retention_floor.clone(),
+            persisted.checkpoint.retention_floor_anchor_digest,
+            None,
+            1,
+        )
+        .expect("construct approved cleanup fence");
+        let checkpoint_bytes =
+            norito::to_bytes(&persisted).expect("encode approved cleanup checkpoint");
+        let source_summary = &persisted.checkpoint.validation_summary;
+        let proposal = ReputationFinalizedArchiveCompactionProposalV1::try_new(
+            fence,
+            persisted.checkpoint_digest,
+            canonical_bytes_domain_digest(
+                RETENTION_CHECKPOINT_BYTES_DIGEST_DOMAIN_V1,
+                &checkpoint_bytes,
+            ),
+            source_summary.journal_prefix_source_head_count,
+            source_summary.journal_prefix_source_head_root,
+        )
+        .expect("construct approved cleanup proposal");
+        let authority = TestRetentionAuthority::new();
+        let approval = ReputationFinalizedArchiveRetentionApprovalRecordV1::try_new(
+            1,
+            authority.binding().qualification(),
+            proposal,
+            None,
+            None,
+        )
+        .expect("construct approved cleanup record");
+        *authority
+            .latest
+            .lock()
+            .expect("lock approved cleanup record") = Some(approval);
+        {
+            let cleaned = open_archive(&directory, bounds());
+            assert_eq!(
+                fs::read_dir(&cleaned.anchors)
+                    .expect("read cleaned anchor namespace")
+                    .count(),
+                0,
+                "the physical retention-floor anchor must already be absent"
+            );
+            assert_eq!(
+                fs::read_dir(&cleaned.checkpoints)
+                    .expect("read cleaned checkpoint namespace")
+                    .count(),
+                1
+            );
+        }
+        (directory, persisted, opened, resolved, terminal, authority)
+    }
+
+    fn recommit_checkpoint_journal_history(
+        checkpoints: &Path,
+        mut persisted: PersistedReputationFinalizedVirtualBaseCheckpointV1,
+        journal_history: Vec<ReputationJournalFinalizedEventV1>,
+    ) {
+        persisted.checkpoint.journal_prefix =
+            journal_prefix_after_events(ReputationFeedPrefixSummaryV1::default(), &journal_history)
+                .expect("recommit complete checkpoint journal history");
+        persisted.checkpoint.journal_prefix_source_heads =
+            merge_journal_source_heads(&[], &journal_history)
+                .expect("recommit complete checkpoint source heads");
+        persisted.checkpoint.journal_source_head_delta = journal_history;
+        persisted.checkpoint.journal_retained_suffix.clear();
+        replace_test_checkpoint_with_recomputed_content_address(checkpoints, persisted);
+    }
+
     #[test]
-    fn source_head_snapshot_record_ceiling_rejects_checkpoint_before_pruning() {
+    fn sealed_reopen_rejects_self_consistent_source_omission_and_stale_head_after_cleanup() {
+        let (omitted_directory, omitted, _opened, _resolved, mut terminal, omitted_authority) =
+            approved_cleaned_source_revision_checkpoint();
+        terminal.sequence = 1;
+        terminal.event_index = 0;
+        recommit_checkpoint_journal_history(
+            &archive_root(&omitted_directory).join(CHECKPOINTS_DIRECTORY),
+            omitted,
+            vec![terminal],
+        );
+        let omitted_binding = omitted_authority.binding();
+        let omitted_kura = Kura::blank_kura_for_testing();
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_with_retention_authority(
+                archive_root(&omitted_directory),
+                bounds(),
+                &ChainId::from("reputation-test-chain"),
+                omitted_kura.as_ref(),
+                &omitted_binding,
+                &omitted_authority,
+            ),
+            Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint)
+        ));
+        assert!(omitted_authority.load_count() > 0);
+        assert_eq!(omitted_authority.cas_count(), 0);
+        assert_eq!(
+            fs::read_dir(archive_root(&omitted_directory).join(ANCHORS_DIRECTORY))
+                .expect("read omitted-history anchor namespace")
+                .count(),
+            0
+        );
+
+        let (stale_directory, stale, opened, _resolved, mut terminal, stale_authority) =
+            approved_cleaned_source_revision_checkpoint();
+        terminal.sequence = 2;
+        terminal.event_index = 1;
+        recommit_checkpoint_journal_history(
+            &archive_root(&stale_directory).join(CHECKPOINTS_DIRECTORY),
+            stale,
+            vec![opened, terminal],
+        );
+        let stale_binding = stale_authority.binding();
+        let stale_kura = Kura::blank_kura_for_testing();
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_with_retention_authority(
+                archive_root(&stale_directory),
+                bounds(),
+                &ChainId::from("reputation-test-chain"),
+                stale_kura.as_ref(),
+                &stale_binding,
+                &stale_authority,
+            ),
+            Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint)
+        ));
+        assert!(stale_authority.load_count() > 0);
+        assert_eq!(stale_authority.cas_count(), 0);
+        assert_eq!(
+            fs::read_dir(archive_root(&stale_directory).join(ANCHORS_DIRECTORY))
+                .expect("read stale-history anchor namespace")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn checkpoint_reopen_rejects_recommitted_omitted_and_stale_source_heads() {
+        let (omitted_directory, mut omitted, _opened, resolved, _terminal) =
+            archive_with_source_revision_checkpoint();
+        omitted
+            .checkpoint
+            .journal_prefix_source_heads
+            .retain(|event| event.entry.source_id != resolved.entry.source_id);
+        replace_test_checkpoint_with_recomputed_content_address(
+            &archive_root(&omitted_directory).join(CHECKPOINTS_DIRECTORY),
+            omitted,
+        );
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_unsealed_for_test(
+                archive_root(&omitted_directory),
+                bounds(),
+            ),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "initial checkpoint source-lineage delta is incomplete or substituted",
+            })
+        ));
+
+        let (stale_directory, mut stale, opened, resolved, _terminal) =
+            archive_with_source_revision_checkpoint();
+        let stale_head = stale
+            .checkpoint
+            .journal_prefix_source_heads
+            .iter_mut()
+            .find(|event| event.entry.source_id == resolved.entry.source_id)
+            .expect("resolved source head exists");
+        *stale_head = opened;
+        replace_test_checkpoint_with_recomputed_content_address(
+            &archive_root(&stale_directory).join(CHECKPOINTS_DIRECTORY),
+            stale,
+        );
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_unsealed_for_test(
+                archive_root(&stale_directory),
+                bounds(),
+            ),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "initial checkpoint source-lineage delta is incomplete or substituted",
+            })
+        ));
+    }
+
+    fn successor_checkpoint_with_journal_delta(
+        previous: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
+        retention_floor_block_hash: [u8; 32],
+        journal_source_head_delta: Vec<ReputationJournalFinalizedEventV1>,
+    ) -> ReputationFinalizedVirtualBaseCheckpointV1 {
+        let mut current = previous.checkpoint.clone();
+        current.retention_floor = ReputationFinalizedArchiveKeyV1::try_new(
+            current.retention_floor.chain_id.clone(),
+            current.retention_floor.height + 1,
+            retention_floor_block_hash,
+        )
+        .expect("construct source-lineage successor floor");
+        current.retention_floor_finalized_at_unix_ms += 1;
+        current.retention_floor_anchor_digest = [0xD1; 32];
+        current.kura_finality_artifact_digest = [0xD2; 32];
+        current.prior_checkpoint_digest = Some(previous.checkpoint_digest);
+        current.checkpoint_generation += 1;
+        current.cumulative_pruned_anchor_count += 1;
+        current.cumulative_pruned_anchor_bytes += 1;
+        current.cumulative_anchor_prefix_digest = rolling_domain_digest(
+            ANCHOR_PREFIX_DIGEST_DOMAIN_V1,
+            current.cumulative_anchor_prefix_digest,
+            &current.retention_floor_anchor_digest,
+        )
+        .expect("extend source-lineage anchor commitment");
+        let previous_prefix = journal_prefix_after_events(
+            previous.checkpoint.journal_prefix,
+            &previous.checkpoint.journal_retained_suffix,
+        )
+        .expect("summarize predecessor journal");
+        let previous_heads = journal_source_head_commitment(
+            &previous.checkpoint.journal_prefix_source_heads,
+            &previous.checkpoint.journal_retained_suffix,
+        )
+        .expect("summarize predecessor source heads")
+        .0;
+        current.journal_prefix =
+            journal_prefix_after_events(previous_prefix, &journal_source_head_delta)
+                .expect("extend source-lineage journal prefix");
+        current.journal_prefix_source_heads =
+            merge_journal_source_heads(&previous_heads, &journal_source_head_delta)
+                .expect("extend source-lineage source heads");
+        current.journal_source_head_delta = journal_source_head_delta;
+        current.journal_retained_suffix.clear();
+        current.validation_summary =
+            checkpoint_validation_summary(&current).expect("summarize source-lineage successor");
+        current.validation_summary_digest = canonical_domain_digest(
+            CHECKPOINT_VALIDATION_DIGEST_DOMAIN_V1,
+            &current.validation_summary,
+        )
+        .expect("digest source-lineage successor summary");
+        current
+    }
+
+    #[test]
+    fn checkpoint_source_head_lineage_accepts_new_resolved_dispute_with_complete_delta() {
+        let directory = tempdir().expect("create archive directory");
+        let projection = sample_projection(7, [0x71; 32]);
+        let previous = {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(projection)
+                .expect("insert empty-journal predecessor");
+            publish_test_checkpoint(
+                &archive,
+                &ReputationFinalizedArchiveKeyV1::try_new(
+                    ChainId::from("reputation-test-chain"),
+                    7,
+                    [0x71; 32],
+                )
+                .expect("construct predecessor key"),
+            )
+        };
+        let opened = opened_dispute_journal_event(
+            &previous.checkpoint.authority_policy.policy,
+            1,
+            8,
+            [0x81; 32],
+            0,
+            0x61,
+        );
+        let resolved = resolved_dispute_journal_event(
+            &previous.checkpoint.authority_policy.policy,
+            2,
+            8,
+            [0x81; 32],
+            1,
+            &opened,
+        );
+        let current = successor_checkpoint_with_journal_delta(
+            &previous,
+            [0x81; 32],
+            vec![opened, resolved.clone()],
+        );
+
+        PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(current.clone())
+            .expect("complete new dispute lifecycle is standalone canonical");
+        validate_journal_source_head_lineage(&previous.checkpoint, &current)
+            .expect("complete new dispute lifecycle extends checkpoint lineage");
+        assert_eq!(
+            current.journal_prefix_source_heads,
+            vec![resolved],
+            "the resolved revision is the authenticated latest source head"
+        );
+    }
+
+    #[test]
+    fn checkpoint_reopen_accepts_new_resolved_dispute_with_complete_delta() {
+        let directory = tempdir().expect("create archive directory");
+        let first = sample_projection(7, [0x71; 32]);
+        let (previous, resolved_source_id) = {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(first.clone())
+                .expect("insert empty-journal predecessor");
+            let previous = publish_test_checkpoint(&archive, &first.key);
+            let opened = opened_dispute_journal_event(
+                &first.authority_policy.policy,
+                1,
+                8,
+                [0x81; 32],
+                0,
+                0x61,
+            );
+            let resolved = resolved_dispute_journal_event(
+                &first.authority_policy.policy,
+                2,
+                8,
+                [0x81; 32],
+                1,
+                &opened,
+            );
+            let resolved_source_id = resolved.entry.source_id;
+            let mut second = first;
+            second.key = ReputationFinalizedArchiveKeyV1::try_new(
+                second.key.chain_id.clone(),
+                8,
+                [0x81; 32],
+            )
+            .expect("construct source-lineage successor key");
+            second.finalized_at_unix_ms += 1;
+            second.journal_events = vec![opened.clone(), resolved];
+            archive
+                .insert(second.clone())
+                .expect("insert complete new dispute lifecycle");
+            let (anchor_digest, anchor_bytes) = {
+                let index = archive.read_index().expect("read successor anchor index");
+                let entry = index
+                    .by_height
+                    .get(&(second.key.chain_id.clone(), second.key.height))
+                    .expect("source-lineage successor anchor");
+                (
+                    entry.anchor_digest,
+                    fs::metadata(&entry.path)
+                        .expect("read successor anchor metadata")
+                        .len(),
+                )
+            };
+            let mut current = successor_checkpoint_with_journal_delta(
+                &previous,
+                second.key.block_hash,
+                second.journal_events,
+            );
+            current.retention_floor_anchor_digest = anchor_digest;
+            current.cumulative_anchor_prefix_digest = rolling_domain_digest(
+                ANCHOR_PREFIX_DIGEST_DOMAIN_V1,
+                previous.checkpoint.cumulative_anchor_prefix_digest,
+                &anchor_digest,
+            )
+            .expect("bind actual successor anchor digest");
+            current.cumulative_pruned_anchor_bytes = previous
+                .checkpoint
+                .cumulative_pruned_anchor_bytes
+                .checked_add(anchor_bytes)
+                .expect("accumulate successor anchor bytes");
+            let persisted = PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(current)
+                .expect("construct successor checkpoint");
+            let bytes =
+                encode_bounded_artifact(&persisted, bounds()).expect("encode successor checkpoint");
+            let path = archive
+                .checkpoints
+                .join(checkpoint_file_name(persisted.checkpoint_digest));
+            publish_immutable_bytes(
+                &archive.checkpoints,
+                archive.checkpoints_identity,
+                &path,
+                &bytes,
+            )
+            .expect("publish successor checkpoint");
+            (previous, resolved_source_id)
+        };
+
+        let reopened = open_archive(&directory, bounds());
+        let floor = reopened
+            .retention_floor(&previous.checkpoint.retention_floor.chain_id)
+            .expect("read successor retention floor")
+            .expect("successor checkpoint is active");
+        assert_eq!(floor.height, 8);
+        let view = reopened
+            .journal_event_by_source_at_exact(&floor, resolved_source_id)
+            .expect("read resolved source at reopened floor")
+            .expect("reopened floor source view");
+        assert_eq!(
+            view.event
+                .expect("resolved source head survives checkpoint reopen")
+                .entry
+                .source_revision,
+            2
+        );
+        assert_eq!(
+            fs::read_dir(&reopened.checkpoints)
+                .expect("read reconciled checkpoint namespace")
+                .count(),
+            1,
+            "reopen must retain only the valid successor checkpoint"
+        );
+        assert_eq!(
+            fs::read_dir(&reopened.anchors)
+                .expect("read reconciled anchor namespace")
+                .count(),
+            0,
+            "reopen may clean physical anchors only after lineage validation succeeds"
+        );
+    }
+
+    #[test]
+    fn checkpoint_source_head_lineage_rejects_new_resolved_dispute_without_opener() {
+        let directory = tempdir().expect("create archive directory");
+        let projection = sample_projection(7, [0x71; 32]);
+        let previous = {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(projection.clone())
+                .expect("insert empty-journal predecessor");
+            publish_test_checkpoint(&archive, &projection.key)
+        };
+        let opened = opened_dispute_journal_event(
+            &previous.checkpoint.authority_policy.policy,
+            1,
+            8,
+            [0x81; 32],
+            0,
+            0x61,
+        );
+        let mut resolved = resolved_dispute_journal_event(
+            &previous.checkpoint.authority_policy.policy,
+            2,
+            8,
+            [0x81; 32],
+            1,
+            &opened,
+        );
+        resolved.sequence = 1;
+        resolved.event_index = 0;
+        let mut forged = previous.checkpoint.clone();
+        forged.retention_floor = ReputationFinalizedArchiveKeyV1::try_new(
+            forged.retention_floor.chain_id.clone(),
+            8,
+            [0x81; 32],
+        )
+        .expect("construct forged successor floor");
+        forged.retention_floor_finalized_at_unix_ms += 1;
+        forged.checkpoint_generation = 2;
+        forged.prior_checkpoint_digest = Some(previous.checkpoint_digest);
+        forged.journal_prefix = journal_prefix_after_events(
+            previous.checkpoint.journal_prefix,
+            std::slice::from_ref(&resolved),
+        )
+        .expect("recommit forged journal prefix");
+        forged.journal_prefix_source_heads = vec![resolved.clone()];
+        forged.journal_source_head_delta = vec![resolved];
+        forged.validation_summary =
+            checkpoint_validation_summary(&forged).expect("recommit forged source summary");
+        forged.validation_summary_digest = canonical_domain_digest(
+            CHECKPOINT_VALIDATION_DIGEST_DOMAIN_V1,
+            &forged.validation_summary,
+        )
+        .expect("digest forged source summary");
+
+        assert!(matches!(
+            validate_journal_source_head_lineage(&previous.checkpoint, &forged),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "journal source-head index is missing, substituted, or lifecycle-discontinuous",
+            })
+        ));
+    }
+
+    #[test]
+    fn checkpoint_source_head_lineage_rejects_omission_and_rollback() {
+        let (_directory, previous, opened, resolved, _terminal) =
+            archive_with_source_revision_checkpoint();
+        let unchanged = successor_checkpoint_with_journal_delta(&previous, [0x81; 32], Vec::new());
+        validate_journal_source_head_lineage(&previous.checkpoint, &unchanged)
+            .expect("unchanged checkpoint source heads extend through an empty delta");
+
+        let mut omitted = unchanged.clone();
+        omitted
+            .journal_prefix_source_heads
+            .retain(|event| event.entry.source_id != resolved.entry.source_id);
+        assert!(matches!(
+            validate_journal_source_head_lineage(&previous.checkpoint, &omitted),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-head lineage omitted, rolled back, or substituted a source",
+            })
+        ));
+
+        let mut rolled_back = unchanged;
+        *rolled_back
+            .journal_prefix_source_heads
+            .iter_mut()
+            .find(|event| event.entry.source_id == resolved.entry.source_id)
+            .expect("resolved source head exists") = opened;
+        assert!(matches!(
+            validate_journal_source_head_lineage(&previous.checkpoint, &rolled_back),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-head lineage omitted, rolled back, or substituted a source",
+            })
+        ));
+    }
+
+    fn archive_with_historical_source_checkpoint() -> (
+        tempfile::TempDir,
+        PersistedReputationFinalizedVirtualBaseCheckpointV1,
+        ReputationJournalSourceIdV1,
+    ) {
+        let directory = tempdir().expect("create archive directory");
+        let mut first = sample_projection(7, [0x71; 32]);
+        let historical = journal_event(
+            &first.authority_policy.policy,
+            1,
+            first.key.height,
+            first.key.block_hash,
+            0x51,
+        );
+        let historical_source_id = historical.entry.source_id;
+        first.journal_events.push(historical);
+        let mut second = first.clone();
+        second.key = ReputationFinalizedArchiveKeyV1::try_new(
+            first.key.chain_id.clone(),
+            first.key.height + 1,
+            [0x81; 32],
+        )
+        .expect("construct historical-source checkpoint floor");
+        second.finalized_at_unix_ms += 1;
+        let mut terminal = journal_event(
+            &second.authority_policy.policy,
+            2,
+            second.key.height,
+            second.key.block_hash,
+            0x52,
+        );
+        terminal.event_index = 0;
+        second.journal_events.push(terminal);
+        let persisted = {
+            let archive = open_archive(&directory, bounds());
+            archive.insert(first).expect("insert historical source");
+            archive
+                .insert(second.clone())
+                .expect("insert checkpoint floor");
+            publish_test_checkpoint(&archive, &second.key)
+        };
+        (directory, persisted, historical_source_id)
+    }
+
+    #[test]
+    fn checkpoint_reopen_rejects_recommitted_source_head_block_hash_and_timestamp_substitution() {
+        let (hash_directory, mut substituted_hash, source_id) =
+            archive_with_historical_source_checkpoint();
+        substituted_hash
+            .checkpoint
+            .journal_prefix_source_heads
+            .iter_mut()
+            .find(|event| event.entry.source_id == source_id)
+            .expect("historical source head exists")
+            .block_hash = [0x72; 32];
+        replace_test_checkpoint_with_recomputed_content_address(
+            &archive_root(&hash_directory).join(CHECKPOINTS_DIRECTORY),
+            substituted_hash,
+        );
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_unsealed_for_test(
+                archive_root(&hash_directory),
+                bounds(),
+            ),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "retained feeds disagree on a finalized block hash",
+            })
+        ));
+
+        let (timestamp_directory, mut substituted_timestamp, source_id) =
+            archive_with_historical_source_checkpoint();
+        substituted_timestamp
+            .checkpoint
+            .journal_prefix_source_heads
+            .iter_mut()
+            .find(|event| event.entry.source_id == source_id)
+            .expect("historical source head exists")
+            .recorded_at_unix_ms += 1;
+        replace_test_checkpoint_with_recomputed_content_address(
+            &archive_root(&timestamp_directory).join(CHECKPOINTS_DIRECTORY),
+            substituted_timestamp,
+        );
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_unsealed_for_test(
+                archive_root(&timestamp_directory),
+                bounds(),
+            ),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "initial checkpoint source-lineage delta is incomplete or substituted",
+            })
+        ));
+    }
+
+    #[test]
+    fn anchor_reopen_rejects_recommitted_source_head_root_substitution() {
+        let directory = tempdir().expect("create archive directory");
+        let mut projection = sample_projection(7, [0x71; 32]);
+        projection.journal_events.push(journal_event(
+            &projection.authority_policy.policy,
+            1,
+            projection.key.height,
+            projection.key.block_hash,
+            0x51,
+        ));
+        let anchor_path = {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(projection.clone())
+                .expect("insert source-committed anchor");
+            archive
+                .record_path(&projection.key)
+                .expect("derive source-committed anchor path")
+        };
+        let bytes = fs::read(&anchor_path).expect("read source-committed anchor");
+        let mut persisted: PersistedReputationFinalizedAnchorV1 =
+            decode_from_bytes_with_limits(&bytes, bounds().decode_limits())
+                .expect("decode source-committed anchor");
+        persisted.manifest.journal_source_head_root[0] ^= 0xFF;
+        persisted.manifest_digest =
+            canonical_domain_digest(MANIFEST_DIGEST_DOMAIN_V1, &persisted.manifest)
+                .expect("recommit substituted anchor manifest");
+        fs::write(
+            &anchor_path,
+            norito::to_bytes(&persisted).expect("encode recommitted anchor"),
+        )
+        .expect("write recommitted anchor");
+
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()),
+            Err(ReputationFinalizedArchiveError::InvalidManifest {
+                reason: "anchor journal source-head commitment does not match its reconstructed event history",
+            })
+        ));
+    }
+
+    #[test]
+    fn public_compaction_paths_reject_oversize_checkpoint_before_approval_or_pruning() {
         let directory = tempdir().expect("create archive directory");
         let mut projection = sample_projection(7, [0x71; 32]);
         projection.journal_events = (0_u8..16)
@@ -10552,13 +11504,16 @@ mod tests {
                 event
             })
             .collect();
-        let (persisted, checkpoint_bytes, anchor_bytes) = {
+        let (persisted, checkpoint_bytes, anchor_bytes, fence) = {
             let archive = open_archive(&directory, bounds());
             archive
                 .insert(projection.clone())
                 .expect("insert many-source projection");
             let (persisted, checkpoint_bytes, _) =
                 test_checkpoint_artifact(&archive, &projection.key);
+            let fence = archive
+                .retention_fence_for(&projection.key)
+                .expect("freeze oversize checkpoint fence");
             let anchor_bytes = fs::metadata(
                 archive
                     .record_path(&projection.key)
@@ -10566,29 +11521,69 @@ mod tests {
             )
             .expect("read retained anchor metadata")
             .len();
-            (persisted, checkpoint_bytes, anchor_bytes)
+            (persisted, checkpoint_bytes, anchor_bytes, fence)
         };
-        let checkpoint_bytes =
+        let checkpoint_canonical_digest = canonical_bytes_domain_digest(
+            RETENTION_CHECKPOINT_BYTES_DIGEST_DOMAIN_V1,
+            &checkpoint_bytes,
+        );
+        let checkpoint_bytes_len =
             u64::try_from(checkpoint_bytes.len()).expect("checkpoint size fits u64");
         assert!(
-            checkpoint_bytes > anchor_bytes,
+            checkpoint_bytes_len > anchor_bytes,
             "inline source-head snapshot must contribute to the checkpoint ceiling"
         );
         let tight_bounds = ReputationFinalizedArchiveBounds::try_new(
-            checkpoint_bytes - 1,
+            checkpoint_bytes_len - 1,
             bounds().max_entries(),
             bounds().max_total_bytes(),
         )
         .expect("construct anchor-fitting checkpoint-rejecting bounds");
         assert!(anchor_bytes <= tight_bounds.max_record_bytes());
         let archive = open_archive(&directory, tight_bounds);
+        let kura = Kura::blank_kura_for_testing();
         assert!(matches!(
-            encode_bounded_artifact(&persisted, tight_bounds),
+            archive.prepare_kura_authenticated_compaction(&fence, kura.as_ref()),
             Err(ReputationFinalizedArchiveError::RecordTooLarge {
                 size,
                 maximum,
-            }) if size == checkpoint_bytes && maximum == checkpoint_bytes - 1
+            }) if size == checkpoint_bytes_len && maximum == checkpoint_bytes_len - 1
         ));
+
+        let source_summary = &persisted.checkpoint.validation_summary;
+        let proposal = ReputationFinalizedArchiveCompactionProposalV1::try_new(
+            fence,
+            persisted.checkpoint_digest,
+            checkpoint_canonical_digest,
+            source_summary.journal_prefix_source_head_count,
+            source_summary.journal_prefix_source_head_root,
+        )
+        .expect("construct valid oversize install proposal");
+        let authority = TestRetentionAuthority::new();
+        let binding = authority.binding();
+        assert!(matches!(
+            archive.approve_and_install_kura_authenticated_compaction(
+                &proposal,
+                kura.as_ref(),
+                &binding,
+                &authority,
+            ),
+            Err(ReputationFinalizedArchiveError::RecordTooLarge {
+                size,
+                maximum,
+            }) if size == checkpoint_bytes_len && maximum == checkpoint_bytes_len - 1
+        ));
+        assert_eq!(authority.qualification_count(), 0);
+        assert_eq!(authority.load_count(), 0);
+        assert_eq!(authority.cas_count(), 0);
+        assert!(
+            authority
+                .latest
+                .lock()
+                .expect("lock unmodified retention approval")
+                .is_none(),
+            "oversize install must not publish external retention state"
+        );
         assert_eq!(
             archive
                 .get_exact(&projection.key)
@@ -10606,6 +11601,13 @@ mod tests {
                 .expect("read retained anchor namespace")
                 .count(),
             1
+        );
+        assert_eq!(
+            fs::read_dir(&archive.checkpoints)
+                .expect("read checkpoint namespace after rejected preparation")
+                .count(),
+            0,
+            "public prepare and install must fail before checkpoint publication"
         );
     }
 
@@ -12899,6 +13901,11 @@ mod tests {
         assert_eq!(
             decoded.manifest.high_water_marks,
             ReputationFeedHighWaterMarksV1::default()
+        );
+        assert_eq!(decoded.manifest.journal_source_head_count, 0);
+        assert_eq!(
+            decoded.manifest.journal_source_head_root,
+            journal_prefix_source_head_root(&[]).expect("digest empty source-head set")
         );
         assert_eq!(decoded.delta, ReputationFinalizedAnchorDeltaV1::default());
     }

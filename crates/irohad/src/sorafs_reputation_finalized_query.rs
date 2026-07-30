@@ -1380,6 +1380,22 @@ impl ArchivedReputationFinalizedQueryV1 {
         })
     }
 
+    fn ensure_at_or_above_activation_floor(
+        &self,
+        chain_id: &ChainId,
+        height: u64,
+    ) -> ExternalResult<()> {
+        if self
+            .archive
+            .activation_floor(chain_id)
+            .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
+            .is_some_and(|floor| height < floor.height)
+        {
+            return Err(external_failure(FAILURE_BELOW_ACTIVATION_FLOOR));
+        }
+        Ok(())
+    }
+
     fn select_at_or_before(
         &self,
         chain_id: &ChainId,
@@ -1388,14 +1404,7 @@ impl ArchivedReputationFinalizedQueryV1 {
         if chain_id.as_str().is_empty() || maximum_height == 0 {
             return Err(external_failure(FAILURE_INVALID_REQUEST));
         }
-        if self
-            .archive
-            .activation_floor(chain_id)
-            .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
-            .is_some_and(|floor| maximum_height < floor.height)
-        {
-            return Err(external_failure(FAILURE_BELOW_ACTIVATION_FLOOR));
-        }
+        self.ensure_at_or_above_activation_floor(chain_id, maximum_height)?;
         self.archive
             .latest_at_or_before(chain_id, maximum_height)
             .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
@@ -1410,14 +1419,7 @@ impl ArchivedReputationFinalizedQueryV1 {
         if chain_id.as_str().is_empty() || maximum_height == 0 {
             return Err(external_failure(FAILURE_INVALID_REQUEST));
         }
-        if self
-            .archive
-            .activation_floor(chain_id)
-            .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
-            .is_some_and(|floor| maximum_height < floor.height)
-        {
-            return Err(external_failure(FAILURE_BELOW_ACTIVATION_FLOOR));
-        }
+        self.ensure_at_or_above_activation_floor(chain_id, maximum_height)?;
         self.archive
             .latest_at_or_before_with_policy_history(chain_id, maximum_height)
             .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
@@ -1442,14 +1444,7 @@ impl ArchivedReputationFinalizedQueryV1 {
             anchor.identity.block_hash,
         )
         .map_err(|_| external_failure(FAILURE_INVALID_REQUEST))?;
-        if self
-            .archive
-            .activation_floor(&anchor.chain_id)
-            .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
-            .is_some_and(|floor| key.height < floor.height)
-        {
-            return Err(external_failure(FAILURE_BELOW_ACTIVATION_FLOOR));
-        }
+        self.ensure_at_or_above_activation_floor(&anchor.chain_id, key.height)?;
         let projection = self
             .archive
             .get_exact(&key)
@@ -1566,6 +1561,7 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
                 if cursor.height > maximum_height {
                     return Err(external_failure(FAILURE_PAGE_BOUNDS));
                 }
+                self.ensure_at_or_above_activation_floor(chain_id, cursor.height)?;
                 let key = ReputationFinalizedArchiveKeyV1::try_new(
                     chain_id.clone(),
                     cursor.height,
@@ -1582,15 +1578,17 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
                 }
                 source_view
             }
-            None => self
-                .archive
-                .latest_journal_event_by_source_at_or_before(
-                    chain_id,
-                    maximum_height,
-                    query.source_id,
-                )
-                .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
-                .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?,
+            None => {
+                self.ensure_at_or_above_activation_floor(chain_id, maximum_height)?;
+                self.archive
+                    .latest_journal_event_by_source_at_or_before(
+                        chain_id,
+                        maximum_height,
+                        query.source_id,
+                    )
+                    .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
+                    .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?
+            }
         };
         let view = ReputationJournalSourceFinalizedViewV1 {
             anchor: ReputationFinalizedAnchorV1 {
@@ -1895,6 +1893,9 @@ mod tests {
             window_start_height: 1,
             window_end_height: 10,
             finalized_query_handle: "reputation-archive:region-a".to_owned(),
+            journal_checkpoint_provider_handle: "sealed.reputation.journal.region-a".to_owned(),
+            journal_checkpoint_provider_revision: 1,
+            journal_checkpoint_provider_policy_digest: [0x60; 32],
             journal_transaction_submitter_handle: "reputation-journal:region-a".to_owned(),
             journal_transaction_submitter_revision: 1,
             journal_transaction_submitter_policy_digest: [0x61; 32],
@@ -2472,6 +2473,99 @@ mod tests {
                 .expect_err("exact archive identity must include finalized time")
                 .receipt(),
             [FAILURE_ANCHOR_MISMATCH; 32]
+        );
+    }
+
+    #[test]
+    fn source_query_reports_explicit_activation_floor_before_archive_selection() {
+        let floor_hash = [0x71; 32];
+        let floor_event = journal_event(1, 0, 0x41, 7, floor_hash);
+        let (_directory, adapter) =
+            adapter_with([projection(7, floor_hash, vec![floor_event.clone()])]);
+        let chain_id = ChainId::from(CHAIN_ID);
+        let cursorless =
+            FindSorafsReputationJournalEventBySourceId::new(floor_event.entry.source_id, None);
+        assert_eq!(
+            adapter
+                .reputation_journal_event_by_source_id(&chain_id, 6, cursorless)
+                .expect_err("cursorless source request below activation floor")
+                .receipt(),
+            [FAILURE_BELOW_ACTIVATION_FLOOR; 32]
+        );
+
+        let below_floor_cursor = ReputationJournalFinalizedCursorV1 {
+            height: 6,
+            block_hash: [0x61; 32],
+            finalized_at_unix_ms: FINALIZED_AT_MS - 1,
+        };
+        let exact_below_floor = FindSorafsReputationJournalEventBySourceId::new(
+            floor_event.entry.source_id,
+            Some(below_floor_cursor),
+        );
+        assert_eq!(
+            adapter
+                .reputation_journal_event_by_source_id(&chain_id, 7, exact_below_floor)
+                .expect_err("exact source request below activation floor")
+                .receipt(),
+            [FAILURE_BELOW_ACTIVATION_FLOOR; 32]
+        );
+
+        let missing_above_floor = FindSorafsReputationJournalEventBySourceId::new(
+            floor_event.entry.source_id,
+            Some(ReputationJournalFinalizedCursorV1 {
+                height: 8,
+                block_hash: [0x81; 32],
+                finalized_at_unix_ms: FINALIZED_AT_MS + 1,
+            }),
+        );
+        assert_eq!(
+            adapter
+                .reputation_journal_event_by_source_id(&chain_id, 8, missing_above_floor)
+                .expect_err("missing exact source anchor remains distinct from activation floor")
+                .receipt(),
+            [FAILURE_MISSING_ANCHOR; 32]
+        );
+
+        let mismatched_floor_time = FindSorafsReputationJournalEventBySourceId::new(
+            floor_event.entry.source_id,
+            Some(ReputationJournalFinalizedCursorV1 {
+                height: 7,
+                block_hash: floor_hash,
+                finalized_at_unix_ms: FINALIZED_AT_MS + 1,
+            }),
+        );
+        assert_eq!(
+            adapter
+                .reputation_journal_event_by_source_id(&chain_id, 7, mismatched_floor_time)
+                .expect_err("exact source timestamp mismatch remains distinct")
+                .receipt(),
+            [FAILURE_ANCHOR_MISMATCH; 32]
+        );
+    }
+
+    #[test]
+    fn source_query_preserves_archive_read_failure_receipt() {
+        let block_hash = [0x71; 32];
+        let event = journal_event(1, 0, 0x45, 7, block_hash);
+        let exact = projection(7, block_hash, vec![event.clone()]);
+        let key = exact.key.clone();
+        let (_directory, adapter) = adapter_with([exact]);
+        let path = adapter
+            .archive
+            .record_path(&key)
+            .expect("derive archive record path");
+        let mut bytes = std::fs::read(&path).expect("read archive record");
+        let last = bytes.last_mut().expect("archive record is non-empty");
+        *last ^= 0x01;
+        std::fs::write(path, bytes).expect("corrupt archive record");
+
+        let query = FindSorafsReputationJournalEventBySourceId::new(event.entry.source_id, None);
+        assert_eq!(
+            adapter
+                .reputation_journal_event_by_source_id(&ChainId::from(CHAIN_ID), 7, query)
+                .expect_err("corrupt source archive must stay an archive-read failure")
+                .receipt(),
+            [FAILURE_ARCHIVE_READ; 32]
         );
     }
 

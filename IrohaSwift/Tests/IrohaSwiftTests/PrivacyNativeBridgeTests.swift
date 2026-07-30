@@ -135,13 +135,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         )
     }
 
-    func testExact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable() throws {
+    func testExact12FixtureBundleRoundTripsAndRejectsAdversarialBytes() throws {
         guard PrivacyNativeBridge.isNativeAvailable else {
-            if ProcessInfo.processInfo.environment["IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"] == "1" {
-                XCTFail("ABI-21 NoritoBridge with exact-12 fixture symbols is required.")
-                return
-            }
-            throw XCTSkip("NoritoBridge exact-12 fixture symbols are unavailable")
+            XCTFail("ABI-21 NoritoBridge with exact-12 fixture symbols is required.")
+            return
         }
 
         let canonical = try PrivacyNativeBridge.exact12FixtureBundleV1()

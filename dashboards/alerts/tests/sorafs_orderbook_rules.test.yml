@@ -54,6 +54,11 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS finalized orderbook projection is unavailable"
+              description: |
+                Torii has not published one complete immutable finalized orderbook
+                projection for cluster unavailable. Matching, depth, and
+                settlement panels are not release evidence until the ready gauge
+                returns to one.
       - alertname: SoraFSOrderbookFinalizedProjectionStale
         eval_time: 9m
         exp_alerts:
@@ -62,6 +67,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS finalized orderbook projection is stale"
+              description: |
+                The last complete orderbook projection for cluster
+                stale is more than two minutes behind the current
+                time. Check finality, the bounded event scan, and Torii readiness.
       - alertname: SoraFSOrderbookFinalizedProjectionFailure
         eval_time: 7m
         exp_alerts:
@@ -71,6 +80,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS finalized orderbook projection failed"
+              description: |
+                A fail-closed orderbook projection refresh failed for reason
+                projection_mismatch in cluster local. Inspect the
+                finalized query path; do not substitute a process-local book.
       - alertname: SoraFSOrderbookFinalizedProjectionSkew
         eval_time: 7m
         exp_alerts:
@@ -79,6 +92,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS finalized orderbook projections are skewed"
+              description: |
+                Ready Torii replicas in cluster skew differ by
+                more than two finalized heights. Check peer finality and complete
+                reconciliation before using the projection as rollout evidence.
       - alertname: SoraFSOrderbookMatchingLagHigh
         eval_time: 12m
         exp_alerts:
@@ -87,6 +104,11 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS orderbook matching lag is high"
+              description: |
+                The authoritative book in cluster local has remained
+                ahead of its last exhaustive bounded matcher scan for more than two
+                seconds. Check transaction forwarding and finality before accepting
+                additional order flow.
       - alertname: SoraFSOrderbookSettlementBacklogHigh
         eval_time: 12m
         exp_alerts:
@@ -95,6 +117,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS settlement backlog is high"
+              description: |
+                Authoritative open settlement channels for cluster
+                local exceeded the backlog or age threshold. Drain
+                receipt submission and pause new channels if the queue grows.
       - alertname: SoraFSOrderbookApiErrorRatioHigh
         eval_time: 7m
         exp_alerts:
@@ -104,6 +130,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS orderbook API error ratio is high"
+              description: |
+                Orderbook API route orders in cluster
+                local reported an error ratio above 5% for five
+                minutes. Inspect validation, signer, and finalized-query failures.
       - alertname: SoraFSOrderbookEscrowRunwayLow
         eval_time: 17m
         exp_alerts:
@@ -112,6 +142,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS orderbook escrow runway below one day"
+              description: |
+                At least one authoritative open settlement channel in cluster
+                local expires within one day. Drain or expire the
+                channel before remaining custody can no longer settle cleanly.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_orderbook_finalized_projection_ready{cluster="local"}'

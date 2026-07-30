@@ -37,6 +37,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS primary hedging feed is stale"
+              description: |
+                Primary XOR/USD feed primary in cluster local
+                has stayed more than 15 minutes behind. Pause statement finalization
+                and verify the feed collector before publishing billing cycles.
       - alertname: SoraFSHedgingFeedDivergenceHigh
         eval_time: 7m
         exp_alerts:
@@ -45,6 +49,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS hedging feed divergence is high"
+              description: |
+                XOR/USD feed divergence in cluster local exceeded
+                500 bps. Keep automated hedge execution disabled and require
+                governance review before accepting the reference price.
       - alertname: SoraFSHedgingExposureDriftHigh
         eval_time: 17m
         exp_alerts:
@@ -54,6 +62,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS hedging exposure drift is high"
+              description: |
+                Hedging exposure for xor in cluster local
+                has drifted more than 1000 bps from the governed target. Reconcile
+                inventory and freeze new hedge execution until limits are reviewed.
       - alertname: SoraFSBillingStatementFailures
         eval_time: 5m
         exp_alerts:
@@ -63,6 +75,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS billing statement generation failed"
+              description: |
+                Billing statement generation failed for account type provider
+                in cluster local. Check source ledger ingestion,
+                reference-price binding, and statement publisher health.
       - alertname: SoraFSBillingAcknowledgementBacklogHigh
         eval_time: 32m
         exp_alerts:
@@ -71,6 +87,10 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS billing acknowledgement backlog is high"
+              description: |
+                Billing acknowledgement backlog in cluster local
+                has exceeded 100 statements for 30 minutes. Verify notification
+                delivery and client acknowledgement workers before rollout.
       - alertname: SoraFSBillingEscrowRunwayLow
         eval_time: 17m
         exp_alerts:
@@ -80,6 +100,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS billing escrow runway below one day"
+              description: |
+                provider escrow runway in cluster local
+                is below one day. Trigger top-up or billing throttles before
+                statement settlement can no longer clear.
       - alertname: SoraFSHedgingBillingLastTickStale
         eval_time: 3m
         exp_alerts: []
@@ -90,6 +114,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS hedging/billing runtime tick is stale"
+              description: |
+                The committed hedging/billing runtime has not completed a successful
+                tick within its bounded freshness window for 5 minutes. Pause billing
+                publication and reconcile the supervised worker before promotion.
       - alertname: SoraFSBillingFinalizedProjectionUnavailable
         eval_time: 7m
         exp_alerts:
@@ -97,6 +125,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS billing finalized projection is unavailable"
+              description: |
+                The billing projector has not maintained an authenticated,
+                admissibly recent finalized-ledger anchor for 5 minutes. Treat
+                statements and hedge intents as stale until reconciliation succeeds.
       - alertname: SoraFSBillingFinalizedLagHigh
         eval_time: 7m
         exp_alerts:
@@ -104,6 +136,10 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS billing finalized projection lag is high"
+              description: |
+                The committed billing projection has remained more than two finalized
+                blocks behind the observed ledger head for 5 minutes. Pause dependent
+                publication and repair finalized-event ingestion before promotion.
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_hedging_feed_lag_seconds{cluster="local",source="primary"}'
